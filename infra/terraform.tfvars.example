@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+
+cloudflare_account_id = "0123456789abcdef0123456789abcdef"
+
+# Google OAuth 2.0 "Web application" client (console.cloud.google.com > APIs & Services > Credentials)
+google_client_id     = "1234567890-abc.apps.googleusercontent.com"
+google_client_secret = "GOCSPX-..."
+
+# Who can open Publishing Mode (admin console)
+admin_emails = ["you@gmail.com"]
+
+# Optional: custom domain on a zone already in this Cloudflare account.
+# Leave empty to run on <name>.<account>.workers.dev (no Zero Trust Access in that case).
+# domain           = "sing.example.com"
+# access_team_name = "your-team"     # from https://<your-team>.cloudflareaccess.com
+
+# environment       = "prod"
+# d1_location_hint  = "enam"
+# r2_location       = "ENAM"
+# deploy_worker     = true
