@@ -23,3 +23,9 @@ docker compose up --build
 ```
 - Web: http://localhost:8080
 - API: http://localhost:8080/api/health
+
+## Cloud infrastructure
+Production runs on Cloudflare (Workers + Durable Objects, D1, R2, Realtime SFU, Stream) with recordings
+stored in each user's Google Drive. `infra/` holds the Terraform that creates all of it in one
+`terraform apply`; see [infra/README.md](infra/README.md). The implementation plan (both modes,
+onboarding, costs) lives in the SingersVoice Implementation Plan doc.
