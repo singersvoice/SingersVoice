@@ -1,0 +1,19 @@
+{
+  // sv-control on Cloudflare Workers (free tier). `database_id` is filled in by tools/cf/deploy.mjs
+  // (it creates the D1 database on first deploy) — or paste yours from `wrangler d1 create svt-db`.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sv-control",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    "GOOGLE_CLIENT_ID": "",
+    "ALLOWED_ORIGINS": "https://singersvoice.github.io"
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "svt-db", "database_id": "REPLACE_ME" }
+  ]
+}

@@ -1,43 +1,24 @@
-import {
-  formatMs,
-  newId,
-  SLOT_COLORS,
-  tempExpiry,
-  type FileEntry,
-  type PerformanceManifest,
-  type SingerSlot,
-  type TrackPackageV2,
-} from '@singersvoice/protocol';
+import { formatMs, SLOT_COLORS, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { getEngine, noteName, type AudioEngine } from '../audio/engine.ts';
-import { StageBackground, BackgroundPicker } from '../components/BackgroundPicker.tsx';
-import { CameraTile } from '../components/CameraTile.tsx';
-import { FxPanel, PresetChips } from '../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcFlip, IcHeadphones, IcImage, IcPlay, IcSliders, IcStop, IcZoom } from '../components/icons.tsx';
-import { CueDeck, LyricsPanel } from '../components/LyricsPanel.tsx';
-import { Page } from '../components/Shell.tsx';
-import { Empty, Field, Progress, Seg, Sheet, Spinner, Switch } from '../components/ui.tsx';
-import { sha256Blob } from '../lib/hash.ts';
-import { go, href } from '../lib/nav.ts';
-import { headphonesLikely, isIOS, keepAwake, platformName } from '../lib/platform.ts';
-import type { LoadedTrack, TrackSummary } from '../lib/storage/types.ts';
-import { errorText, toast } from '../lib/toast.ts';
-import { isDrive, withProvider } from '../state/session.ts';
-import { appSettings, audioSettings, updateApp, updateAudio } from '../state/settings.ts';
-import { Camera, pickVideoMime, ZOOM_LEVELS, type ZoomPreset } from '../video/camera.ts';
+import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
+import { StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
+import { CameraTile } from '../../components/CameraTile.tsx';
+import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
+import { IcCamera, IcCameraOff, IcFlip, IcHeadphones, IcImage, IcPlay, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
+import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
+import { Page } from '../../components/Shell.tsx';
+import { Empty, Field, Progress, Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
+import { go, href } from '../../lib/nav.ts';
+import { headphonesLikely, isIOS, keepAwake } from '../../lib/platform.ts';
+import { buildManifest, saveTake as persistTake, type TakeResult } from '../../lib/takes.ts';
+import type { LoadedTrack, TrackSummary } from '../../lib/storage/types.ts';
+import { errorText, toast } from '../../lib/toast.ts';
+import { isDrive, withProvider } from '../../state/session.ts';
+import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
+import { Camera, pickVideoMime, ZOOM_LEVELS, type ZoomPreset } from '../../video/camera.ts';
 
 type Phase = 'loading' | 'ready' | 'starting' | 'countdown' | 'playing' | 'finishing' | 'review';
-
-export interface TakeResult {
-  vocal: Blob;
-  video: Blob | null;
-  durationMs: number;
-  vocalOffsetMs: number;
-  videoOffsetMs: number | null;
-  latencyCompMs: number;
-  sampleRate: number;
-  startedAtEpochMs: number;
-}
+export type { TakeResult };
 
 /** Track picker (/sing). */
 export function SingPicker() {
@@ -57,14 +38,14 @@ export function SingPicker() {
       )}
       {tracks && !tracks.length && (
         <Empty title="No tracks yet" body="Make one in Track Maker first — it takes a song file and your lyrics.">
-          <a class="btn primary" href={href('/trackmaker')}>
+          <a class="btn primary" href={href('/studio/trackmaker')}>
             Open Track Maker
           </a>
         </Empty>
       )}
       <div class="list">
         {tracks?.map((t) => (
-          <a class="item" key={t.trackId} href={href(`/sing/${encodeURIComponent(t.trackId)}`)}>
+          <a class="item" key={t.trackId} href={href(`/studio/sing/${encodeURIComponent(t.trackId)}`)}>
             <div class="thumb">{t.title.charAt(0).toUpperCase()}</div>
             <div class="meta">
               <div class="t">{t.title}</div>
@@ -115,7 +96,7 @@ export function Sing(props: { id: string }) {
       setPhase('ready');
     }).catch((e) => {
       toast(errorText(e), 'error', 7000);
-      go('/sing', true);
+      go('/studio/sing', true);
     });
     void headphonesLikely().then(setHeadphones);
     return () => {
@@ -447,7 +428,17 @@ export function Sing(props: { id: string }) {
 
 // ---------------- Review / keep ----------------
 
-function Review(props: { take: TakeResult; loaded: LoadedTrack; slot: SingerSlot; onAgain: () => void }) {
+export function Review(props: {
+  take: TakeResult;
+  loaded: LoadedTrack;
+  slot: SingerSlot;
+  onAgain: () => void;
+  /** 'live' takes are filed under Performances/Live and reported to the meet. */
+  mode?: 'offline' | 'live';
+  meetId?: string | null;
+  onSaved?: (summary: { performanceId: string; link?: string; state: 'temp' | 'kept' }) => void;
+  againLabel?: string;
+}) {
   const { take, loaded } = props;
   const [nudge, setNudge] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -515,54 +506,20 @@ function Review(props: { take: TakeResult; loaded: LoadedTrack; slot: SingerSlot
     setPlaying(true);
   };
 
-  async function buildManifest(state: 'temp' | 'kept'): Promise<PerformanceManifest> {
-    const files: FileEntry[] = [{ name: 'vocal.wav', mimeType: 'audio/wav', size: take.vocal.size, sha256: await sha256Blob(take.vocal) }];
-    if (take.video && take.video.size) {
-      const ext = take.video.type.includes('mp4') ? 'mp4' : 'webm';
-      files.push({ name: `video.${ext}`, mimeType: take.video.type, size: take.video.size, sha256: await sha256Blob(take.video) });
-    }
-    const createdAt = new Date(take.startedAtEpochMs || Date.now()).toISOString();
-    return {
-      schema: 'singersvoice.performance.v2',
-      performanceId: savedId ?? newId('perf-'),
-      mode: 'offline',
-      state,
-      createdAt,
-      expiresAt: state === 'temp' ? tempExpiry(new Date(createdAt)) : null,
-      trackId: loaded.track.trackId,
-      trackTitle: loaded.track.title,
-      trackArtist: loaded.track.artist,
-      singerSlot: props.slot,
-      meetId: null,
-      durationMs: take.durationMs,
-      timeline: {
-        startedAtEpochMs: take.startedAtEpochMs,
-        vocalOffsetMs: take.vocalOffsetMs - take.latencyCompMs + nudge,
-        videoOffsetMs: take.videoOffsetMs,
-        latencyCompMs: take.latencyCompMs,
-        sampleRate: take.sampleRate,
-      },
-      playback: { tempo: audioSettings.peek().tempo, keyShift: audioSettings.peek().keyShift, backingGain: audioSettings.peek().backingGain },
-      fx: audioSettings.peek().params,
-      device: { userAgent: navigator.userAgent, platform: platformName, headphones: null },
-      files,
-      notes: '',
-    };
-  }
-
   async function saveTake(state: 'temp' | 'kept'): Promise<void> {
     if (!take.vocal.size && !take.video) return;
     setSaving({ label: state === 'temp' ? 'Securing take in Temp' : 'Keeping performance', fraction: 0.02 });
     try {
-      const manifest = await buildManifest(state);
       if (savedId && state === 'kept') {
         await withProvider((p) => p.keepPerformance(savedId));
       } else {
-        const s = await withProvider((p) => p.savePerformance(manifest, { vocal: take.vocal, video: take.video && take.video.size ? take.video : null }, (pr) => setSaving(pr)));
+        const manifest = await buildManifest(take, loaded.track, { state, mode: props.mode ?? 'offline', slot: props.slot, meetId: props.meetId ?? null, performanceId: savedId ?? undefined, nudgeMs: nudge });
+        const s = await persistTake(manifest, take, (pr) => setSaving(pr));
         setSavedId(s.performanceId);
+        props.onSaved?.({ performanceId: s.performanceId, link: s.link, state });
       }
       setSavedState(state);
-      if (state === 'kept') toast(`Kept in ${isDrive.value ? 'Drive › SingersVoice › Performances › Offline' : 'Performances'}`, 'ok', 5000);
+      if (state === 'kept') toast(`Kept in ${isDrive.value ? `Drive › SingersVoice › Performances › ${props.mode === 'live' ? 'Live' : 'Offline'}` : 'Performances'}`, 'ok', 5000);
     } catch (e) {
       toast(`Could not save the take: ${errorText(e)}`, 'error', 10000, { label: 'Retry', onClick: () => void saveTake(state) });
     } finally {
@@ -617,9 +574,9 @@ function Review(props: { take: TakeResult; loaded: LoadedTrack; slot: SingerSlot
         </div>
         <div class="row">
           <button class="btn" onClick={() => (stop(), props.onAgain())}>
-            Sing again
+            {props.againLabel ?? 'Sing again'}
           </button>
-          <a class="btn ghost" href={href('/performances')}>
+          <a class="btn ghost" href={href('/studio/performances')}>
             All performances
           </a>
         </div>

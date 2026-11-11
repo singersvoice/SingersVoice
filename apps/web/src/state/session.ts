@@ -132,6 +132,17 @@ export async function withProvider<T>(fn: (p: StorageProvider) => Promise<T>): P
   }
 }
 
+/** Privileged (Publishing mode) flag from the SVT DB — refreshed by refreshAccount(). */
+export const privileged = signal<boolean>(localStorage.getItem('sv.privileged') === '1');
+export function setPrivileged(v: boolean): void {
+  privileged.value = v;
+  try {
+    localStorage.setItem('sv.privileged', v ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Expiry watchdog: flag reconnect ~1 minute before the token dies. */
 setInterval(() => {
   const t = token.value;

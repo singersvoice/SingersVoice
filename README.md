@@ -8,24 +8,36 @@ static host (GitHub Pages); live meets (up to 10 performers on stage, unlimited 
 **Test it now:** https://singersvoice.github.io/SingersVoice/ — on a phone, open it in Safari (iOS) or Chrome (Android)
 and use *Share → Add to Home Screen* / *Install app* to get the standalone app with the SingersVoice icon.
 
-## What's in the box
+## Four portals, loosely coupled
+
+| Portal | What it does | Depends on |
+| --- | --- | --- |
+| **Tracks** (`/tracks`) | Your tracks in Drive; the **public catalog (SVT DB)** — publish a track (Drive folder shared anyone-with-link + catalog entry) so any singer can pull it into their own Drive; imports (SVOld `.trackmaker.json`, `track.json`, `.lrc`), sharing, export | Drive; catalog needs sv-control |
+| **Studio** (`/studio`) | Offline: 4-step Track Maker, lyrics-first solo Sing with VoxForge, takes → Temp (7 days) → Keep | Drive only |
+| **Live Meets** (`/meets`, `/meet/:id`) | Create a meet → link + 6-letter code; anyone with it joins; up to 10 stage slots, unlimited audience with chat; **GMT kickstart**: every device starts the track at the same server instant; each performer's take is a personal session kept in their own Drive (`Performances/Live`); the meet **self-expires after 5 idle minutes** | sv-control |
+| **Publishing** (`/publishing`, `/watch/:id`) | Privileged users: destinations (YouTube, Facebook, Instagram, Twitch, in-house portal) with encrypted stream keys, publish jobs per meet, history; public watch page with lyrics + chat | sv-control (+ session container for the actual encoder, next increment) |
+
+**Sign-in is Google-only and mandatory** (Drive is the system of record). A build without `VITE_GOOGLE_CLIENT_ID` offers a *developer preview* on-device mode so CI and local testing never block on Google.
+
+## Status
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Sign-in + Google Drive link | ✅ browser-only OAuth (`drive.file`), folder tree created at onboarding | needs `VITE_GOOGLE_CLIENT_ID` (see [docs/GOOGLE_OAUTH.md](docs/GOOGLE_OAUTH.md)); without it the app runs in **device mode** (IndexedDB) |
-| Track Maker | ✅ 4 steps: Source → Lyrics → Timing (tap-to-mark, waveform, nudge, auto-space) → Save | imports SVOld `*.trackmaker.json`, v2 `track.json`, `.lrc` |
-| Sing (lyrics-first stage) | ✅ 16 / 60 / 24 % layout, 1 done + 1 active + 3 upcoming lines, singer-slot badges, cue deck, 3-2-1 count-in | backing track + lyrics + recorder share one audio clock |
-| VoxForge voice | ✅ Web Audio chain (trim → pitch/auto-tune worklet → HPF → 3-band EQ → comp → sat → chorus → stereo delay → reverb → out), 8 presets, tempo 0.5–1.5× with key kept, key shift ±6 st | presets autosave to `Config/audio_plugin_settings.json` |
-| Recording | ✅ sample-accurate WAV vocal (AudioWorklet) + camera video (MediaRecorder); auto-saved to **Temp** (7 days), **Keep** moves it to `Performances/Offline` | uploads are resumable and md5-verified |
-| Camera | ✅ Wide / Mid / Close presets, AutoZoom intro, face auto-frame (where `FaceDetector` exists), front/back flip, optional person cut-out (MediaPipe, lazy-loaded) | |
-| Library / Performances / Settings | ✅ search, share (anyone-with-link or a Google account), export, delete; playback with alignment nudge; device pickers, text scale 1.0–2.0, backgrounds | |
-| Meets | 🟡 stage preview + chat layout + protocol; `services/control` skeleton (rooms, slots, GMT kickstart, chat) | goes live once sv-control is deployed and `VITE_CONTROL_URL` is set |
-| Session container (mixer/encoder) | ⏳ V3 | mediasoup ingest · VoxForge C++ mixer · FFmpeg → RTMPS/LL-HLS |
+| Sign-in + Google Drive link | ✅ browser-only OAuth (`drive.file`), folder tree created at onboarding | needs `VITE_GOOGLE_CLIENT_ID` ([docs/GOOGLE_OAUTH.md](docs/GOOGLE_OAUTH.md)) |
+| Track Maker / Sing / Performances | ✅ | see Studio |
+| VoxForge voice | ✅ Web Audio chain + pitch/auto-tune worklet, 8 presets, tempo with key kept, key shift | presets autosave to `Config/audio_plugin_settings.json` |
+| Recording | ✅ sample-accurate WAV + camera video; resumable, md5-verified uploads | |
+| Public catalog (SVT DB) | ✅ publish / unpublish / search / pull | sv-control |
+| Live meets | ✅ rooms, slots, ready, chat, kickstart sync, personal takes, 5-min expiry, watch page | performers don't hear each other yet (Solo foldback by design); the audience stream needs the session container |
+| Publishing | ✅ destinations + jobs + history + in-house watch page | the encoder (RTMPS push, LL-HLS) is the session container, next increment |
+| sv-control | ✅ Hono on Node 22 (node:sqlite) **and** Cloudflare Workers + D1; Google token auth; tests + boot smoke | [docs/DEPLOY_CONTROL.md](docs/DEPLOY_CONTROL.md) — one workflow run after two secrets |
+| Session container (mixer/encoder) | ⏳ next | mediasoup ingest · VoxForge C++ mixer · FFmpeg → RTMPS/LL-HLS |
 
 ## Repository layout
 
 ```
 apps/web/              Preact + Vite + TypeScript PWA (the iOS / Android / web client)
+  src/portals/         tracks · studio · meets · publishing — independent portals, shared only via lib/ and the protocol
   public/brand/        logo kit (from SVOld/assets/Logo), PWA icons, welcome loop
   public/backgrounds/  stage & publishing backgrounds (from SVOld/assets/Backgrounds, WebP)
   public/worklets/     AudioWorklets: pitch-shifter + auto-tune, sample-accurate recorder
@@ -34,10 +46,11 @@ apps/web/              Preact + Vite + TypeScript PWA (the iOS / Android / web c
   src/screens          Welcome/Setup, Home, Library, TrackMaker, Sing, Performances, Meets, Settings
 packages/protocol/     shared types + pure helpers (track v2, lyrics window, LRC, performance manifest,
                        VoxForge params/presets, Drive layout, meet messages) — 100 % unit-tested
-services/control/      sv-control (Hono + WebSocket on Node 22): meets, stage slots, kickstart clock, chat
+services/control/      sv-control = the SVT DB API (Hono): catalog, meets, chat, kickstart clock, publishing — Node 22 or Cloudflare Workers + D1
 tools/brand/           make_brand.py (icons from the logo render), export_logo_blender.py (render SV.blend)
 tools/backgrounds/     convert.sh (jpg/mp4 → web sizes + index.json)
-tools/ci/              check-budget.mjs (400 KB gz first load), screenshots.mjs (viewport matrix + stage e2e)
+tools/ci/              check-budget.mjs, screenshots.mjs (viewport matrix + solo and live-meet e2e), control-smoke.mjs
+tools/cf/              deploy.mjs — sv-control to Cloudflare Workers + D1 in one run (used by deploy-control.yml)
 docs/                  GOOGLE_OAUTH.md, RESTORE_POINTS.md, ARCHITECTURE.md, TESTING.md
 ```
 
@@ -65,8 +78,9 @@ credentials).
   (and optionally `VITE_GOOGLE_API_KEY`, `VITE_CONTROL_URL`). GitHub Pages is for testing; before commercial use move
   the same `dist/` to Cloudflare (static assets + Worker, see the Terraform in PR #1 / branch
   `infra/terraform-cloudflare`).
-- **sv-control:** `docker compose up --build` locally; the image in `services/control/Dockerfile` runs on any
-  container host (Fly Machines, DOKS, GKE Autopilot — costed in the plan).
+- **sv-control (SVT DB):** add `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` secrets and run *Deploy sv-control* —
+  it creates D1, deploys the worker, sets `VITE_CONTROL_URL` and redeploys the web app ([docs/DEPLOY_CONTROL.md](docs/DEPLOY_CONTROL.md)).
+  Or `docker compose up --build` / any Node 22 host.
 
 ## Restore points
 

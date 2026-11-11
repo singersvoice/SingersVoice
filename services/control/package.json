@@ -3,16 +3,17 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "sv-control — meets, stage slots, GMT kickstart clock and chat (Hono + WebSocket on Node 22).",
+  "description": "sv-control — the SVT DB API: public track catalog, live meets (stage slots, GMT kickstart, chat, 5-min idle expiry), publishing destinations/jobs. Hono on Node 22 or Cloudflare Workers + D1.",
   "scripts": {
-    "dev": "node --watch src/index.ts",
-    "start": "node src/index.ts",
+    "dev": "node --no-warnings=ExperimentalWarning --watch src/index.ts",
+    "start": "node --no-warnings=ExperimentalWarning src/index.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "node ../../tools/cf/deploy.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.5",
-    "@hono/node-ws": "^1.3.1",
     "@singersvoice/protocol": "2.0.0",
     "hono": "^4.13.17"
   },

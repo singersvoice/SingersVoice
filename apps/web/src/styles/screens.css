@@ -680,3 +680,109 @@
   font-size: 0.75em;
   color: var(--muted);
 }
+
+/* ---------- Portals / Meets ---------- */
+.quick.portals {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.quick.portals a {
+  min-height: 120px;
+}
+.stage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.slot-card {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  padding: 10px;
+  min-height: 72px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.slot-card:disabled {
+  cursor: default;
+}
+.slot-card.taken {
+  background: var(--surface-2);
+}
+.slot-card.mine {
+  outline: 2px solid var(--accent);
+}
+.slot-card .name {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.chat-log {
+  max-height: 40dvh;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.chat-msg {
+  font-size: 0.92em;
+  line-height: 1.35;
+}
+.watch-stage {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  isolation: isolate;
+  background: #000;
+}
+.watch-stage .bg {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-size: cover;
+  background-position: center;
+  filter: brightness(0.5);
+}
+.watch-stage .logo {
+  position: absolute;
+  left: 2%;
+  top: 3%;
+  height: 12%;
+  z-index: 2;
+}
+.watch-center {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.watch-center .lyrics {
+  height: 100%;
+  width: 100%;
+}
+.watch-lineup {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  z-index: 2;
+}
+@media (max-width: 480px) {
+  .watch-stage {
+    aspect-ratio: 4 / 3;
+  }
+}

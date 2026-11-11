@@ -1,13 +1,13 @@
 import { formatMs } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { IcDownload, IcPlay, IcStop, IcTrash } from '../components/icons.tsx';
-import { Page } from '../components/Shell.tsx';
-import { Empty, Seg, Sheet, Spinner } from '../components/ui.tsx';
-import { downloadBlob } from '../lib/download.ts';
-import { href } from '../lib/nav.ts';
-import type { LoadedPerformance, PerformanceSummary } from '../lib/storage/types.ts';
-import { errorText, toast } from '../lib/toast.ts';
-import { isDrive, withProvider } from '../state/session.ts';
+import { IcDownload, IcPlay, IcStop, IcTrash } from '../../components/icons.tsx';
+import { Page } from '../../components/Shell.tsx';
+import { Empty, Seg, Sheet, Spinner } from '../../components/ui.tsx';
+import { downloadBlob } from '../../lib/download.ts';
+import { href } from '../../lib/nav.ts';
+import type { LoadedPerformance, PerformanceSummary } from '../../lib/storage/types.ts';
+import { errorText, toast } from '../../lib/toast.ts';
+import { isDrive, withProvider } from '../../state/session.ts';
 
 export function Performances() {
   const [list, setList] = useState<PerformanceSummary[] | null>(null);
@@ -47,7 +47,7 @@ export function Performances() {
         )}
         {list && !shown.length && (
           <Empty title="Nothing here yet" body="Takes land here after you finish singing. Temp takes auto-delete after 7 days unless you keep them.">
-            <a class="btn primary" href={href('/sing')}>
+            <a class="btn primary" href={href('/studio/sing')}>
               Sing something
             </a>
           </Empty>

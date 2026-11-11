@@ -40,8 +40,8 @@ export function TopBar(props: { title?: string; right?: ComponentChildren }) {
 
 const NAV = [
   { to: '/home', label: 'Home', Icon: IcHome },
-  { to: '/library', label: 'Library', Icon: IcLibrary },
-  { to: '/sing', label: 'Sing', Icon: IcMic, primary: true },
+  { to: '/tracks', label: 'Tracks', Icon: IcLibrary },
+  { to: '/studio', label: 'Studio', Icon: IcMic, primary: true },
   { to: '/meets', label: 'Meets', Icon: IcUsers },
   { to: '/settings', label: 'More', Icon: IcMore },
 ];
@@ -52,7 +52,7 @@ export function NavBar() {
   return (
     <nav class="navbar" aria-label="Primary">
       {NAV.map((n) => {
-        const active = rel === n.to || rel.startsWith(`${n.to}/`);
+        const active = rel === n.to || rel.startsWith(`${n.to}/`) || (n.to === '/meets' && rel.startsWith('/meet/')) || (n.to === '/settings' && rel.startsWith('/publishing'));
         return (
           <a key={n.to} href={href(n.to)} class={`${active ? 'active' : ''} ${n.primary ? 'primary' : ''}`} aria-current={active ? 'page' : undefined}>
             <span class="ico">

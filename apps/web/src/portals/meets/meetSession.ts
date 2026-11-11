@@ -1,0 +1,142 @@
+/**
+ * Client-side meet session: join, poll (heartbeat), actions. Polling cadence: 2 s while the room
+ * is forming or counting down (the kickstart instant is absolute, so 2 s is plenty), 5 s otherwise.
+ */
+import { signal } from '@preact/signals';
+import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetSnapshot, type Participant } from '@singersvoice/protocol';
+import { api, ApiError, clock, serverNow, syncClock } from '../../lib/api.ts';
+
+const POLL_FORMING_MS = 2000;
+const POLL_SETTLED_MS = 5000;
+
+export class MeetSession {
+  readonly snapshot = signal<MeetSnapshot | null>(null);
+  readonly you = signal<Participant | null>(null);
+  readonly chat = signal<ChatMessage[]>([]);
+  readonly error = signal<string | null>(null);
+  readonly joining = signal(false);
+  resumeToken = '';
+  private lastSeq = 0;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private stopped = false;
+  private inFlight = false;
+
+  constructor(readonly meetId: string) {
+    try {
+      this.resumeToken = sessionStorage.getItem(`sv.meet.${meetId}.rt`) ?? '';
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async join(role: 'audience' | 'performer'): Promise<void> {
+    this.joining.value = true;
+    try {
+      if (Date.now() - clock.value.syncedAt > 60_000) await syncClock();
+      const r = await api.post('POST /meets/:id/join', `/meets/${encodeURIComponent(this.meetId)}/join`, { role, resumeToken: this.resumeToken || undefined });
+      this.resumeToken = r.resumeToken;
+      try {
+        sessionStorage.setItem(`sv.meet.${this.meetId}.rt`, r.resumeToken);
+      } catch {
+        /* ignore */
+      }
+      this.you.value = r.you;
+      this.error.value = null;
+      await this.heartbeat();
+      this.schedule();
+    } catch (e) {
+      this.error.value = e instanceof ApiError ? e.message : String(e);
+      throw e;
+    } finally {
+      this.joining.value = false;
+    }
+  }
+
+  private schedule(): void {
+    clearTimeout(this.timer);
+    if (this.stopped) return;
+    const m = this.snapshot.value?.meet;
+    const forming = m && (m.state === 'lobby' || m.state === 'countdown');
+    this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), forming ? POLL_FORMING_MS : POLL_SETTLED_MS);
+  }
+
+  private apply(snap: MeetSnapshot): void {
+    this.snapshot.value = snap;
+    if (snap.you) this.you.value = snap.you;
+    if (snap.chat.length) {
+      const known = new Set(this.chat.value.map((c) => c.seq));
+      const fresh = snap.chat.filter((c) => !known.has(c.seq));
+      if (fresh.length) {
+        this.chat.value = [...this.chat.value, ...fresh].sort((a, b) => a.seq - b.seq).slice(-200);
+        this.lastSeq = Math.max(this.lastSeq, ...fresh.map((c) => c.seq));
+      }
+    }
+  }
+
+  async heartbeat(): Promise<void> {
+    if (this.inFlight || !this.resumeToken) return;
+    this.inFlight = true;
+    try {
+      const snap = await api.post('POST /meets/:id/heartbeat', `/meets/${encodeURIComponent(this.meetId)}/heartbeat`, {
+        resumeToken: this.resumeToken,
+        chatSince: this.lastSeq,
+        driftMs: Math.round(clock.value.offsetMs),
+        rttMs: Math.round(clock.value.rttMs),
+      });
+      this.apply(snap);
+      this.error.value = null;
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 403 || e.status === 404 || e.status === 410)) {
+        this.error.value = e.message;
+        this.stop();
+      } else if (e instanceof ApiError && e.code === 'offline') {
+        this.error.value = 'Connection lost — retrying';
+      }
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
+  private async act(path: string, body: Record<string, unknown>): Promise<void> {
+    const snap = await api.post('POST /meets/:id/slot', `/meets/${encodeURIComponent(this.meetId)}/${path}`, { resumeToken: this.resumeToken, ...body } as never);
+    this.apply(snap as MeetSnapshot);
+  }
+
+  claimSlot(slot: number | null): Promise<void> {
+    return this.act('slot', { slot });
+  }
+  setReady(ready: boolean): Promise<void> {
+    return this.act('ready', { ready });
+  }
+  start(leadMs = 8000): Promise<void> {
+    return this.act('start', { leadMs });
+  }
+  stopMeet(): Promise<void> {
+    return this.act('stop', {});
+  }
+  async say(text: string): Promise<void> {
+    const r = await api.post('POST /meets/:id/chat', `/meets/${encodeURIComponent(this.meetId)}/chat`, { resumeToken: this.resumeToken, text });
+    this.apply({ ...(this.snapshot.value as MeetSnapshot), chat: [r.message] });
+  }
+  async registerRecording(performanceId: string, driveFolderLink: string | null, durationMs: number): Promise<void> {
+    await api.post('POST /meets/:id/recordings', `/meets/${encodeURIComponent(this.meetId)}/recordings`, { resumeToken: this.resumeToken, performanceId, driveFolderLink, durationMs });
+  }
+  async leave(): Promise<void> {
+    this.stop();
+    if (this.resumeToken) await api.post('POST /meets/:id/leave', `/meets/${encodeURIComponent(this.meetId)}/leave`, { resumeToken: this.resumeToken }).catch(() => undefined);
+  }
+
+  stop(): void {
+    this.stopped = true;
+    clearTimeout(this.timer);
+  }
+
+  /** ms until the idle expiry, by the server clock. */
+  msToExpiry(): number {
+    const m = this.snapshot.value?.meet;
+    if (!m || !meetIsOpen(m)) return 0;
+    return Math.max(0, Date.parse(m.expiresAt) - serverNow());
+  }
+
+  static readonly IDLE_MS = MEET_IDLE_EXPIRY_MS;
+}

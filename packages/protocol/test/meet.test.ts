@@ -1,15 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import { clockOffsetMs, emptyStage, MAX_PERFORMERS, performanceFolderName, tempExpiry, applyPreset, clampParams, totalSemitones, VOXFORGE_DEFAULTS, VOXFORGE_PRESETS } from '../src/index.ts';
+import {
+  applyPreset,
+  bestClockOffset,
+  clampParams,
+  clockOffsetMs,
+  emptyStage,
+  MAX_PERFORMERS,
+  meetIsOpen,
+  newJoinCode,
+  performanceFolderName,
+  tempExpiry,
+  totalSemitones,
+  VOXFORGE_DEFAULTS,
+  VOXFORGE_PRESETS,
+} from '../src/index.ts';
 
-describe('meet', () => {
+describe('meet helpers', () => {
   it('builds a 10-slot stage', () => {
     expect(emptyStage()).toHaveLength(MAX_PERFORMERS);
     expect(emptyStage()[9]!.slot).toBe(10);
   });
-  it('computes NTP-style offsets', () => {
+  it('computes NTP-style offsets and picks the median of the fastest samples', () => {
     const { offsetMs, rttMs } = clockOffsetMs(1000, 1500, 1200);
     expect(rttMs).toBe(200);
     expect(offsetMs).toBe(400);
+    const best = bestClockOffset([
+      { offsetMs: 400, rttMs: 200 },
+      { offsetMs: 420, rttMs: 180 },
+      { offsetMs: 900, rttMs: 2000 }, // slow outlier is dropped
+      { offsetMs: 410, rttMs: 190 },
+    ]);
+    expect(best.offsetMs).toBe(410);
+    expect(best.rttMs).toBe(180);
+  });
+  it('join codes are 6 unambiguous characters', () => {
+    const c = newJoinCode();
+    expect(c).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/);
+    expect(meetIsOpen({ state: 'lobby' })).toBe(true);
+    expect(meetIsOpen({ state: 'expired' })).toBe(false);
   });
 });
 

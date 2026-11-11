@@ -20,13 +20,13 @@ import {
   type TrackPackageV2,
 } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { IcCheck, IcMusic, IcPlay, IcPause, IcSkipBack, IcUpload } from '../components/icons.tsx';
-import { Page } from '../components/Shell.tsx';
-import { Field, Progress, Seg, Spinner } from '../components/ui.tsx';
-import { decodeBlob, probeDuration } from '../lib/decode.ts';
-import { go, href } from '../lib/nav.ts';
-import { errorText, toast } from '../lib/toast.ts';
-import { isDrive, withProvider } from '../state/session.ts';
+import { IcCheck, IcMusic, IcPlay, IcPause, IcSkipBack, IcUpload } from '../../components/icons.tsx';
+import { Page } from '../../components/Shell.tsx';
+import { Field, Progress, Seg, Spinner } from '../../components/ui.tsx';
+import { decodeBlob, probeDuration } from '../../lib/decode.ts';
+import { go, href } from '../../lib/nav.ts';
+import { errorText, toast } from '../../lib/toast.ts';
+import { isDrive, withProvider } from '../../state/session.ts';
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -164,10 +164,10 @@ export function TrackMaker(props: { id?: string }) {
               </button>
               {savedRef && (
                 <div class="row">
-                  <a class="btn accent" href={href(`/sing/${encodeURIComponent(savedRef)}`)}>
+                  <a class="btn accent" href={href(`/studio/sing/${encodeURIComponent(savedRef)}`)}>
                     <IcPlay /> Sing it now
                   </a>
-                  <a class="btn" href={href('/library')}>
+                  <a class="btn" href={href('/tracks')}>
                     Library
                   </a>
                 </div>
@@ -575,5 +575,5 @@ function TimingStep(props: { track: TrackPackageV2; audio: Blob | null; audioUrl
 }
 
 export function openTrackMaker(id?: string): void {
-  go(id ? `/trackmaker/${encodeURIComponent(id)}` : '/trackmaker');
+  go(id ? `/studio/trackmaker/${encodeURIComponent(id)}` : '/studio/trackmaker');
 }

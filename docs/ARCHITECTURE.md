@@ -19,13 +19,36 @@ that the code depends on.
 5. **Lightweight.** First load ≈ 58 KB gzipped (Preact + signals + the app). Backgrounds, the cut-out model and
    Google scripts load on demand. The same `dist/` runs on GitHub Pages, Cloudflare or any static host.
 
+## Portals (loosely coupled)
+
+| Portal | Route | State it owns | Talks to |
+| --- | --- | --- | --- |
+| Tracks | `/tracks` | track files in Drive, catalog entries | Drive API, `sv-control /catalog/*` |
+| Studio | `/studio/*` | tracks, takes, audio settings | Drive API only (works offline) |
+| Live Meets | `/meets`, `/meet/:id` | meet session (poll), personal take | `sv-control /meets/*`, Drive for the take |
+| Publishing | `/publishing`, `/watch/:id` | destinations, jobs | `sv-control /publishing/*`, `/watch/*` |
+
+No portal imports another's screens; they share only `packages/protocol`, `lib/` (storage, api, audio) and
+`state/` (session, settings). The SVT DB (sv-control) is the only shared backend and holds no media.
+
+## Live meet timing
+
+1. Each client measures its clock offset to the server (5 samples of `GET /time`, median of the fastest).
+2. The host presses Start → the server stores `kickstartEpochMs = now + 8 s`.
+3. Every performer's device converts that instant to its own AudioContext time and schedules the backing
+   track (and the sample-accurate recorder) there. Nobody waits for anybody; network jitter only affects
+   when a device *learns* the instant, not when it plays.
+4. Performers hear only themselves + the track (Solo foldback). The composed mix for the audience comes from
+   the session container (next increment); until then the watch page shows lyrics in sync and chat.
+5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.
+
 ## Components
 
 | Component | Where | Runs on |
 | --- | --- | --- |
 | PWA client | `apps/web` | iOS Safari (installable), Android Chrome (installable), desktop browsers |
 | Shared protocol | `packages/protocol` | client + services |
-| sv-control | `services/control` | Node 22 container (Hono + WebSocket): meets, slots, kickstart, chat; Postgres + Google ID-token auth next |
+| sv-control (SVT DB) | `services/control` | Hono on Node 22 (node:sqlite) or Cloudflare Workers + D1: users (privileged flag), catalog, meets, chat, recordings, publishing destinations/jobs; Google access-token auth |
 | sv-session (V3) | `services/session` (planned) | one pod per meet: mediasoup ingest → VoxForge C++ mixer-composer → FFmpeg encoder → RTMPS / LL-HLS |
 
 ## Audio chain (VoxForge, web twin of the JUCE plugin)

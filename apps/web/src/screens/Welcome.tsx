@@ -11,7 +11,19 @@ import { Spinner } from '../components/ui.tsx';
 
 export function Welcome() {
   useEffect(() => {
-    if (signedIn.value) go(appSettings.value.onboarded ? '/home' : '/setup', true);
+    if (!signedIn.value) return;
+    let next = appSettings.value.onboarded ? '/home' : '/setup';
+    try {
+      const saved = sessionStorage.getItem('sv.afterSignIn');
+      if (saved && appSettings.value.onboarded) {
+        sessionStorage.removeItem('sv.afterSignIn');
+        window.location.replace(saved);
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    go(next, true);
   }, [signedIn.value]);
 
   const onGoogle = async () => {
@@ -37,17 +49,22 @@ export function Welcome() {
         <p class="muted">Lyrics-first karaoke. Sing solo now, sing together on stage next — every take lands in your own Google Drive.</p>
       </div>
       <div class="actions">
-        <button class="btn primary lg block" disabled={busy.value !== null} onClick={() => void onGoogle()}>
+        <button class="btn primary lg block" disabled={busy.value !== null || !googleConfigured} onClick={() => void onGoogle()}>
           {busy.value ? <Spinner /> : <IcDrive />}
           {busy.value ?? 'Continue with Google'}
         </button>
-        <button class="btn lg block" onClick={() => (continueOnDevice(), go('/setup', true))}>
-          Try it on this {platformName === 'Web' ? 'browser' : platformName} first
-        </button>
+        <p class="small muted" style="text-align:center">
+          Google sign-in is required: your tracks, takes and settings are stored in <b>your</b> Google Drive (folder <span class="kbd">SingersVoice</span>), never on our servers.
+        </p>
         {!googleConfigured && (
-          <p class="small faint" style="text-align:center">
-            Google sign-in isn't configured for this build yet (VITE_GOOGLE_CLIENT_ID). Tracks and takes stay on this device until it is.
-          </p>
+          <>
+            <button class="btn lg block" onClick={() => (continueOnDevice(), go('/setup', true))}>
+              Developer preview on this {platformName === 'Web' ? 'browser' : platformName} (no Google client configured)
+            </button>
+            <p class="small faint" style="text-align:center">
+              This build has no VITE_GOOGLE_CLIENT_ID. Files stay in this browser until it is set — see docs/GOOGLE_OAUTH.md.
+            </p>
+          </>
         )}
       </div>
     </div>

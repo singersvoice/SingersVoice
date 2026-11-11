@@ -225,6 +225,7 @@ h3 {
     top: var(--topbar);
     bottom: auto;
     grid-column: 1;
+    grid-row: 2;
     grid-auto-flow: row;
     grid-auto-rows: 52px;
     align-content: start;
@@ -252,6 +253,7 @@ h3 {
   }
   .content {
     grid-column: 2;
+    grid-row: 2;
   }
   .shell.nonav .content {
     grid-column: 1 / -1;

@@ -429,6 +429,62 @@ export class DriveProvider implements StorageProvider {
     return `https://drive.google.com/drive/folders/${folderId}`;
   }
 
+  /** Drive ids the public catalog needs so other singers can fetch the package (folder must be shared first). */
+  async publicTrackRefs(trackId: string): Promise<{ folderId: string; folderLink: string; trackJsonId: string; audioId: string; audioMime: string; shared: boolean }> {
+    await this.ready();
+    const files = await this.trackFiles(trackId);
+    const json = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'track');
+    const audio = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'trackAudio');
+    const folderId = files.find((f) => f.mimeType === FOLDER_MIME)?.id ?? json?.parents?.[0];
+    if (!json || !audio || !folderId) throw new Error('Track files not found in Drive');
+    return {
+      folderId,
+      folderLink: `https://drive.google.com/drive/folders/${folderId}`,
+      trackJsonId: json.id,
+      audioId: audio.id,
+      audioMime: audio.mimeType || 'audio/mpeg',
+      shared: json.appProperties?.svShared === '1',
+    };
+  }
+
+  /** Remove the anyone-with-link permission from a track folder (catalog unpublish). */
+  async unshareTrack(trackId: string): Promise<void> {
+    await this.ready();
+    const files = await this.trackFiles(trackId);
+    const json = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'track');
+    const folderId = files.find((f) => f.mimeType === FOLDER_MIME)?.id ?? json?.parents?.[0];
+    if (!folderId) return;
+    const perms = await this.req<{ permissions?: { id: string; type: string }[] }>(`${API}/files/${folderId}/permissions?fields=permissions(id,type)`);
+    for (const p of perms.permissions ?? []) if (p.type === 'anyone') await this.req(`${API}/files/${folderId}/permissions/${p.id}`, { method: 'DELETE' }).catch(() => undefined);
+    if (json) {
+      await this.req(`${API}/files/${json.id}?fields=id`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appProperties: { ...(json.appProperties ?? {}), svShared: '0' } }),
+      }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Fetch a file another singer shared anyone-with-link (catalog pull). Tries the signed-in token
+   * first (works for files this app created), then the API key (public files), then the Drive
+   * download URL as a last resort.
+   */
+  async downloadPublic(fileId: string, apiKey: string): Promise<Blob> {
+    try {
+      return await this.download(fileId);
+    } catch (e) {
+      if (e instanceof AuthExpiredError) throw e;
+    }
+    if (apiKey) {
+      const r = await fetch(`${API}/files/${fileId}?alt=media&key=${encodeURIComponent(apiKey)}`);
+      if (r.ok) return r.blob();
+    }
+    const r = await fetch(`https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`);
+    if (r.ok) return r.blob();
+    throw new Error('Could not fetch the shared file from Drive (is the folder still shared "anyone with the link"?)');
+  }
+
   /** Import a track folder/file another singer shared (after the Google Picker granted access to it). */
   async importShared(fileOrFolderId: string): Promise<LoadedTrack> {
     await this.ready();

@@ -38,6 +38,9 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: sv-control boots on Node (type stripping + node:sqlite)
+        run: node tools/ci/control-smoke.mjs
+
       - name: Build web (GitHub Pages base)
         env:
           BASE_PATH: /SingersVoice/

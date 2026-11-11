@@ -29,6 +29,13 @@ const base = process.env.BASE_PATH ?? '/SingersVoice/';
 const port = 4173;
 mkdirSync(out, { recursive: true });
 
+// Local sv-control (SVT DB) with dev auth so the meets/publishing portals can be exercised end to end.
+const controlPort = 8798;
+const control = spawn('node', ['--no-warnings=ExperimentalWarning', 'src/index.ts'], {
+  cwd: path.resolve('services/control'),
+  env: { ...process.env, PORT: String(controlPort), DEV_AUTH: '1', SV_DB: ':memory:', ALLOWED_ORIGINS: `http://localhost:${port}` },
+  stdio: 'ignore',
+});
 const preview = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], {
   cwd: path.resolve('apps/web'),
   env: { ...process.env, BASE_PATH: base },
@@ -66,9 +73,9 @@ for (const m of matrix) {
   const url = (p) => `http://localhost:${port}${base}${p.replace(/^\//, '')}`;
   const shot = (name) => page.screenshot({ path: path.join(out, `${m.name}--${name}.png`) });
   try {
-    await page.goto(url('/'), { waitUntil: 'networkidle' });
+    await page.goto(`${url('/')}?control=http://localhost:${controlPort}`, { waitUntil: 'networkidle' });
     await shot('01-welcome');
-    await page.getByRole('button', { name: /Try it on this/ }).click();
+    await page.getByRole('button', { name: /Developer preview|Try it on this/ }).click();
     await page.waitForURL(/\/setup/);
     await wait(600);
     await shot('02-setup');
@@ -76,23 +83,24 @@ for (const m of matrix) {
     await page.waitForURL(/\/home/);
     await wait(500);
     await shot('03-home');
-    await page.goto(url('/library'), { waitUntil: 'networkidle' });
-    await shot('04-library');
-    await page.goto(url('/trackmaker'), { waitUntil: 'networkidle' });
-    await shot('05-trackmaker');
-    await page.goto(url('/sing'), { waitUntil: 'networkidle' });
-    await shot('06-sing-picker');
+    await page.goto(url('/tracks'), { waitUntil: 'networkidle' });
+    await shot('04-tracks');
+    await page.goto(url('/studio'), { waitUntil: 'networkidle' });
+    await shot('05-studio');
+    await page.goto(url('/studio/trackmaker'), { waitUntil: 'networkidle' });
+    await shot('05b-trackmaker');
     await page.goto(url('/meets'), { waitUntil: 'networkidle' });
     await wait(800);
     await shot('07-meets');
+    await page.goto(url('/publishing'), { waitUntil: 'networkidle' });
+    await wait(800);
+    await shot('08-publishing');
     await page.goto(url('/settings'), { waitUntil: 'networkidle' });
-    await shot('08-settings');
-    await page.goto(url('/performances'), { waitUntil: 'networkidle' });
-    await shot('09-performances');
+    await shot('09-settings');
 
     if (e2eJson && e2eAudio && m.e2e) {
       // Import the sample track, open the stage, sing 9 s with the fake mic, finish, review.
-      await page.goto(url('/library'), { waitUntil: 'networkidle' });
+      await page.goto(url('/tracks'), { waitUntil: 'networkidle' });
       await page.getByRole('button', { name: 'Import' }).first().click();
       await page.locator('input[type=file][accept*=".json"]').setInputFiles(e2eJson);
       await page.locator('input[type=file][accept*="audio"]').setInputFiles(e2eAudio);
@@ -121,10 +129,10 @@ for (const m of matrix) {
       await page.getByText('Kept', { exact: true }).first().waitFor({ timeout: 30000 });
       await wait(500);
       await shot('16-review-kept');
-      await page.goto(url('/performances'), { waitUntil: 'networkidle' });
+      await page.goto(url('/studio/performances'), { waitUntil: 'networkidle' });
       await wait(800);
       await shot('17-performances');
-      await page.goto(url('/library'), { waitUntil: 'networkidle' });
+      await page.goto(url('/tracks'), { waitUntil: 'networkidle' });
       await page.getByRole('button', { name: 'More' }).first().click();
       await page.getByRole('button', { name: /Edit lyrics/ }).click();
       await page.waitForURL(/\/trackmaker\//);
@@ -133,6 +141,51 @@ for (const m of matrix) {
       await page.getByRole('button', { name: /Next: timing/ }).click();
       await wait(1500);
       await shot('19-trackmaker-timing');
+
+      // Live meet: create → take a slot → ready (pre-flight) → host starts → sing 10 s → finish → keep → end meet.
+      await page.goto(url('/meets'), { waitUntil: 'networkidle' });
+      await page.getByPlaceholder('Sunday SV music meet').fill('CI meet');
+      await page.locator('select.input').first().selectOption({ index: 1 });
+      await page.getByRole('button', { name: 'Create meet' }).click();
+      await page.waitForURL(/\/meet\//);
+      await page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
+      await shot('20-meet-lobby');
+      await page.getByRole('button', { name: 'Take a stage slot' }).click();
+      await page.getByRole('button', { name: /I'm ready/ }).click();
+      await page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
+      await page.getByRole('radio', { name: /Chat/ }).click();
+      await page.getByPlaceholder('Message everyone').fill('hello from CI');
+      await page.getByRole('button', { name: 'Send' }).click();
+      await page.getByText('hello from CI').first().waitFor();
+      await page.getByRole('radio', { name: 'Stage' }).click();
+      await shot('21-meet-ready');
+      await page.getByRole('button', { name: /Start the song/ }).click();
+      await wait(2500);
+      await shot('22-meet-countdown');
+      await wait(10000);
+      await shot('23-meet-live');
+      await page.getByRole('button', { name: 'Finish' }).click();
+      await page.getByText('Your take').waitFor({ timeout: 30000 });
+      await wait(1200);
+      await shot('24-meet-review');
+      await page.getByRole('button', { name: 'Keep' }).click();
+      await page.getByText('Kept', { exact: true }).first().waitFor({ timeout: 30000 });
+      await page.getByRole('button', { name: 'Back to the meet' }).click();
+      await page.getByRole('button', { name: 'End meet' }).waitFor({ timeout: 30000 });
+      page.once('dialog', (d) => d.accept());
+      await page.getByRole('button', { name: 'End meet' }).click();
+      await page.getByText(/Meet ended/).waitFor({ timeout: 30000 });
+      await wait(800);
+      await shot('25-meet-ended');
+      const meetId = page.url().split('/meet/')[1];
+      await page.goto(url(`/watch/${meetId}`), { waitUntil: 'networkidle' });
+      await wait(1500);
+      await shot('26-watch');
+      await page.goto(url('/publishing'), { waitUntil: 'networkidle' });
+      await wait(800);
+      await page.getByRole('radio', { name: 'Publish a meet' }).click();
+      await wait(600);
+      await shot('27-publishing-publish');
     }
   } catch (e) {
     failures++;
@@ -148,4 +201,5 @@ for (const m of matrix) {
 }
 await browser.close();
 preview.kill();
+control.kill();
 if (failures) process.exit(1);
