@@ -55,7 +55,14 @@ export const provider = computed<StorageProvider>(() => {
 
 export const driveProvider = (): DriveProvider | null => (provider.value instanceof DriveProvider ? provider.value : null);
 export const isDrive = computed(() => provider.value.kind === 'drive');
-export const signedIn = computed(() => profile.value !== null && mode.value !== null);
+/**
+ * Google sign-in is mandatory. A device-only session (developer preview) only counts in builds
+ * without a Google client; once VITE_GOOGLE_CLIENT_ID is set, a preview session left on this
+ * device is not resumed — the Welcome screen asks for Google instead.
+ */
+export const previewAllowed = !googleConfigured;
+export const signedIn = computed(() => profile.value !== null && mode.value !== null && (profile.value.mode === 'drive' || previewAllowed));
+export const staleDeviceSession = computed(() => !previewAllowed && profile.value?.mode === 'local');
 
 export const localProvider = local;
 

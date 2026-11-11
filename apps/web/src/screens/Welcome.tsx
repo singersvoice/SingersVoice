@@ -3,7 +3,7 @@ import { googleConfigured } from '../lib/google.ts';
 import { asset, go } from '../lib/nav.ts';
 import { persistStorage, platformName } from '../lib/platform.ts';
 import { errorText, toast } from '../lib/toast.ts';
-import { busy, continueOnDevice, isDrive, profile, provider, signInWithGoogle, signedIn } from '../state/session.ts';
+import { busy, continueOnDevice, isDrive, profile, provider, signInWithGoogle, signedIn, staleDeviceSession } from '../state/session.ts';
 import { appSettings, pullSettings, updateApp } from '../state/settings.ts';
 import { IcCamera, IcCheck, IcDrive, IcHeadphones, IcMic } from '../components/icons.tsx';
 import { Logo } from '../components/Shell.tsx';
@@ -56,6 +56,11 @@ export function Welcome() {
         <p class="small muted" style="text-align:center">
           Google sign-in is required: your tracks, takes and settings are stored in <b>your</b> Google Drive (folder <span class="kbd">SingersVoice</span>), never on our servers.
         </p>
+        {staleDeviceSession.value && (
+          <div class="callout" style="text-align:center">
+            This device was in developer preview. Google sign-in is now on — continue with Google to use the catalog, live meets and publishing. Files made in preview stay in this browser.
+          </div>
+        )}
         {!googleConfigured && (
           <>
             <button class="btn lg block" onClick={() => (continueOnDevice(), go('/setup', true))}>

@@ -5,7 +5,8 @@
  */
 import { computed, signal } from '@preact/signals';
 import { bestClockOffset, clockOffsetMs, type Routes } from '@singersvoice/protocol';
-import { needsReconnect, profile, setPrivileged, token } from '../state/session.ts';
+import { needsReconnect, profile, reconnect, setPrivileged, token } from '../state/session.ts';
+import { toast } from './toast.ts';
 
 const OVERRIDE_KEY = 'sv.controlUrl';
 
@@ -87,10 +88,25 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   if (!r.ok) {
     const e = (json ?? {}) as { error?: string; code?: string };
-    if (r.status === 401 && token.value) needsReconnect.value = true;
+    if (r.status === 401 && profile.value?.mode === 'drive') {
+      // Google access tokens live one hour: offer the one-tap reconnect instead of a dead end.
+      needsReconnect.value = true;
+      offerReconnect();
+      throw new ApiError(401, 'reconnect', 'Your Google session expired — tap Reconnect and try again');
+    }
     throw new ApiError(r.status, e.code ?? `http_${r.status}`, e.error ?? `Request failed (${r.status})`);
   }
   return json as T;
+}
+
+let reconnectToastAt = 0;
+function offerReconnect(): void {
+  if (Date.now() - reconnectToastAt < 8000) return;
+  reconnectToastAt = Date.now();
+  toast('Google session expired', 'warn', 8000, {
+    label: 'Reconnect',
+    onClick: () => void reconnect().catch((err) => toast(String(err), 'error')),
+  });
 }
 
 type Res<K extends keyof Routes> = Routes[K]['res'];
