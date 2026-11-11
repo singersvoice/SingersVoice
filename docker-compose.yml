@@ -8,5 +8,5 @@ services:
     ports:
       - '8787:8787'
     environment:
-      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:4173,https://namballa2025.github.io
+      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:4173,https://singersvoice.github.io
     restart: unless-stopped

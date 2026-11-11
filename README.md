@@ -5,7 +5,7 @@ track and take stored in the singer's **own Google Drive** (`SingersVoice/…`).
 static host (GitHub Pages); live meets (up to 10 performers on stage, unlimited audience with chat) run on the
 `sv-control` service and per-meet session containers described in the v2 implementation plan.
 
-**Test it now:** https://namballa2025.github.io/SingersVoice/ — on a phone, open it in Safari (iOS) or Chrome (Android)
+**Test it now:** https://singersvoice.github.io/SingersVoice/ — on a phone, open it in Safari (iOS) or Chrome (Android)
 and use *Share → Add to Home Screen* / *Install app* to get the standalone app with the SingersVoice icon.
 
 ## What's in the box
@@ -70,7 +70,7 @@ credentials).
 
 ## Restore points
 
-`restore/RP1` is the branch frozen before v2 execution (the old scaffold + Terraform PR). See
+`restore/RP1` is the branch frozen before v2 execution (the repo moved from `namballa2025/SingersVoice` to the `singersvoice` org on 2026-11-11; all branches moved with it) (the old scaffold + Terraform PR). See
 [docs/RESTORE_POINTS.md](docs/RESTORE_POINTS.md) for how to go back or branch from it.
 
 ## Plan

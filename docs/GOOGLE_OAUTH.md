@@ -17,7 +17,7 @@ SingersVoice signs people in with Google and keeps their files in **their** Driv
 4. **Credentials → Create credentials → OAuth client ID** → *Web application*:
    - Name: `SingersVoice Web`
    - **Authorized JavaScript origins**:
-     - `https://namballa2025.github.io`
+     - `https://singersvoice.github.io`
      - `http://localhost:5173` and `http://localhost:4173` (local dev/preview)
      - your Cloudflare domain later (e.g. `https://app.singersvoice.com`)
    - No redirect URIs are needed for the token flow.

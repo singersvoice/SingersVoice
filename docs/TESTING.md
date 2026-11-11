@@ -1,6 +1,6 @@
 # Testing SingersVoice on iOS, Android and the web
 
-Live build: **https://namballa2025.github.io/SingersVoice/**
+Live build: **https://singersvoice.github.io/SingersVoice/**
 
 ## Install as an app
 

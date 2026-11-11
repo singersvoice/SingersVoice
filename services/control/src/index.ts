@@ -19,7 +19,7 @@ import { newId, type ClientMessage } from '@singersvoice/protocol';
 import { MeetRegistry, type Client } from './meets.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);
-const ORIGINS = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:5173,http://localhost:4173,https://namballa2025.github.io').split(',');
+const ORIGINS = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:5173,http://localhost:4173,https://singersvoice.github.io').split(',');
 
 const app = new Hono();
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
