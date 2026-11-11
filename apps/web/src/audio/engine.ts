@@ -72,7 +72,12 @@ export class AudioEngine {
     return ((c.outputLatency ?? 0) || c.baseLatency || 0) * 1000;
   }
 
-  async openMic(opts: { deviceId?: string; echoCancellation?: boolean } = {}): Promise<void> {
+  /**
+   * Open the microphone. With `video` constraints the audio and video are requested in ONE
+   * getUserMedia call (iOS Safari drops an earlier capture when a second one starts); the video
+   * tracks are returned as their own MediaStream for the camera tile / recorder.
+   */
+  async openMic(opts: { deviceId?: string; echoCancellation?: boolean; video?: MediaTrackConstraints | false } = {}): Promise<MediaStream | null> {
     await this.resume();
     this.closeMic();
     const constraints: MediaStreamConstraints = {
@@ -83,10 +88,19 @@ export class AudioEngine {
         autoGainControl: false,
         channelCount: 1,
       },
-      video: false,
+      video: opts.video ?? false,
     };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    this.micStream = stream;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (e) {
+      if (!opts.video) throw e;
+      // Camera busy/denied: fall back to audio only so the take still happens.
+      stream = await navigator.mediaDevices.getUserMedia({ ...constraints, video: false });
+    }
+    const videoTracks = stream.getVideoTracks();
+    const videoStream = videoTracks.length ? new MediaStream(videoTracks) : null;
+    this.micStream = new MediaStream(stream.getAudioTracks());
     this.inputLabel.value = stream.getAudioTracks()[0]?.label ?? 'Microphone';
     this.micSource = this.ctx.createMediaStreamSource(stream);
     if (!this.chain) {
@@ -106,6 +120,7 @@ export class AudioEngine {
     }
     this.micSource.connect(this.chain.input);
     this.micOpen.value = true;
+    return videoStream;
   }
 
   closeMic(): void {

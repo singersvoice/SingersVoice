@@ -164,7 +164,21 @@ export function Sing(props: { id: string }) {
       const engine = engineRef.current ?? getEngine();
       engineRef.current = engine;
       await engine.resume(); // inside the tap gesture
-      await engine.openMic({ deviceId: app.audioInputId || undefined, echoCancellation: app.echoCancellation });
+      const wantCombined = isIOS && app.cameraOn;
+      if (wantCombined) camera.close();
+      const video = await engine.openMic({
+        deviceId: app.audioInputId || undefined,
+        echoCancellation: app.echoCancellation,
+        video: wantCombined
+          ? app.cameraDeviceId
+            ? { deviceId: { exact: app.cameraDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
+            : { facingMode: app.cameraFacing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
+          : false,
+      });
+      if (video) {
+        camera.adopt(video, app.cameraFacing);
+        camera.setPreset(app.zoomPreset);
+      }
       engine.applyFx(audio.params);
       engine.setMonitor(audio.monitor);
       const player = engine.player!;

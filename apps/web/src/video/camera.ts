@@ -41,6 +41,15 @@ export class Camera {
     return stream;
   }
 
+  /** Use a stream captured elsewhere (combined audio+video getUserMedia on iOS). */
+  adopt(stream: MediaStream, facing: 'user' | 'environment' = this.facing.value): void {
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = stream;
+    this.facing.value = facing;
+    this.deviceLabel.value = stream.getVideoTracks()[0]?.label ?? 'Camera';
+    this.on.value = true;
+  }
+
   async flip(): Promise<void> {
     await this.open({ facing: this.facing.value === 'user' ? 'environment' : 'user' });
   }
