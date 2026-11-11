@@ -1,0 +1,25 @@
+{
+ "schema": "singersvoice.track.v2",
+ "trackId": "trk-sample-ci",
+ "title": "CI Sample Song",
+ "artist": "SingersVoice",
+ "genre": "Test",
+ "language": "English",
+ "bpm": 120,
+ "keySignature": "A",
+ "durationMs": 20000,
+ "layers": [{ "id": "L1", "kind": "backing", "file": "backing", "mimeType": "audio/mpeg", "gain": 1, "enabledByDefault": true }],
+ "lyrics": [
+  { "startMs": 2000, "endMs": 4500, "text": "Lights up, the stage is ours tonight", "singerSlot": 1 },
+  { "startMs": 4500, "endMs": 7000, "text": "Two voices, one song, shining bright", "singerSlot": 2 },
+  { "startMs": 7000, "endMs": 9500, "text": "Hold the note and let it ring", "singerSlot": 1 },
+  { "startMs": 9500, "endMs": 12000, "text": "Every heart can learn to sing", "singerSlot": 2 },
+  { "startMs": 12000, "endMs": 15000, "text": "Sing it with me now", "singerSlot": 0 },
+  { "startMs": 15000, "endMs": 19000, "text": "SingersVoice, take a bow", "singerSlot": 0 }
+ ],
+ "singerCount": 2,
+ "notes": "Synthetic backing generated with ffmpeg for CI.",
+ "createdAt": "2026-11-10T00:00:00.000Z",
+ "updatedAt": "2026-11-10T00:00:00.000Z",
+ "origin": "trackmaker"
+}

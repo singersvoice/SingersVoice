@@ -1,0 +1,166 @@
+{
+ "schema": "singersvoice.backgrounds.v1",
+ "items": [
+  {
+   "id": "mytestbg1",
+   "kind": "image",
+   "src": "mytestbg1.webp",
+   "thumb": "thumbs/mytestbg1.webp",
+   "width": 1920,
+   "height": 1080,
+   "label": "MyTestBG1"
+  },
+  {
+   "id": "mytestbg2",
+   "kind": "image",
+   "src": "mytestbg2.webp",
+   "thumb": "thumbs/mytestbg2.webp",
+   "width": 641,
+   "height": 312,
+   "label": "MyTestBG2"
+  },
+  {
+   "id": "mytestbg3",
+   "kind": "image",
+   "src": "mytestbg3.webp",
+   "thumb": "thumbs/mytestbg3.webp",
+   "width": 1000,
+   "height": 595,
+   "label": "MyTestBG3"
+  },
+  {
+   "id": "mytestbg4",
+   "kind": "image",
+   "src": "mytestbg4.webp",
+   "thumb": "thumbs/mytestbg4.webp",
+   "width": 678,
+   "height": 452,
+   "label": "MyTestBG4"
+  },
+  {
+   "id": "mytestbg5",
+   "kind": "image",
+   "src": "mytestbg5.webp",
+   "thumb": "thumbs/mytestbg5.webp",
+   "width": 1000,
+   "height": 595,
+   "label": "MyTestBG5"
+  },
+  {
+   "id": "mytestbg6",
+   "kind": "image",
+   "src": "mytestbg6.webp",
+   "thumb": "thumbs/mytestbg6.webp",
+   "width": 541,
+   "height": 360,
+   "label": "MyTestBG6"
+  },
+  {
+   "id": "mytestbg7",
+   "kind": "image",
+   "src": "mytestbg7.webp",
+   "thumb": "thumbs/mytestbg7.webp",
+   "width": 800,
+   "height": 533,
+   "label": "MyTestBG7"
+  },
+  {
+   "id": "mytestbg8",
+   "kind": "image",
+   "src": "mytestbg8.webp",
+   "thumb": "thumbs/mytestbg8.webp",
+   "width": 1300,
+   "height": 867,
+   "label": "MyTestBG8"
+  },
+  {
+   "id": "mytestbg9",
+   "kind": "image",
+   "src": "mytestbg9.webp",
+   "thumb": "thumbs/mytestbg9.webp",
+   "width": 612,
+   "height": 408,
+   "label": "MyTestBG9"
+  },
+  {
+   "id": "mytestbg10",
+   "kind": "image",
+   "src": "mytestbg10.webp",
+   "thumb": "thumbs/mytestbg10.webp",
+   "width": 1000,
+   "height": 628,
+   "label": "MyTestBG10"
+  },
+  {
+   "id": "mytestbg11",
+   "kind": "image",
+   "src": "mytestbg11.webp",
+   "thumb": "thumbs/mytestbg11.webp",
+   "width": 1000,
+   "height": 408,
+   "label": "MyTestBG11"
+  },
+  {
+   "id": "mytestbg12",
+   "kind": "image",
+   "src": "mytestbg12.webp",
+   "thumb": "thumbs/mytestbg12.webp",
+   "width": 1000,
+   "height": 560,
+   "label": "MyTestBG12"
+  },
+  {
+   "id": "mytestbg13",
+   "kind": "image",
+   "src": "mytestbg13.webp",
+   "thumb": "thumbs/mytestbg13.webp",
+   "width": 1024,
+   "height": 683,
+   "label": "MyTestBG13"
+  },
+  {
+   "id": "mytestbg14",
+   "kind": "image",
+   "src": "mytestbg14.webp",
+   "thumb": "thumbs/mytestbg14.webp",
+   "width": 1024,
+   "height": 1024,
+   "label": "MyTestBG14"
+  },
+  {
+   "id": "mytestbg15",
+   "kind": "image",
+   "src": "mytestbg15.webp",
+   "thumb": "thumbs/mytestbg15.webp",
+   "width": 1000,
+   "height": 667,
+   "label": "MyTestBG15"
+  },
+  {
+   "id": "mytestbg16",
+   "kind": "video",
+   "src": "mytestbg16.mp4",
+   "poster": "mytestbg16.poster.jpg",
+   "thumb": "thumbs/mytestbg16.jpg",
+   "label": "MyTestBG16"
+  },
+  {
+   "id": "mytestbg17",
+   "kind": "image",
+   "src": "mytestbg17.webp",
+   "thumb": "thumbs/mytestbg17.webp",
+   "width": 1000,
+   "height": 545,
+   "label": "MyTestBG17"
+  },
+  {
+   "id": "mytestbg18",
+   "kind": "image",
+   "src": "mytestbg18.webp",
+   "thumb": "thumbs/mytestbg18.webp",
+   "width": 1000,
+   "height": 560,
+   "label": "MyTestBG18"
+  }
+ ]
+}

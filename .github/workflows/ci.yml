@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck · test · build · budget · secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (npm 12 avoids the npm 10 workspace peer-set bug)
+        run: |
+          npm i -g npm@12
+          npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build web (GitHub Pages base)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: npm run build
+
+      - name: First-load budget (400 KB gz)
+        run: node tools/ci/check-budget.mjs apps/web/dist 400
+
+      - name: Secret scan (no credentials in the repo)
+        run: |
+          set -e
+          if git grep -nE 'AIza[0-9A-Za-z_-]{30,}|[0-9]+-[0-9a-z]{32}\.apps\.googleusercontent\.com|GOCSPX-[0-9A-Za-z_-]{20,}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----' -- ':!package-lock.json' ; then
+            echo "::error::Possible credential committed"; exit 1; fi
+          echo "no credentials found"
+
+      - name: Viewport screenshots (320→1280, device mode + stage e2e)
+        env:
+          BASE_PATH: /SingersVoice/
+          SV_E2E_JSON: apps/web/test/fixtures/sample.track.json
+          SV_E2E_AUDIO: apps/web/test/fixtures/sample.mp3
+        run: |
+          npm i --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+          node tools/ci/screenshots.mjs screenshots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots
+          retention-days: 14

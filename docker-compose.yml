@@ -1,19 +1,12 @@
+# Local control plane for live meets (the static web app can run without it).
+#   docker compose up --build
 services:
-  db:
-    image: postgres:16
-    env_file: .env
-    volumes:
-      - db_data:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d
-  api:
-    build: ./api
-    env_file: .env
+  control:
+    build:
+      context: .
+      dockerfile: services/control/Dockerfile
+    ports:
+      - '8787:8787'
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-    depends_on: [db]
-  web:
-    build: ./web
-    ports: ["8080:80"]
-    depends_on: [api]
-volumes:
-  db_data:
+      ALLOWED_ORIGINS: http://localhost:5173,http://localhost:4173,https://namballa2025.github.io
+    restart: unless-stopped

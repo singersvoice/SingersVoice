@@ -1,10 +1,39 @@
+# dependencies / build
 node_modules/
 dist/
-build/
+dev-dist/
+.vite/
+*.tsbuildinfo
+coverage/
+
+# local env & secrets (never commit)
 .env
 .env.*
 !.env.example
-*.log
+*.local
+*.local.js
+*.local.json
+local_secrets/
+*.pem
+*.key
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.generated/
+crash.log
+
+# tooling output
+screenshots/
+playwright-report/
+test-results/
+
+# OS / editors
 .DS_Store
-uploads/
-recordings/
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

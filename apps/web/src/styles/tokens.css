@@ -1,0 +1,53 @@
+:root {
+  color-scheme: dark;
+  --brand: #5a1583;
+  --brand-strong: #7a2bb0;
+  --brand-deep: #1b0a2e;
+  --brand-glow: #c9a7e1;
+  --accent: #ffb454;
+  --accent-ink: #2a1600;
+  --bg: #120722;
+  --bg-2: #180b2d;
+  --surface: #1f1136;
+  --surface-2: #2b1a49;
+  --surface-3: #37245b;
+  --line: rgba(255, 255, 255, 0.1);
+  --line-strong: rgba(255, 255, 255, 0.2);
+  --text: #f6f1fc;
+  --muted: #b8a8ce;
+  --faint: #7f6f99;
+  --ok: #38d39f;
+  --warn: #ffb454;
+  --danger: #ff5f7e;
+  --info: #4ea8ff;
+
+  --lyric-done: #8e86a0;
+  --lyric-active: #38d39f;
+  --lyric-next: #ffa447;
+  --lyric-size: clamp(22px, 5.2vw, 34px);
+
+  --pad: 16px;
+  --gap: 12px;
+  --icon: 22px;
+  --btn: 44px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --text-scale: 1;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --topbar: 56px;
+  --navbar: 64px;
+
+  --font: ui-rounded, 'SF Pro Rounded', system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'Noto Sans Telugu', 'Helvetica Neue', Arial, sans-serif;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-contrast='high'] {
+  --lyric-done: #b9b3c4;
+  --lyric-active: #6dffc8;
+  --lyric-next: #ffc98a;
+  --text: #ffffff;
+}
