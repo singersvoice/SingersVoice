@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SingersVoice — Privacy Policy</title>
+<meta name="description" content="How SingersVoice handles your Google account and Google Drive data." />
+<link rel="icon" href="brand/sv-mark.png" />
+<style>
+  :root { color-scheme: dark; --bg: #120a1f; --card: #1c1030; --fg: #f3eefb; --muted: #b9a9d6; --accent: #b388ff; --line: #3a2a5a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+  header img { width: 44px; height: 44px; }
+  h1 { font-size: 1.7rem; margin: 0; }
+  h2 { font-size: 1.15rem; margin: 28px 0 8px; color: var(--accent); }
+  p, li { color: var(--fg); }
+  .muted { color: var(--muted); font-size: .9rem; }
+  a { color: var(--accent); }
+  code { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; font-size: .9em; }
+  nav { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="brand/sv-mark.png" alt="" />
+    <div><h1>SingersVoice — Privacy Policy</h1><div class="muted">Last updated: 11 November 2026</div></div>
+  </header>
+
+  <p>SingersVoice is a karaoke app for singing solo or together in live meets. It is built around one principle:
+  <strong>your recordings, tracks and settings live in <em>your own</em> Google Drive</strong>, not on our servers.</p>
+
+  <h2>What we ask Google for</h2>
+  <ul>
+    <li><strong>Sign-in</strong> (<code>openid</code>, <code>email</code>, <code>profile</code>): your name, email address and profile picture, used to show who you are inside the app and in meets you join.</li>
+    <li><strong>Google Drive, app-created files only</strong> (<code>drive.file</code>): the app can only see and manage files it created itself — the <code>SingersVoice</code> folder with your tracks, takes, backgrounds and settings — or files you explicitly pick. It cannot read the rest of your Drive.</li>
+  </ul>
+
+  <h2>Where your data is stored</h2>
+  <ul>
+    <li><strong>Audio, video, tracks and settings:</strong> in your Google Drive (<code>SingersVoice/…</code>). You can open, download or delete them there at any time.</li>
+    <li><strong>On your device:</strong> in-progress takes and cached tracks are kept in the browser's storage so the app works offline. "Remove everything on this device" in Settings clears them.</li>
+    <li><strong>The SingersVoice service (SVT DB):</strong> a small coordination service stores only what live features need: your name and email (to identify you in meets and the catalog), the public links of tracks you chose to publish, live-meet rooms (title, participants, chat messages, start times) and publishing destinations you configure. It never receives your audio or video files. Meet rooms are deleted automatically a few minutes after they go idle.</li>
+  </ul>
+
+  <h2>What we do not do</h2>
+  <ul>
+    <li>We do not sell or share your personal data with third parties.</li>
+    <li>We do not use your Google data for advertising or to train models.</li>
+    <li>We only stream a meet to an external platform (YouTube, Facebook, Instagram, Twitch…) when a privileged host explicitly starts a publishing job for it.</li>
+  </ul>
+
+  <h2>Access tokens</h2>
+  <p>Google issues the app a short-lived access token (about one hour) in your browser. It is kept only on your device and sent only to Google's APIs and, as proof of identity, to the SingersVoice service. We never see your password.</p>
+
+  <h2>Deleting your data</h2>
+  <p>Delete the <code>SingersVoice</code> folder in Google Drive to remove all your files, revoke the app under
+  <a href="https://myaccount.google.com/permissions" rel="noopener">Google Account → Third-party access</a>, and use
+  "Remove everything on this device" in the app's Settings. To have your account record removed from the SingersVoice
+  service, contact us as described below.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about privacy: write to the support email shown on Google's sign-in screen for SingersVoice, or open an
+  issue at <a href="https://github.com/singersvoice/SingersVoice/issues" rel="noopener">github.com/singersvoice/SingersVoice</a>.</p>
+
+  <nav><a href="./">← Back to SingersVoice</a> · <a href="terms.html">Terms of Service</a></nav>
+</main>
+</body>
+</html>

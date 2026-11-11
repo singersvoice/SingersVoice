@@ -71,6 +71,15 @@ export function Welcome() {
             </p>
           </>
         )}
+        <p class="small faint" style="text-align:center">
+          <a href={asset('privacy.html')} target="_blank" rel="noopener">
+            Privacy policy
+          </a>{' '}
+          ·{' '}
+          <a href={asset('terms.html')} target="_blank" rel="noopener">
+            Terms of service
+          </a>
+        </p>
       </div>
     </div>
   );

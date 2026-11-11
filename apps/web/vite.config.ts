@@ -42,7 +42,8 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,woff2,webmanifest}', 'brand/icon-192.png', 'brand/sv-mark.png', 'worklets/*.js'],
         globIgnores: ['backgrounds/**', 'brand/*.mp4', 'brand/og-image.png'],
         navigateFallback: `${base}index.html`,
-        navigateFallbackDenylist: [/^\/api\//],
+        // Static pages (privacy/terms) must not be swallowed by the SPA fallback.
+        navigateFallbackDenylist: [/^\/api\//, /\/(privacy|terms)\.html$/],
         maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
         runtimeCaching: [
           {
