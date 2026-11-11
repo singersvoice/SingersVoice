@@ -113,7 +113,7 @@ for (const m of matrix) {
       await wait(400);
       await shot('14-sing-fx');
       await page.keyboard.press('Escape');
-      await page.getByRole('button', { name: 'Finish take' }).click();
+      await page.getByRole('button', { name: 'Finish' }).click();
       await page.getByText('Your take').waitFor({ timeout: 30000 });
       await wait(1500);
       await shot('15-review');

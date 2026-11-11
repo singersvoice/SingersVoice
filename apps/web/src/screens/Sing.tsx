@@ -328,7 +328,7 @@ export function Sing(props: { id: string }) {
             </button>
             {live ? (
               <button class="btn big accent" onClick={() => void finish()}>
-                <IcStop /> Finish take
+                <IcStop /> Finish
               </button>
             ) : (
               <button class="btn big primary" onClick={() => void start()} disabled={busy}>
