@@ -30,7 +30,7 @@ and use *Share → Add to Home Screen* / *Install app* to get the standalone app
 | Public catalog (SVT DB) | ✅ publish / unpublish / search / pull | sv-control |
 | Live meets | ✅ rooms, slots, ready, chat, kickstart sync, personal takes, 5-min expiry, watch page | performers don't hear each other yet (Solo foldback by design); the audience stream needs the session container |
 | Publishing | ✅ destinations + jobs + history + in-house watch page | the encoder (RTMPS push, LL-HLS) is the session container, next increment |
-| sv-control | ✅ Hono on Node 22 (node:sqlite) **and** Cloudflare Workers + D1; Google token auth; tests + boot smoke | [docs/DEPLOY_CONTROL.md](docs/DEPLOY_CONTROL.md) — one workflow run after two secrets |
+| sv-control | ✅ Hono on Node 22 (node:sqlite) **and** Cloudflare Workers (SQLite Durable Object); Google token auth; tests + boot smoke | [docs/DEPLOY_CONTROL.md](docs/DEPLOY_CONTROL.md) — one workflow run after two secrets |
 | Session container (mixer/encoder) | ⏳ next | mediasoup ingest · VoxForge C++ mixer · FFmpeg → RTMPS/LL-HLS |
 
 ## Repository layout
@@ -46,11 +46,11 @@ apps/web/              Preact + Vite + TypeScript PWA (the iOS / Android / web c
   src/screens          Welcome/Setup, Home, Library, TrackMaker, Sing, Performances, Meets, Settings
 packages/protocol/     shared types + pure helpers (track v2, lyrics window, LRC, performance manifest,
                        VoxForge params/presets, Drive layout, meet messages) — 100 % unit-tested
-services/control/      sv-control = the SVT DB API (Hono): catalog, meets, chat, kickstart clock, publishing — Node 22 or Cloudflare Workers + D1
+services/control/      sv-control = the SVT DB API (Hono): catalog, meets, chat, kickstart clock, publishing — Node 22 or Cloudflare Workers (Durable Object)
 tools/brand/           make_brand.py (icons from the logo render), export_logo_blender.py (render SV.blend)
 tools/backgrounds/     convert.sh (jpg/mp4 → web sizes + index.json)
 tools/ci/              check-budget.mjs, screenshots.mjs (viewport matrix + solo and live-meet e2e), control-smoke.mjs
-tools/cf/              deploy.mjs — sv-control to Cloudflare Workers + D1 in one run (used by deploy-control.yml)
+tools/cf/              deploy.mjs — sv-control to Cloudflare Workers in one run; control-url.mjs — finds the service URL for Deploy web
 docs/                  GOOGLE_OAUTH.md, RESTORE_POINTS.md, ARCHITECTURE.md, TESTING.md
 ```
 
@@ -78,8 +78,9 @@ credentials).
   (and optionally `VITE_GOOGLE_API_KEY`, `VITE_CONTROL_URL`). GitHub Pages is for testing; before commercial use move
   the same `dist/` to Cloudflare (static assets + Worker, see the Terraform in PR #1 / branch
   `infra/terraform-cloudflare`).
-- **sv-control (SVT DB):** add `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` secrets and run *Deploy sv-control* —
-  it creates D1, deploys the worker, sets `VITE_CONTROL_URL` and redeploys the web app ([docs/DEPLOY_CONTROL.md](docs/DEPLOY_CONTROL.md)).
+- **sv-control (SVT DB):** add `CLOUDFLARE_API_TOKEN` (plain "Edit Cloudflare Workers" token) + `CLOUDFLARE_ACCOUNT_ID`
+  secrets and run *Deploy sv-control* — it deploys the worker (SQLite Durable Object inside, nothing else to create) and
+  redeploys the web app with the worker URL; *Deploy web* also discovers that URL by itself ([docs/DEPLOY_CONTROL.md](docs/DEPLOY_CONTROL.md)).
   Or `docker compose up --build` / any Node 22 host.
 
 ## Restore points

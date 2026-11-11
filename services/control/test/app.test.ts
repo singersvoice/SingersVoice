@@ -3,7 +3,8 @@ import type { CatalogListResponse, JoinMeetResponse, Meet, MeetSnapshot } from '
 import { createApp, type AppDeps } from '../src/app.ts';
 import { createAuthenticator } from '../src/auth.ts';
 import { SecretBox } from '../src/crypto.ts';
-import { nodeSqliteDriver, openNodeSqlite } from '../src/store/driver.ts';
+import { nodeSqliteDriver } from '../src/store/driver.ts';
+import { openNodeSqlite } from '../src/store/node-sqlite.ts';
 import { SqlStore } from '../src/store/sql.ts';
 
 let app: ReturnType<typeof createApp>;

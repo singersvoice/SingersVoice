@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      control_url:
+        description: sv-control URL (optional — otherwise the VITE_CONTROL_URL variable, or discovered from Cloudflare)
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -27,13 +32,21 @@ jobs:
       - run: |
           npm i -g npm@12
           npm ci --no-audit --no-fund
+      - name: Find the sv-control (SVT DB) URL
+        id: control
+        env:
+          INPUT_URL: ${{ inputs.control_url }}
+          VAR_URL: ${{ vars.VITE_CONTROL_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node tools/cf/control-url.mjs
       - name: Build
         env:
           BASE_PATH: /SingersVoice/
           # Repo → Settings → Secrets and variables → Actions → Variables
           VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
           VITE_GOOGLE_API_KEY: ${{ vars.VITE_GOOGLE_API_KEY }}
-          VITE_CONTROL_URL: ${{ vars.VITE_CONTROL_URL }}
+          VITE_CONTROL_URL: ${{ steps.control.outputs.url }}
         run: npm run build
       - uses: actions/configure-pages@v5
         with:

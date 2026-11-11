@@ -1,12 +1,13 @@
-name: Deploy sv-control (Cloudflare Workers + D1)
+name: Deploy sv-control (Cloudflare Workers)
 
 # One-time setup (repo → Settings → Secrets and variables → Actions):
-#   Secrets:   CLOUDFLARE_API_TOKEN (Workers Scripts:Edit, D1:Edit, Account Settings:Read)
+#   Secrets:   CLOUDFLARE_API_TOKEN — the plain "Edit Cloudflare Workers" token template is enough
+#              (the SVT DB is a SQLite Durable Object inside the worker; nothing else to provision)
 #              CLOUDFLARE_ACCOUNT_ID
-#              PUBLISH_KEY_SECRET (optional; generated + printed on the first run — save it)
+#              PUBLISH_KEY_SECRET (optional; a new worker gets a generated one that stays on the worker)
 #   Variables: VITE_GOOGLE_CLIENT_ID (also used as the token audience), PRIVILEGED_EMAILS (comma list)
-# After a successful run the workflow stores the worker URL in the VITE_CONTROL_URL variable and
-# re-runs "Deploy web" so the app picks it up.
+# After a successful run the workflow re-runs "Deploy web" with the worker URL so the app picks it up
+# ("Deploy web" can also discover the URL from the Cloudflare account on its own).
 
 on:
   push:
@@ -70,6 +71,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           URL: ${{ steps.deploy.outputs.url }}
         run: |
-          gh variable set VITE_CONTROL_URL --body "$URL" --repo "$GITHUB_REPOSITORY" || echo "::warning::Could not set VITE_CONTROL_URL automatically — set it in Settings → Variables to $URL"
-          gh workflow run deploy-web.yml --repo "$GITHUB_REPOSITORY" || echo "::warning::Could not trigger Deploy web — run it from the Actions tab"
+          # Best effort only: the workflow token usually may not write repo variables. Not needed —
+          # "Deploy web" gets the URL as an input below and can also discover it from Cloudflare.
+          gh variable set VITE_CONTROL_URL --body "$URL" --repo "$GITHUB_REPOSITORY" 2>/dev/null \
+            && echo "VITE_CONTROL_URL variable set to $URL" \
+            || echo "VITE_CONTROL_URL variable not set (no permission) — fine, Deploy web discovers the URL itself."
+          gh workflow run deploy-web.yml --repo "$GITHUB_REPOSITORY" -f control_url="$URL" \
+            || echo "::warning::Could not trigger Deploy web — run it from the Actions tab (it will find $URL on its own)"
           echo "sv-control is live at $URL"

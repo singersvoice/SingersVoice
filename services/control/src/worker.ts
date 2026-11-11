@@ -1,19 +1,18 @@
 /**
- * sv-control on Cloudflare Workers + D1 (free tier). Bindings (wrangler.jsonc):
- *   DB                 D1 database (SVT DB)
- *   GOOGLE_CLIENT_ID   var
- *   ALLOWED_ORIGINS    var (comma separated, optional)
- *   PRIVILEGED_EMAILS  var/secret (comma separated, optional)
- *   PUBLISH_KEY_SECRET secret (base64 32 bytes)
+ * sv-control on Cloudflare Workers (free tier) — the SVT DB lives in ONE SQLite-backed Durable
+ * Object ("main"), so deploying needs only the standard Workers permissions (no D1 setup).
+ *
+ * Bindings (wrangler.jsonc): SVT_DB (Durable Object namespace, class SvtDb)
+ * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH
  */
 import { createApp, sweepMeets, type AppDeps } from './app.ts';
 import { createAuthenticator } from './auth.ts';
 import { SecretBox } from './crypto.ts';
-import { d1Driver, type D1DatabaseLike } from './store/driver.ts';
+import { durableSqlDriver, type SqlStorageLike } from './store/driver.ts';
 import { SqlStore } from './store/sql.ts';
 
 interface Env {
-  DB: D1DatabaseLike;
+  SVT_DB: { idFromName(name: string): unknown; get(id: unknown): { fetch(req: Request): Promise<Response> } };
   GOOGLE_CLIENT_ID?: string;
   ALLOWED_ORIGINS?: string;
   PRIVILEGED_EMAILS?: string;
@@ -21,13 +20,21 @@ interface Env {
   DEV_AUTH?: string;
 }
 
-const depsByDb = new WeakMap<object, AppDeps>();
+interface DurableState {
+  storage: { sql: SqlStorageLike };
+}
 
-function depsFor(env: Env): AppDeps {
-  let d = depsByDb.get(env.DB as object);
-  if (!d) {
-    d = {
-      store: new SqlStore(d1Driver(env.DB)),
+const SWEEP_PATH = '/__sweep';
+const SWEEP_HEADER = 'x-sv-internal';
+
+/** The single SVT DB instance: SQLite in Durable Object storage + the whole Hono app. */
+export class SvtDb {
+  private deps: AppDeps;
+  private app: ReturnType<typeof createApp>;
+
+  constructor(state: DurableState, env: Env) {
+    this.deps = {
+      store: new SqlStore(durableSqlDriver(state.storage.sql)),
       auth: createAuthenticator({ googleClientId: env.GOOGLE_CLIENT_ID, devAuth: env.DEV_AUTH === '1' }),
       secrets: new SecretBox(env.PUBLISH_KEY_SECRET ?? ''),
       runtime: 'cloudflare',
@@ -35,18 +42,32 @@ function depsFor(env: Env): AppDeps {
       privilegedEmails: (env.PRIVILEGED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
       version: '2.1.0',
     };
-    depsByDb.set(env.DB as object, d);
+    this.app = createApp(() => this.deps);
   }
-  return d;
+
+  async fetch(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    if (url.pathname === SWEEP_PATH) {
+      if (req.headers.get(SWEEP_HEADER) !== '1') return new Response('not found', { status: 404 });
+      await this.deps.store.migrate();
+      const n = await sweepMeets(this.deps.store);
+      return Response.json({ swept: n });
+    }
+    return this.app.fetch(req);
+  }
 }
 
-const app = createApp((env) => depsFor(env as unknown as Env));
+function main(env: Env) {
+  return env.SVT_DB.get(env.SVT_DB.idFromName('main'));
+}
 
 export default {
-  fetch: (req: Request, env: Env, ctx: unknown) => app.fetch(req, env as unknown as Record<string, unknown>, ctx as never),
+  fetch(req: Request, env: Env): Promise<Response> {
+    const url = new URL(req.url);
+    if (url.pathname === SWEEP_PATH) return Promise.resolve(new Response('not found', { status: 404 }));
+    return main(env).fetch(req);
+  },
   async scheduled(_event: unknown, env: Env): Promise<void> {
-    const d = depsFor(env);
-    await d.store.migrate();
-    await sweepMeets(d.store);
+    await main(env).fetch(new Request(`https://svt-db.internal${SWEEP_PATH}`, { headers: { [SWEEP_HEADER]: '1' } }));
   },
 };

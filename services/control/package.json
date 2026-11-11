@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "sv-control — the SVT DB API: public track catalog, live meets (stage slots, GMT kickstart, chat, 5-min idle expiry), publishing destinations/jobs. Hono on Node 22 or Cloudflare Workers + D1.",
+  "description": "sv-control — the SVT DB API: public track catalog, live meets (stage slots, GMT kickstart, chat, 5-min idle expiry), publishing destinations/jobs. Hono on Node 22 or Cloudflare Workers (SQLite Durable Object).",
   "scripts": {
     "dev": "node --no-warnings=ExperimentalWarning --watch src/index.ts",
     "start": "node --no-warnings=ExperimentalWarning src/index.ts",

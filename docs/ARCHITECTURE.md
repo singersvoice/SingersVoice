@@ -48,7 +48,7 @@ No portal imports another's screens; they share only `packages/protocol`, `lib/`
 | --- | --- | --- |
 | PWA client | `apps/web` | iOS Safari (installable), Android Chrome (installable), desktop browsers |
 | Shared protocol | `packages/protocol` | client + services |
-| sv-control (SVT DB) | `services/control` | Hono on Node 22 (node:sqlite) or Cloudflare Workers + D1: users (privileged flag), catalog, meets, chat, recordings, publishing destinations/jobs; Google access-token auth |
+| sv-control (SVT DB) | `services/control` | Hono on Node 22 (node:sqlite) or Cloudflare Workers (one SQLite-backed Durable Object): users (privileged flag), catalog, meets, chat, recordings, publishing destinations/jobs; Google access-token auth |
 | sv-session (V3) | `services/session` (planned) | one pod per meet: mediasoup ingest → VoxForge C++ mixer-composer → FFmpeg encoder → RTMPS / LL-HLS |
 
 ## Audio chain (VoxForge, web twin of the JUCE plugin)

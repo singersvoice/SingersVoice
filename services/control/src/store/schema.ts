@@ -1,4 +1,4 @@
-/** SVT DB schema (SQLite dialect — node:sqlite and Cloudflare D1). Idempotent; run at startup. */
+/** SVT DB schema (SQLite dialect — node:sqlite and Durable Object SQLite storage). Idempotent; run at startup. */
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
   user_id TEXT PRIMARY KEY,

@@ -12,7 +12,8 @@ import { serve } from '@hono/node-server';
 import { createApp, sweepMeets, type AppDeps } from './app.ts';
 import { createAuthenticator } from './auth.ts';
 import { SecretBox } from './crypto.ts';
-import { nodeSqliteDriver, openNodeSqlite } from './store/driver.ts';
+import { nodeSqliteDriver } from './store/driver.ts';
+import { openNodeSqlite } from './store/node-sqlite.ts';
 import { SqlStore } from './store/sql.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);

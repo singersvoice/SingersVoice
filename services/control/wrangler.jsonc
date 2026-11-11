@@ -1,6 +1,7 @@
 {
-  // sv-control on Cloudflare Workers (free tier). `database_id` is filled in by tools/cf/deploy.mjs
-  // (it creates the D1 database on first deploy) — or paste yours from `wrangler d1 create svt-db`.
+  // sv-control on Cloudflare Workers (free tier). The SVT DB is a SQLite-backed Durable Object,
+  // so a plain "Edit Cloudflare Workers" API token is all a deploy needs. tools/cf/deploy.mjs
+  // writes .generated/wrangler.jsonc from this file with the vars filled in.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "sv-control",
   "main": "src/worker.ts",
@@ -13,7 +14,8 @@
     "GOOGLE_CLIENT_ID": "",
     "ALLOWED_ORIGINS": "https://singersvoice.github.io"
   },
-  "d1_databases": [
-    { "binding": "DB", "database_name": "svt-db", "database_id": "REPLACE_ME" }
-  ]
+  "durable_objects": {
+    "bindings": [{ "name": "SVT_DB", "class_name": "SvtDb" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SvtDb"] }]
 }

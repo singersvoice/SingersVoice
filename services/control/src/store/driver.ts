@@ -1,6 +1,6 @@
 /**
  * Minimal SQL driver so the same store runs on Node (node:sqlite, zero dependencies) and on
- * Cloudflare Workers (D1). Both speak SQLite, so one schema serves both.
+ * Cloudflare Workers (SQLite-backed Durable Object storage). Both speak SQLite, so one schema serves both.
  */
 export interface Driver {
   run(sql: string, params?: unknown[]): Promise<void>;
@@ -8,42 +8,6 @@ export interface Driver {
   get<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T | undefined>;
   /** Execute several statements (schema setup). */
   exec(sql: string): Promise<void>;
-}
-
-// ---- Cloudflare D1 (structural types; no dependency on @cloudflare/workers-types) ----
-export interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  run(): Promise<unknown>;
-  all<T = unknown>(): Promise<{ results?: T[] }>;
-  first<T = unknown>(): Promise<T | null>;
-}
-export interface D1DatabaseLike {
-  prepare(sql: string): D1PreparedStatement;
-  batch(statements: D1PreparedStatement[]): Promise<unknown>;
-}
-
-export function d1Driver(db: D1DatabaseLike): Driver {
-  return {
-    async run(sql, params = []) {
-      await db.prepare(sql).bind(...params).run();
-    },
-    async all<T>(sql: string, params: unknown[] = []) {
-      const r = await db.prepare(sql).bind(...params).all<T>();
-      return r.results ?? [];
-    },
-    async get<T>(sql: string, params: unknown[] = []) {
-      const r = await db.prepare(sql).bind(...params).first<T>();
-      return r ?? undefined;
-    },
-    async exec(sql) {
-      const stmts = sql
-        .split(';')
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => db.prepare(s));
-      if (stmts.length) await db.batch(stmts);
-    },
-  };
 }
 
 // ---- Node: node:sqlite (Node 22.13+ built-in) ----
@@ -74,8 +38,24 @@ export function nodeSqliteDriver(db: NodeSqliteDatabase): Driver {
   };
 }
 
-/** Open a node:sqlite database (file path or ':memory:'). Loaded lazily so the Worker bundle never sees it. */
-export async function openNodeSqlite(path: string): Promise<NodeSqliteDatabase> {
-  const mod = (await import('node:sqlite')) as unknown as { DatabaseSync: new (p: string) => NodeSqliteDatabase };
-  return new mod.DatabaseSync(path);
+// ---- Cloudflare Durable Object SQLite storage (ctx.storage.sql) ----
+export interface SqlStorageLike {
+  exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
+}
+
+export function durableSqlDriver(sql: SqlStorageLike): Driver {
+  return {
+    async run(q, params = []) {
+      sql.exec(q, ...params);
+    },
+    async all<T>(q: string, params: unknown[] = []) {
+      return sql.exec(q, ...params).toArray() as T[];
+    },
+    async get<T>(q: string, params: unknown[] = []) {
+      return (sql.exec(q, ...params).toArray()[0] as T | undefined) ?? undefined;
+    },
+    async exec(q) {
+      for (const stmt of q.split(';').map((s) => s.trim()).filter(Boolean)) sql.exec(stmt);
+    },
+  };
 }
