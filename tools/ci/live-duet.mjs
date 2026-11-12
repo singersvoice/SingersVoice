@@ -68,7 +68,7 @@ try {
   check(true, 'a new meet starts with an empty set list');
   // The host adds the first song from her library (private → "add anyway": her guest holds his own copy).
   const addSong = async (p, who) => {
-    await p.getByRole('button', { name: 'Pick a song' }).click();
+    await p.getByRole('button', { name: 'Pick your selection of song' }).click();
     await p.getByRole('button', { name: 'Pick CI Sample Song' }).click();
     await p.getByText(/is up next|is on the set list/).waitFor({ timeout: 15000 });
     console.log(`${who} picked the song`);

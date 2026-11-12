@@ -59,7 +59,7 @@ model loads, a camera on/off button for you.
 
 | Option | Who | What it does |
 | --- | --- | --- |
-| **Pick a song** | host, singers | Opens the picker: *My songs* (your Drive library) and *Songs from other singers*, with search. Picking is all you do: the song loads on every device in the meet, so all the singers sing the same lines at the same time. A song of yours that other devices cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission — needs a Google sign-in; otherwise only your own devices can play it, and the others say so). The first song picked becomes the current one; later picks queue up. |
+| **Pick your selection of song** | host, singers | Opens the picker: *My songs* (your Drive library) and *Songs from other singers*, with search. Picking is all you do: the song loads on every device in the meet, so all the singers sing the same lines at the same time. A song of yours that other devices cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission — needs a Google sign-in; otherwise only your own devices can play it, and the others say so). The first song picked becomes the current one; later picks queue up. |
 | **Now** (in the picker / on a queued song) | host | Makes that song the current one (the previous current goes back to the top of the queue). Only between songs. |
 | ▲ / × on a queued song | host (× also the one who added it) | Move up / remove. |
 | **Skip** | host | Drops the current song; the next one comes up. |

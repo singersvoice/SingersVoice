@@ -45,7 +45,7 @@ export function SetListPanel(props: { session: MeetSession; meet: Meet; you: Par
     <div class="row monitor-chips">
       {canPick && !picking && (
         <button class="btn sm primary" onClick={() => setPicking(true)}>
-          <IcMusic size={16} /> Pick a song
+          <IcMusic size={16} /> Pick your selection of song
         </button>
       )}
       {host && hasSong && !live && (
