@@ -38,12 +38,17 @@ export interface StageTile {
 const FPS = 24;
 const MAX_WIDTH = 1600;
 
-/** Pure layout: N portrait tiles (3:4) evenly spaced, bottom-anchored; fewer performers → bigger tiles. */
-export function layoutStage(width: number, height: number, count: number): StageTile[] {
+export type StageMode = 'stage' | 'show';
+
+/**
+ * Pure layout: N portrait tiles (3:4) evenly spaced, bottom-anchored; fewer performers → bigger tiles.
+ * 'stage' leaves the top ~40 % to the lyrics; 'show' (Publishing mode) has no lyrics and fills the
+ * frame with the performers, like a televised stage show.
+ */
+export function layoutStage(width: number, height: number, count: number, mode: StageMode = 'stage'): StageTile[] {
   const n = Math.max(1, count);
   const slotW = width / n;
-  // Lyrics live in the top ~40 %; performers fill the band below it, bigger when fewer.
-  const hFrac = n === 1 ? 0.62 : n === 2 ? 0.6 : n <= 4 ? 0.56 : n <= 6 ? 0.5 : 0.44;
+  const hFrac = mode === 'show' ? (n <= 2 ? 0.96 : n <= 4 ? 0.92 : 0.86) : n === 1 ? 0.62 : n === 2 ? 0.6 : n <= 4 ? 0.56 : n <= 6 ? 0.5 : 0.44;
   let h = height * hFrac;
   let w = h * 0.75;
   if (w > slotW * 0.96) {
@@ -71,7 +76,7 @@ export class StageCompositor {
   /** Latest layout in CSS pixels (for tests / overlays). */
   tiles: (StageTile & { performer: StagePerformer })[] = [];
 
-  constructor() {
+  constructor(readonly mode: StageMode = 'stage') {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'stagecanvas';
     this.ctx = this.canvas.getContext('2d', { alpha: true })!;
@@ -138,7 +143,7 @@ export class StageCompositor {
     if (!W || !H) return;
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.clearRect(0, 0, W, H);
-    const tiles = layoutStage(W, H, this.performers.length);
+    const tiles = layoutStage(W, H, this.performers.length, this.mode);
     this.tiles = tiles.map((t, i) => ({ ...t, id: this.performers[i]!.id, performer: this.performers[i]! }));
     for (const t of this.tiles) {
       const p = t.performer;
@@ -232,7 +237,7 @@ export class StageCompositor {
   }
 
   private drawTag(c: CanvasRenderingContext2D, p: StagePerformer, t: StageTile): void {
-    const fontPx = Math.max(11, Math.min(16, t.w * 0.09));
+    const fontPx = this.mode === 'show' ? Math.max(14, Math.min(26, t.w * 0.1)) : Math.max(11, Math.min(16, t.w * 0.09));
     c.save();
     c.font = `600 ${fontPx}px system-ui, -apple-system, sans-serif`;
     c.textBaseline = 'middle';

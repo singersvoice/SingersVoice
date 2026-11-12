@@ -48,11 +48,17 @@ export class AlphaPacker {
 }
 
 const VS = `attribute vec2 p; varying vec2 v; void main(){ v = vec2((p.x+1.0)*0.5, (1.0-p.y)*0.5); gl_Position = vec4(p,0.0,1.0); }`;
-const FS = `precision mediump float; uniform sampler2D t; varying vec2 v;
+// The mask travels as the grey right half of a lossy video: erode it by one texel (3×3 minimum) so
+// codec ringing and the sliver of background the segmenter leaves around a person never show as a
+// bright fringe once the cut-out stands huge on a show stage, then firm up the edge.
+const FS = `precision mediump float; uniform sampler2D t; uniform vec2 u; varying vec2 v;
+float m(vec2 o){ return texture2D(t, vec2(0.5 + v.x*0.5, v.y) + o).r; }
 void main(){
   vec3 rgb = texture2D(t, vec2(v.x*0.5, v.y)).rgb;
-  float a = texture2D(t, vec2(0.5 + v.x*0.5, v.y)).r;
-  a = smoothstep(0.08, 0.6, a);
+  float a = m(vec2(0.0));
+  a = min(a, min(min(m(vec2(-u.x, 0.0)), m(vec2(u.x, 0.0))), min(m(vec2(0.0, -u.y)), m(vec2(0.0, u.y)))));
+  a = min(a, min(min(m(vec2(-u.x, -u.y)), m(vec2(u.x, -u.y))), min(m(vec2(-u.x, u.y)), m(vec2(u.x, u.y)))));
+  a = smoothstep(0.2, 0.75, a);
   gl_FragColor = vec4(rgb, a);
 }`;
 
@@ -104,6 +110,7 @@ export class AlphaUnpacker {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.uniform1i(gl.getUniformLocation(prog, 't'), 0);
+    gl.uniform2f(gl.getUniformLocation(prog, 'u'), 1 / (this.width * 2), 1 / this.height);
     gl.viewport(0, 0, this.width, this.height);
   }
 

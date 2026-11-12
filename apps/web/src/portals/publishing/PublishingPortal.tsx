@@ -1,7 +1,9 @@
 /**
- * Publishing mode — privileged users push a meet to YouTube / Facebook / Instagram / Twitch and the
- * in-house watch portal. Screens: Destinations (ingest URL + stream key, enable), Publish (pick a
- * meet, destinations, title, go live / stop), History (jobs with their event timeline).
+ * Publishing mode — its own portal, for privileged accounts only: push a meet to YouTube / Facebook /
+ * Instagram / Twitch and the in-house watch portal. Screens: Publish (pick a meet — one you host or
+ * joined, or any meet by link / code — pick destinations, Publish → the show view), Destinations
+ * (ingest URL + stream key per platform), History (jobs with their event timeline). The show view
+ * (/publishing/show/:id) is the broadcast picture: performers huge on one stage, no lyrics.
  * The encoder that executes a job lives in the session container (next increment); jobs queue here.
  */
 import { DESTINATIONS, meetIsOpen, type Destination, type DestinationKind, type Meet, type PublishJob } from '@singersvoice/protocol';
@@ -10,14 +12,31 @@ import { IcCheck, IcPlay, IcStop } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Seg, Spinner, Switch } from '../../components/ui.tsx';
 import { api, ApiError, controlConfigured, refreshAccount } from '../../lib/api.ts';
-import { href } from '../../lib/nav.ts';
+import { go, href } from '../../lib/nav.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { privileged } from '../../state/session.ts';
 
 type Tab = 'publish' | 'destinations' | 'history';
 
+const initialTab = (): Tab => {
+  const q = new URLSearchParams(location.search);
+  const t = q.get('tab');
+  if (t === 'publish' || t === 'destinations' || t === 'history') return t;
+  return 'publish';
+};
+
+/** `/meet/<id>` link, a bare meet id, or a 6-letter join code → the meet. */
+async function resolveMeet(input: string): Promise<Meet> {
+  const s = input.trim();
+  const m = /\/meet\/([^/?#\s]+)/.exec(s);
+  if (m) return (await api.get('GET /meets/:id', `/meets/${encodeURIComponent(m[1]!)}`)).meet;
+  if (/^[a-z0-9]{6}$/i.test(s)) return (await api.get('GET /meets/code/:code', `/meets/code/${encodeURIComponent(s.toUpperCase())}`)).meet;
+  if (s) return (await api.get('GET /meets/:id', `/meets/${encodeURIComponent(s)}`)).meet;
+  throw new Error('Paste a meet link or its 6-letter code');
+}
+
 export function PublishingPortal() {
-  const [tab, setTab] = useState<Tab>(() => (new URLSearchParams(location.search).get('meet') ? 'publish' : 'destinations'));
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [checked, setChecked] = useState(false);
   useEffect(() => {
     void refreshAccount().finally(() => setChecked(true));
@@ -152,46 +171,69 @@ function Destinations() {
 
 function Publish(props: { onDone: () => void }) {
   const [meets, setMeets] = useState<Meet[] | null>(null);
-  const [dests, setDests] = useState<Destination[]>([]);
+  const [dests, setDests] = useState<Destination[] | null>(null);
   const [meetId, setMeetId] = useState(() => new URLSearchParams(location.search).get('meet') ?? '');
-  const [picked, setPicked] = useState<DestinationKind[]>(['inhouse']);
+  const [link, setLink] = useState('');
+  const [resolving, setResolving] = useState(false);
+  const [picked, setPicked] = useState<DestinationKind[] | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
-  const [job, setJob] = useState<PublishJob | null>(null);
 
   useEffect(() => {
     void api.get('GET /meets', '/meets').then((r) => setMeets(r.meets)).catch(() => setMeets([]));
-    void api.get('GET /publishing/destinations', '/publishing/destinations').then((r) => setDests(r.destinations)).catch(() => undefined);
+    void api
+      .get('GET /publishing/destinations', '/publishing/destinations')
+      .then((r) => {
+        setDests(r.destinations);
+        setPicked((p) => p ?? r.destinations.filter((d) => d.enabled).map((d) => d.kind));
+      })
+      .catch(() => setDests([]));
   }, []);
   useEffect(() => {
     const m = meets?.find((x) => x.meetId === meetId);
     if (m && !title) setTitle(m.title);
   }, [meetId, meets]);
 
-  const go = async () => {
+  /** Any meet by link or code: it is added to the list and selected (the show view joins it as the publisher). */
+  const addByLink = async () => {
+    setResolving(true);
+    try {
+      const m = await resolveMeet(link);
+      setMeets((l) => (l ?? []).some((x) => x.meetId === m.meetId) ? l : [m, ...(l ?? [])]);
+      setMeetId(m.meetId);
+      setTitle((t) => t || m.title);
+      setLink('');
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : errorText(e), 'error', 6000);
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  const enabled = (dests ?? []).filter((d) => d.enabled).map((d) => d.kind);
+  const selected = meets?.find((m) => m.meetId === meetId) ?? null;
+  const chosen = picked ?? [];
+  const showUrl = (id: string, job?: PublishJob) => `/publishing/show/${encodeURIComponent(id)}?dest=${encodeURIComponent(chosen.join(','))}${job ? `&job=${encodeURIComponent(job.jobId)}` : ''}`;
+
+  /** Publish: queue the job for the chosen destinations, then open the show view (performers huge, no lyrics). */
+  const publish = async () => {
+    if (!meetId) return;
     setBusy(true);
     try {
-      const r = await api.post('POST /publishing/jobs', '/publishing/jobs', { meetId, destinations: picked, title, description });
-      setJob(r.job);
-      toast('Publish job queued', 'ok');
+      const r = await api.post('POST /publishing/jobs', '/publishing/jobs', { meetId, destinations: chosen, title, description });
+      toast('Publishing requested — opening the show view', 'ok');
+      go(showUrl(meetId, r.job));
     } catch (e) {
-      toast(e instanceof ApiError ? e.message : errorText(e), 'error', 8000);
+      if (e instanceof ApiError && (e.code === 'already_publishing' || e.code === 'not_in_meet')) {
+        // Already running, or we have to be in the meet first: the show view joins as the publisher and takes it from there.
+        go(showUrl(meetId));
+      } else toast(e instanceof ApiError ? e.message : errorText(e), 'error', 8000);
     } finally {
       setBusy(false);
     }
   };
-  const stop = async () => {
-    if (!job) return;
-    try {
-      const r = await api.post('POST /publishing/jobs/:id/stop', `/publishing/jobs/${encodeURIComponent(job.jobId)}/stop`);
-      setJob(r.job);
-    } catch (e) {
-      toast(errorText(e), 'error');
-    }
-  };
 
-  const enabled = dests.filter((d) => d.enabled).map((d) => d.kind);
   return (
     <div class="stack">
       <section class="card stack">
@@ -200,7 +242,7 @@ function Publish(props: { onDone: () => void }) {
           <Spinner />
         ) : (
           <select class="input" value={meetId} onChange={(e) => setMeetId((e.currentTarget as HTMLSelectElement).value)}>
-            <option value="">Pick a meet you host</option>
+            <option value="">Pick a meet you host or joined</option>
             {meets.map((m) => (
               <option key={m.meetId} value={m.meetId}>
                 {m.title} · {m.state} · {new Date(m.createdAt).toLocaleString()}
@@ -208,20 +250,30 @@ function Publish(props: { onDone: () => void }) {
             ))}
           </select>
         )}
-        {meetId && meets?.find((m) => m.meetId === meetId && !meetIsOpen(m)) && <div class="small muted">This meet is over — the job records the configuration; start a new meet to stream live.</div>}
+        <div class="row">
+          <input class="input" style="flex:1 1 240px" value={link} placeholder="…or paste a meet link / 6-letter code" aria-label="Meet link or code" onInput={(e) => setLink((e.currentTarget as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && void addByLink()} />
+          <button class="btn" disabled={resolving || !link.trim()} onClick={() => void addByLink()}>
+            {resolving ? <Spinner /> : 'Add'}
+          </button>
+        </div>
+        {selected && !meetIsOpen(selected) && <div class="small muted">This meet is over — the job only records the configuration; publish an open meet to stream live.</div>}
       </section>
       <section class="card stack">
         <h3>2 · Where</h3>
-        {DESTINATIONS.map((d) => (
-          <Switch
-            key={d.kind}
-            checked={picked.includes(d.kind)}
-            disabled={!enabled.includes(d.kind)}
-            onChange={(v) => setPicked((p) => (v ? [...p, d.kind] : p.filter((k) => k !== d.kind)))}
-            label={d.label}
-            hint={enabled.includes(d.kind) ? undefined : 'Enable it under Destinations first'}
-          />
-        ))}
+        {dests === null ? (
+          <Spinner />
+        ) : (
+          DESTINATIONS.map((d) => (
+            <Switch
+              key={d.kind}
+              checked={chosen.includes(d.kind)}
+              disabled={!enabled.includes(d.kind)}
+              onChange={(v) => setPicked((p) => (v ? [...(p ?? []), d.kind] : (p ?? []).filter((k) => k !== d.kind)))}
+              label={d.label}
+              hint={enabled.includes(d.kind) ? undefined : 'Enable it under Destinations first'}
+            />
+          ))
+        )}
       </section>
       <section class="card stack">
         <h3>3 · Listing</h3>
@@ -233,22 +285,21 @@ function Publish(props: { onDone: () => void }) {
         </Field>
       </section>
       <section class="card stack">
-        <h3>4 · Go live</h3>
+        <h3>4 · Publish</h3>
         <p class="muted small">
-          Queues a publish job. When the meet's host starts the song, the session container composes the stage (performers' takes, lyrics, background) and pushes RTMPS to the chosen platforms; the in-house portal gets an LL-HLS stream. Until the container is deployed, the job stays <b>requested</b> — nothing is sent anywhere.
+          Opens the <b>show view</b>: the performers cut out of their cameras, huge on one stage, no lyrics — the picture your audience sees. The job is queued for the chosen destinations; when the host starts the song, the session container composes the stage and pushes RTMPS to the platforms (the in-house portal gets LL-HLS). Until the container is deployed, the job stays <b>requested</b> — nothing is sent anywhere.
         </p>
-        {!job ? (
-          <button class="btn accent lg" disabled={busy || !meetId || !picked.length} onClick={() => void go()}>
-            {busy ? <Spinner /> : <IcPlay />} Queue publish
+        <div class="row">
+          <button class="btn accent lg" disabled={busy || !meetId || !chosen.length} onClick={() => void publish()}>
+            {busy ? <Spinner /> : <IcPlay />} Publish
           </button>
-        ) : (
-          <JobCard job={job} onStop={stop} />
-        )}
-        {job && (
-          <button class="btn ghost" onClick={props.onDone}>
-            See history
+          <button class="btn lg" disabled={!meetId} onClick={() => meetId && go(showUrl(meetId))} title="Open the broadcast picture without queueing a job">
+            Open show view
           </button>
-        )}
+        </div>
+        <button class="btn ghost" onClick={props.onDone}>
+          See history
+        </button>
       </section>
     </div>
   );
@@ -280,11 +331,18 @@ function JobCard(props: { job: PublishJob; onStop?: () => void }) {
         ))}
       </div>
       {j.error && <div class="callout danger">{j.error}</div>}
-      {active && props.onStop && (
-        <button class="btn danger sm" onClick={props.onStop}>
-          <IcStop size={16} /> Stop
-        </button>
-      )}
+      <div class="row">
+        {active && (
+          <a class="btn sm primary" href={href(`/publishing/show/${encodeURIComponent(j.meetId)}?job=${encodeURIComponent(j.jobId)}`)}>
+            <IcPlay size={16} /> Show view
+          </a>
+        )}
+        {active && props.onStop && (
+          <button class="btn danger sm" onClick={props.onStop}>
+            <IcStop size={16} /> Stop
+          </button>
+        )}
+      </div>
     </div>
   );
 }

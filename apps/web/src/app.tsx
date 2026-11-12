@@ -5,6 +5,7 @@ import { bindRouter, href, relPath } from './lib/nav.ts';
 import { MeetRoom } from './portals/meets/MeetRoom.tsx';
 import { MeetsHome } from './portals/meets/MeetsHome.tsx';
 import { PublishingPortal } from './portals/publishing/PublishingPortal.tsx';
+import { ShowView } from './portals/publishing/ShowView.tsx';
 import { Watch } from './portals/publishing/Watch.tsx';
 import { Performances } from './portals/studio/Performances.tsx';
 import { Sing, SingPicker } from './portals/studio/Sing.tsx';
@@ -80,6 +81,7 @@ export function App() {
           <Route path={r('/meet/:id')} component={guarded((p) => <MeetRoom id={p.id ?? ''} />)} />
           {/* Publishing portal + public watch page */}
           <Route path={r('/publishing')} component={guarded(() => <PublishingPortal />)} />
+          <Route path={r('/publishing/show/:id')} component={guarded((p) => <ShowView id={p.id ?? ''} />)} />
           <Route path={r('/watch/:id')} component={(p: P) => <Watch id={p.id ?? ''} />} />
           <Route path={r('/settings')} component={guarded(() => <Settings />)} />
           <Route default component={NotFound} />

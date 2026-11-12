@@ -22,22 +22,29 @@ export class MeetSession {
   private stopped = false;
   private inFlight = false;
 
-  constructor(readonly meetId: string) {
+  /** Resume token per meet — and per kind: a publisher's show view is its own participant, so its own token. */
+  private readonly storageKey: string;
+
+  constructor(
+    readonly meetId: string,
+    readonly kind: 'member' | 'publisher' = 'member',
+  ) {
+    this.storageKey = `sv.meet.${meetId}.${kind === 'publisher' ? 'pub.' : ''}rt`;
     try {
-      this.resumeToken = sessionStorage.getItem(`sv.meet.${meetId}.rt`) ?? '';
+      this.resumeToken = sessionStorage.getItem(this.storageKey) ?? '';
     } catch {
       /* ignore */
     }
   }
 
-  async join(role: 'audience' | 'performer'): Promise<void> {
+  async join(role: 'audience' | 'performer' | 'publisher'): Promise<void> {
     this.joining.value = true;
     try {
       if (Date.now() - clock.value.syncedAt > 60_000) await syncClock();
       const r = await api.post('POST /meets/:id/join', `/meets/${encodeURIComponent(this.meetId)}/join`, { role, resumeToken: this.resumeToken || undefined });
       this.resumeToken = r.resumeToken;
       try {
-        sessionStorage.setItem(`sv.meet.${this.meetId}.rt`, r.resumeToken);
+        sessionStorage.setItem(this.storageKey, r.resumeToken);
       } catch {
         /* ignore */
       }
@@ -58,8 +65,8 @@ export class MeetSession {
     if (this.stopped) return;
     const m = this.snapshot.value?.meet;
     const forming = m && (m.state === 'lobby' || m.state === 'countdown');
-    // Performers follow the host's transport cues (pause/resume), so they poll faster while live.
-    const onStageLive = m?.state === 'live' && this.you.value?.slot != null;
+    // Performers (and a publisher's show view) follow the host's transport cues, so they poll faster while live.
+    const onStageLive = m?.state === 'live' && (this.you.value?.slot != null || this.you.value?.role === 'publisher');
     this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), forming ? POLL_FORMING_MS : onStageLive ? POLL_ONSTAGE_MS : POLL_SETTLED_MS);
   }
 

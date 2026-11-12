@@ -26,7 +26,7 @@ that the code depends on.
 | Tracks | `/tracks` | track files in Drive, catalog entries | Drive API, `sv-control /catalog/*` |
 | Studio | `/studio/*` | tracks, takes, audio settings | Drive API (works offline); the catalog only to publish a saved track or pull one to sing |
 | Live Meets | `/meets`, `/meet/:id` | meet session (poll), personal take | `sv-control /meets/*`, Drive for the take |
-| Publishing | `/publishing`, `/watch/:id` | destinations, jobs | `sv-control /publishing/*`, `/watch/*` |
+| Publishing | `/publishing`, `/publishing/show/:id`, `/watch/:id` | destinations, jobs, the show view | `sv-control /publishing/*`, `/meets/:id/*` (as a publisher), `/watch/*` |
 
 No portal imports another's screens; they share only `packages/protocol`, `lib/` (storage, api, audio) and
 `state/` (session, settings). The SVT DB (sv-control) is the only shared backend and holds no media.
@@ -83,7 +83,29 @@ the mask as grey, `video/alphaPack.ts`), which survives compression far better t
 receivers unpack it with a one-line WebGL shader. Signalling is relayed by the SVT DB
 (`POST /meets/:id/signal`, polled) so no socket server is needed; ICE servers come from `GET /ice`
 (Google STUN by default; set `ICE_SERVERS` on the service to add TURN for strict NATs). Per-peer
-bitrate is capped and scaled with the mesh size (≈1.6 Mbit/s total uplink).
+bitrate is capped and scaled with the mesh size (≈1.6 Mbit/s total uplink). The mesh heals itself:
+signals to a peer go out in order (an offer always lands before its ICE candidates; the relay assigns
+its per-meet sequence inside one INSERT so simultaneous signals never collide), candidates that
+overtake a description are queued, an offer nobody answers within 9 s is made again from a fresh
+connection, a link that failed its ICE restarts is re-made, and a new DTLS fingerprint from a peer
+(a reload, a re-made link) is mirrored by re-making ours.
+
+## Publishing mode (the show view)
+
+Publishing is its own portal (`/publishing`) for privileged accounts (`PRIVILEGED_EMAILS` on the
+service): per-platform destinations (YouTube, Facebook, Instagram, Twitch — RTMPS ingest URL +
+stream key, stored sealed — and the in-house portal), a publish job per meet, history. **Publish**
+opens the **show view** (`/publishing/show/:id`): the broadcast picture. It joins the meet as a
+*publisher* participant — its own kind: never on stage, never counted as audience, one per account
+and meet, separate from the same account's performer participant on another device — pulls every
+performer's video over the same mesh (receive-only; performers keep a publisher's link even though
+it is not on the stage list), and draws them with the compositor in `show` mode: performers fill
+the frame (≈96 % of its height for one or two, 92 % up to four, 86 % beyond), bigger name tags, no
+lyrics, no controls in the picture. The chrome (title, LIVE badge, destinations, Go live / Stop,
+backing track in sync with the meet's transport, full screen) fades out while the show plays and
+comes back on any pointer movement. Only the host, or a privileged account that joined the meet
+(the show view does), may queue a job for it. The singers' rooms are untouched: they keep their
+lyrics, cue deck and transport; the show view only listens to the meet and pulls video.
 4. Performers hear only themselves + the track (Solo foldback). The composed mix for the audience comes from
    the session container (next increment); until then the watch page shows lyrics in sync and chat.
 5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.

@@ -276,8 +276,12 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (meet.state === 'expired') return err(c, 410, 'expired', 'This meet expired after 5 minutes without activity');
     if (meet.state === 'ended') return err(c, 410, 'ended', 'This meet has ended');
     const now = new Date().toISOString();
-    let p = (body.resumeToken ? await store.getParticipantByToken(meet.meetId, body.resumeToken) : null) ?? (await store.getParticipantByUser(meet.meetId, user.userId));
-    if (p && p.userId !== user.userId) p = null;
+    const publisher = body.role === 'publisher';
+    if (publisher && !user.privileged) return err(c, 403, 'not_privileged', 'Publishing mode is for privileged accounts');
+    // A publisher's show view is its own participant: the same account may be performing on another device.
+    let p = body.resumeToken ? await store.getParticipantByToken(meet.meetId, body.resumeToken) : null;
+    if (!p) p = await store.getParticipantByUser(meet.meetId, user.userId, publisher ? 'publisher' : 'member');
+    if (p && (p.userId !== user.userId || (publisher ? p.role !== 'publisher' : p.role === 'publisher'))) p = null;
     if (!p) {
       p = {
         meetId: meet.meetId,
@@ -285,7 +289,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         userId: user.userId,
         displayName: user.name,
         picture: user.picture,
-        role: user.userId === meet.hostUserId ? 'host' : 'audience',
+        role: publisher ? 'publisher' : user.userId === meet.hostUserId ? 'host' : 'audience',
         slot: null,
         joinedAt: now,
         lastSeenAt: now,
@@ -428,6 +432,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const p = await participantFromBody(c, meet.meetId, body.resumeToken);
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
     if (!meetIsOpen(meet)) return err(c, 410, 'meet_closed', 'This meet has ended');
+    // Performer video is private to the stage: only performers and a publisher's show view may signal.
+    if (p.slot === null && p.role !== 'publisher') return err(c, 403, 'not_on_stage', 'Only performers and the publisher exchange video');
     const to = String(body.to ?? '');
     const type = body.type;
     const data = typeof body.data === 'string' ? body.data : JSON.stringify(body.data ?? null);
@@ -446,6 +452,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
     const p = await participantFromBody(c, meet.meetId, body.resumeToken);
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (p.slot === null && p.role !== 'publisher') return err(c, 403, 'not_on_stage', 'Only performers and the publisher exchange video');
     const signals = await store.signalsFor(meet.meetId, p.participantId, Number(body.since ?? 0));
     return c.json({ signals, serverEpochMs: Date.now() });
   });
@@ -546,7 +553,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!body.meetId) return err(c, 400, 'bad_request', 'meetId is required');
     const meet = await store.getMeet(body.meetId);
     if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
-    if (meet.hostUserId !== user.userId) return err(c, 403, 'not_host', 'Only the meet host can publish it');
+    // The host, or a privileged account that joined the meet (its Publishing show view), may publish it.
+    if (meet.hostUserId !== user.userId && !(await store.getParticipantByUser(meet.meetId, user.userId, 'any'))) return err(c, 403, 'not_in_meet', 'Join the meet (or host it) to publish it');
     const wanted = (Array.isArray(body.destinations) ? body.destinations : []).filter((k): k is DestinationKind => DESTINATIONS.some((d) => d.kind === k));
     if (!wanted.length) return err(c, 400, 'no_destinations', 'Pick at least one destination');
     const stored = await store.listDestinations(user.userId);
@@ -585,7 +593,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (job.state !== 'stopped' && job.state !== 'failed') {
       job.state = 'stopped';
       job.updatedAt = now;
-      job.events.push({ at: now, state: 'stopped', note: 'Stopped by the host' });
+      job.events.push({ at: now, state: 'stopped', note: 'Stopped by the publisher' });
       await store.saveJob(job);
     }
     return c.json({ job });

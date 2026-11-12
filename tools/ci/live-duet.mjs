@@ -1,6 +1,8 @@
 // Live-meet e2e: two performers (host alice on a desktop, guest bob on a phone) on ONE virtual stage.
 // Fake cameras → person cut-outs → alpha-packed WebRTC through the SVT DB relay → both devices draw
 // both singers; the host's cued pause/resume freezes and restarts both at the same track position.
+// A third, privileged account (carol) opens the Publishing show view: receive-only, both performers
+// drawn huge on a 1080p stage, no lyrics, and the broadcast job goes to "requested".
 //   npm run build (BASE_PATH=/SingersVoice/) && node tools/ci/live-duet.mjs [outDir]
 // Exits 1 when any assertion fails. Needs playwright (local install or /opt/npm-tools).
 import { createRequire } from 'node:module';
@@ -23,9 +25,10 @@ mkdirSync(out, { recursive: true });
 let failed = false;
 const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) failed = true; };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const errors = { alice: [], bob: [] };
+const secs = (t) => Number(t.split(':')[0]) * 60 + Number(t.split(':')[1]);
+const errors = { alice: [], bob: [], carol: [] };
 
-async function person(name, viewport) {
+async function person(name, viewport, { track = true } = {}) {
   const ctx = await browser.newContext({ viewport, permissions: ['microphone', 'camera'], deviceScaleFactor: 1 });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors[name].push(String(e)));
@@ -34,6 +37,7 @@ async function person(name, viewport) {
   // device identity for DEV_AUTH: the app sends X-Dev-User from the local profile sub
   await page.evaluate((n) => localStorage.setItem('sv.profile', JSON.stringify({ sub: n, name: n, email: '', picture: '', mode: 'local' })), name);
   await page.evaluate(() => { localStorage.setItem('sv.mode', 'local'); localStorage.setItem('sv.settings.app', JSON.stringify({ onboarded: true })); });
+  if (!track) return { ctx, page, trackId: null };
   await page.goto(base + 'tracks?' + control, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: 'Import' }).first().click();
   await page.locator('input[type=file][accept*=".json"]').setInputFiles('apps/web/test/fixtures/sample.track.json');
@@ -107,6 +111,61 @@ try {
   await alice.page.screenshot({ path: `${out}/duet-alice-live.png` });
   await bob.page.screenshot({ path: `${out}/duet-bob-live.png` });
 
+  // Publishing mode: carol (privileged, not in the meet) opens the show view of this meet.
+  const carol = await person('carol', { width: 1920, height: 1080 }, { track: false });
+  const meetId = /\/meet\/([^/?#]+)/.exec(meetUrl)[1];
+  await carol.page.goto(`${base}publishing/show/${meetId}?${control}`, { waitUntil: 'networkidle' });
+  await carol.page.locator('.show[data-state="live"]').waitFor({ timeout: 30000 });
+  const t1 = Date.now();
+  let tConn = 0;
+  while (Date.now() - t1 < 25000 && (await remoteFrames(carol.page)) < 2) {
+    if (!tConn && (await carol.page.evaluate(() => Object.values(window.__svMesh.peerStates()).filter((s) => s === 'connected').length)) === 2) tConn = Date.now() - t1;
+    await wait(500);
+  }
+  console.log(`carol: both peers connected after ${tConn} ms; frames after ${Date.now() - t1} ms; now ${new Date().toISOString()}`);
+  console.log('rtp carol:', JSON.stringify(await rtp(carol.page)));
+  const peers = (p) => p.evaluate(() => [...window.__svMesh.peers.entries()].map(([id, x]) => ({ id, state: x.state, sig: x.pc.signalingState, ice: x.pc.iceConnectionState, inbound: x.inbound, polite: x.polite, tr: x.pc.getTransceivers().map((t) => `${t.direction}/${t.currentDirection || '-'}`) })));
+  const inbox = async (p, who) => { const mid = /\/meet\/([^/?#]+)/.exec(meetUrl)[1]; return p.evaluate(async ([m, w, ctl]) => { const key = Object.keys(sessionStorage).find((k) => k.startsWith(`sv.meet.${m}`) && k.endsWith('.rt')); const rt = sessionStorage.getItem(key); const r = await fetch(`${ctl}/meets/${m}/signals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dev-User': w, 'X-Dev-Name': w }, body: JSON.stringify({ resumeToken: rt, since: 0 }) }); const j = await r.json(); return (j.signals || []).map((x) => `${x.seq}:${x.type}<${x.from.slice(-6)}@${x.sentAt.slice(11, 23)}`).join(' '); }, [mid, who, servers.controlUrl]); };
+  for (const [n, p] of [['alice', alice.page], ['bob', bob.page], ['carol', carol.page]]) console.log(`peers ${n}:`, JSON.stringify(await peers(p)), '\n inbox:', await inbox(p, n));
+  check((await remoteFrames(carol.page)) >= 2, `the show view receives both performers' video (${Math.round((Date.now() - t1) / 1000)} s)`);
+  await wait(1500);
+  const show = await carol.page.evaluate(() => {
+    const c = document.querySelector('canvas.stagecanvas');
+    const x = c.getContext('2d');
+    const d = x.getImageData(0, 0, c.width, c.height).data;
+    let left = 0, right = 0, top = 0; const w = c.width, h = c.height;
+    for (let i = 3, px = 0; i < d.length; i += 4, px++) if (d[i] > 40) { if (px % w < w / 2) left++; else right++; if (Math.floor(px / w) < h * 0.3) top++; }
+    const tiles = window.__svShow.tiles.map((t) => ({ h: Math.round(t.h), label: t.performer.label, source: t.performer.source.kind }));
+    return { tiles, left, right, top, w, h, lyrics: document.querySelectorAll('.lyrics, .cue').length, top_text: document.querySelector('.show-top').innerText.replace(/\s+/g, ' '), state: document.querySelector('.show').dataset.state };
+  });
+  console.log('carol show:', JSON.stringify(show));
+  check(show.tiles.length === 2 && show.tiles.every((t) => t.source === 'packed'), 'the show view lays out both performers from their video');
+  check(show.tiles.every((t) => t.h > show.h * 0.9), `performers stand huge on the show stage (tile ${show.tiles[0]?.h} of ${show.h} px)`);
+  check(show.left > 2000 && show.right > 2000 && show.top > 0, 'both cut-outs are drawn, filling the frame up to the top');
+  check(show.lyrics === 0, 'no lyrics in publish mode');
+  check(/2 on stage · 2\/2 video/.test(show.top_text), `show header: ${show.top_text}`);
+  await carol.page.screenshot({ path: `${out}/show-carol-live.png` });
+  // Go live with the in-house destination (enabled by default): the job is requested for this meet.
+  // The chrome hides itself while the show plays; moving the pointer brings it back (like a video player).
+  check((await carol.page.locator('.show').getAttribute('data-idle')) === '1', 'the show chrome hides itself while the show plays');
+  await carol.page.mouse.move(900, 900);
+  await carol.page.mouse.move(920, 940);
+  await carol.page.locator('.show[data-idle="0"]').waitFor({ timeout: 5000 });
+  await carol.page.locator('.showbar .dest', { hasText: 'In-house portal' }).waitFor({ timeout: 15000 });
+  await carol.page.getByRole('button', { name: 'Go live' }).click();
+  await carol.page.locator('.showbar .jobline').waitFor({ timeout: 15000 });
+  const jobline = await carol.page.locator('.showbar .jobline').innerText();
+  check(/requested/.test(jobline) && /inhouse/.test(jobline), `publish job queued from the show view (${jobline.replace(/\s+/g, ' ')})`);
+  check(await carol.page.getByRole('button', { name: 'Stop publishing' }).isVisible(), 'the show view offers Stop while the job is active');
+  // The singers' rooms are untouched by the publisher: still 2 performers, video still linked.
+  const a2 = await stageInfo(alice.page);
+  check(a2.performers === '2' && /1\/1 video linked/.test(a2.text), 'the performers\' stage is unaffected by the show view joining');
+
+  // Host restarts the song from the top (cued 5 s ahead) so the 20 s sample has room for the pause/resume checks.
+  await alice.page.getByRole('button', { name: /Restart the song for everyone/ }).click();
+  await wait(7000);
+  const tr = await alice.page.locator('.timeline .mono').first().innerText();
+  check(secs(tr) < 6, `restart took everyone back to the top (${tr})`);
   // Host pauses: cued 3 s ahead; both freeze at the same position.
   await alice.page.getByRole('button', { name: /Pause for everyone/ }).click();
   await wait(5500);
@@ -120,13 +179,13 @@ try {
   check(ta1 === tb1, `both devices froze at the same position (${ta1} / ${tb1})`);
   check(/paused by the host/.test(await bob.page.locator('.stagebar').innerText()), 'the guest sees "paused by the host"');
   await bob.page.screenshot({ path: `${out}/duet-bob-paused.png` });
+  check(await carol.page.locator('.show-note', { hasText: 'Paused by the host' }).isVisible(), 'the show view shows the pause');
   // Resume: cued 4 s ahead.
   await alice.page.getByRole('button', { name: /Resume for everyone/ }).click();
   await wait(6500);
   const ta3 = await alice.page.locator('.timeline .mono').first().innerText();
   const tb3 = await bob.page.locator('.timeline .mono').first().innerText();
   console.log('resumed:', { alice: ta3, bob: tb3 });
-  const secs = (t) => Number(t.split(':')[0]) * 60 + Number(t.split(':')[1]);
   check(secs(ta3) > secs(ta1) && secs(tb3) > secs(tb1) && Math.abs(secs(ta3) - secs(tb3)) <= 1, 'both devices resumed together from the paused position');
   // Finish both (the 20 s sample may already have ended → the take review is up by itself).
   for (const p of [bob.page, alice.page]) {
@@ -134,8 +193,13 @@ try {
     if (await finish.isVisible().catch(() => false)) await finish.click().catch(() => undefined);
     await p.getByText('Your take').waitFor({ timeout: 30000 });
   }
-  const errs = { alice: errors.alice.filter((e) => !/favicon/.test(e)), bob: errors.bob.filter((e) => !/favicon/.test(e)) };
-  check(!errs.alice.length && !errs.bob.length, `no page errors (${JSON.stringify(errs).slice(0, 300)})`);
+  await carol.page.mouse.move(900, 900);
+  await carol.page.mouse.move(930, 950);
+  await carol.page.locator('.show[data-idle="0"]').waitFor({ timeout: 5000 });
+  await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
+  await carol.page.locator('.showbar .jobline', { hasText: 'stopped' }).waitFor({ timeout: 15000 });
+  const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon/.test(e))]));
+  check(Object.values(errs).every((v) => !v.length), `no page errors (${JSON.stringify(errs).slice(0, 300)})`);
   console.log('both takes reviewed');
 } catch (e) {
   failed = true;

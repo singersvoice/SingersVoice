@@ -191,9 +191,17 @@ export class SqlStore {
     return r ? (JSON.parse(r.data) as StoredParticipant) : null;
   }
 
-  async getParticipantByUser(meetId: string, userId: string): Promise<StoredParticipant | null> {
-    const r = await this.db.get<{ data: string }>('SELECT data FROM participants WHERE meet_id=? AND user_id=? ORDER BY last_seen_at DESC LIMIT 1', [meetId, userId]);
-    return r ? (JSON.parse(r.data) as StoredParticipant) : null;
+  /**
+   * The user's participant in a meet. One account can be in a meet twice: as a member (host /
+   * performer / audience) and, from a Publishing show view, as a publisher — `kind` picks which.
+   */
+  async getParticipantByUser(meetId: string, userId: string, kind: 'member' | 'publisher' | 'any' = 'member'): Promise<StoredParticipant | null> {
+    const rows = await this.db.all<{ data: string }>('SELECT data FROM participants WHERE meet_id=? AND user_id=? ORDER BY last_seen_at DESC', [meetId, userId]);
+    for (const r of rows) {
+      const p = JSON.parse(r.data) as StoredParticipant;
+      if (kind === 'any' || (kind === 'publisher') === (p.role === 'publisher')) return p;
+    }
+    return null;
   }
 
   async listParticipants(meetId: string): Promise<StoredParticipant[]> {
@@ -226,16 +234,20 @@ export class SqlStore {
 
   // ---------- WebRTC signalling (performer ↔ performer, relayed) ----------
 
+  /**
+   * Append a signal. The per-meet sequence is assigned inside the INSERT itself (one statement, so
+   * two performers — or a publisher fanning out offers to the whole stage — signalling at the same
+   * instant can never collide on a seq and lose an offer); the seq column is authoritative on read.
+   */
   async addSignal(meetId: string, sig: Omit<MeetSignal, 'seq'>): Promise<MeetSignal> {
-    const seq = Number((await this.db.get<{ n: number }>('SELECT COALESCE(MAX(seq),0)+1 AS n FROM signals WHERE meet_id=?', [meetId]))?.n ?? 1);
-    const full: MeetSignal = { ...sig, seq };
-    await this.db.run('INSERT INTO signals (meet_id, seq, to_id, data) VALUES (?,?,?,?)', [meetId, seq, sig.to, JSON.stringify(full)]);
-    return full;
+    await this.db.run('INSERT INTO signals (meet_id, seq, to_id, data) SELECT ?, COALESCE(MAX(seq),0)+1, ?, ? FROM signals WHERE meet_id=?', [meetId, sig.to, JSON.stringify(sig), meetId]);
+    const r = await this.db.get<{ n: number }>('SELECT COALESCE(MAX(seq),0) AS n FROM signals WHERE meet_id=?', [meetId]);
+    return { ...sig, seq: Number(r?.n ?? 0) };
   }
 
   async signalsFor(meetId: string, to: string, since: number, limit = 200): Promise<MeetSignal[]> {
-    const rows = await this.db.all<{ data: string }>('SELECT data FROM signals WHERE meet_id=? AND to_id=? AND seq>? ORDER BY seq ASC LIMIT ?', [meetId, to, since, limit]);
-    return rows.map((r) => JSON.parse(r.data) as MeetSignal);
+    const rows = await this.db.all<{ seq: number; data: string }>('SELECT seq, data FROM signals WHERE meet_id=? AND to_id=? AND seq>? ORDER BY seq ASC LIMIT ?', [meetId, to, since, limit]);
+    return rows.map((r) => ({ ...(JSON.parse(r.data) as Omit<MeetSignal, 'seq'>), seq: Number(r.seq) }));
   }
 
   async clearSignals(meetId: string): Promise<void> {

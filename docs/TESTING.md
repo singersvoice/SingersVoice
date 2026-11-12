@@ -49,7 +49,13 @@ so the real segmentation model has someone to cut out) — the host on a desktop
 the sample track, meet in one room, take two stage slots and sing. The test asserts that both devices
 lay out two performers on the virtual stage, that WebRTC video is linked both ways through the SVT DB
 relay (cut-outs drawn on both halves of the stage), that the host's cued pause freezes both timelines
-at the same position and that resume restarts both together. Runs in CI after the viewport screenshots:
+at the same position and that resume restarts both together. A third, privileged account (carol,
+`PRIVILEGED_EMAILS=carol@dev.local` on the test service) then opens the Publishing **show view** of the
+meet on a 1080p viewport: both performers arrive over the receive-only mesh and stand huge on the show
+stage (tiles over 90 % of the frame height), there are no lyrics, the chrome hides itself while the
+show plays, *Go live* queues a publish job (in-house destination), the pause shows on the show view,
+*Stop publishing* ends the job — and the singers' own stage is unaffected. Runs in CI after the
+viewport screenshots:
 
 ```bash
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/live-duet.mjs screenshots

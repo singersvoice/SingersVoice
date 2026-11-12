@@ -41,7 +41,8 @@ export async function startServers({ base = '/SingersVoice/' } = {}) {
   };
   run('node', ['--no-warnings=ExperimentalWarning', 'src/index.ts'], {
     cwd: path.resolve('services/control'),
-    env: { ...process.env, PORT: String(controlPort), DEV_AUTH: '1', SV_DB: ':memory:', ALLOWED_ORIGINS: `http://localhost:${port}` },
+    // The first account seen (alice) is privileged by bootstrap; carol is the Publishing-mode tester.
+    env: { ...process.env, PORT: String(controlPort), DEV_AUTH: '1', SV_DB: ':memory:', ALLOWED_ORIGINS: `http://localhost:${port}`, PRIVILEGED_EMAILS: 'carol@dev.local' },
   });
   run('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], { cwd: path.resolve('apps/web'), env: { ...process.env, BASE_PATH: base } });
   const stop = () => {

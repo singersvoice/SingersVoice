@@ -33,7 +33,8 @@ export interface CreateMeetRequest {
 }
 
 export interface JoinMeetRequest {
-  role: 'performer' | 'audience';
+  /** 'publisher' (privileged only) gets its own participant even when the same account performs on another device. */
+  role: 'performer' | 'audience' | 'publisher';
   resumeToken?: string;
 }
 

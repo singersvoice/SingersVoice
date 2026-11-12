@@ -102,6 +102,35 @@ describe('sv-control API', () => {
     expect(nothingNew.signals).toHaveLength(0);
     const aliceInbox = await json<{ signals: unknown[] }>(await app.request(`/meets/${meet.meetId}/signals`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, since: 0 }) }));
     expect(aliceInbox.signals).toHaveLength(0); // not addressed to her
+    // Audience may not pull performer video; a privileged publisher gets its own participant and may.
+    const carol = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ role: 'audience' }) }));
+    expect((await app.request(`/meets/${meet.meetId}/signals`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ resumeToken: carol.resumeToken, since: 0 }) })).status).toBe(403);
+    expect((await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ role: 'publisher' }) })).status).toBe(403); // not privileged
+    const pub = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'publisher' }) }));
+    expect(pub.you.role).toBe('publisher');
+    expect(pub.you.participantId).not.toBe(host.you.participantId); // alice still performs on her other device
+    expect(pub.you.slot).toBeNull();
+    expect((await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: pub.resumeToken, slot: 3 }) })).status).toBe(409);
+    expect((await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: pub.resumeToken, to: bob.you.participantId, type: 'offer', data: '{}' }) })).status).toBe(200);
+    const bobInbox = await json<{ signals: { from: string; seq: number }[] }>(await app.request(`/meets/${meet.meetId}/signals`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, since: inbox.signals[0]!.seq }) }));
+    expect(bobInbox.signals.map((x) => x.from)).toEqual([pub.you.participantId]);
+    // A burst at the same instant (a publisher fanning offers + ICE out to the whole stage) never loses a signal to a seq collision.
+    const burst = await Promise.all(Array.from({ length: 12 }, (_, i) => app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, to: bob.you.participantId, type: 'ice', data: JSON.stringify({ i }) }) })));
+    expect(burst.map((r) => r.status)).toEqual(Array<number>(12).fill(200));
+    const lastSeq = Math.max(...bobInbox.signals.map((x) => x.seq));
+    const bobBurst = await json<{ signals: { seq: number; data: string }[] }>(await app.request(`/meets/${meet.meetId}/signals`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, since: lastSeq }) }));
+    expect(bobBurst.signals).toHaveLength(12);
+    expect(new Set(bobBurst.signals.map((x) => x.seq)).size).toBe(12);
+    expect(new Set(bobBurst.signals.map((x) => x.data)).size).toBe(12);
+    const hostAgain = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'performer', resumeToken: host.resumeToken }) }));
+    expect(hostAgain.you.participantId).toBe(host.you.participantId); // the performer participant is untouched
+    expect(hostAgain.meet.audienceCount).toBe(1); // carol; the publisher is not audience
+    // Without any token, each kind of join resumes its own record: the show view its publisher, the room its performer.
+    const pubAgain = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'publisher' }) }));
+    expect(pubAgain.you.participantId).toBe(pub.you.participantId);
+    const roomAgain = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'audience' }) }));
+    expect(roomAgain.you.participantId).toBe(host.you.participantId);
+    expect(roomAgain.you.slot).toBe(1);
     const ice = await json<{ iceServers: { urls: string | string[] }[] }>(await app.request('/ice', { headers: as('bob') }));
     expect(ice.iceServers[0]!.urls).toContain('stun:stun.l.google.com:19302');
 
@@ -136,5 +165,13 @@ describe('sv-control API', () => {
     );
     expect(job.job.state).toBe('requested');
     expect(job.job.watchUrl).toBe(`/watch/${meet.meet.meetId}`);
+    // A privileged account that is not the host publishes a meet only once it has joined it (its show view).
+    const bobs = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('bob'), body: JSON.stringify({ title: "Bob's meet" }) }));
+    const notIn = await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: bobs.meet.meetId, destinations: ['inhouse'] }) });
+    expect(notIn.status).toBe(403);
+    expect((await app.request(`/meets/${bobs.meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'publisher' }) })).status).toBe(200);
+    const joined = await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: bobs.meet.meetId, destinations: ['inhouse'] }) });
+    expect(joined.status).toBe(201);
+    expect((await app.request('/publishing/jobs', { method: 'POST', headers: as('bob'), body: JSON.stringify({ meetId: bobs.meet.meetId, destinations: ['inhouse'] }) })).status).toBe(403); // bob is not privileged
   });
 });

@@ -93,7 +93,7 @@ export function reconcile(m: Meet, participants: Participant[], now = Date.now()
     }
   }
   const performerCount = m.stage.filter((s) => s.participantId).length;
-  const audienceCount = active.filter((p) => !m.stage.some((s) => s.participantId === p.participantId)).length;
+  const audienceCount = active.filter((p) => p.role !== 'publisher' && !m.stage.some((s) => s.participantId === p.participantId)).length;
   if (performerCount !== m.performerCount || audienceCount !== m.audienceCount) {
     m.performerCount = performerCount;
     m.audienceCount = audienceCount;
@@ -114,11 +114,12 @@ function clearSlot(s: StageSlot): void {
 
 export function claimSlot(m: Meet, p: Participant, slot: number | null): { ok: boolean; reason?: string } {
   if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  if (p.role === 'publisher' && slot !== null) return { ok: false, reason: 'publisher' };
   // Leave current slot first.
   for (const s of m.stage) if (s.participantId === p.participantId) clearSlot(s);
   if (slot === null) {
     p.slot = null;
-    p.role = p.userId === m.hostUserId ? 'host' : 'audience';
+    if (p.role !== 'publisher') p.role = p.userId === m.hostUserId ? 'host' : 'audience';
     return { ok: true };
   }
   if (slot < 1 || slot > MAX_PERFORMERS) return { ok: false, reason: 'bad_slot' };

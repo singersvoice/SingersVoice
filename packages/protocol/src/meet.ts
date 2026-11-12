@@ -15,7 +15,8 @@ export const MEET_HEARTBEAT_MS = 15 * 1000;
 export const MEET_POLL_LOBBY_MS = 1000;
 export const MEET_POLL_IDLE_MS = 3000;
 
-export type MeetRole = 'host' | 'performer' | 'audience';
+/** 'publisher' = a privileged account's show view (Publishing mode): receives the performers' video, never on stage. */
+export type MeetRole = 'host' | 'performer' | 'audience' | 'publisher';
 export type MeetState = 'lobby' | 'countdown' | 'live' | 'ended' | 'expired';
 
 /**

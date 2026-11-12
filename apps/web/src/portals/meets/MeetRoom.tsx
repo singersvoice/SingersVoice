@@ -247,6 +247,11 @@ function Lobby(props: {
                 <button class="btn sm" onClick={() => void share()}>
                   <IcShare size={16} /> Share link
                 </button>
+                {privileged.value && (
+                  <a class="btn sm" href={href(`/publishing/show/${encodeURIComponent(meet.meetId)}`)} target="_blank" rel="noopener" title="Publishing mode: the broadcast picture (performers huge, no lyrics), in a new tab">
+                    Show view
+                  </a>
+                )}
               </div>
             </div>
             <div class="small muted" style="text-align:right">
