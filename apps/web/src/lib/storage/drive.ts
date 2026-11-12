@@ -71,7 +71,15 @@ export class DriveProvider implements StorageProvider {
     return `Bearer ${t.accessToken}`;
   }
 
+  /** Authenticated Drive call with retries; JSON responses are parsed (use `download` for file bytes). */
   private async req<T>(url: string, init: RequestInit = {}, attempt = 0): Promise<T> {
+    const r = await this.fetchOk(url, init, attempt);
+    if (r.status === 204) return undefined as T;
+    const ct = r.headers.get('content-type') ?? '';
+    return (ct.includes('application/json') ? await r.json() : await r.blob()) as T;
+  }
+
+  private async fetchOk(url: string, init: RequestInit = {}, attempt = 0): Promise<Response> {
     const headers = new Headers(init.headers ?? {});
     headers.set('Authorization', this.auth());
     let r: Response;
@@ -80,19 +88,17 @@ export class DriveProvider implements StorageProvider {
     } catch (e) {
       if (attempt < 3) {
         await sleep(600 * 2 ** attempt);
-        return this.req<T>(url, init, attempt + 1);
+        return this.fetchOk(url, init, attempt + 1);
       }
       throw e;
     }
     if (r.status === 401) throw new AuthExpiredError();
     if ((r.status === 429 || r.status >= 500 || (r.status === 403 && (await isRateLimited(r.clone())))) && attempt < 4) {
       await sleep(800 * 2 ** attempt + Math.random() * 300);
-      return this.req<T>(url, init, attempt + 1);
+      return this.fetchOk(url, init, attempt + 1);
     }
     if (!r.ok) throw new Error(await errorMessage(r));
-    if (r.status === 204) return undefined as T;
-    const ct = r.headers.get('content-type') ?? '';
-    return (ct.includes('application/json') ? await r.json() : await r.blob()) as T;
+    return r;
   }
 
   private async list(q: string, pageSize = 200): Promise<DriveFile[]> {
@@ -231,8 +237,11 @@ export class DriveProvider implements StorageProvider {
     });
   }
 
+  /** File bytes, always as a Blob — `alt=media` answers with the file's own content type (track.json is
+   *  application/json), so this must not go through the JSON-parsing `req`. */
   private async download(fileId: string): Promise<Blob> {
-    return this.req<Blob>(`${API}/files/${fileId}?alt=media`);
+    const r = await this.fetchOk(`${API}/files/${fileId}?alt=media`);
+    return r.blob();
   }
 
   private async downloadJson<T>(fileId: string): Promise<T> {
