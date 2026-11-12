@@ -119,11 +119,19 @@ the first use; CDN fallback). The model's mask comes back either in the alpha ch
 brightness with opaque alpha depending on the browser/GPU path, so — as in the original SingersVoice
 app — `alphaFromMaskPixels` uses whichever channel varies, normalises and feathers it, and falls back
 to a soft head-and-shoulders silhouette when the mask is unusable (never a rectangle). `video/stage.ts` draws every
-performer, left to right by stage slot, evenly spaced and bottom-anchored over the stage background —
-one shared stage whether there is 1 singer or 10, on every device. Framing (`video/framing.ts`) has
-three levels — wide (the whole frame, standing small on stage; the default), mid, close — and a
-vocal-driven auto zoom: the mic meter eases a singer's cut-out towards "close" while they sing and
-back out when they fall silent. The sender applies the framing to its own stream, so whoever takes
+performer, left to right by stage slot, evenly spaced over the stage background — one shared stage
+whether there is 1 singer or 10, on every device — and **frames each of them itself**: a small probe
+reads the cut-out's alpha a few times a second, finds the person (top to bottom of the opaque
+pixels; across, the width most rows have, so a stretched arm never shrinks anyone) and scales them to
+fill their slot — head near the top, the camera's cut edge on the picture's bottom edge, feet on the
+floor line when the camera sees them. The box is moved only when it really changed and eased, so
+nothing breathes with mask noise. Across a row, heads are levelled: whoever's head stands clearly
+above the median head line (a camera that sees them whole) is scaled down, feet staying put, so
+nobody towers over the bust shots beside them. Show mode (Publishing, the lobby stage) gives every
+slot the full frame height; stage mode (lyrics above) the lower ~60 %. Framing
+(`video/framing.ts`) is therefore only the crop: wide (the whole frame; the default), mid, close
+(around the face), and a vocal-driven auto zoom that eases towards "close" while a singer sings and
+back out when they fall silent. The sender crops its own stream at full resolution, so whoever takes
 the vocal comes closer on everyone's screen.
 
 Other performers' video arrives over a WebRTC mesh (`video/peers.ts`, video only — singers never hear

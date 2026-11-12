@@ -2,16 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { FRAMING, frameRect, framingAt, presetLevel } from '../src/video/framing.ts';
 
 describe('stage framing', () => {
-  it('wide shows the whole frame standing small; close crops in and fills the tile', () => {
+  it('wide shows the whole frame; close crops in around the face — the crop always fills the frame sent', () => {
     const wide = frameRect(480, 640, presetLevel('wide'));
     expect([wide.sx, wide.sy, wide.sw, wide.sh]).toEqual([0, 0, 480, 640]); // no crop
-    expect(wide.dh / 640).toBeCloseTo(FRAMING.wide.scale, 5);
-    expect(wide.dy + wide.dh).toBe(640); // feet on the floor
-    expect(wide.dx).toBeCloseTo((480 - wide.dw) / 2, 5); // centred
+    expect([wide.dx, wide.dy, wide.dw, wide.dh]).toEqual([0, 0, 480, 640]); // full resolution out
     const close = frameRect(480, 640, presetLevel('close'));
     expect(close.sw).toBeCloseTo(480 / FRAMING.close.crop, 5);
-    expect(close.dh).toBe(640);
-    expect(close.dw).toBe(480);
+    expect(close.sh).toBeCloseTo(640 / FRAMING.close.crop, 5);
+    expect([close.dx, close.dy, close.dw, close.dh]).toEqual([0, 0, 480, 640]); // nobody stands small in their own frame
   });
   it('crops around the face origin and clamps to the frame', () => {
     const r = frameRect(480, 640, 1, { x: 90, y: 10 });

@@ -38,6 +38,14 @@ slot, over the stage background. It is live from the first slot taken — there 
 stage itself. Chips on it: *N on stage · x/y video linked*, *blending you into the stage…* while the
 model loads, a camera on/off button for you.
 
+**How big you stand.** The stage frames every singer itself: it finds you in your cut-out and fills
+your slot with you — head near the top, the camera's cut edge on the picture's bottom edge (a
+webcam bust shot fills the whole height), feet on the floor if your camera sees them. One singer
+fills the picture; ten make one even row across it, each as big as a tenth of the stage allows, heads
+level (someone whose camera sees them whole stands on the floor at the others' head height rather
+than towering over them). A stretched arm reaches past your slot instead of shrinking you. The
+*Framing* setting (wide / mid / close, auto zoom) only chooses how tight your camera's crop is.
+
 ### Who is who
 
 - Everyone who enters is **audience** (chat, lyrics and the backing track once the song runs).
@@ -111,7 +119,8 @@ ingest + stream key; the in-house portal), **History**.
 
 The **show view** (`/publishing/show/:id`) joins the meet as a *publisher* — never on stage, never
 counted as audience, one participant per view — pulls every performer's video (receive-only) and
-draws them huge on one stage, no lyrics, with a self-hiding bar (destinations, Go live / Stop,
+draws them huge on one stage (the same framing as the room's stage: each singer fills their slot
+top to bottom, ten in one even row), no lyrics, with a self-hiding bar (destinations, Go live / Stop,
 singers' vocals, backing track in sync, full screen). It shows the singers from the lobby on (*Up
 next: …*), the countdown as an opener, *Paused by the host*, and carries on across every song of
 the event: the show is independent of the song.

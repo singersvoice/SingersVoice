@@ -1,8 +1,13 @@
 /**
  * The virtual stage: every performer (1..10) is cut out of their camera and drawn side by side
  * over the shared stage background, evenly spaced from left to right by stage slot — as if all
- * of them stood on the same stage, wherever they really are. The canvas is transparent: the
- * background itself is the stage's CSS background (image or video), so nothing is drawn twice.
+ * of them stood on the same stage, wherever they really are. The stage frames each of them
+ * itself: it finds the person in their cut-out (the bounding box of the opaque pixels) and scales
+ * them to fill their slot — head near the top, the camera's cut edge on the picture's bottom edge,
+ * feet on the floor when the camera sees them — so a singer stands as big as the stage allows
+ * whatever their camera, distance or framing, and ten singers make one even row. The canvas is
+ * transparent: the background itself is the stage's CSS background (image or video), so nothing is
+ * drawn twice.
  */
 import { AlphaUnpacker } from './alphaPack.ts';
 
@@ -35,29 +40,163 @@ export interface StageTile {
   h: number;
 }
 
+/** Where the person is in their cut-out frame, as fractions (0..1) of the frame. */
+export interface PersonBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** How a person is drawn into their slot: the scale from source pixels and the drawn box (CSS px). */
+export interface PersonFit {
+  scale: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** The camera frame cuts the person (no feet): their cut edge sits on the picture's bottom edge. */
+  cut: boolean;
+  /** Taller than the slot allows: top-anchored, the bottom runs off the picture (a close-up). */
+  cropped: boolean;
+}
+
 const FPS = 24;
 const MAX_WIDTH = 1600;
+/** The person may fill this much of the slot's width (room for an arm, and for the tag). */
+const FILL_W = 0.94;
+/** Headroom above the head, as a fraction of the slot height. */
+const HEADROOM = 0.035;
+/** Show mode may stand a singer this much taller than the slot (a close-up, cut at the bottom edge); 1 = never. */
+const SHOW_CLOSE_UP = 1;
+/** A cut-out reaching this far down the frame is cut by the camera, not standing in it. */
+const CUT_EDGE = 0.985;
+/** The person probe: the cut-out's alpha at this size, this often; opaque means alpha above this. */
+const PROBE_W = 96;
+const PROBE_H = 128;
+const PROBE_MS = 100;
+const PROBE_ALPHA = 40;
+/** The box only moves for a change bigger than this (fraction of the frame) — no breathing from mask noise. */
+const PROBE_DEAD = 0.012;
+/** How fast the drawn box follows a moved box (per drawn frame). */
+const BOX_EASE = 0.15;
+/** Until a person is found: the whole frame. */
+const WHOLE: PersonBox = { x: 0, y: 0, w: 1, h: 1 };
 
 export type StageMode = 'stage' | 'show';
 
 /**
- * Pure layout: N portrait tiles (3:4) evenly spaced, bottom-anchored; fewer performers → bigger tiles.
- * 'stage' leaves the top ~40 % to the lyrics; 'show' (Publishing mode) has no lyrics and fills the
- * frame with the performers, like a televised stage show.
+ * Pure layout: N slots evenly spaced across the width, bottom-anchored on the floor line; fewer
+ * performers → wider slots. 'stage' leaves the top ~40 % to the lyrics (3:4 tiles); 'show'
+ * (Publishing mode, the lobby stage) has no lyrics: every slot is as tall as the frame, so the
+ * performers stand huge, like a televised stage show, in one even row whether there are 1 or 10.
  */
 export function layoutStage(width: number, height: number, count: number, mode: StageMode = 'stage'): StageTile[] {
   const n = Math.max(1, count);
   const slotW = width / n;
-  const hFrac = mode === 'show' ? (n <= 2 ? 0.96 : n <= 4 ? 0.92 : 0.86) : n === 1 ? 0.62 : n === 2 ? 0.6 : n <= 4 ? 0.56 : n <= 6 ? 0.5 : 0.44;
-  let h = height * hFrac;
-  let w = h * 0.75;
-  if (w > slotW * 0.96) {
-    w = slotW * 0.96;
-    h = w / 0.75;
+  let h: number;
+  let w: number;
+  if (mode === 'show') {
+    h = height * 0.96;
+    w = Math.min(slotW * FILL_W, h * 0.9);
+  } else {
+    const hFrac = n === 1 ? 0.62 : n === 2 ? 0.6 : n <= 4 ? 0.56 : n <= 6 ? 0.5 : 0.44;
+    h = height * hFrac;
+    w = h * 0.75;
+    if (w > slotW * 0.96) {
+      w = slotW * 0.96;
+      h = w / 0.75;
+    }
   }
   const y = height - h - height * 0.015;
   return Array.from({ length: n }, (_, i) => ({ id: String(i), x: slotW * i + (slotW - w) / 2, y, w, h }));
 }
+
+/**
+ * Pure framing: scale the person's box to fill the slot — as wide as the slot allows, as tall as
+ * the room between the headroom and the floor allows. A person the camera cuts (no feet) sits on
+ * the picture's bottom edge like a TV shot; one the camera sees whole stands on the floor line.
+ */
+export function fitPerson(t: StageTile, srcW: number, srcH: number, box: PersonBox, mode: StageMode, canvasH: number): PersonFit {
+  const bw = Math.max(1, box.w * srcW);
+  const bh = Math.max(1, box.h * srcH);
+  const cut = box.y + box.h >= CUT_EDGE;
+  const floor = cut ? Math.max(canvasH, t.y + t.h) : t.y + t.h;
+  const top = t.y + t.h * HEADROOM;
+  const room = Math.max(1, floor - top);
+  const scale = Math.min((t.w * FILL_W) / bw, (room * (mode === 'show' ? SHOW_CLOSE_UP : 1)) / bh);
+  const w = bw * scale;
+  const h = bh * scale;
+  const cropped = h > room + 0.5;
+  return { scale, x: t.x + (t.w - w) / 2, y: cropped ? top : floor - h, w, h, cut, cropped };
+}
+
+/**
+ * Where the person is in an RGBA buffer (fractions of w×h), or null when nobody is there: top to
+ * bottom of the opaque pixels, and across, the body — the width most rows have (the 80th
+ * percentile) around the median row centre — so an arm stretched out for a moment never shrinks
+ * the singer or pulls them sideways; it just runs past the edge of their slot.
+ */
+export function boxOfAlpha(data: Uint8ClampedArray, w: number, h: number, threshold = PROBE_ALPHA): PersonBox | null {
+  const widths: number[] = [];
+  const centres: number[] = [];
+  let y0 = -1;
+  let y1 = -1;
+  let area = 0;
+  for (let y = 0; y < h; y++) {
+    const row = y * w * 4 + 3;
+    let l = -1;
+    let r = -1;
+    for (let x = 0; x < w; x++) {
+      if (data[row + x * 4]! > threshold) {
+        if (l < 0) l = x;
+        r = x;
+      }
+    }
+    if (l < 0) continue;
+    if (y0 < 0) y0 = y;
+    y1 = y;
+    widths.push(r - l + 1);
+    centres.push((l + r + 1) / 2);
+    area += r - l + 1;
+  }
+  if (y0 < 0 || area < w * h * 0.01) return null; // a few stray pixels are not a person
+  widths.sort((a, b) => a - b);
+  centres.sort((a, b) => a - b);
+  const bw = widths[Math.min(widths.length - 1, Math.floor(widths.length * 0.8))]! + 2; // + a probe pixel of margin each side (soft edges, hair)
+  const cx = centres[Math.floor(centres.length / 2)]!;
+  y0 = Math.max(0, y0 - 1);
+  y1 = Math.min(h - 1, y1 + 1);
+  return { x: (cx - bw / 2) / w, y: y0 / h, w: bw / w, h: (y1 - y0 + 1) / h };
+}
+
+/**
+ * Pure: nobody towers over the row. Heads line up on a real stage, but a camera that sees a singer
+ * whole (feet and all) makes them stand twice as tall as the bust shots beside them — so whoever's
+ * head stands clearly above the row's head line (the median, ties going to the taller) is scaled
+ * down, feet or cut edge staying put, until it is level. Mutates the fits in place.
+ */
+export function levelHeads(fits: (PersonFit | undefined)[], tolerance: number): void {
+  const heads = fits
+    .filter((f): f is PersonFit => f !== undefined)
+    .map((f) => f.y)
+    .sort((a, b) => a - b);
+  if (heads.length < 2) return;
+  const line = heads[Math.floor((heads.length - 1) / 2)]!;
+  for (const f of fits) {
+    if (!f || f.cropped || f.y >= line - tolerance) continue;
+    const bottom = f.y + f.h;
+    const k = (bottom - line) / f.h;
+    const cx = f.x + f.w / 2;
+    f.scale *= k;
+    f.w *= k;
+    f.h = bottom - line;
+    f.x = cx - f.w / 2;
+    f.y = line;
+  }
+}
+
+const boxMoved = (a: PersonBox, b: PersonBox): number => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y), Math.abs(a.x + a.w - b.x - b.w), Math.abs(a.y + a.h - b.y - b.h));
 
 export class StageCompositor {
   readonly canvas: HTMLCanvasElement;
@@ -67,6 +206,9 @@ export class StageCompositor {
   private avatars = new Map<string, HTMLImageElement>();
   /** Last time each packed <video> advanced (frames stop → placeholder after a grace period). */
   private seen = new Map<string, { t: number; at: number }>();
+  /** Where each person is in their frame: the box drawn (eased) and the box last measured. */
+  private boxes = new Map<string, { box: PersonBox; target: PersonBox; at: number }>();
+  private probe: CanvasRenderingContext2D | null = null;
   private raf = 0;
   private lastDraw = 0;
   private running = false;
@@ -74,7 +216,7 @@ export class StageCompositor {
   private cssH = 0;
   private dpr = 1;
   /** Latest layout in CSS pixels (for tests / overlays). */
-  tiles: (StageTile & { performer: StagePerformer })[] = [];
+  tiles: (StageTile & { performer: StagePerformer; fit?: PersonFit })[] = [];
 
   /** 'stage' (lyrics above the performers) or 'show' (performers fill the frame); may be switched while running. */
   mode: StageMode;
@@ -108,6 +250,7 @@ export class StageCompositor {
         this.seen.delete(id);
       }
     }
+    for (const id of [...this.boxes.keys()]) if (!this.performers.some((p) => p.id === id)) this.boxes.delete(id);
     for (const p of this.performers) {
       if (p.picture && !this.avatars.has(p.id)) {
         const img = new Image();
@@ -157,22 +300,30 @@ export class StageCompositor {
     }
     const tiles = layoutStage(W, H, this.performers.length, this.mode);
     this.tiles = tiles.map((t, i) => ({ ...t, id: this.performers[i]!.id, performer: this.performers[i]! }));
-    for (const t of this.tiles) {
+    // Frame everyone first (so heads can be levelled across the row), then draw left to right.
+    const frames = this.tiles.map((t) => {
+      const src = this.sourceCanvas(t.performer);
+      if (!src) return null;
+      const box = this.personBox(t.performer.id, src);
+      t.fit = fitPerson(t, src.width, src.height, box, this.mode, H);
+      return { src, box };
+    });
+    levelHeads(
+      this.tiles.map((t) => t.fit),
+      H * 0.02,
+    );
+    for (const [i, t] of this.tiles.entries()) {
       const p = t.performer;
-      // Floor shadow grounds the performer on the stage.
-      const g = c.createRadialGradient(t.x + t.w / 2, t.y + t.h, 0, t.x + t.w / 2, t.y + t.h, t.w * 0.5);
-      g.addColorStop(0, 'rgba(0,0,0,0.45)');
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      c.save();
-      c.translate(0, t.y + t.h);
-      c.scale(1, 0.18);
-      c.fillStyle = g;
-      c.fillRect(t.x - t.w * 0.2, -t.w * 0.5, t.w * 1.4, t.w);
-      c.restore();
-
-      const src = this.sourceCanvas(p);
-      if (src) this.drawPerson(c, src, p, t);
-      else this.drawPlaceholder(c, p, t);
+      const f = frames[i];
+      const fit = t.fit;
+      if (f && fit) {
+        if (!fit.cut) this.drawShadow(c, fit.x + fit.w / 2, t.y + t.h, fit.w * 1.5); // feet on the floor: a shadow grounds them
+        this.drawPerson(c, f.src, p, f.box, fit, t);
+      } else {
+        t.fit = undefined;
+        this.drawShadow(c, t.x + t.w / 2, t.y + t.h, t.w);
+        this.drawPlaceholder(c, p, t);
+      }
       this.drawTag(c, p, t);
     }
   }
@@ -200,24 +351,84 @@ export class StageCompositor {
     return null;
   }
 
-  /** The framed cut-out is already composed (crop + stage scale by its own device); fit it into the tile. */
-  private drawPerson(c: CanvasRenderingContext2D, src: HTMLCanvasElement, p: StagePerformer, t: StageTile): void {
-    const sr = src.width / src.height;
-    const dr = t.w / t.h;
-    let cw = src.width;
-    let ch = src.height;
-    if (sr > dr) cw = src.height * dr;
-    else ch = src.width / dr;
-    const sx = (src.width - cw) / 2;
-    const sy = src.height - ch; // keep the floor: crop from the top if the tile is wider
-    c.save();
-    if (p.mirror) {
-      c.translate(t.x + t.w, t.y);
-      c.scale(-1, 1);
-      c.drawImage(src, sx, sy, cw, ch, 0, 0, t.w, t.h);
-    } else {
-      c.drawImage(src, sx, sy, cw, ch, t.x, t.y, t.w, t.h);
+  /**
+   * Where the person is in their frame: measured from the cut-out's alpha a few times a second
+   * (on a small probe canvas), moved only when it really changed, and eased so the stage never
+   * jitters with the mask. Nobody found yet → the whole frame.
+   */
+  private personBox(id: string, src: HTMLCanvasElement): PersonBox {
+    const now = performance.now();
+    let e = this.boxes.get(id);
+    if (!e || now - e.at >= PROBE_MS) {
+      const m = this.measure(src);
+      if (m) {
+        if (!e) {
+          e = { box: m, target: m, at: now };
+          this.boxes.set(id, e);
+        } else {
+          e.at = now;
+          if (boxMoved(e.target, m) > PROBE_DEAD) e.target = m;
+        }
+      } else if (e) e.at = now; // nobody in frame right now: keep the last box rather than jump
     }
+    if (!e) return WHOLE;
+    const { box, target } = e;
+    if (box !== target) {
+      const k = BOX_EASE;
+      const next = { x: box.x + (target.x - box.x) * k, y: box.y + (target.y - box.y) * k, w: box.w + (target.w - box.w) * k, h: box.h + (target.h - box.h) * k };
+      e.box = boxMoved(next, target) < 0.001 ? target : next;
+    }
+    return e.box;
+  }
+
+  private measure(src: HTMLCanvasElement): PersonBox | null {
+    if (!this.probe) {
+      const pc = document.createElement('canvas');
+      pc.width = PROBE_W;
+      pc.height = PROBE_H;
+      this.probe = pc.getContext('2d', { willReadFrequently: true });
+      if (!this.probe) return null;
+    }
+    const c = this.probe;
+    try {
+      c.clearRect(0, 0, PROBE_W, PROBE_H);
+      c.drawImage(src, 0, 0, PROBE_W, PROBE_H);
+      return boxOfAlpha(c.getImageData(0, 0, PROBE_W, PROBE_H).data, PROBE_W, PROBE_H);
+    } catch {
+      return null; // a tainted or lost canvas: the whole frame then
+    }
+  }
+
+  /** A soft ellipse of shadow on the floor line, `w` wide (the gradient is made inside the squashed space so it lands there). */
+  private drawShadow(c: CanvasRenderingContext2D, cx: number, floor: number, w: number): void {
+    c.save();
+    c.translate(0, floor);
+    c.scale(1, 0.18);
+    const g = c.createRadialGradient(cx, 0, 0, cx, 0, w * 0.5);
+    g.addColorStop(0, 'rgba(0,0,0,0.45)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = g;
+    c.fillRect(cx - w * 0.7, -w * 0.5, w * 1.4, w);
+    c.restore();
+  }
+
+  /** Draw the whole cut-out frame scaled so the person's box lands on the fit — centred in the slot, mirrored if asked. */
+  private drawPerson(c: CanvasRenderingContext2D, src: HTMLCanvasElement, p: StagePerformer, box: PersonBox, fit: PersonFit, t: StageTile): void {
+    const s = fit.scale;
+    const bcx = (p.mirror ? 1 - (box.x + box.w / 2) : box.x + box.w / 2) * src.width;
+    const dx0 = t.x + t.w / 2 - bcx * s;
+    const dy0 = fit.y - box.y * src.height * s;
+    c.save();
+    c.beginPath();
+    c.rect(t.x - t.w * 0.25, 0, t.w * 1.5, this.cssH); // an arm may reach past the slot, never across the neighbour
+    c.clip();
+    c.translate(dx0, dy0);
+    c.scale(s, s);
+    if (p.mirror) {
+      c.translate(src.width, 0);
+      c.scale(-1, 1);
+    }
+    c.drawImage(src, 0, 0);
     c.restore();
   }
 
