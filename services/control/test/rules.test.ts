@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, playbackPositionMs, type Participant } from '@singersvoice/protocol';
-import { claimSlot, decideRequest, ensureMeet, ensurePlayback, newMeet, pause, reconcile, requestStage, resume, setStagePolicy, start, stop, tick, touch, withdrawRequest } from '../src/meets.ts';
+import { addSong, claimSlot, decideRequest, ensureMeet, ensurePlayback, newMeet, nextSong, pause, reconcile, requestStage, resume, setStagePolicy, songAction, start, stop, tick, touch, withdrawRequest } from '../src/meets.ts';
 
 const T0 = Date.parse('2026-11-11T10:00:00Z');
 const person = (id: string, userId = `u-${id}`): Participant => ({
@@ -154,5 +154,67 @@ describe('meet rules', () => {
     delete legacy.stagePolicy;
     delete legacy.requests;
     expect(ensureMeet(legacy as typeof m)).toMatchObject({ stagePolicy: 'ask', requests: [] });
+  });
+
+  it('set list: a karaoke event is many songs — pick, queue, play now, song over → lobby for the next one', () => {
+    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: null, trackTitle: '', catalogTrackId: null, backgroundId: 'bg' }, T0);
+    const host = person('h', 'u-host');
+    const a = person('a');
+    claimSlot(m, host, 1);
+    expect(start(m, 5000, T0)).toEqual({ ok: false, reason: 'no_song' }); // nothing to sing yet
+    expect(addSong(m, a, { trackId: 't1', catalogTrackId: 'c1', trackTitle: 'One' })).toMatchObject({ ok: false, reason: 'not_on_stage' }); // audience picks nothing
+    decideRequest(m, a, true); // seated by the host
+    expect(addSong(m, a, { trackId: 't1', catalogTrackId: 'c1', trackTitle: 'One', durationMs: 20_000 }, false, T0).ok).toBe(true);
+    expect(m).toMatchObject({ trackId: 't1', catalogTrackId: 'c1', trackTitle: 'One' }); // first song plays next at once
+    expect(m.setList).toHaveLength(0);
+    expect(addSong(m, host, { trackId: null, catalogTrackId: 'c2', trackTitle: 'Two' }, false, T0 + 1).ok).toBe(true);
+    expect(addSong(m, a, { trackId: 't3', catalogTrackId: null, trackTitle: 'Three' }, false, T0 + 2).ok).toBe(true);
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two', 'Three']);
+    // a singer may play now only through the host; the host swaps the current song, which goes back to the top
+    expect(addSong(m, a, { trackId: 't4', catalogTrackId: null, trackTitle: 'Four' }, true)).toMatchObject({ ok: false, reason: 'not_host' });
+    expect(addSong(m, host, { trackId: 't4', catalogTrackId: null, trackTitle: 'Four' }, true).ok).toBe(true);
+    expect(m.trackTitle).toBe('Four');
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['One', 'Two', 'Three']);
+    // ordering: only the host; the picker may remove their own
+    const three = m.setList[2]!;
+    expect(songAction(m, a, three.id, 'up')).toMatchObject({ ok: false, reason: 'not_host' });
+    expect(songAction(m, host, three.id, 'up').ok).toBe(true);
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['One', 'Three', 'Two']);
+    expect(songAction(m, a, m.setList[0]!.id, 'remove')).toMatchObject({ ok: false, reason: 'not_host' }); // One was re-queued by the host
+    expect(songAction(m, a, three.id, 'remove').ok).toBe(true); // Three is hers
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['One', 'Two']);
+    expect(songAction(m, host, m.setList[0]!.id, 'now').ok).toBe(true);
+    expect(m.trackTitle).toBe('One');
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Four', 'Two']);
+    // sing it: nothing may be swapped under a song in progress
+    m.stage[0]!.ready = true;
+    expect(start(m, 5000, T0 + 10).ok).toBe(true);
+    expect(addSong(m, host, { trackId: 't5', catalogTrackId: null, trackTitle: 'Five' }, true)).toMatchObject({ ok: false, reason: 'song_in_progress' });
+    expect(songAction(m, host, m.setList[0]!.id, 'now')).toMatchObject({ ok: false, reason: 'song_in_progress' });
+    expect(addSong(m, host, { trackId: 't5', catalogTrackId: null, trackTitle: 'Five' }).ok).toBe(true); // queued instead
+    tick(m, T0 + 6000);
+    expect(m.state).toBe('live');
+    // song over → back to the lobby with the next song up; stage and slots untouched, ready reset
+    expect(nextSong(m, T0 + 30_000)).toEqual({ ok: true });
+    expect(m).toMatchObject({ state: 'lobby', kickstartEpochMs: null, trackTitle: 'Four', songCount: 1 });
+    expect(m.playback.state).toBe('idle');
+    expect(m.stage[0]!.participantId).toBe('h');
+    expect(m.stage[0]!.ready).toBe(false);
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two', 'Five']);
+    // the 15-minute cap ends the song, not the meet
+    start(m, 5000, T0 + 40_000);
+    tick(m, T0 + 45_000);
+    expect(tick(m, T0 + 45_000 + MAX_LIVE_TAKE_MS + 1)).toBe(true);
+    expect(m).toMatchObject({ state: 'lobby', trackTitle: 'Two', songCount: 2 });
+    // the queue runs dry: no song until somebody picks one
+    nextSong(m, T0 + 50_000);
+    nextSong(m, T0 + 51_000);
+    expect(m.trackId).toBeNull();
+    expect(start(m, 5000, T0 + 52_000)).toEqual({ ok: false, reason: 'no_song' });
+    // rows from before the set list existed
+    const legacy = { ...newMeet({ title: '', hostUserId: 'u', hostName: 'H', trackId: 'x', trackTitle: 'X', catalogTrackId: null, backgroundId: 'bg' }, T0) } as Partial<typeof m>;
+    delete legacy.setList;
+    delete legacy.songCount;
+    expect(ensureMeet(legacy as typeof m)).toMatchObject({ setList: [], songCount: 0, trackTitle: 'X' });
   });
 });

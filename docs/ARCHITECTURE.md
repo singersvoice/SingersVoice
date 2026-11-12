@@ -67,6 +67,21 @@ parallel with the show. The lobby strip draws in `show` layout (no lyrics); the 
 the same compositor to `stage` layout; nothing reconnects at the kickstart. Audience devices draw
 the performers' placeholders (video is private to the stage and the publisher).
 
+## The set list
+
+A karaoke event is many songs. The meet's current song is `trackId` / `catalogTrackId` /
+`trackTitle`; `setList` queues the rest (`SetListEntry`: who picked it). The host and everyone on
+stage add songs (`POST /meets/:id/songs` — the first one of a meet becomes current at once; `now`
+lets the host swap the current song between songs, the replaced one going back to the top); the
+host orders the queue (`…/songs/:sid` remove / up / now; the one who added a song may remove it);
+`…/songs/next` (host) ends the current song: the meet goes back to the lobby with stage, slots and
+cameras untouched, ready flags cleared and the next queued song up. The host's device calls it when
+the backing track ends, so a song ending anywhere ends it for everyone; the 15-minute cap does the
+same. `start` needs a song. Every device resolves the current song itself (`loadMeetTrack`:
+library, then catalog); the picker (`SongPicker.tsx`) offers to publish a private track through
+`lib/catalog.ts` first. A take in progress keeps the live stage mounted until it wraps up, even
+once the meet is back in the lobby. The full walk-through is in [LIVE_MEET_FLOW.md](LIVE_MEET_FLOW.md).
+
 ## Live meet timing
 
 1. Each client measures its clock offset to the server (5 samples of `GET /time`, median of the fastest).

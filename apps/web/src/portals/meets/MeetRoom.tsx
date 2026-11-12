@@ -3,14 +3,15 @@
  * performers (GMT kickstart), the audience view, and the ended/expired summary.
  * Every take on stage is a personal session: recorded locally, kept in the singer's own Drive.
  */
-import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
+import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, type Meet, type Participant, type SingerSlot, type SongPick, type StageSlot } from '@singersvoice/protocol';
 import { useRoomStage, type RoomStage } from './roomStage.ts';
+import { SongPicker } from './SongPicker.tsx';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, type AudioEngine } from '../../audio/engine.ts';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcPause, IcPlay, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcMusic, IcPause, IcPlay, IcPlus, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Progress, Seg, Spinner, Switch } from '../../components/ui.tsx';
@@ -35,8 +36,11 @@ export function MeetRoom(props: { id: string }) {
   const [prepared, setPrepared] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const engineRef = useRef<AudioEngine | null>(null);
+  /** Which song is decoded in the player (a karaoke event is many songs: each one is loaded when it comes up). */
+  const loadedKey = useRef('');
   const camera = useMemo(() => new Camera(), []);
-  const [take, setTake] = useState<TakeResult | null>(null);
+  /** A finished take with the song it was sung to (the set list may already have moved on). */
+  const [take, setTake] = useState<{ take: TakeResult; loaded: NonNullable<MeetTrack['loaded']> } | null>(null);
   const snap = session.snapshot.value;
   const you = session.you.value;
   const meet = snap?.meet ?? null;
@@ -53,12 +57,17 @@ export function MeetRoom(props: { id: string }) {
     };
   }, [props.id]);
 
-  // Load the track once we know which one the meet uses.
+  // Load the current song whenever the set list moves on (every device resolves it: library, then catalog).
   const trackKey = `${meet?.trackId ?? ''}|${meet?.catalogTrackId ?? ''}`;
   useEffect(() => {
     if (!meet) return;
     let cancelled = false;
     setTrack(null);
+    setPrepared(false); // a new song: get ready again (the server cleared the ready flags too)
+    if (!meet.trackId && !meet.catalogTrackId) {
+      setTrack({ loaded: null, source: 'none', reason: 'No song picked yet — add one to the set list.' });
+      return;
+    }
     void loadMeetTrack(meet).then((t) => !cancelled && setTrack(t));
     return () => {
       cancelled = true;
@@ -88,7 +97,10 @@ export function MeetRoom(props: { id: string }) {
       engine.applyFx(audio.params);
       engine.setMonitor(audio.monitor);
       const player = engine.player!;
-      if (!player.buffer) await player.load(track.loaded.audio);
+      if (loadedKey.current !== trackKey || !player.buffer) {
+        await player.load(track.loaded.audio);
+        loadedKey.current = trackKey;
+      }
       player.setGain(audio.backingGain);
       await keepAwake(true);
       setPrepared(true);
@@ -139,11 +151,11 @@ export function MeetRoom(props: { id: string }) {
       onPrepare={prepare}
       participants={snap?.participants ?? []}
       take={take}
-      onTake={setTake}
+      onTake={(t, loaded) => setTake({ take: t, loaded })}
       onAgain={() => {
+        // Back to the stage: still a performer, camera on — the next song may already be up.
         setTake(null);
         setPrepared(false);
-        void session.claimSlot(null).catch(() => undefined);
       }}
     />
   );
@@ -161,19 +173,24 @@ function Room(props: {
   preparing: boolean;
   onPrepare: () => Promise<void>;
   participants: Participant[];
-  take: TakeResult | null;
-  onTake: (t: TakeResult) => void;
+  take: { take: TakeResult; loaded: NonNullable<MeetTrack['loaded']> } | null;
+  onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>) => void;
   onAgain: () => void;
 }) {
   const { session, meet, you, track, camera, engine } = props;
   const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, level: () => engine?.recorder?.level.value ?? 0 });
   const onStage = you.slot !== null;
   const live = meet.state === 'countdown' || meet.state === 'live';
+  // A take in progress keeps the live stage mounted until it wraps up, even once the meet is back in
+  // the lobby (the host ended the song, the set list moved on) — otherwise the take would be lost.
+  const [singing, setSinging] = useState(false);
+  const liveLoaded = useRef<NonNullable<MeetTrack['loaded']> | null>(null);
+  if (live && track?.loaded) liveLoaded.current = track.loaded;
 
-  if (props.take && track?.loaded)
-    return <Review take={props.take} loaded={track.loaded} slot={(you.slot ?? 1) as SingerSlot} mode="live" meetId={meet.meetId} againLabel="Back to the meet" onSaved={(s) => void session.registerRecording(s.performanceId, s.link ?? null, props.take!.durationMs).catch(() => undefined)} onAgain={props.onAgain} />;
+  if (props.take)
+    return <Review take={props.take.take} loaded={props.take.loaded} slot={(you.slot ?? 1) as SingerSlot} mode="live" meetId={meet.meetId} againLabel="Back to the stage" onSaved={(s) => void session.registerRecording(s.performanceId, s.link ?? null, props.take!.take.durationMs).catch(() => undefined)} onAgain={props.onAgain} />;
 
-  if (live && onStage && track?.loaded && engine) return <LiveStage session={session} meet={meet} you={you} loaded={track.loaded} engine={engine} camera={camera} stage={stage} prepared={props.prepared} onPrepare={props.onPrepare} onTake={props.onTake} />;
+  if ((live || singing) && onStage && liveLoaded.current && engine) return <LiveStage session={session} meet={meet} you={you} loaded={liveLoaded.current} engine={engine} camera={camera} stage={stage} prepared={props.prepared} onPrepare={props.onPrepare} onTake={props.onTake} onSinging={setSinging} />;
 
   if (meet.state === 'ended' || meet.state === 'expired') return <Ended session={session} meet={meet} you={you} />;
 
@@ -197,6 +214,7 @@ function Lobby(props: {
   const { session, meet, you, stage } = props;
   const [tab, setTab] = useState<'stage' | 'chat'>('stage');
   const [deciding, setDeciding] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
   useEffect(() => {
     stage.compositor.mode = 'show'; // no lyrics over the lobby stage: the performers fill it
   }, []);
@@ -271,6 +289,27 @@ function Lobby(props: {
       toast(errorText(e), 'warn');
     }
   };
+  const addSong = async (song: SongPick, now = false) => {
+    await session.addSong(song, now);
+    toast(now || (!meet.trackId && !meet.catalogTrackId) ? `"${song.trackTitle}" is up next` : `"${song.trackTitle}" added to the set list`, 'ok');
+  };
+  const songAction = async (id: string, action: 'remove' | 'up' | 'now') => {
+    try {
+      await session.songAction(id, action);
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
+  const endSong = async () => {
+    if (!confirm('End the current song for everyone and move on?')) return;
+    try {
+      await session.nextSong();
+    } catch (e) {
+      toast(errorText(e), 'error');
+    }
+  };
+  const canPick = host || onStage;
+  const hasSong = Boolean(meet.trackId || meet.catalogTrackId);
   const start = async () => {
     try {
       await session.start(LEAD_MS);
@@ -332,7 +371,6 @@ function Lobby(props: {
               <div class={msLeft < 60_000 ? 'chip warn' : ''}>closes in {formatMs(msLeft)} without activity</div>
             </div>
           </div>
-          <TrackStatus track={props.track} host={host} />
         </section>
 
         {live && (
@@ -377,6 +415,56 @@ function Lobby(props: {
           <section class="stack">
             {/* The stage is live from the start: whoever steps on appears here at once (own cut-out; other performers' video on stage devices). */}
             <StageStrip stage={stage} meet={meet} onStage={onStage} />
+            <section class="card stack pad-sm setlist" data-songs={meet.setList.length} data-current={hasSong ? '1' : '0'}>
+              <div class="row between">
+                <div class="min0">
+                  <div class="small muted">{hasSong ? (live ? 'Now singing' : `Up next${meet.songCount ? ` · song ${meet.songCount + 1}` : ''}`) : 'No song picked yet'}</div>
+                  <b class="setlist-title">{hasSong ? meet.trackTitle || 'Untitled track' : canPick ? 'Add a song from your library or the public catalog' : 'The singers pick the songs'}</b>
+                </div>
+                <div class="row monitor-chips">
+                  {canPick && !picking && (
+                    <button class="btn sm primary" onClick={() => setPicking(true)}>
+                      <IcPlus size={16} /> Add a song
+                    </button>
+                  )}
+                  {host && hasSong && !live && (
+                    <button class="btn sm" title="Skip this song; the next one on the set list comes up" onClick={() => void endSong()}>
+                      Skip
+                    </button>
+                  )}
+                </div>
+              </div>
+              {hasSong && <TrackStatus track={props.track} host={host} />}
+              {picking && <SongPicker onPick={(song) => addSong(song)} canPlayNow={host && hasSong && !live} onPlayNow={(song) => addSong(song, true)} onClose={() => setPicking(false)} />}
+              {meet.setList.length > 0 && (
+                <ol class="setlist-queue">
+                  {meet.setList.map((e, i) => (
+                    <li key={e.id} class="row between">
+                      <span class="min0">
+                        <b>{e.trackTitle}</b> <span class="small muted">· picked by {e.pickedByName.split(' ')[0]}{e.durationMs ? ` · ${formatMs(e.durationMs)}` : ''}</span>
+                      </span>
+                      <span class="row monitor-chips">
+                        {host && i > 0 && (
+                          <button class="btn icon sm" aria-label={`Move ${e.trackTitle} up`} title="Move up" onClick={() => void songAction(e.id, 'up')}>
+                            ▲
+                          </button>
+                        )}
+                        {host && !live && (
+                          <button class="btn sm" aria-label={`Play ${e.trackTitle} now`} onClick={() => void songAction(e.id, 'now')}>
+                            <IcPlay size={14} /> Now
+                          </button>
+                        )}
+                        {(host || e.pickedBy === you.participantId) && (
+                          <button class="btn icon sm" aria-label={`Remove ${e.trackTitle} from the set list`} title="Remove" onClick={() => void songAction(e.id, 'remove')}>
+                            <IcX size={14} />
+                          </button>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
             {host && meet.requests.length > 0 && (
               <div class="card stack pad-sm requests" data-requests={meet.requests.length}>
                 <b>Asking to sing</b>
@@ -409,8 +497,8 @@ function Lobby(props: {
               {onStage ? (
                 <>
                   {!props.prepared ? (
-                    <button class="btn accent" disabled={props.preparing || !props.track?.loaded} onClick={() => void props.onPrepare()}>
-                      {props.preparing ? <Spinner /> : <IcMic />} {live ? 'Join the song on stage' : "I'm ready (mic & camera check)"}
+                    <button class="btn accent" disabled={props.preparing || !props.track?.loaded} title={!hasSong ? 'Add a song to the set list first' : props.track?.loaded ? undefined : 'Loading the song on this device…'} onClick={() => void props.onPrepare()}>
+                      {props.preparing ? <Spinner /> : <IcMic />} {!hasSong ? 'Pick a song to get ready' : live ? 'Join the song on stage' : "I'm ready (mic & camera check)"}
                     </button>
                   ) : (
                     <span class="chip ok">{live ? 'Joining the song…' : 'Ready — stage will start automatically'}</span>
@@ -439,8 +527,13 @@ function Lobby(props: {
                 </>
               )}
               {host && !live && (
-                <button class="btn accent" disabled={meet.performerCount === 0} onClick={() => void start()}>
+                <button class="btn accent" disabled={meet.performerCount === 0 || !hasSong} title={!hasSong ? 'Add a song first' : undefined} onClick={() => void start()}>
                   <IcPlay /> Start the song (8 s count-in)
+                </button>
+              )}
+              {host && live && (
+                <button class="btn" onClick={() => void endSong()}>
+                  <IcMusic size={16} /> End the song
                 </button>
               )}
               {host && (
@@ -589,7 +682,9 @@ function LiveStage(props: {
   stage: RoomStage;
   prepared: boolean;
   onPrepare: () => Promise<void>;
-  onTake: (t: TakeResult) => void;
+  onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>) => void;
+  /** A take is in progress (from the first cue until it wraps up). */
+  onSinging: (singing: boolean) => void;
 }) {
   const { session, meet, engine, camera, loaded, stage } = props;
   const { feed, compositor, blend, peerStates } = stage;
@@ -657,6 +752,7 @@ function LiveStage(props: {
         }
       }
       setStarted(true);
+      props.onSinging(true);
     } else {
       // Resume / restart: the recorder keeps the take on the track timeline by dropping the pause.
       clearTimeout(pauseTimer.current);
@@ -725,11 +821,17 @@ function LiveStage(props: {
     return () => clearTimeout(pauseTimer.current);
   }, [pb.state, pauseAt, pb.pausedAtMs, started]);
 
-  useEffect(() => () => cancelAnimationFrame(raf.current), []);
+  useEffect(
+    () => () => {
+      cancelAnimationFrame(raf.current);
+      props.onSinging(false);
+    },
+    [],
+  );
 
-  // Host ended the meet while we sing → wrap up the personal take.
+  // The song is over (its track ended on the host's device, or the host ended it) or the meet ended → wrap up the personal take.
   useEffect(() => {
-    if (started && (meet.state === 'ended' || meet.state === 'expired')) void finish();
+    if (started && (meet.state === 'lobby' || meet.state === 'ended' || meet.state === 'expired')) void finish();
   }, [meet.state]);
 
   const finish = async () => {
@@ -765,16 +867,22 @@ function LiveStage(props: {
       mediaRec.current = null;
       engine.closeMic();
       await keepAwake(false);
-      props.onTake({
-        vocal,
-        video,
-        durationMs,
-        vocalOffsetMs: Math.round(vocalOffsetMs),
-        videoOffsetMs: videoOffsetMs === null ? null : Math.round(videoOffsetMs),
-        latencyCompMs: Math.round(engine.outputLatencyMs * 2),
-        sampleRate,
-        startedAtEpochMs: meet.kickstartEpochMs ?? Date.now(),
-      });
+      // The host's take ending ends the song for everyone: the meet goes back to the lobby, next song up.
+      if (host && (meet.state === 'live' || meet.state === 'countdown')) void session.nextSong().catch(() => undefined);
+      props.onTake(
+        {
+          vocal,
+          video,
+          durationMs,
+          vocalOffsetMs: Math.round(vocalOffsetMs),
+          videoOffsetMs: videoOffsetMs === null ? null : Math.round(videoOffsetMs),
+          latencyCompMs: Math.round(engine.outputLatencyMs * 2),
+          sampleRate,
+          startedAtEpochMs: meet.kickstartEpochMs ?? Date.now(),
+        },
+        loaded,
+      );
+      props.onSinging(false);
     } catch (e) {
       toast(errorText(e), 'error', 8000);
       setFinishing(false);
@@ -849,8 +957,8 @@ function LiveStage(props: {
                     <IcSkipBack />
                   </button>
                 )}
-                <button class="btn big accent" disabled={finishing} onClick={() => void finish()}>
-                  {finishing ? <Spinner /> : <IcStop />} Finish
+                <button class="btn big accent" disabled={finishing} title={host ? 'Ends the song for everyone; the next one on the set list comes up' : 'Finish your take; the song goes on for the others'} onClick={() => void finish()}>
+                  {finishing ? <Spinner /> : <IcStop />} {host ? 'End song' : 'Finish'}
                 </button>
               </>
             ) : (

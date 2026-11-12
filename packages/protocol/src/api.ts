@@ -1,6 +1,6 @@
 /** sv-control HTTP API shapes shared by the client and the server. All routes are JSON. */
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
-import type { ChatMessage, Meet, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, StagePolicy } from './meet.ts';
+import type { ChatMessage, Meet, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, SongPick, StagePolicy } from './meet.ts';
 import type { Destination, DestinationKind, DestinationUpdate, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 
 export interface ApiError {
@@ -146,6 +146,10 @@ export interface Routes {
   'POST /meets/:id/requests/:pid/decide': { req: DecideRequest; res: MeetSnapshot };
   'POST /meets/:id/stage/:pid/remove': { req: { resumeToken: string }; res: MeetSnapshot };
   'POST /meets/:id/policy': { req: { resumeToken: string; stagePolicy: StagePolicy }; res: MeetSnapshot };
+  /** The set list (karaoke queue): anyone on stage adds a song; the host orders it, plays one now, or ends the current song. */
+  'POST /meets/:id/songs': { req: { resumeToken: string; song: SongPick; now?: boolean }; res: MeetSnapshot };
+  'POST /meets/:id/songs/next': { req: { resumeToken: string }; res: MeetSnapshot };
+  'POST /meets/:id/songs/:sid': { req: { resumeToken: string; action: 'remove' | 'up' | 'now' }; res: MeetSnapshot };
   'POST /meets/:id/ready': { req: ReadyRequest; res: MeetSnapshot };
   'POST /meets/:id/chat': { req: ChatRequest; res: { message: ChatMessage } };
   'POST /meets/:id/start': { req: StartMeetRequest; res: MeetSnapshot };

@@ -1086,3 +1086,27 @@
     padding-bottom: 18px;
   }
 }
+
+/* The set list (karaoke queue) in the lobby */
+.setlist .min0 {
+  min-width: 0;
+}
+.setlist-title {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.setlist-queue {
+  margin: 0;
+  padding-left: 22px;
+  display: grid;
+  gap: 6px;
+}
+.setlist-queue li {
+  gap: 8px;
+}
+.songpicker .list {
+  max-height: 40dvh;
+  overflow: auto;
+}

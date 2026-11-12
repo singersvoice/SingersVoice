@@ -51,7 +51,7 @@ describe('sv-control API', () => {
   });
 
   it('meets: create → join by code → slots → chat → kickstart → recordings → stop', async () => {
-    const created = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Sunday meet', trackTitle: 'AA' }) }));
+    const created = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Sunday meet' }) }));
     const meet = created.meet;
     expect(meet.joinCode).toHaveLength(6);
     const byCode = await json<{ meet: Meet }>(await app.request(`/meets/code/${meet.joinCode.toLowerCase()}`, { headers: as('bob') }));
@@ -106,6 +106,15 @@ describe('sv-control API', () => {
 
     const notHost = await app.request(`/meets/${meet.meetId}/start`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, leadMs: 5000 }) });
     expect(notHost.status).toBe(403);
+    // The set list: the meet was created with a title only; bob (on stage) picks the first song, alice queues another.
+    const noSong = await app.request(`/meets/${meet.meetId}/start`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 5000 }) });
+    expect((await json<{ code: string }>(noSong)).code).toBe('no_song');
+    const picked = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/songs`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, song: { trackId: 'trk-1', catalogTrackId: 'trk-1', trackTitle: 'Amma', durationMs: 283000 } }) }));
+    expect(picked.meet).toMatchObject({ trackTitle: 'Amma', catalogTrackId: 'trk-1' });
+    const queued = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/songs`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, song: { trackId: 'trk-2', catalogTrackId: null, trackTitle: 'Next one' } }) }));
+    expect(queued.meet.setList.map((e) => e.trackTitle)).toEqual(['Next one']);
+    expect((await app.request(`/meets/${meet.meetId}/songs/${queued.meet.setList[0]!.id}`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, action: 'up' }) })).status).toBe(403);
+    expect((await app.request(`/meets/${meet.meetId}/songs/nope`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, action: 'remove' }) })).status).toBe(404);
     const started = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/start`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 5000 }) }));
     expect(started.meet.state).toBe('countdown');
     expect(started.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(4000);
@@ -121,6 +130,14 @@ describe('sv-control API', () => {
     expect(resumed.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(1000);
     const restarted = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/restart`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 2000, fromMs: 0 }) }));
     expect(restarted.meet.playback).toMatchObject({ state: 'playing', offsetMs: 0, epoch: 3 });
+    // Song over (host): back to the lobby with the next song up; the stage stays as it was.
+    expect((await app.request(`/meets/${meet.meetId}/songs/next`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken }) })).status).toBe(403);
+    const over = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/songs/next`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken }) }));
+    expect(over.meet).toMatchObject({ state: 'lobby', trackTitle: 'Next one', songCount: 1, performerCount: 2 });
+    expect(over.meet.setList).toHaveLength(0);
+    expect(over.meet.stage[0]!.ready).toBe(false);
+    const again = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/start`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 3000 }) }));
+    expect(again.meet.state).toBe('countdown');
 
     // WebRTC signalling relay between the two performers
     const sent = await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, to: bob.you.participantId, type: 'offer', data: JSON.stringify({ sdp: 'v=0' }) }) });

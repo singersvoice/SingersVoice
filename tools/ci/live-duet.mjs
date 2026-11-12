@@ -33,6 +33,7 @@ async function person(name, viewport, { track = true } = {}) {
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors[name].push(String(e)));
   page.on('console', (m) => m.type() === 'error' && errors[name].push(m.text()));
+  page.on('response', (r) => { if (r.status() >= 400 && !/favicon/.test(r.url())) console.log(`[${name}] HTTP ${r.status()} ${r.request().method()} ${r.url().replace(servers.controlUrl, '')}`); });
   await page.goto(base + '?' + control, { waitUntil: 'networkidle' });
   // device identity for DEV_AUTH: the app sends X-Dev-User from the local profile sub
   await page.evaluate((n) => localStorage.setItem('sv.profile', JSON.stringify({ sub: n, name: n, email: '', picture: '', mode: 'local' })), name);
@@ -58,12 +59,24 @@ try {
   // Host creates the meet with her track.
   await alice.page.goto(base + 'meets', { waitUntil: 'networkidle' });
   await alice.page.getByPlaceholder('Sunday SV music meet').fill('Duet e2e');
-  await alice.page.locator('select.input').first().selectOption({ index: 1 });
-  await alice.page.getByRole('button', { name: 'Create meet' }).click();
+  await alice.page.getByRole('button', { name: 'Create meet' }).click(); // no song yet: a karaoke event picks its songs in the room
   await alice.page.waitForURL(/\/meet\//);
   const meetUrl = alice.page.url();
   const meetId = /\/meet\/([^/?#]+)/.exec(meetUrl)[1];
+  await alice.page.locator('.setlist[data-current="0"]').waitFor({ timeout: 15000 });
+  check(true, 'a new meet starts with an empty set list');
+  // The host adds the first song from her library (private → "add anyway": her guest holds his own copy).
+  const addSong = async (p, who) => {
+    await p.getByRole('button', { name: 'Add a song' }).click();
+    await p.getByRole('button', { name: /^Add CI Sample Song to the set list/ }).click();
+    const anyway = p.getByRole('button', { name: /Add anyway/ });
+    if (await anyway.isVisible().catch(() => false)) await anyway.click();
+    await p.getByText(/is up next|added to the set list/).waitFor({ timeout: 15000 });
+    console.log(`${who} added the song`);
+  };
+  await addSong(alice.page, 'alice');
   await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
+  check(/Up next/.test(await alice.page.locator('.setlist').innerText()), 'the first song picked becomes the current song');
   const remoteFrames = (p) => p.evaluate(async () => { const vs = [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0 && v.readyState >= 2); const t = vs.map((v) => v.currentTime); await new Promise((r) => setTimeout(r, 700)); return vs.filter((v, i) => v.currentTime !== t[i]).length; });
   // The lobby's virtual stage: a performer appears on it the moment they take a slot — long before the song.
   const stripInfo = (p) => p.evaluate(async () => {
@@ -117,7 +130,7 @@ try {
   const tShowLobby = Date.now();
   while (Date.now() - tShowLobby < 30000 && (await remoteFrames(carol.page)) < 2) await wait(500);
   check((await remoteFrames(carol.page)) >= 2, `the show view receives both performers before the song starts (${Math.round((Date.now() - tShowLobby) / 1000)} s)`);
-  check(/the song has not started yet/.test(await carol.page.locator('.show-note').innerText().catch(() => '')), 'the show picture says the song has not started yet');
+  check(/Up next: CI Sample Song/.test(await carol.page.locator('.show-note').innerText().catch(() => '')), 'the show picture names the song that is up next');
   await carol.page.screenshot({ path: `${out}/show-carol-lobby.png` });
 
   // Everyone gets ready; the host starts the song. The stage carries on — nothing reconnects.
@@ -267,12 +280,43 @@ try {
   const tb3 = await bob.page.locator('.timeline .mono').first().innerText();
   console.log('resumed:', { alice: ta3, bob: tb3 });
   check(secs(ta3) > secs(ta1) && secs(tb3) > secs(tb1) && Math.abs(secs(ta3) - secs(tb3)) <= 1, 'both devices resumed together from the paused position');
-  // Finish both (the 20 s sample may already have ended → the take review is up by itself).
-  for (const p of [bob.page, alice.page]) {
-    const finish = p.getByRole('button', { name: 'Finish' });
-    if (await finish.isVisible().catch(() => false)) await finish.click().catch(() => undefined);
-    await p.getByText('Your take').waitFor({ timeout: 30000 });
+  // The 20 s sample ends on the host's device → the song is over for everyone: both takes go to review by themselves.
+  for (const p of [alice.page, bob.page]) await p.getByText('Your take').waitFor({ timeout: 40000 });
+  check(true, 'the song ending on the host device ends it for everyone (both takes reviewed)');
+  // Back to the stage: still performers, the meet is back in the lobby, the video mesh never dropped.
+  for (const p of [alice.page, bob.page]) {
+    await p.getByRole('button', { name: 'Back to the stage' }).click();
+    await p.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
   }
+  const meshAfterSong = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
+  check(meshAfterSong === meshBefore, 'the same video mesh carries on after the song (stage never left)');
+  check(/No song picked yet/.test(await alice.page.locator('.setlist').innerText()), 'the set list is empty again after the only song');
+  // Next song: the host adds it again, everyone gets ready, the host starts it — a second act of the same karaoke event.
+  await addSong(alice.page, 'alice');
+  await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
+  await alice.page.getByRole('button', { name: /I'm ready/ }).click();
+  await alice.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
+  await bob.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
+  await bob.page.getByRole('button', { name: /I'm ready/ }).click();
+  await bob.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
+  await alice.page.getByRole('button', { name: /Start the song/ }).click();
+  await alice.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
+  await bob.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
+  await wait(9500);
+  const a3 = await stageInfo(alice.page);
+  const b3 = await stageInfo(bob.page);
+  check(a3.performers === '2' && b3.performers === '2' && /1\/1 video linked/.test(a3.text) && /1\/1 video linked/.test(b3.text), `the second song runs on the same stage (${a3.t} / ${b3.t})`);
+  check(/Up next|Now singing/.test(await carol.page.locator('.show-top').innerText().catch(() => '')) || (await carol.page.locator('.show[data-state="live"]').isVisible()), 'the show view follows the second song');
+  // The host ends the song for everyone, then ends the meet.
+  await alice.page.getByRole('button', { name: 'End song' }).click();
+  for (const p of [alice.page, bob.page]) await p.getByText('Your take').waitFor({ timeout: 30000 });
+  check(true, '"End song" on the host device wraps up every take');
+  await alice.page.getByRole('button', { name: 'Back to the stage' }).click();
+  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
+  alice.page.once('dialog', (d) => void d.accept());
+  await alice.page.getByRole('button', { name: 'End meet' }).click();
+  await alice.page.getByText(/Meet ended/).waitFor({ timeout: 15000 });
+  check(true, 'the host ends the meet');
   await carol.page.mouse.move(900, 900);
   await carol.page.mouse.move(930, 950);
   await carol.page.locator('.show[data-idle="0"]').waitFor({ timeout: 5000 });

@@ -1,5 +1,5 @@
 /** Pure meet rules (no I/O) so they are unit-testable and identical on every runtime. */
-import type { MeetPlayback, StagePolicy } from '@singersvoice/protocol';
+import type { MeetPlayback, SetListEntry, SongPick, StagePolicy } from '@singersvoice/protocol';
 import { emptyStage, idlePlayback, MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, meetIsOpen, newId, newJoinCode, playbackPositionMs, type Meet, type Participant, type StageSlot } from '@singersvoice/protocol';
 
 /** Participants unseen for this long are dropped from the stage/audience counts. */
@@ -31,6 +31,8 @@ export function newMeet(input: { title: string; hostUserId: string; hostName: st
     openJoin: true,
     stagePolicy: 'ask',
     requests: [],
+    setList: [],
+    songCount: 0,
   };
 }
 
@@ -39,7 +41,101 @@ export function ensureMeet(m: Meet): Meet {
   ensurePlayback(m);
   if (m.stagePolicy !== 'open' && m.stagePolicy !== 'ask') m.stagePolicy = 'ask';
   if (!Array.isArray(m.requests)) m.requests = [];
+  if (!Array.isArray(m.setList)) m.setList = [];
+  if (typeof m.songCount !== 'number') m.songCount = 0;
   return m;
+}
+
+// ---------- the set list: a karaoke event is many songs ----------
+
+export const hasSong = (m: Meet): boolean => Boolean(m.trackId || m.catalogTrackId);
+/** A song is in progress (count-in, playing or paused) — the current song cannot be swapped under it. */
+export const songInProgress = (m: Meet): boolean => m.state === 'countdown' || (m.state === 'live' && ensurePlayback(m).state !== 'idle');
+/** The host and everyone on stage pick songs. */
+export const canPickSong = (m: Meet, p: Participant): boolean => p.role !== 'publisher' && (p.userId === m.hostUserId || p.slot !== null);
+
+function setCurrent(m: Meet, song: SongPick | null): void {
+  m.trackId = song?.trackId ?? null;
+  m.catalogTrackId = song?.catalogTrackId ?? null;
+  m.trackTitle = song ? song.trackTitle.slice(0, 120) : '';
+  for (const s of m.stage) s.ready = false; // a new song: everyone gets ready again (loads it)
+}
+
+/**
+ * Add a song: the first song of a meet (nothing current yet) plays next at once; otherwise it joins
+ * the queue — or, with `now` (host only), replaces the current song while no song is in progress,
+ * the replaced one going back to the top of the queue.
+ */
+export function addSong(m: Meet, p: Participant, song: SongPick, now = false, at = Date.now()): { ok: boolean; reason?: string; entry?: SetListEntry } {
+  if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  if (!canPickSong(m, p)) return { ok: false, reason: 'not_on_stage' };
+  if (!song.trackId && !song.catalogTrackId) return { ok: false, reason: 'no_track' };
+  if (!song.trackTitle?.trim()) return { ok: false, reason: 'no_title' };
+  const pick: SongPick = { trackId: song.trackId ?? null, catalogTrackId: song.catalogTrackId ?? null, trackTitle: song.trackTitle.trim(), durationMs: Math.max(0, Math.round(song.durationMs ?? 0)) };
+  const entry: SetListEntry = { id: newId('song-'), ...pick, durationMs: pick.durationMs ?? 0, pickedBy: p.participantId, pickedByName: p.displayName, addedAt: new Date(at).toISOString() };
+  if (!hasSong(m)) {
+    setCurrent(m, pick);
+    return { ok: true, entry };
+  }
+  if (now) {
+    if (p.userId !== m.hostUserId) return { ok: false, reason: 'not_host' };
+    if (songInProgress(m)) return { ok: false, reason: 'song_in_progress' };
+    const previous: SetListEntry = { id: newId('song-'), trackId: m.trackId, catalogTrackId: m.catalogTrackId, trackTitle: m.trackTitle, durationMs: 0, pickedBy: m.hostUserId, pickedByName: m.hostName, addedAt: new Date(at).toISOString() };
+    setCurrent(m, pick);
+    m.setList.unshift(previous);
+    return { ok: true, entry };
+  }
+  m.setList.push(entry);
+  return { ok: true, entry };
+}
+
+/** Host: remove / move up / play now a queued song. The one who added it may remove it. */
+export function songAction(m: Meet, p: Participant, songId: string, action: 'remove' | 'up' | 'now'): { ok: boolean; reason?: string } {
+  if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  const i = m.setList.findIndex((e) => e.id === songId);
+  if (i < 0) return { ok: false, reason: 'no_song' };
+  const host = p.userId === m.hostUserId;
+  const entry = m.setList[i]!;
+  if (action === 'remove') {
+    if (!host && entry.pickedBy !== p.participantId) return { ok: false, reason: 'not_host' };
+    m.setList.splice(i, 1);
+    return { ok: true };
+  }
+  if (!host) return { ok: false, reason: 'not_host' };
+  if (action === 'up') {
+    if (i > 0) {
+      m.setList.splice(i, 1);
+      m.setList.splice(i - 1, 0, entry);
+    }
+    return { ok: true };
+  }
+  // now: it becomes the current song; a current song that was waiting goes back to the top of the queue
+  if (songInProgress(m)) return { ok: false, reason: 'song_in_progress' };
+  m.setList.splice(i, 1);
+  if (hasSong(m)) m.setList.unshift({ id: newId('song-'), trackId: m.trackId, catalogTrackId: m.catalogTrackId, trackTitle: m.trackTitle, durationMs: 0, pickedBy: m.hostUserId, pickedByName: m.hostName, addedAt: entry.addedAt });
+  setCurrent(m, entry);
+  return { ok: true };
+}
+
+/**
+ * The current song is over (its track ended on the host's device, or the host ends it): the meet
+ * goes back to the lobby — stage, slots and cameras untouched — with the next queued song up, or
+ * nothing until somebody picks one. Playback and the kickstart are cleared; ready flags reset.
+ */
+export function nextSong(m: Meet, now = Date.now()): { ok: boolean; reason?: string } {
+  if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  if (m.state === 'countdown' || m.state === 'live') m.songCount += 1;
+  m.state = 'lobby';
+  m.kickstartEpochMs = null;
+  const pb = ensurePlayback(m);
+  pb.state = 'idle';
+  pb.offsetMs = 0;
+  pb.pausedAtMs = 0;
+  pb.pauseAtEpochMs = null;
+  const next = m.setList.shift() ?? null;
+  setCurrent(m, next);
+  touch(m, now);
+  return { ok: true };
 }
 
 /** Rows written before playback existed: a running meet counts as playing from its kickstart. */
@@ -75,12 +171,11 @@ export function tick(m: Meet, now = Date.now()): boolean {
     pb.pauseAtEpochMs = null;
     changed = true;
   }
-  // A take can never run forever: the cap counts played time only (pauses don't count).
+  // A song can never run forever: the cap counts played time only (pauses don't count) — the meet
+  // goes back to the lobby for the next song, like any song that ended.
   const played = playbackPositionMs(m, now);
   if (m.state === 'live' && played !== null && played > MAX_LIVE_TAKE_MS) {
-    m.state = 'ended';
-    m.endedAt = new Date(now).toISOString();
-    ensurePlayback(m).state = 'idle';
+    nextSong(m, now);
     changed = true;
   }
   if (meetIsOpen(m) && now > Date.parse(m.expiresAt)) {
@@ -213,6 +308,7 @@ export function reportClock(m: Meet, p: Participant, driftMs: number | null, rtt
 export function start(m: Meet, leadMs: number, now = Date.now()): { ok: boolean; reason?: string } {
   if (m.state !== 'lobby' && m.state !== 'countdown') return { ok: false, reason: 'not_in_lobby' };
   if (!m.stage.some((s) => s.participantId)) return { ok: false, reason: 'no_performers' };
+  if (!hasSong(m)) return { ok: false, reason: 'no_song' };
   m.kickstartEpochMs = now + Math.max(3000, Math.min(30000, leadMs));
   m.state = 'countdown';
   const pb = ensurePlayback(m);

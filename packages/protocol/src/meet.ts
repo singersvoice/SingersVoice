@@ -75,6 +75,26 @@ export interface StageRequest {
   askedAt: string;
 }
 
+/** A song on the meet's set list — the karaoke queue (`trackId` = the picker's own copy, `catalogTrackId` = the public entry every device loads). */
+export interface SetListEntry {
+  id: string;
+  trackId: string | null;
+  catalogTrackId: string | null;
+  trackTitle: string;
+  durationMs: number;
+  pickedBy: string;
+  pickedByName: string;
+  addedAt: string;
+}
+
+/** What a song pick carries (from a library track or a catalog entry). */
+export interface SongPick {
+  trackId: string | null;
+  catalogTrackId: string | null;
+  trackTitle: string;
+  durationMs?: number;
+}
+
 export interface Meet {
   meetId: string;
   /** 6-letter join code shown next to the link. */
@@ -107,6 +127,10 @@ export interface Meet {
   stagePolicy: StagePolicy;
   /** Audience members waiting for the host's permission to sing. */
   requests: StageRequest[];
+  /** Songs queued after the current one (`trackId` / `catalogTrackId` / `trackTitle` above). */
+  setList: SetListEntry[];
+  /** Songs sung so far in this meet (the current one counts once it started). */
+  songCount: number;
 }
 
 export interface Participant {

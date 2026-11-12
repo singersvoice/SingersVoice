@@ -34,12 +34,13 @@ import {
   type SignalRequest,
   type SlotRequest,
   type DecideRequest,
+  type SongPick,
   type StartMeetRequest,
   type UserRecord,
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
-import { claimSlot, decideRequest, ensureMeet, isHost, newMeet, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, start, stop, tick, touch, withdrawRequest } from './meets.ts';
+import { addSong, claimSlot, decideRequest, ensureMeet, isHost, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, withdrawRequest } from './meets.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
 export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -423,6 +424,69 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json((await snapshot(c, meet.meetId, host))!);
   });
 
+  // ---- the set list: a karaoke event is many songs ----
+  app.post('/meets/:id/songs', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; song?: Partial<SongPick>; now?: boolean };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    tick(meet);
+    const song = body.song ?? {};
+    const r = addSong(meet, p, { trackId: song.trackId ? String(song.trackId) : null, catalogTrackId: song.catalogTrackId ? String(song.catalogTrackId) : null, trackTitle: String(song.trackTitle ?? ''), durationMs: Number(song.durationMs ?? 0) }, Boolean(body.now));
+    if (!r.ok) {
+      if (r.reason === 'not_on_stage') return err(c, 403, 'not_on_stage', 'Step on stage (or host the meet) to pick songs');
+      if (r.reason === 'not_host') return err(c, 403, 'not_host', 'Only the host plays a song right away — it was not added');
+      if (r.reason === 'song_in_progress') return err(c, 409, 'song_in_progress', 'A song is in progress — it is added to the set list instead');
+      return err(c, 400, r.reason ?? 'bad_song', r.reason === 'meet_closed' ? 'This meet has ended' : 'Pick a track with a title');
+    }
+    p.lastSeenAt = new Date().toISOString();
+    touch(meet);
+    await store.saveParticipant(p);
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, p))!);
+  });
+
+  app.post('/meets/:id/songs/next', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (!isHost(meet, p)) return err(c, 403, 'not_host', 'Only the host ends the song');
+    tick(meet);
+    const r = nextSong(meet);
+    if (!r.ok) return err(c, 409, r.reason ?? 'song', 'This meet has ended');
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, p))!);
+  });
+
+  app.post('/meets/:id/songs/:sid', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; action?: string };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (body.action !== 'remove' && body.action !== 'up' && body.action !== 'now') return err(c, 400, 'bad_action', 'action must be remove, up or now');
+    tick(meet);
+    const r = songAction(meet, p, c.req.param('sid'), body.action);
+    if (!r.ok) {
+      if (r.reason === 'not_host') return err(c, 403, 'not_host', 'Only the host orders the set list');
+      if (r.reason === 'no_song') return err(c, 404, 'no_song', 'That song is no longer on the set list');
+      if (r.reason === 'song_in_progress') return err(c, 409, 'song_in_progress', 'A song is in progress');
+      return err(c, 409, r.reason ?? 'song', 'This meet has ended');
+    }
+    touch(meet);
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, p))!);
+  });
+
   app.post('/meets/:id/policy', async (c) => {
     const { store } = c.get('deps');
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; stagePolicy?: string };
@@ -478,7 +542,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!isHost(meet, p)) return err(c, 403, 'not_host', 'Only the host can start the song');
     tick(meet);
     const r = start(meet, Number(body.leadMs ?? 5000));
-    if (!r.ok) return err(c, 409, r.reason ?? 'start', r.reason === 'no_performers' ? 'Nobody is on stage yet' : 'The meet is not in the lobby');
+    if (!r.ok) return err(c, 409, r.reason ?? 'start', r.reason === 'no_performers' ? 'Nobody is on stage yet' : r.reason === 'no_song' ? 'Pick a song first (set list)' : 'The meet is not in the lobby');
     await store.saveMeet(meet);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });

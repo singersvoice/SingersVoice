@@ -3,7 +3,7 @@
  * is forming or counting down (the kickstart instant is absolute, so 2 s is plenty), 5 s otherwise.
  */
 import { signal } from '@preact/signals';
-import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetSignal, type MeetSignalType, type MeetSnapshot, type Participant, type StagePolicy } from '@singersvoice/protocol';
+import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetSignal, type MeetSignalType, type MeetSnapshot, type Participant, type SongPick, type StagePolicy } from '@singersvoice/protocol';
 import { api, ApiError, clock, serverNow, syncClock } from '../../lib/api.ts';
 
 const POLL_FORMING_MS = 2000;
@@ -145,6 +145,16 @@ export class MeetSession {
   setStagePolicy(stagePolicy: StagePolicy): Promise<void> {
     return this.act('policy', { stagePolicy });
   }
+  /** The set list: anyone on stage adds a song (the host may play it now); the host orders it and ends the current song. */
+  addSong(song: SongPick, now = false): Promise<void> {
+    return this.act('songs', { song, now });
+  }
+  songAction(songId: string, action: 'remove' | 'up' | 'now'): Promise<void> {
+    return this.act(`songs/${encodeURIComponent(songId)}`, { action });
+  }
+  nextSong(): Promise<void> {
+    return this.act('songs/next', {});
+  }
   /** Host transport: pause freezes everyone's position; resume/restart cue a new shared kickstart. */
   pause(leadMs = 3000): Promise<void> {
     return this.act('pause', { leadMs });
@@ -158,12 +168,18 @@ export class MeetSession {
 
   // ---- WebRTC signalling relay (performer ↔ performer) ----
   private lastSignalSeq = 0;
+  /** The relay only serves open meets: nothing is sent or polled once the meet ended (teardown stays quiet). */
+  private get closed(): boolean {
+    const m = this.snapshot.value?.meet;
+    return this.stopped || Boolean(m && !meetIsOpen(m));
+  }
   async sendSignal(to: string, type: MeetSignalType, data: unknown): Promise<void> {
+    if (!this.resumeToken || this.closed) return;
     await api.post('POST /meets/:id/signal', `/meets/${encodeURIComponent(this.meetId)}/signal`, { resumeToken: this.resumeToken, to, type, data: typeof data === 'string' ? data : JSON.stringify(data) });
   }
   /** Signals addressed to me that arrived since the last poll. */
   async pollSignals(): Promise<MeetSignal[]> {
-    if (!this.resumeToken || this.stopped) return [];
+    if (!this.resumeToken || this.closed) return [];
     const r = await api.post('POST /meets/:id/signals', `/meets/${encodeURIComponent(this.meetId)}/signals`, { resumeToken: this.resumeToken, since: this.lastSignalSeq });
     for (const s of r.signals) this.lastSignalSeq = Math.max(this.lastSignalSeq, s.seq);
     return r.signals;

@@ -151,13 +151,14 @@ for (const m of matrix) {
       await shot('22-meet-countdown');
       await wait(10000);
       await shot('23-meet-live');
-      await page.getByRole('button', { name: 'Finish' }).click();
+      // The host's "End song" ends the song for everyone (a singer's button is "Finish": their own take only).
+      await page.getByRole('button', { name: 'End song' }).click();
       await page.getByText('Your take').waitFor({ timeout: 30000 });
       await wait(1200);
       await shot('24-meet-review');
       await page.getByRole('button', { name: 'Keep' }).click();
       await page.getByText('Kept', { exact: true }).first().waitFor({ timeout: 30000 });
-      await page.getByRole('button', { name: 'Back to the meet' }).click();
+      await page.getByRole('button', { name: 'Back to the stage' }).click();
       await page.getByRole('button', { name: 'End meet' }).waitFor({ timeout: 30000 });
       page.once('dialog', (d) => d.accept());
       await page.getByRole('button', { name: 'End meet' }).click();
