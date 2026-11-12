@@ -647,19 +647,30 @@
   gap: 8px;
 }
 .slot-card {
-  display: grid;
-  gap: 6px;
-  justify-items: start;
-  padding: 10px;
+  position: relative;
   min-height: 72px;
   border-radius: var(--radius);
   border: 1px solid var(--line-strong);
   background: var(--surface);
+}
+.slot-card .slot-take {
+  appearance: none;
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  padding: 10px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
   color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
-.slot-card:disabled {
+.slot-card .slot-take:disabled {
   cursor: default;
 }
 .slot-card.taken {
@@ -674,6 +685,60 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+.slot-card .slot-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.slot-card .slot-remove:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+/* The lobby's virtual stage: the show runs from the first slot taken */
+.stagestrip {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  width: min(100%, calc(46dvh * 16 / 9));
+  margin: 0 auto;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #000;
+  isolation: isolate;
+  container-type: inline-size;
+}
+.stagestrip .stagebar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 2;
+  padding: 8px;
+  pointer-events: none;
+}
+.stagestrip .stagebar .btn {
+  pointer-events: auto;
+}
+.requests .avatar-sm {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: var(--surface-2);
+  object-fit: cover;
+  font-weight: 700;
+  flex-shrink: 0;
 }
 .chat-log {
   max-height: 40dvh;

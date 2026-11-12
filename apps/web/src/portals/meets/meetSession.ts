@@ -3,7 +3,7 @@
  * is forming or counting down (the kickstart instant is absolute, so 2 s is plenty), 5 s otherwise.
  */
 import { signal } from '@preact/signals';
-import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetSignal, type MeetSignalType, type MeetSnapshot, type Participant } from '@singersvoice/protocol';
+import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetSignal, type MeetSignalType, type MeetSnapshot, type Participant, type StagePolicy } from '@singersvoice/protocol';
 import { api, ApiError, clock, serverNow, syncClock } from '../../lib/api.ts';
 
 const POLL_FORMING_MS = 2000;
@@ -128,6 +128,22 @@ export class MeetSession {
   }
   stopMeet(): Promise<void> {
     return this.act('stop', {});
+  }
+  /** Audience → singer: ask the host; withdraw; the host decides, clears a slot, or opens the stage to everyone. */
+  askToSing(): Promise<void> {
+    return this.act('requests', {});
+  }
+  withdrawAsk(): Promise<void> {
+    return this.act('requests/withdraw', {});
+  }
+  decide(participantId: string, allow: boolean, slot?: number): Promise<void> {
+    return this.act(`requests/${encodeURIComponent(participantId)}/decide`, { allow, ...(slot ? { slot } : {}) });
+  }
+  removeFromStage(participantId: string): Promise<void> {
+    return this.act(`stage/${encodeURIComponent(participantId)}/remove`, {});
+  }
+  setStagePolicy(stagePolicy: StagePolicy): Promise<void> {
+    return this.act('policy', { stagePolicy });
   }
   /** Host transport: pause freezes everyone's position; resume/restart cue a new shared kickstart. */
   pause(leadMs = 3000): Promise<void> {

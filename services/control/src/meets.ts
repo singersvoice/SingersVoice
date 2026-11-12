@@ -1,5 +1,5 @@
 /** Pure meet rules (no I/O) so they are unit-testable and identical on every runtime. */
-import type { MeetPlayback } from '@singersvoice/protocol';
+import type { MeetPlayback, StagePolicy } from '@singersvoice/protocol';
 import { emptyStage, idlePlayback, MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, meetIsOpen, newId, newJoinCode, playbackPositionMs, type Meet, type Participant, type StageSlot } from '@singersvoice/protocol';
 
 /** Participants unseen for this long are dropped from the stage/audience counts. */
@@ -29,7 +29,17 @@ export function newMeet(input: { title: string; hostUserId: string; hostName: st
     endedAt: null,
     streamUrl: null,
     openJoin: true,
+    stagePolicy: 'ask',
+    requests: [],
   };
+}
+
+/** Rows written before a field existed get its default (playback, stage policy, requests). */
+export function ensureMeet(m: Meet): Meet {
+  ensurePlayback(m);
+  if (m.stagePolicy !== 'open' && m.stagePolicy !== 'ask') m.stagePolicy = 'ask';
+  if (!Array.isArray(m.requests)) m.requests = [];
+  return m;
 }
 
 /** Rows written before playback existed: a running meet counts as playing from its kickstart. */
@@ -92,6 +102,10 @@ export function reconcile(m: Meet, participants: Participant[], now = Date.now()
       changed = true;
     }
   }
+  // Requests from members who left (or are on stage) are dropped.
+  const before = (m.requests ?? []).length;
+  m.requests = (m.requests ?? []).filter((r) => activeIds.has(r.participantId) && !m.stage.some((s) => s.participantId === r.participantId));
+  if (m.requests.length !== before) changed = true;
   const performerCount = m.stage.filter((s) => s.participantId).length;
   const audienceCount = active.filter((p) => p.role !== 'publisher' && !m.stage.some((s) => s.participantId === p.participantId)).length;
   if (performerCount !== m.performerCount || audienceCount !== m.audienceCount) {
@@ -112,27 +126,75 @@ function clearSlot(s: StageSlot): void {
   s.rttMs = null;
 }
 
-export function claimSlot(m: Meet, p: Participant, slot: number | null): { ok: boolean; reason?: string } {
+/**
+ * Take a slot (or leave the stage with `slot = null`). Everyone who enters a meet is audience; the
+ * host steps on stage freely, anyone else needs the host's permission while the stage policy is
+ * 'ask' (`approved` — the host's decision seats them) or an 'open' stage. Performers already on
+ * stage may move to another free slot. The stage is live from the moment the meet exists — the
+ * song is just one activity on it — so a slot may be taken during the song as well (a late
+ * performer starts mid-song).
+ */
+export function claimSlot(m: Meet, p: Participant, slot: number | null, approved = false): { ok: boolean; reason?: string } {
   if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
   if (p.role === 'publisher' && slot !== null) return { ok: false, reason: 'publisher' };
+  const entering = slot !== null && !m.stage.some((s) => s.participantId === p.participantId);
+  if (entering && m.stagePolicy !== 'open' && !approved && p.userId !== m.hostUserId) return { ok: false, reason: 'ask_first' };
+  if (slot !== null && (slot < 1 || slot > MAX_PERFORMERS)) return { ok: false, reason: 'bad_slot' };
+  if (slot !== null) {
+    const target = m.stage[slot - 1]!;
+    if (target.participantId && target.participantId !== p.participantId) return { ok: false, reason: 'slot_taken' };
+  }
   // Leave current slot first.
   for (const s of m.stage) if (s.participantId === p.participantId) clearSlot(s);
+  m.requests = (m.requests ?? []).filter((r) => r.participantId !== p.participantId);
   if (slot === null) {
     p.slot = null;
     if (p.role !== 'publisher') p.role = p.userId === m.hostUserId ? 'host' : 'audience';
     return { ok: true };
   }
-  if (slot < 1 || slot > MAX_PERFORMERS) return { ok: false, reason: 'bad_slot' };
   const target = m.stage[slot - 1]!;
-  if (target.participantId && target.participantId !== p.participantId) return { ok: false, reason: 'slot_taken' };
-  if (m.state === 'live') return { ok: false, reason: 'already_live' };
   target.participantId = p.participantId;
   target.displayName = p.displayName;
   target.picture = p.picture;
   target.ready = false;
   p.slot = slot;
   p.role = 'performer';
+  p.stageRequest = 'none';
   return { ok: true };
+}
+
+/** An audience member asks the host to sing (idempotent while pending). */
+export function requestStage(m: Meet, p: Participant, now = Date.now()): { ok: boolean; reason?: string } {
+  if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  if (p.role === 'publisher') return { ok: false, reason: 'publisher' };
+  if (p.slot !== null) return { ok: false, reason: 'on_stage' };
+  if (m.stagePolicy === 'open') return { ok: false, reason: 'open_stage' };
+  if (!m.requests.some((r) => r.participantId === p.participantId)) m.requests.push({ participantId: p.participantId, displayName: p.displayName, picture: p.picture, askedAt: new Date(now).toISOString() });
+  p.stageRequest = 'pending';
+  return { ok: true };
+}
+
+export function withdrawRequest(m: Meet, p: Participant): void {
+  m.requests = (m.requests ?? []).filter((r) => r.participantId !== p.participantId);
+  if (p.stageRequest === 'pending') p.stageRequest = 'none';
+}
+
+/** The host lets someone on stage (first free slot unless given) or declines; the decision clears the request. */
+export function decideRequest(m: Meet, target: Participant, allow: boolean, slot?: number): { ok: boolean; reason?: string } {
+  if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  m.requests = (m.requests ?? []).filter((r) => r.participantId !== target.participantId);
+  if (!allow) {
+    target.stageRequest = 'declined';
+    return { ok: true };
+  }
+  const free = slot ?? m.stage.find((s) => !s.participantId)?.slot;
+  if (!free) return { ok: false, reason: 'stage_full' };
+  return claimSlot(m, target, free, true);
+}
+
+export function setStagePolicy(m: Meet, policy: StagePolicy): void {
+  m.stagePolicy = policy;
+  if (policy === 'open') m.requests = []; // nothing to wait for any more
 }
 
 export function setReady(m: Meet, p: Participant, ready: boolean): void {

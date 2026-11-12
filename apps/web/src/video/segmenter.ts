@@ -104,6 +104,32 @@ function loadRuntime(): Promise<string> {
 
 export type SegmenterMode = 'loading' | 'model' | 'oval' | 'off';
 
+/**
+ * One model instance per page, created once and never closed: the solution's WASM module can only
+ * be instantiated once per page — a second `new SelfieSegmentation()` (a camera re-opened, a second
+ * stage in the same tab) aborts inside Emscripten ("Module.arguments has been replaced…") and so
+ * would every retry. Whoever starts last owns the results callback.
+ */
+let sharedSeg: SelfieSegmentationLike | null = null;
+let sharedSegPromise: Promise<SelfieSegmentationLike> | null = null;
+function acquireModel(): Promise<SelfieSegmentationLike> {
+  if (sharedSeg) return Promise.resolve(sharedSeg);
+  if (sharedSegPromise) return sharedSegPromise;
+  sharedSegPromise = (async () => {
+    const base = await loadRuntime();
+    const Ctor = (window as unknown as { SelfieSegmentation: SegCtor }).SelfieSegmentation;
+    const seg = new Ctor({ locateFile: (f) => `${base}/${f}` });
+    seg.setOptions({ modelSelection: 1, selfieMode: false });
+    if (seg.initialize) await withTimeout(seg.initialize(), LOAD_TIMEOUT_MS);
+    sharedSeg = seg;
+    return seg;
+  })();
+  sharedSegPromise.catch(() => {
+    sharedSegPromise = null; // a failed load (offline, timeout) is retried by the next start()
+  });
+  return sharedSegPromise;
+}
+
 export class PersonSegmenter {
   /** Person over transparent background, feathered edge. */
   readonly canvas: HTMLCanvasElement;
@@ -170,17 +196,9 @@ export class PersonSegmenter {
     let attempt = 0;
     while (this.running && this.video === video) {
       try {
-        const base = await loadRuntime();
+        const seg = await acquireModel();
         if (!this.running || this.video !== video) return;
-        const Ctor = (window as unknown as { SelfieSegmentation: SegCtor }).SelfieSegmentation;
-        const seg = new Ctor({ locateFile: (f) => `${base}/${f}` });
-        seg.setOptions({ modelSelection: 1, selfieMode: false });
         seg.onResults((r) => this.drawModel(r));
-        if (seg.initialize) await withTimeout(seg.initialize(), LOAD_TIMEOUT_MS);
-        if (!this.running || this.video !== video) {
-          void seg.close();
-          return;
-        }
         this.seg = seg;
         clearTimeout(this.timer);
         this.setMode('model');
@@ -238,6 +256,7 @@ export class PersonSegmenter {
    * frame "is" the person) falls back to a soft head-and-shoulders mask, never a rectangle.
    */
   private drawModel(r: SegResults): void {
+    if (!this.running || !this.seg) return; // a frame answered after stop()
     const mask = this.buildAlphaMask(r.segmentationMask);
     const c = this.ctx2d;
     const { width, height } = this.canvas;
@@ -333,9 +352,7 @@ export class PersonSegmenter {
   stop(): void {
     this.running = false;
     clearTimeout(this.timer);
-    const s = this.seg;
-    this.seg = null;
-    if (s) void Promise.resolve(s.close()).catch(() => undefined);
+    this.seg = null; // the shared model stays alive for the next start (see acquireModel)
     this.video = null;
     this.setMode('off');
   }

@@ -33,12 +33,13 @@ import {
   type RegisterRecordingRequest,
   type SignalRequest,
   type SlotRequest,
+  type DecideRequest,
   type StartMeetRequest,
   type UserRecord,
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
-import { claimSlot, ensurePlayback, isHost, newMeet, pause, reconcile, reportClock, resume, setReady, start, stop, tick, touch } from './meets.ts';
+import { claimSlot, decideRequest, ensureMeet, isHost, newMeet, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, start, stop, tick, touch, withdrawRequest } from './meets.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
 export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -209,7 +210,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const { store } = c.get('deps');
     const meet = await store.getMeet(meetId);
     if (!meet) return null;
-    ensurePlayback(meet);
+    ensureMeet(meet);
     let changed = tick(meet);
     const stored = await store.listParticipants(meetId);
     const rec = reconcile(meet, stored);
@@ -294,6 +295,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         picture: user.picture,
         role: publisher ? 'publisher' : user.userId === meet.hostUserId ? 'host' : 'audience',
         slot: null,
+        stageRequest: 'none',
         joinedAt: now,
         lastSeenAt: now,
         resumeToken: newId('rt-'),
@@ -336,12 +338,102 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
     tick(meet);
     const r = claimSlot(meet, p, body.slot === null || body.slot === undefined ? null : Number(body.slot));
-    if (!r.ok) return err(c, 409, r.reason ?? 'slot', r.reason === 'slot_taken' ? 'That stage slot is taken' : r.reason === 'already_live' ? 'The song already started' : 'Cannot take that slot');
+    if (!r.ok) {
+      if (r.reason === 'ask_first') return err(c, 403, 'ask_first', 'Ask the host to sing — they let you on stage');
+      return err(c, 409, r.reason ?? 'slot', r.reason === 'slot_taken' ? 'That stage slot is taken' : r.reason === 'meet_closed' ? 'This meet has ended' : 'Cannot take that slot');
+    }
     p.lastSeenAt = new Date().toISOString();
     touch(meet);
     await store.saveParticipant(p);
     await store.saveMeet(meet);
     return c.json((await snapshot(c, meet.meetId, p))!);
+  });
+
+  // ---- audience → singer: ask, and the host decides; the host also clears slots and sets the stage policy ----
+  app.post('/meets/:id/requests', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    tick(meet);
+    const r = requestStage(meet, p);
+    if (!r.ok) return err(c, 409, r.reason ?? 'request', r.reason === 'on_stage' ? 'You are already on stage' : r.reason === 'open_stage' ? 'The stage is open — just take a slot' : r.reason === 'meet_closed' ? 'This meet has ended' : 'Cannot ask right now');
+    p.lastSeenAt = new Date().toISOString();
+    touch(meet);
+    await store.saveParticipant(p);
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, p))!);
+  });
+
+  app.post('/meets/:id/requests/withdraw', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    withdrawRequest(meet, p);
+    await store.saveParticipant(p);
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, p))!);
+  });
+
+  app.post('/meets/:id/requests/:pid/decide', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<DecideRequest>;
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const host = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!host) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (!isHost(meet, host)) return err(c, 403, 'not_host', 'Only the host decides who sings');
+    const target = await store.getParticipant(meet.meetId, c.req.param('pid'));
+    if (!target || target.role === 'publisher') return err(c, 404, 'no_participant', 'They are no longer in the meet');
+    tick(meet);
+    const r = decideRequest(meet, target, Boolean(body.allow), body.slot === undefined ? undefined : Number(body.slot));
+    if (!r.ok) return err(c, 409, r.reason ?? 'decide', r.reason === 'stage_full' ? 'The stage is full (10 singers)' : r.reason === 'slot_taken' ? 'That stage slot is taken' : 'Cannot seat them right now');
+    touch(meet);
+    await store.saveParticipant(target);
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, host))!);
+  });
+
+  app.post('/meets/:id/stage/:pid/remove', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const host = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!host) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (!isHost(meet, host)) return err(c, 403, 'not_host', 'Only the host clears the stage');
+    const target = await store.getParticipant(meet.meetId, c.req.param('pid'));
+    if (!target) return err(c, 404, 'no_participant', 'They are no longer in the meet');
+    claimSlot(meet, target, null);
+    touch(meet);
+    await store.saveParticipant(target);
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, host))!);
+  });
+
+  app.post('/meets/:id/policy', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; stagePolicy?: string };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const host = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!host) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (!isHost(meet, host)) return err(c, 403, 'not_host', 'Only the host sets who may step on stage');
+    if (body.stagePolicy !== 'ask' && body.stagePolicy !== 'open') return err(c, 400, 'bad_policy', 'stagePolicy must be ask or open');
+    setStagePolicy(meet, body.stagePolicy);
+    touch(meet);
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, host))!);
   });
 
   app.post('/meets/:id/ready', async (c) => {
@@ -412,7 +504,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       const p = await participantFromBody(c, meet.meetId, body.resumeToken);
       if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
       if (!isHost(meet, p)) return err(c, 403, 'not_host', 'Only the host controls playback');
-      ensurePlayback(meet);
+      ensureMeet(meet);
       tick(meet);
       const r =
         action === 'pause'
@@ -615,7 +707,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 export async function sweepMeets(store: SqlStore): Promise<number> {
   let n = 0;
   for (const m of await store.listOpenMeets()) {
-    ensurePlayback(m);
+    ensureMeet(m);
     if (tick(m)) {
       await store.saveMeet(m);
       if (!meetIsOpen(m)) await store.clearSignals(m.meetId).catch(() => undefined);

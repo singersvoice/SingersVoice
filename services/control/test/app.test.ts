@@ -63,10 +63,33 @@ describe('sv-control API', () => {
     const bob = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ role: 'audience' }) }));
     expect(bob.you.slot).toBeNull();
 
-    const taken = await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, slot: 1 }) });
-    expect(taken.status).toBe(409);
-    const ok = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, slot: 2 }) }));
+    // Everyone enters as audience: bob asks to sing, the host (admin) lets him on; the stage policy can be opened.
+    const askFirst = await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, slot: 2 }) });
+    expect(askFirst.status).toBe(403);
+    expect((await json<{ code: string }>(askFirst)).code).toBe('ask_first');
+    expect((await app.request(`/meets/${meet.meetId}/requests/${bob.you.participantId}/decide`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, allow: true }) })).status).toBe(403); // not the host
+    const asked = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/requests`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken }) }));
+    expect(asked.you?.stageRequest).toBe('pending');
+    expect(asked.meet.requests.map((r) => r.participantId)).toEqual([bob.you.participantId]);
+    const declined = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/requests/${bob.you.participantId}/decide`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, allow: false }) }));
+    expect(declined.meet.requests).toHaveLength(0);
+    const bobView = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/heartbeat`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, chatSince: 0, driftMs: 0, rttMs: 0 }) }));
+    expect(bobView.you?.stageRequest).toBe('declined');
+    await app.request(`/meets/${meet.meetId}/requests`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken }) });
+    const taken = await app.request(`/meets/${meet.meetId}/requests/${bob.you.participantId}/decide`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, allow: true, slot: 1 }) });
+    expect(taken.status).toBe(409); // alice sits in slot 1
+    const ok = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/requests/${bob.you.participantId}/decide`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, allow: true, slot: 2 }) }));
     expect(ok.meet.performerCount).toBe(2);
+    expect(ok.meet.stage[1]!.participantId).toBe(bob.you.participantId);
+    expect(ok.meet.requests).toHaveLength(0);
+    // The host clears a slot and reseats him by opening the stage.
+    const cleared = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/stage/${bob.you.participantId}/remove`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken }) }));
+    expect(cleared.meet.performerCount).toBe(1);
+    expect((await app.request(`/meets/${meet.meetId}/policy`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, stagePolicy: 'open' }) })).status).toBe(403);
+    const opened = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/policy`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, stagePolicy: 'open' }) }));
+    expect(opened.meet.stagePolicy).toBe('open');
+    const reseated = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, slot: 2 }) }));
+    expect(reseated.meet.performerCount).toBe(2);
 
     await app.request(`/meets/${meet.meetId}/chat`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, text: 'ready!' }) });
     const hb = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/heartbeat`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, chatSince: 0, driftMs: 12, rttMs: 80 }) }));

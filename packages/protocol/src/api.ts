@@ -1,6 +1,6 @@
 /** sv-control HTTP API shapes shared by the client and the server. All routes are JSON. */
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
-import type { ChatMessage, Meet, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant } from './meet.ts';
+import type { ChatMessage, Meet, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, StagePolicy } from './meet.ts';
 import type { Destination, DestinationKind, DestinationUpdate, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 
 export interface ApiError {
@@ -60,6 +60,13 @@ export interface MeetSnapshot {
   recordings: MeetRecording[];
   serverEpochMs: number;
   you?: Participant;
+}
+
+export interface DecideRequest {
+  resumeToken: string;
+  allow: boolean;
+  /** Which slot to seat them in (the first free one when omitted). */
+  slot?: number;
 }
 
 export interface SlotRequest {
@@ -133,6 +140,12 @@ export interface Routes {
   'POST /meets/:id/join': { req: JoinMeetRequest; res: JoinMeetResponse };
   'POST /meets/:id/heartbeat': { req: HeartbeatRequest; res: MeetSnapshot };
   'POST /meets/:id/slot': { req: SlotRequest; res: MeetSnapshot };
+  /** Audience → "ask to sing"; host decides; host may clear a slot or change who can step on stage. */
+  'POST /meets/:id/requests': { req: { resumeToken: string }; res: MeetSnapshot };
+  'POST /meets/:id/requests/withdraw': { req: { resumeToken: string }; res: MeetSnapshot };
+  'POST /meets/:id/requests/:pid/decide': { req: DecideRequest; res: MeetSnapshot };
+  'POST /meets/:id/stage/:pid/remove': { req: { resumeToken: string }; res: MeetSnapshot };
+  'POST /meets/:id/policy': { req: { resumeToken: string; stagePolicy: StagePolicy }; res: MeetSnapshot };
   'POST /meets/:id/ready': { req: ReadyRequest; res: MeetSnapshot };
   'POST /meets/:id/chat': { req: ChatRequest; res: { message: ChatMessage } };
   'POST /meets/:id/start': { req: StartMeetRequest; res: MeetSnapshot };

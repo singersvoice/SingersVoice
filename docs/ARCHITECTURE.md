@@ -47,6 +47,25 @@ No portal imports another's screens; they share only `packages/protocol`, `lib/`
 `lib/catalog.ts` is the only place that knows how publishing and pulling work; portals call it and never
 each other, so any portal can be removed or replaced without touching the others.
 
+## Live meet: who is on stage
+
+Everyone who enters a meet is **audience**. The host (the meet's admin) steps on a slot freely; anyone
+else **asks to sing** (`POST /meets/:id/requests`) and the host **lets them on** or declines
+(`…/requests/:pid/decide` — the server seats them in the first free slot, so the singer touches
+nothing), clears a slot (`…/stage/:pid/remove`) or opens the stage to everyone
+(`…/policy` → `stagePolicy: 'open'`, default `'ask'`). Requests live on the meet (`meet.requests`),
+the member's own state on their participant (`stageRequest: none | pending | declined`); requests
+from members who left are dropped by the reconcile. The stage is live from the moment the meet
+exists: a slot may be taken during the song too (a late singer starts mid-song).
+
+**The stage runs before, during and after the song.** `portals/meets/roomStage.ts` owns one
+camera feed, one compositor and one performer mesh for the whole room: whoever takes a slot opens
+their camera with that tap, sees their cut-out on the lobby's stage strip at once and streams it to
+the other performers and to any Publishing show view — the song is one activity on that stage, in
+parallel with the show. The lobby strip draws in `show` layout (no lyrics); the live stage switches
+the same compositor to `stage` layout; nothing reconnects at the kickstart. Audience devices draw
+the performers' placeholders (video is private to the stage and the publisher).
+
 ## Live meet timing
 
 1. Each client measures its clock offset to the server (5 samples of `GET /time`, median of the fastest).
@@ -105,7 +124,10 @@ lyrics, no controls in the picture. The chrome (title, LIVE badge, destinations,
 backing track in sync with the meet's transport, full screen) fades out while the show plays and
 comes back on any pointer movement. Only the host, or a privileged account that joined the meet
 (the show view does), may queue a job for it. The singers' rooms are untouched: they keep their
-lyrics, cue deck and transport; the show view only listens to the meet and pulls video.
+lyrics, cue deck and transport; the show view only listens to the meet and pulls video. Because
+the performers' stage runs from the lobby on, the show view (and Preview) carry the singers before
+the host starts the song — the show is its own process, the song and the host's transport are
+events on it.
 
 **Preview** (admin monitoring) lists every open meet the account may publish (hosted or joined,
 any other by link / code) as a monitor tile: the exact broadcast picture (`showStage.tsx`, the

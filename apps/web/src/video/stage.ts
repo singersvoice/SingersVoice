@@ -76,7 +76,11 @@ export class StageCompositor {
   /** Latest layout in CSS pixels (for tests / overlays). */
   tiles: (StageTile & { performer: StagePerformer })[] = [];
 
-  constructor(readonly mode: StageMode = 'stage') {
+  /** 'stage' (lyrics above the performers) or 'show' (performers fill the frame); may be switched while running. */
+  mode: StageMode;
+
+  constructor(mode: StageMode = 'stage') {
+    this.mode = mode;
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'stagecanvas';
     this.ctx = this.canvas.getContext('2d', { alpha: true })!;
@@ -123,7 +127,11 @@ export class StageCompositor {
       if (!this.running) return;
       if (t - this.lastDraw >= 1000 / FPS) {
         this.lastDraw = t;
-        this.draw();
+        try {
+          this.draw();
+        } catch (e) {
+          console.warn('stage draw', e); // one bad frame never stops the stage
+        }
       }
       this.raf = requestAnimationFrame(loop);
     };
@@ -143,6 +151,10 @@ export class StageCompositor {
     if (!W || !H) return;
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.clearRect(0, 0, W, H);
+    if (!this.performers.length) {
+      this.tiles = []; // an empty stage: just the background
+      return;
+    }
     const tiles = layoutStage(W, H, this.performers.length, this.mode);
     this.tiles = tiles.map((t, i) => ({ ...t, id: this.performers[i]!.id, performer: this.performers[i]! }));
     for (const t of this.tiles) {

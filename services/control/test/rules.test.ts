@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, playbackPositionMs, type Participant } from '@singersvoice/protocol';
-import { claimSlot, ensurePlayback, newMeet, pause, reconcile, resume, start, stop, tick, touch } from '../src/meets.ts';
+import { claimSlot, decideRequest, ensureMeet, ensurePlayback, newMeet, pause, reconcile, requestStage, resume, setStagePolicy, start, stop, tick, touch, withdrawRequest } from '../src/meets.ts';
 
 const T0 = Date.parse('2026-11-11T10:00:00Z');
 const person = (id: string, userId = `u-${id}`): Participant => ({
@@ -10,9 +10,16 @@ const person = (id: string, userId = `u-${id}`): Participant => ({
   picture: '',
   role: 'audience',
   slot: null,
+  stageRequest: 'none',
   joinedAt: new Date(T0).toISOString(),
   lastSeenAt: new Date(T0).toISOString(),
 });
+/** A meet with an open stage (the legacy rules below seat people directly). */
+const openMeet = (input: Parameters<typeof newMeet>[0]) => {
+  const m = newMeet(input, T0);
+  setStagePolicy(m, 'open');
+  return m;
+};
 
 describe('meet rules', () => {
   it('expires after 5 idle minutes and any activity extends it', () => {
@@ -27,7 +34,7 @@ describe('meet rules', () => {
   });
 
   it('seats at most 10 performers, refuses taken slots, frees slots of silent participants', () => {
-    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: null, trackTitle: '', catalogTrackId: null, backgroundId: 'bg' }, T0);
+    const m = openMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: null, trackTitle: '', catalogTrackId: null, backgroundId: 'bg' });
     const people = Array.from({ length: 12 }, (_, i) => person(`p${i + 1}`));
     people.forEach((p, i) => {
       const r = claimSlot(m, p, i + 1);
@@ -45,7 +52,7 @@ describe('meet rules', () => {
   });
 
   it('kickstart: host starts with a lead, countdown becomes live at the instant, stop ends it', () => {
-    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' }, T0);
+    const m = openMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' });
     expect(start(m, 5000, T0)).toEqual({ ok: false, reason: 'no_performers' });
     claimSlot(m, person('p1'), 1);
     expect(start(m, 5000, T0)).toEqual({ ok: true });
@@ -54,14 +61,14 @@ describe('meet rules', () => {
     expect(claimSlot(m, person('p2'), 2).ok).toBe(true); // still allowed during countdown
     tick(m, T0 + 5001);
     expect(m.state).toBe('live');
-    expect(claimSlot(m, person('p3'), 3)).toEqual({ ok: false, reason: 'already_live' });
+    expect(claimSlot(m, person('p3'), 3).ok).toBe(true); // the stage stays open during the song: a late singer starts mid-song
     stop(m, T0 + 60_000);
     expect(m.state).toBe('ended');
     expect(m.kickstartEpochMs).toBeNull();
   });
 
   it('pause freezes the shared position; resume and restart cue a new kickstart with a new epoch', () => {
-    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' }, T0);
+    const m = openMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' });
     claimSlot(m, person('p1'), 1);
     expect(pause(m, T0)).toEqual({ ok: false, reason: 'not_playing' });
     start(m, 5000, T0);
@@ -95,7 +102,7 @@ describe('meet rules', () => {
   });
 
   it('a meet saved before playback existed is treated as playing from its kickstart', () => {
-    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' }, T0);
+    const m = openMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' });
     claimSlot(m, person('p1'), 1);
     start(m, 3000, T0);
     tick(m, T0 + 3000);
@@ -103,5 +110,49 @@ describe('meet rules', () => {
     ensurePlayback(m);
     expect(m.playback.state).toBe('playing');
     expect(playbackPositionMs(m, T0 + 4000)).toBe(1000);
+  });
+
+  it('stage policy: everyone enters as audience; they ask, the host decides; the host steps on freely; open stage needs no asking', () => {
+    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' }, T0);
+    expect(m.stagePolicy).toBe('ask');
+    const host = person('h', 'u-host');
+    const a = person('a');
+    const b = person('b');
+    expect(claimSlot(m, a, 1)).toEqual({ ok: false, reason: 'ask_first' });
+    expect(claimSlot(m, host, 1).ok).toBe(true); // the host (admin) is never asked
+    expect(requestStage(m, a, T0)).toEqual({ ok: true });
+    expect(requestStage(m, a, T0 + 1)).toEqual({ ok: true }); // idempotent
+    expect(m.requests.map((r) => r.participantId)).toEqual(['a']);
+    expect(a.stageRequest).toBe('pending');
+    expect(requestStage(m, host)).toEqual({ ok: false, reason: 'on_stage' });
+    expect(decideRequest(m, a, false)).toEqual({ ok: true });
+    expect(a.stageRequest).toBe('declined');
+    expect(m.requests).toHaveLength(0);
+    expect(requestStage(m, a, T0)).toEqual({ ok: true }); // may ask again
+    expect(decideRequest(m, a, true)).toEqual({ ok: true });
+    expect(a.slot).toBe(2); // first free slot
+    expect(a.role).toBe('performer');
+    expect(a.stageRequest).toBe('none');
+    expect(claimSlot(m, a, 3).ok).toBe(true); // a performer may move to another free slot without asking again
+    expect(claimSlot(m, a, null).ok).toBe(true);
+    expect(claimSlot(m, a, 3)).toEqual({ ok: false, reason: 'ask_first' }); // back in the audience: ask again
+    requestStage(m, b, T0);
+    withdrawRequest(m, b);
+    expect(m.requests).toHaveLength(0);
+    expect(b.stageRequest).toBe('none');
+    requestStage(m, b, T0);
+    // Someone who left the meet is no longer waiting.
+    reconcile(m, [host, a], T0 + 1000);
+    expect(m.requests).toHaveLength(0);
+    requestStage(m, b, T0);
+    setStagePolicy(m, 'open');
+    expect(m.requests).toHaveLength(0);
+    expect(claimSlot(m, b, 5).ok).toBe(true);
+    expect(requestStage(m, a, T0)).toEqual({ ok: false, reason: 'open_stage' });
+    // Rows from before the policy existed default to 'ask' with no requests.
+    const legacy = { ...newMeet({ title: '', hostUserId: 'u', hostName: 'H', trackId: null, trackTitle: '', catalogTrackId: null, backgroundId: 'bg' }, T0) } as Partial<typeof m>;
+    delete legacy.stagePolicy;
+    delete legacy.requests;
+    expect(ensureMeet(legacy as typeof m)).toMatchObject({ stagePolicy: 'ask', requests: [] });
   });
 });

@@ -46,9 +46,13 @@ CI uploads the screenshots as an artifact on every PR.
 
 Two Chromium contexts with a synthetic-person clip as the fake camera (`tools/ci/fake-person.mjs`,
 so the real segmentation model has someone to cut out) — the host on a desktop viewport, a guest on a phone — import
-the sample track, meet in one room, take two stage slots and sing. The test asserts that both devices
-lay out two performers on the virtual stage, that WebRTC video is linked both ways through the SVT DB
-relay (cut-outs drawn on both halves of the stage), that the host's cued pause freezes both timelines
+the sample track and meet in one room. The host takes a slot and must see herself cut out on the
+lobby's stage within seconds; the guest arrives as audience, cannot take a slot, asks to sing, the
+host sees the request and lets him on; both lobby stages then show two performers with video linked
+both ways — before any song. The publisher's show view, opened in the lobby, receives both. Then both
+get ready and the host starts the song: the test asserts the same mesh carries on (no reconnection),
+that both devices lay out two performers on the live stage with video linked both ways through the
+SVT DB relay (cut-outs drawn on both halves), that the host's cued pause freezes both timelines
 at the same position and that resume restarts both together. A third, privileged account (carol,
 `PRIVILEGED_EMAILS=carol@dev.local` on the test service) then opens the Publishing **show view** of the
 meet on a 1080p viewport: both performers arrive over the receive-only mesh and stand huge on the show

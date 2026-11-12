@@ -62,25 +62,77 @@ try {
   await alice.page.getByRole('button', { name: 'Create meet' }).click();
   await alice.page.waitForURL(/\/meet\//);
   const meetUrl = alice.page.url();
+  const meetId = /\/meet\/([^/?#]+)/.exec(meetUrl)[1];
   await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
+  const remoteFrames = (p) => p.evaluate(async () => { const vs = [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0 && v.readyState >= 2); const t = vs.map((v) => v.currentTime); await new Promise((r) => setTimeout(r, 700)); return vs.filter((v, i) => v.currentTime !== t[i]).length; });
+  // The lobby's virtual stage: a performer appears on it the moment they take a slot — long before the song.
+  const stripInfo = (p) => p.evaluate(async () => {
+    const el = document.querySelector('.stagestrip');
+    const c = el.querySelector('canvas.stagecanvas');
+    const x = c.getContext('2d');
+    const d = x.getImageData(0, 0, c.width, c.height).data;
+    let left = 0, right = 0; const w = c.width;
+    for (let i = 3, px = 0; i < d.length; i += 4, px++) if (d[i] > 40) { if (px % w < w / 2) left++; else right++; }
+    return { onstage: el.dataset.onstage, performers: el.dataset.performers, linked: el.dataset.linked, blend: el.dataset.blend, mask: el.dataset.mask, left, right, w, h: c.height, text: el.querySelector('.stagebar').innerText.replace(/\s+/g, ' ') };
+  });
+  // The host (admin) steps on freely.
   await alice.page.getByRole('button', { name: 'Take a stage slot' }).click();
-  await alice.page.getByRole('button', { name: /I'm ready/ }).click();
-  await alice.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
+  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
+  const tStrip = Date.now();
+  while (Date.now() - tStrip < 25000 && (await stripInfo(alice.page)).blend !== 'model') await wait(500);
+  await wait(800);
+  const sa = await stripInfo(alice.page);
+  console.log('alice lobby stage:', JSON.stringify(sa));
+  check(sa.onstage === '1' && sa.performers === '1' && sa.blend === 'model' && sa.left + sa.right > 300, `the host sees herself on the stage the moment she takes a slot (${Math.round((Date.now() - tStrip) / 1000)} s, blend ${sa.blend})`);
+  await alice.page.screenshot({ path: `${out}/lobby-alice-onstage.png` });
 
-  // Guest joins by link, takes a slot, gets ready.
+  // Guest joins by link: audience first. He has to ask; the host lets him on.
   await bob.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
   await bob.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
-  await bob.page.getByRole('button', { name: 'Take a stage slot' }).click();
+  check(!(await bob.page.getByRole('button', { name: 'Take a stage slot' }).isVisible().catch(() => false)), 'an audience member cannot just take a slot (the stage policy is "ask")');
+  await bob.page.getByRole('button', { name: 'Ask to sing' }).click();
+  await bob.page.getByText(/Asked to sing — waiting for/).waitFor({ timeout: 15000 });
+  await alice.page.locator('.requests').waitFor({ timeout: 15000 });
+  check(/bob/.test(await alice.page.locator('.requests').innerText()), 'the host sees "bob wants to join the stage"');
+  await alice.page.screenshot({ path: `${out}/lobby-alice-request.png` });
+  await alice.page.getByRole('button', { name: 'Let bob sing' }).click();
+  await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
+  check(true, 'the host let bob on stage: he is seated (slot 2) without touching anything');
+  // Both performers' video links come up in the lobby (the stage runs before the song).
+  const tLobby = Date.now();
+  while (Date.now() - tLobby < 30000 && ((await remoteFrames(alice.page)) < 1 || (await remoteFrames(bob.page)) < 1)) await wait(500);
+  await wait(1000);
+  const sa2 = await stripInfo(alice.page);
+  const sb2 = await stripInfo(bob.page);
+  console.log('lobby stage alice:', JSON.stringify(sa2), '\nlobby stage bob:  ', JSON.stringify(sb2));
+  check(sa2.performers === '2' && sb2.performers === '2', 'both lobby stages lay out 2 performers');
+  check(sa2.linked === '1' && sb2.linked === '1' && /1\/1 video linked/.test(sa2.text), `video linked both ways in the lobby (${Math.round((Date.now() - tLobby) / 1000)} s)`);
+  check(sa2.left > 100 && sa2.right > 100 && sb2.left > 100 && sb2.right > 100, 'both singers are drawn on both lobby stages');
+  await bob.page.screenshot({ path: `${out}/lobby-bob-onstage.png` });
+
+  // Publishing: the show is its own process — carol's show view gets both performers while the song has not started.
+  const carol = await person('carol', { width: 1920, height: 1080 }, { track: false });
+  await carol.page.goto(`${base}publishing/show/${meetId}?${control}`, { waitUntil: 'networkidle' });
+  await carol.page.locator('.show[data-state="lobby"]').waitFor({ timeout: 30000 });
+  const tShowLobby = Date.now();
+  while (Date.now() - tShowLobby < 30000 && (await remoteFrames(carol.page)) < 2) await wait(500);
+  check((await remoteFrames(carol.page)) >= 2, `the show view receives both performers before the song starts (${Math.round((Date.now() - tShowLobby) / 1000)} s)`);
+  check(/the song has not started yet/.test(await carol.page.locator('.show-note').innerText().catch(() => '')), 'the show picture says the song has not started yet');
+  await carol.page.screenshot({ path: `${out}/show-carol-lobby.png` });
+
+  // Everyone gets ready; the host starts the song. The stage carries on — nothing reconnects.
+  await alice.page.getByRole('button', { name: /I'm ready/ }).click();
+  await alice.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
   await bob.page.getByRole('button', { name: /I'm ready/ }).click();
   await bob.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
-
+  const meshBefore = await alice.page.evaluate(() => (window.__svMeshId = window.__svMeshId || Math.random(), window.__svMesh && (window.__svMesh.__id = window.__svMesh.__id || window.__svMeshId)));
   await alice.page.getByRole('button', { name: /Start the song/ }).click();
-  // Both land on the live stage; wait for the kickstart (8 s lead) and the mesh.
-  await alice.page.locator('.stagebar').waitFor({ timeout: 30000 });
-  await bob.page.locator('.stagebar').waitFor({ timeout: 30000 });
+  // Both land on the live stage; wait for the kickstart (8 s lead).
+  await alice.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
+  await bob.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
   await wait(9000);
-  // Wait until the other singer's video actually carries frames on both sides (not just "connected").
-  const remoteFrames = (p) => p.evaluate(async () => { const vs = [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0 && v.readyState >= 2); const t = vs.map((v) => v.currentTime); await new Promise((r) => setTimeout(r, 700)); return vs.filter((v, i) => v.currentTime !== t[i]).length; });
+  const meshAfter = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
+  check(meshBefore !== undefined && meshBefore === meshAfter, 'the same video mesh carries on from the lobby into the song (no reconnection)');
   const t0 = Date.now();
   while (Date.now() - t0 < 25000 && ((await remoteFrames(alice.page)) < 2 || (await remoteFrames(bob.page)) < 2)) await wait(500);
   const vids = (p) => p.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ w: v.videoWidth, rs: v.readyState, paused: v.paused, muted: v.srcObject ? (v.srcObject.getVideoTracks()[0] || {}).muted : null, tracks: v.srcObject ? v.srcObject.getVideoTracks().length : 0 })));
@@ -91,8 +143,8 @@ try {
   check((await remoteFrames(alice.page)) >= 2 && (await remoteFrames(bob.page)) >= 2, `remote video frames flowing on both devices (${Math.round((Date.now() - t0) / 1000)} s)`);
   await wait(1500);
   const stageInfo = async (p) => p.evaluate(() => {
-    const bar = document.querySelector('.stagebar');
-    const c = document.querySelector('canvas.stagecanvas');
+    const bar = document.querySelector('.sing .stagebar');
+    const c = document.querySelector('.sing canvas.stagecanvas');
     const x = c.getContext('2d');
     // count opaque pixels in the left and right halves of the performer band
     const band = x.getImageData(0, Math.round(c.height * 0.45), c.width, Math.round(c.height * 0.5)).data;
@@ -111,10 +163,7 @@ try {
   await alice.page.screenshot({ path: `${out}/duet-alice-live.png` });
   await bob.page.screenshot({ path: `${out}/duet-bob-live.png` });
 
-  // Publishing mode: carol (privileged, not in the meet) opens the show view of this meet.
-  const carol = await person('carol', { width: 1920, height: 1080 }, { track: false });
-  const meetId = /\/meet\/([^/?#]+)/.exec(meetUrl)[1];
-  await carol.page.goto(`${base}publishing/show/${meetId}?${control}`, { waitUntil: 'networkidle' });
+  // Publishing mode: carol's show view (open since the lobby) follows the song — same links, now live.
   await carol.page.locator('.show[data-state="live"]').waitFor({ timeout: 30000 });
   const t1 = Date.now();
   let tConn = 0;
@@ -208,7 +257,7 @@ try {
   console.log('paused:', { alice: [ta1, ta2], bob: [tb1, tb2] });
   check(ta1 === ta2 && tb1 === tb2, 'the timeline freezes on both devices after the cued pause');
   check(ta1 === tb1, `both devices froze at the same position (${ta1} / ${tb1})`);
-  check(/paused by the host/.test(await bob.page.locator('.stagebar').innerText()), 'the guest sees "paused by the host"');
+  check(/paused by the host/.test(await bob.page.locator('.sing .stagebar').innerText()), 'the guest sees "paused by the host"');
   await bob.page.screenshot({ path: `${out}/duet-bob-paused.png` });
   check(await carol.page.locator('.show-note', { hasText: 'Paused by the host' }).isVisible(), 'the show view shows the pause');
   // Resume: cued 4 s ahead.

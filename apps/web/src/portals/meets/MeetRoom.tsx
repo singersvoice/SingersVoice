@@ -4,15 +4,16 @@
  * Every take on stage is a personal session: recorded locally, kept in the singer's own Drive.
  */
 import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
+import { useRoomStage, type RoomStage } from './roomStage.ts';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, type AudioEngine } from '../../audio/engine.ts';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcChat, IcHeadphones, IcMic, IcPause, IcPlay, IcShare, IcSkipBack, IcStop, IcUsers } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcPause, IcPlay, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { Page } from '../../components/Shell.tsx';
-import { Progress, Seg, Spinner } from '../../components/ui.tsx';
+import { Progress, Seg, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, serverNow } from '../../lib/api.ts';
 import { shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
@@ -22,9 +23,6 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { privileged } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera, pickVideoMime } from '../../video/camera.ts';
-import { LocalFeed } from '../../video/localFeed.ts';
-import { PerformerMesh, type PeerState } from '../../video/peers.ts';
-import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
 import { Review } from '../studio/Sing.tsx';
 import { MeetSession } from './meetSession.ts';
 import { loadMeetTrack, type MeetTrack } from './trackSource.ts';
@@ -128,33 +126,58 @@ export function MeetRoom(props: { id: string }) {
       </Page>
     );
 
+  return (
+    <Room
+      session={session}
+      meet={meet}
+      you={you}
+      track={track}
+      camera={camera}
+      engine={engineRef.current}
+      prepared={prepared}
+      preparing={preparing}
+      onPrepare={prepare}
+      participants={snap?.participants ?? []}
+      take={take}
+      onTake={setTake}
+      onAgain={() => {
+        setTake(null);
+        setPrepared(false);
+        void session.claimSlot(null).catch(() => undefined);
+      }}
+    />
+  );
+}
+
+/** The joined room: one virtual stage for the whole meet (see roomStage.ts), then whichever screen fits. */
+function Room(props: {
+  session: MeetSession;
+  meet: Meet;
+  you: Participant;
+  track: MeetTrack | null;
+  camera: Camera;
+  engine: AudioEngine | null;
+  prepared: boolean;
+  preparing: boolean;
+  onPrepare: () => Promise<void>;
+  participants: Participant[];
+  take: TakeResult | null;
+  onTake: (t: TakeResult) => void;
+  onAgain: () => void;
+}) {
+  const { session, meet, you, track, camera, engine } = props;
+  const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, level: () => engine?.recorder?.level.value ?? 0 });
   const onStage = you.slot !== null;
   const live = meet.state === 'countdown' || meet.state === 'live';
 
-  if (take && track?.loaded)
-    return (
-      <Review
-        take={take}
-        loaded={track.loaded}
-        slot={(you.slot ?? 1) as SingerSlot}
-        mode="live"
-        meetId={meet.meetId}
-        againLabel="Back to the meet"
-        onSaved={(s) => void session.registerRecording(s.performanceId, s.link ?? null, take.durationMs).catch(() => undefined)}
-        onAgain={() => {
-          setTake(null);
-          setPrepared(false);
-          void session.claimSlot(null).catch(() => undefined);
-        }}
-      />
-    );
+  if (props.take && track?.loaded)
+    return <Review take={props.take} loaded={track.loaded} slot={(you.slot ?? 1) as SingerSlot} mode="live" meetId={meet.meetId} againLabel="Back to the meet" onSaved={(s) => void session.registerRecording(s.performanceId, s.link ?? null, props.take!.durationMs).catch(() => undefined)} onAgain={props.onAgain} />;
 
-  if (live && onStage && track?.loaded && engineRef.current)
-    return <LiveStage session={session} meet={meet} you={you} loaded={track.loaded} engine={engineRef.current} camera={camera} prepared={prepared} onPrepare={prepare} onTake={setTake} />;
+  if (live && onStage && track?.loaded && engine) return <LiveStage session={session} meet={meet} you={you} loaded={track.loaded} engine={engine} camera={camera} stage={stage} prepared={props.prepared} onPrepare={props.onPrepare} onTake={props.onTake} />;
 
   if (meet.state === 'ended' || meet.state === 'expired') return <Ended session={session} meet={meet} you={you} />;
 
-  return <Lobby session={session} meet={meet} you={you} track={track} prepared={prepared} preparing={preparing} onPrepare={prepare} participants={snap?.participants ?? []} engine={engineRef.current} />;
+  return <Lobby session={session} meet={meet} you={you} track={track} stage={stage} prepared={props.prepared} preparing={props.preparing} onPrepare={props.onPrepare} participants={props.participants} engine={engine} />;
 }
 
 // ---------------- Lobby + audience ----------------
@@ -164,14 +187,19 @@ function Lobby(props: {
   meet: Meet;
   you: Participant;
   track: MeetTrack | null;
+  stage: RoomStage;
   prepared: boolean;
   preparing: boolean;
   onPrepare: () => Promise<void>;
   participants: Participant[];
   engine: AudioEngine | null;
 }) {
-  const { session, meet, you } = props;
+  const { session, meet, you, stage } = props;
   const [tab, setTab] = useState<'stage' | 'chat'>('stage');
+  const [deciding, setDeciding] = useState<string | null>(null);
+  useEffect(() => {
+    stage.compositor.mode = 'show'; // no lyrics over the lobby stage: the performers fill it
+  }, []);
   const [now, setNow] = useState(Date.now());
   const [listen, setListen] = useState(false);
   useEffect(() => {
@@ -193,9 +221,52 @@ function Lobby(props: {
     const r = await shareOrCopy(`Join "${meet.title}" on SingersVoice`, `Code ${meet.joinCode}`, link);
     toast(r === 'copied' ? 'Meet link copied' : r === 'shared' ? 'Shared' : link, r === 'failed' ? 'warn' : 'ok');
   };
+  const openStage = meet.stagePolicy === 'open';
+  const askState = you.stageRequest ?? 'none';
+  /** Step on a slot: the camera opens with the tap (browsers that need the gesture), then the slot is taken. */
   const claim = async (slot: number | null) => {
+    if (slot !== null && appSettings.peek().cameraOn) void stage.openCamera();
     try {
       await session.claimSlot(slot);
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
+  const ask = async () => {
+    try {
+      await session.askToSing();
+      toast('Asked the host — you step on stage as soon as they say yes', 'ok');
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
+  const withdraw = async () => {
+    try {
+      await session.withdrawAsk();
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
+  const decide = async (participantId: string, allow: boolean) => {
+    setDeciding(participantId);
+    try {
+      await session.decide(participantId, allow);
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    } finally {
+      setDeciding(null);
+    }
+  };
+  const remove = async (participantId: string) => {
+    try {
+      await session.removeFromStage(participantId);
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
+  const setPolicy = async (open: boolean) => {
+    try {
+      await session.setStagePolicy(open ? 'open' : 'ask');
     } catch (e) {
       toast(errorText(e), 'warn');
     }
@@ -304,9 +375,34 @@ function Lobby(props: {
 
         {tab === 'stage' && (
           <section class="stack">
+            {/* The stage is live from the start: whoever steps on appears here at once (own cut-out; other performers' video on stage devices). */}
+            <StageStrip stage={stage} meet={meet} onStage={onStage} />
+            {host && meet.requests.length > 0 && (
+              <div class="card stack pad-sm requests" data-requests={meet.requests.length}>
+                <b>Asking to sing</b>
+                {meet.requests.map((r) => (
+                  <div class="row between" key={r.participantId}>
+                    <span class="row" style="gap:8px">
+                      {r.picture ? <img class="avatar-sm" src={r.picture} alt="" referrerpolicy="no-referrer" /> : <span class="avatar-sm">{(r.displayName || '?').charAt(0).toUpperCase()}</span>}
+                      <span>
+                        <b>{r.displayName}</b> <span class="small muted">wants to join the stage</span>
+                      </span>
+                    </span>
+                    <span class="row" style="gap:6px;flex-wrap:nowrap">
+                      <button class="btn sm primary" disabled={deciding === r.participantId || meet.performerCount >= MAX_PERFORMERS} aria-label={`Let ${r.displayName} sing`} onClick={() => void decide(r.participantId, true)}>
+                        <IcCheck size={16} /> Let them sing
+                      </button>
+                      <button class="btn sm" disabled={deciding === r.participantId} aria-label={`Decline ${r.displayName}`} onClick={() => void decide(r.participantId, false)}>
+                        <IcX size={16} /> Not now
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div class="stage-grid">
               {meet.stage.map((s) => (
-                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} canClaim={!s.participantId && !live} onClaim={() => void claim(s.slot)} />
+                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} canClaim={!s.participantId && (host || openStage || onStage)} onClaim={() => void claim(s.slot)} onRemove={host && s.participantId && s.participantId !== you.participantId ? () => void remove(s.participantId!) : undefined} />
               ))}
             </div>
             <div class="row">
@@ -314,23 +410,33 @@ function Lobby(props: {
                 <>
                   {!props.prepared ? (
                     <button class="btn accent" disabled={props.preparing || !props.track?.loaded} onClick={() => void props.onPrepare()}>
-                      {props.preparing ? <Spinner /> : <IcMic />} I'm ready (mic & camera check)
+                      {props.preparing ? <Spinner /> : <IcMic />} {live ? 'Join the song on stage' : "I'm ready (mic & camera check)"}
                     </button>
                   ) : (
-                    <span class="chip ok">Ready — stage will start automatically</span>
+                    <span class="chip ok">{live ? 'Joining the song…' : 'Ready — stage will start automatically'}</span>
                   )}
-                  {!live && (
-                    <button class="btn" onClick={() => void claim(null)}>
-                      Leave stage
-                    </button>
-                  )}
+                  <button class="btn" onClick={() => void claim(null)}>
+                    Leave stage
+                  </button>
+                </>
+              ) : host || openStage ? (
+                <button class="btn primary" disabled={meet.performerCount >= MAX_PERFORMERS} onClick={() => void claim(meet.stage.find((s) => !s.participantId)?.slot ?? null)}>
+                  <IcMic /> Take a stage slot
+                </button>
+              ) : askState === 'pending' ? (
+                <>
+                  <span class="chip warn">Asked to sing — waiting for {meet.hostName}</span>
+                  <button class="btn sm" onClick={() => void withdraw()}>
+                    Withdraw
+                  </button>
                 </>
               ) : (
-                !live && (
-                  <button class="btn primary" disabled={meet.performerCount >= MAX_PERFORMERS} onClick={() => void claim(meet.stage.find((s) => !s.participantId)?.slot ?? null)}>
-                    <IcMic /> Take a stage slot
+                <>
+                  <button class="btn primary" disabled={meet.performerCount >= MAX_PERFORMERS} onClick={() => void ask()}>
+                    <IcMic /> {askState === 'declined' ? 'Ask again to sing' : 'Ask to sing'}
                   </button>
-                )
+                  {askState === 'declined' && <span class="chip">The host said not now</span>}
+                </>
               )}
               {host && !live && (
                 <button class="btn accent" disabled={meet.performerCount === 0} onClick={() => void start()}>
@@ -343,8 +449,10 @@ function Lobby(props: {
                 </button>
               )}
             </div>
+            {host && <Switch checked={openStage} onChange={(v) => void setPolicy(v)} label="Open stage: anyone may take a free slot" hint={openStage ? 'Switch off to be asked first' : 'Off: the audience asks, you decide who sings'} />}
             <div class="small muted">
-              Audience: {props.participants.filter((p) => p.slot === null).map((p) => p.displayName).join(', ') || 'nobody yet'}
+              Audience: {props.participants.filter((p) => p.slot === null && p.role !== 'publisher').map((p) => p.displayName).join(', ') || 'nobody yet'}
+              {!host && !onStage && !openStage && ' · ask to sing and the host lets you on stage'}
             </div>
             {meet.stage.some((s) => s.participantId && s.rttMs !== null) && (
               <div class="small faint">
@@ -376,14 +484,59 @@ function TrackStatus(props: { track: MeetTrack | null; host: boolean }) {
   );
 }
 
-function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; onClaim: () => void }) {
+function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; onClaim: () => void; onRemove?: () => void }) {
   const s = props.slot;
   return (
-    <button type="button" class={`slot-card ${s.participantId ? 'taken' : ''} ${props.mine ? 'mine' : ''}`} disabled={!props.canClaim} onClick={props.onClaim} style={{ borderColor: SLOT_COLORS[s.slot as SingerSlot] }}>
-      <span class="slot-badge" style={{ background: SLOT_COLORS[s.slot as SingerSlot] }}>S{s.slot}</span>
-      <span class="name">{s.participantId ? s.displayName : 'open'}</span>
-      {s.participantId && <span class={`chip ${s.ready ? 'ok' : ''}`}>{s.ready ? 'ready' : 'joined'}</span>}
-    </button>
+    <div class={`slot-card ${s.participantId ? 'taken' : ''} ${props.mine ? 'mine' : ''}`} style={{ borderColor: SLOT_COLORS[s.slot as SingerSlot] }}>
+      <button type="button" class="slot-take" disabled={!props.canClaim} onClick={props.onClaim} aria-label={s.participantId ? `Slot ${s.slot}: ${s.displayName}` : `Take slot ${s.slot}`}>
+        <span class="slot-badge" style={{ background: SLOT_COLORS[s.slot as SingerSlot] }}>S{s.slot}</span>
+        <span class="name">{s.participantId ? s.displayName : 'open'}</span>
+        {s.participantId && <span class={`chip ${s.ready ? 'ok' : ''}`}>{s.ready ? 'ready' : 'joined'}</span>}
+      </button>
+      {props.onRemove && (
+        <button type="button" class="slot-remove" aria-label={`Clear slot ${s.slot} (${s.displayName})`} title="Clear this slot" onClick={props.onRemove}>
+          <IcX size={14} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The virtual stage in the lobby: everyone on stage, cut out of their cameras (own video; others' on stage devices). */
+function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
+  const { stage, meet } = props;
+  const app = appSettings.value;
+  const n = meet.stage.filter((s) => s.participantId).length;
+  return (
+    <div class="stagestrip" data-blend={stage.blend} data-mask={stage.feed.segmenter.maskMode} data-performers={n} data-linked={stage.linked} data-onstage={props.onStage ? '1' : '0'}>
+      <div class="showpic">
+        <StageBackground id={meet.backgroundId} />
+        <VirtualStage compositor={stage.compositor} />
+        {!n && (
+          <div class="show-center">
+            <h2>The stage is empty</h2>
+            <p class="muted">Take a slot and you are on it at once — the show runs from now on, the song is one act of it.</p>
+          </div>
+        )}
+      </div>
+      <div class="stagebar">
+        <span class="chip">
+          <IcUsers size={14} /> {n} on stage{props.onStage && stage.others ? ` · ${stage.linked}/${stage.others} video linked` : ''}
+        </span>
+        {props.onStage && stage.camOn && stage.blend === 'loading' && <span class="chip">blending you into the stage…</span>}
+        {props.onStage && !stage.camOn && app.cameraOn && (
+          <button class="btn sm accent" style="pointer-events:auto" onClick={() => void stage.openCamera()}>
+            <IcCamera size={16} /> Turn the camera on
+          </button>
+        )}
+        {props.onStage && stage.camError && <span class="chip warn">camera: {stage.camError}</span>}
+        {props.onStage && (
+          <button class={`btn sm ${app.cameraOn ? '' : 'accent'}`} style="pointer-events:auto" aria-label={app.cameraOn ? 'Camera off' : 'Camera on'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
+            {app.cameraOn ? <IcCameraOff size={16} /> : <IcCamera size={16} />}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -433,21 +586,17 @@ function LiveStage(props: {
   loaded: NonNullable<MeetTrack['loaded']>;
   engine: AudioEngine;
   camera: Camera;
+  stage: RoomStage;
   prepared: boolean;
   onPrepare: () => Promise<void>;
   onTake: (t: TakeResult) => void;
 }) {
-  const { session, meet, engine, camera, loaded } = props;
+  const { session, meet, engine, camera, loaded, stage } = props;
+  const { feed, compositor, blend, peerStates } = stage;
   const [tMs, setTMs] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [started, setStarted] = useState(false);
   const [finishing, setFinishing] = useState(false);
-  const [blend, setBlend] = useState<'loading' | 'model' | 'oval' | 'off'>('off');
-  const [peerStates, setPeerStates] = useState<Record<string, PeerState>>({});
-  const feed = useMemo(() => new LocalFeed(), []);
-  const compositor = useMemo(() => new StageCompositor(), []);
-  const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, props.you.participantId) : null), [session, props.you.participantId]);
-  const remoteVideos = useRef(new Map<string, HTMLVideoElement>());
   const mediaRec = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const videoStartCtx = useRef<number | null>(null);
@@ -468,87 +617,15 @@ function LiveStage(props: {
     engine.player?.setGain(audio.backingGain);
   }, [audio]);
 
-  // ---- my cut-out + the performer mesh (video only; singers never hear each other) ----
-  const camStream = camera.stream;
-  const camOn = camera.on.value;
+  // The room's stage (camera, cut-out, mesh) is already running since the lobby; here the lyrics sit above the performers.
   useEffect(() => {
-    feed.onMode = (m) => setBlend(m);
-    feed.attach(camOn ? camStream : null, true);
-    if (camOn && camStream) {
-      camera.startAutoFrame(feed.video);
-      mesh?.setLocalStream(feed.packedStream());
-    } else {
-      camera.stopAutoFrame();
-      mesh?.setLocalStream(null);
-    }
-  }, [camStream, camOn]);
-  useEffect(() => feed.setFraming(app.zoomPreset, app.autoZoom), [app.zoomPreset, app.autoZoom]);
-  const origin = camera.origin.value;
-  useEffect(() => feed.setOrigin(origin), [origin.x, origin.y]);
-  // Vocal-driven auto zoom: whoever sings comes closer, and everyone sees it (the sender frames its own stream).
-  useEffect(() => {
-    const t = setInterval(() => feed.reportLevel(engine.recorder?.level.value ?? 0), 100);
-    return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    if (!mesh) return;
-    mesh.onRemote = (id, stream, state) => {
-      let v = remoteVideos.current.get(id);
-      if (stream) {
-        if (!v) {
-          v = document.createElement('video');
-          v.muted = true;
-          v.playsInline = true;
-          v.autoplay = true;
-          v.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
-          document.body.appendChild(v);
-          remoteVideos.current.set(id, v);
-        }
-        if (v.srcObject !== stream) {
-          v.srcObject = stream;
-          void v.play().catch(() => undefined);
-        }
-      } else if (v) {
-        v.srcObject = null;
-        v.remove();
-        remoteVideos.current.delete(id);
-      }
-      setPeerStates((s) => ({ ...s, [id]: state }));
-    };
-    void mesh.start();
-    (window as unknown as { __svMesh?: PerformerMesh; __svFeed?: LocalFeed }).__svMesh = mesh; // support / e2e hooks
-    (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed;
+    compositor.mode = 'stage';
     return () => {
-      mesh.close();
-      for (const v of remoteVideos.current.values()) {
-        v.srcObject = null;
-        v.remove();
-      }
-      remoteVideos.current.clear();
-      feed.dispose();
+      compositor.mode = 'show';
     };
-  }, [mesh]);
-
+  }, []);
+  const camOn = stage.camOn;
   const stagePerformers = meet.stage.filter((s) => s.participantId);
-  const peerIds = stagePerformers.map((s) => s.participantId!).filter((id) => id !== props.you.participantId);
-  const peerKey = peerIds.join(',');
-  useEffect(() => {
-    mesh?.setPeers(peerIds);
-  }, [peerKey]);
-
-  // Everyone on stage, left to right by slot, on one shared stage.
-  const facing = camera.facing.value;
-  useEffect(() => {
-    const list: StagePerformer[] = stagePerformers.map((s) => {
-      const me = s.participantId === props.you.participantId;
-      const color = SLOT_COLORS[Math.max(1, Math.min(track.singerCount, s.slot)) as SingerSlot];
-      if (me) return { id: 'me', slot: s.slot, label: `You · S${s.slot}`, color, source: feed.source, mirror: facing === 'user', isMe: true };
-      const v = remoteVideos.current.get(s.participantId!);
-      return { id: s.participantId!, slot: s.slot, label: `${s.displayName.split(' ')[0] || 'Singer'} · S${s.slot}`, picture: s.picture, color, source: v ? { kind: 'packed', video: v } : { kind: 'none' } };
-    });
-    compositor.setPerformers(list);
-  }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), camStream, camOn, facing, peerStates]);
 
   // ---- follow the shared transport: schedule playback + recording at every kickstart (start / resume / restart) ----
   useEffect(() => {
@@ -686,7 +763,6 @@ function LiveStage(props: {
         videoOffsetMs = videoStartCtx.current !== null ? (videoStartCtx.current - origin) * 1000 : null;
       }
       mediaRec.current = null;
-      mesh?.close();
       engine.closeMic();
       await keepAwake(false);
       props.onTake({
@@ -724,7 +800,7 @@ function LiveStage(props: {
     <Page title={meet.title} nav={false} full>
       <div class="sing">
         <StageBackground id={meet.backgroundId} />
-        <VirtualStage compositor={compositor} extra={[feed.video]} />
+        <VirtualStage compositor={compositor} />
         <section class="stagebar" data-blend={blend} data-mask={feed.segmenter.maskMode} data-performers={compositor.tiles.length}>
           <span class="chip">
             <IcUsers size={14} /> {stagePerformers.length} on stage{others.length ? ` · ${connected}/${others.length} video linked` : ''}

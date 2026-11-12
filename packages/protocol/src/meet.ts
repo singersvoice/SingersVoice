@@ -64,6 +64,17 @@ export interface StageSlot {
   rttMs: number | null;
 }
 
+/** Who may step on stage: 'ask' = audience asks and the host lets them on (default); 'open' = anyone takes a free slot. */
+export type StagePolicy = 'ask' | 'open';
+
+/** An audience member asking the host to sing. */
+export interface StageRequest {
+  participantId: string;
+  displayName: string;
+  picture: string;
+  askedAt: string;
+}
+
 export interface Meet {
   meetId: string;
   /** 6-letter join code shown next to the link. */
@@ -92,6 +103,10 @@ export interface Meet {
   streamUrl: string | null;
   /** Meet-wide privacy: anyone with the link can join (always true in this increment). */
   openJoin: boolean;
+  /** Who may step on stage (see StagePolicy). */
+  stagePolicy: StagePolicy;
+  /** Audience members waiting for the host's permission to sing. */
+  requests: StageRequest[];
 }
 
 export interface Participant {
@@ -101,6 +116,8 @@ export interface Participant {
   picture: string;
   role: MeetRole;
   slot: number | null;
+  /** This member's "ask to sing": pending until the host decides; declined until they ask again. */
+  stageRequest: 'none' | 'pending' | 'declined';
   joinedAt: string;
   lastSeenAt: string;
 }

@@ -42,7 +42,7 @@ export class LocalFeed {
     v.playsInline = true;
     v.autoplay = true;
     v.setAttribute('aria-hidden', 'true');
-    v.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
+    v.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
     this.video = v;
     this.canvas = document.createElement('canvas');
     this.canvas.width = W;
@@ -67,6 +67,13 @@ export class LocalFeed {
       this.video.srcObject = null;
       return;
     }
+    // The hidden camera <video> lives on the body for the feed's whole life: a media element taken
+    // out of the document (a view swapping its stage container) is paused by the browser, and a
+    // paused camera means a frozen cut-out for everyone else.
+    if (!this.video.isConnected) document.body.appendChild(this.video);
+    this.video.onpause = () => {
+      if (this.stream && this.video.srcObject) void this.video.play().catch(() => undefined);
+    };
     this.video.srcObject = stream;
     void this.video.play().catch(() => undefined);
     void this.segmenter.start(this.video, useModel, (m) => {
@@ -125,6 +132,7 @@ export class LocalFeed {
     this.segmenter.stop();
     this.packer?.stop();
     this.packer = null;
+    this.video.onpause = null;
     this.video.srcObject = null;
     this.video.remove();
     this.stream = null;

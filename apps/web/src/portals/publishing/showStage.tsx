@@ -114,12 +114,13 @@ export function ShowPicture(props: { meet: Meet; compositor: StageCompositor; co
     <div class="showpic" data-state={meet.state}>
       <StageBackground id={meet.backgroundId} />
       <VirtualStage compositor={props.compositor} />
+      {meet.state === 'lobby' && onStage > 0 && <div class="show-note">On stage — the song has not started yet</div>}
       {!live && (
         <div class="show-center">
-          {meet.state === 'lobby' && (
+          {meet.state === 'lobby' && !onStage && (
             <>
-              <h2>{onStage ? 'The stage is set' : 'Waiting for the singers'}</h2>
-              <p class="muted">The show starts when the host starts the song.</p>
+              <h2>Waiting for the singers</h2>
+              <p class="muted">The show is on: whoever steps on stage appears here at once.</p>
             </>
           )}
           {meet.state === 'countdown' && props.countdown !== null && (
