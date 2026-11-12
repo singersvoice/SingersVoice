@@ -8,14 +8,15 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { IcDownload, IcDrive, IcPlus, IcShare, IcSliders, IcTrash, IcUpload } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Seg, Sheet, Spinner } from '../../components/ui.tsx';
-import { api, ApiError, controlConfigured, controlStatus } from '../../lib/api.ts';
+import { ApiError, controlConfigured, controlStatus } from '../../lib/api.ts';
+import { catalogAvailable, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, pullCatalogTrack, searchCatalog, unpublishTrack } from '../../lib/catalog.ts';
 import { probeDuration } from '../../lib/decode.ts';
 import { downloadBlob, shareOrCopy } from '../../lib/download.ts';
 import { GOOGLE_API_KEY, pickFromDrive } from '../../lib/google.ts';
 import { go, href } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { driveProvider, isDrive, profile, token, withProvider } from '../../state/session.ts';
+import { driveProvider, isDrive, token, withProvider } from '../../state/session.ts';
 
 type Tab = 'mine' | 'catalog';
 
@@ -36,12 +37,7 @@ export function TracksPortal() {
       setTracks([]);
       toast(errorText(e), 'error');
     });
-    if (controlConfigured.value) {
-      api
-        .get('GET /catalog/tracks', '/catalog/tracks?mine=1&limit=50')
-        .then((r) => setPublished(new Set(r.items.map((t) => t.trackId))))
-        .catch(() => undefined);
-    }
+    if (catalogAvailable()) void myPublishedIds().then(setPublished);
   };
   useEffect(() => void reload(), []);
 
@@ -50,30 +46,11 @@ export function TracksPortal() {
   // ----- actions on my tracks -----
 
   const publish = async (t: TrackSummary) => {
-    const d = driveProvider();
-    if (!d) return toast('Publishing to the catalog needs Google Drive', 'warn');
-    if (!controlConfigured.value) return toast('The catalog service is not configured for this build yet', 'warn');
-    setBusy({ label: 'Sharing the Drive folder (anyone with the link)', fraction: 0.2 });
+    if (!driveProvider()) return toast('Publishing to the catalog needs Google Drive', 'warn');
+    if (!catalogAvailable()) return toast('The catalog service is not configured for this build yet', 'warn');
+    setBusy({ label: 'Publishing', fraction: 0.1 });
     try {
-      const link = await d.shareTrack(t.trackId, { type: 'anyone' });
-      const refs = await d.publicTrackRefs(t.trackId);
-      setBusy({ label: 'Registering in the SingersVoice catalog', fraction: 0.7 });
-      const loaded = await d.getTrack(t.trackId);
-      await api.post('POST /catalog/tracks', '/catalog/tracks', {
-        trackId: t.trackId,
-        title: t.title,
-        artist: t.artist,
-        genre: loaded?.track.genre ?? '',
-        language: loaded?.track.language ?? '',
-        durationMs: t.durationMs,
-        singerCount: t.singerCount,
-        lineCount: loaded?.track.lyrics.length ?? 0,
-        driveFolderId: refs.folderId,
-        driveFolderLink: link,
-        trackJsonId: refs.trackJsonId,
-        audioId: refs.audioId,
-        audioMime: refs.audioMime,
-      });
+      await publishTrack(t.trackId, setBusy);
       setPublished((s) => new Set([...s, t.trackId]));
       toast(`"${t.title}" is in the public catalog — every SingersVoice singer can pull it`, 'ok', 6000);
       setSel(null);
@@ -86,14 +63,9 @@ export function TracksPortal() {
   };
 
   const unpublish = async (t: TrackSummary) => {
-    const d = driveProvider();
-    if (!d) return;
     setBusy({ label: 'Removing from the catalog', fraction: 0.3 });
     try {
-      await api.del('DELETE /catalog/tracks/:id', `/catalog/tracks/${encodeURIComponent(t.trackId)}`).catch((e) => {
-        if (!(e instanceof ApiError && e.status === 404)) throw e;
-      });
-      await d.unshareTrack(t.trackId);
+      await unpublishTrack(t.trackId);
       setPublished((s) => {
         const n = new Set(s);
         n.delete(t.trackId);
@@ -142,7 +114,7 @@ export function TracksPortal() {
   const remove = async (t: TrackSummary) => {
     if (!confirm(`Delete "${t.title}"? ${isDrive.value ? 'It moves to Drive trash.' : 'This cannot be undone.'}`)) return;
     try {
-      if (published.has(t.trackId)) await api.del('DELETE /catalog/tracks/:id', `/catalog/tracks/${encodeURIComponent(t.trackId)}`).catch(() => undefined);
+      if (published.has(t.trackId)) await unpublishTrack(t.trackId).catch(() => undefined);
       await withProvider((p) => p.deleteTrack(t.trackId));
       setSel(null);
       void reload();
@@ -320,12 +292,12 @@ function Catalog(props: { onPulled: () => void; myIds: Set<string> }) {
   const [total, setTotal] = useState(0);
   const [cursor, setCursor] = useState<string | null>(null);
   const [pulling, setPulling] = useState<{ id: string; label: string; fraction: number } | null>(null);
-  const me = profile.value?.sub ? `g-${profile.value.sub}` : '';
+  const me = myCatalogUserId();
 
   const load = async (append = false) => {
-    if (!controlConfigured.value) return setItems([]);
+    if (!catalogAvailable()) return setItems([]);
     try {
-      const r = await api.get('GET /catalog/tracks', `/catalog/tracks?q=${encodeURIComponent(q)}&limit=24${append && cursor ? `&cursor=${cursor}` : ''}`);
+      const r = await searchCatalog(q, { cursor: append ? cursor : null, limit: 24 });
       setItems((prev) => (append && prev ? [...prev, ...r.items] : r.items));
       setTotal(r.total);
       setCursor(r.nextCursor);
@@ -340,29 +312,9 @@ function Catalog(props: { onPulled: () => void; myIds: Set<string> }) {
   }, [q]);
 
   const pull = async (t: CatalogTrack) => {
-    const d = driveProvider();
     setPulling({ id: t.trackId, label: 'Fetching from the owner’s Drive', fraction: 0.1 });
     try {
-      let jsonBlob: Blob;
-      let audio: Blob;
-      if (d) {
-        jsonBlob = await d.downloadPublic(t.trackJsonId, GOOGLE_API_KEY);
-        setPulling({ id: t.trackId, label: 'Fetching backing track', fraction: 0.35 });
-        audio = await d.downloadPublic(t.audioId, GOOGLE_API_KEY);
-      } else {
-        const key = GOOGLE_API_KEY ? `&key=${encodeURIComponent(GOOGLE_API_KEY)}` : '';
-        const [j, a] = await Promise.all([
-          fetch(`https://www.googleapis.com/drive/v3/files/${t.trackJsonId}?alt=media${key}`),
-          fetch(`https://www.googleapis.com/drive/v3/files/${t.audioId}?alt=media${key}`),
-        ]);
-        if (!j.ok || !a.ok) throw new Error('Sign in with Google to pull catalog tracks');
-        jsonBlob = await j.blob();
-        audio = await a.blob();
-      }
-      const pkg = JSON.parse(await jsonBlob.text()) as TrackPackageV2;
-      const copy = createTrack({ ...pkg, trackId: `${t.trackId}-copy-${me.slice(-4) || 'x'}`, notes: `${pkg.notes}\nFrom the public catalog (by ${t.ownerName})`.trim(), origin: 'unknown' });
-      await withProvider((p) => p.saveTrack(copy, new Blob([audio], { type: t.audioMime || audio.type || 'audio/mpeg' }), (pr) => setPulling({ id: t.trackId, ...pr })));
-      await api.post('POST /catalog/tracks/:id/pull', `/catalog/tracks/${encodeURIComponent(t.trackId)}/pull`).catch(() => undefined);
+      await pullCatalogTrack(t, (pr) => setPulling({ id: t.trackId, ...pr }));
       toast(`"${t.title}" added to ${isDrive.value ? 'your Drive' : 'this device'}`, 'ok', 5000);
       props.onPulled();
     } catch (e) {
@@ -392,7 +344,7 @@ function Catalog(props: { onPulled: () => void; myIds: Set<string> }) {
       <div class="list">
         {items?.map((t) => {
           const mine = t.ownerUserId === me;
-          const have = props.myIds.has(t.trackId) || [...props.myIds].some((id) => id.startsWith(`${t.trackId}-copy-`));
+          const have = [...props.myIds].some((id) => isSameTrack(id, t.trackId));
           return (
             <div class="item" key={t.trackId}>
               <div class="thumb">{t.title.charAt(0).toUpperCase()}</div>

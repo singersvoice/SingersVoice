@@ -3,25 +3,35 @@
  * Rules: anyone signed in can create; anyone with the link/code can join; a meet self-expires after
  * 5 minutes without activity; up to 10 on stage, unlimited audience with chat.
  */
-import { MAX_PERFORMERS, meetIsOpen, type Meet } from '@singersvoice/protocol';
+import { MAX_PERFORMERS, meetIsOpen, type CatalogTrack, type Meet } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { IcChat, IcPlus, IcUsers } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
-import { Empty, Field, Sheet, Spinner } from '../../components/ui.tsx';
+import { Empty, Field, Progress, Sheet, Spinner } from '../../components/ui.tsx';
 import { api, ApiError, checkControl, controlConfigured, controlStatus } from '../../lib/api.ts';
+import { canPublish, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, searchCatalog } from '../../lib/catalog.ts';
 import { go, href } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { profile, withProvider } from '../../state/session.ts';
+import { isDrive, profile, withProvider } from '../../state/session.ts';
 import { appSettings, updateApp } from '../../state/settings.ts';
 
 export function MeetsHome() {
   const [meets, setMeets] = useState<Meet[] | null>(null);
   const [tracks, setTracks] = useState<TrackSummary[]>([]);
   const [published, setPublished] = useState<Set<string>>(new Set());
+  const [catalog, setCatalog] = useState<CatalogTrack[]>([]);
   const [title, setTitle] = useState('');
-  const [trackId, setTrackId] = useState('');
+  // "<id>" = one of my tracks, "catalog:<id>" = a public track straight from the catalog.
+  const [trackId, setTrackId] = useState(() => {
+    try {
+      return new URLSearchParams(location.search).get('track') ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const [publishing, setPublishing] = useState<{ label: string; fraction: number } | null>(null);
   const [code, setCode] = useState('');
   const [bgOpen, setBgOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -42,21 +52,23 @@ export function MeetsHome() {
         setMeets([]);
         if (!(e instanceof ApiError && e.code === 'offline')) toast(errorText(e), 'error');
       });
-    api
-      .get('GET /catalog/tracks', '/catalog/tracks?mine=1&limit=50')
-      .then((r) => setPublished(new Set(r.items.map((t) => t.trackId))))
+    void myPublishedIds().then(setPublished);
+    searchCatalog('', { limit: 50 })
+      .then((r) => setCatalog(r.items.filter((t) => t.ownerUserId !== myCatalogUserId())))
       .catch(() => undefined);
   }, [configured]);
 
   const create = async () => {
     setBusy(true);
     try {
+      const fromCatalog = trackId.startsWith('catalog:') ? catalog.find((c) => `catalog:${c.trackId}` === trackId) : undefined;
       const t = tracks.find((x) => x.trackId === trackId);
       const r = await api.post('POST /meets', '/meets', {
         title: title.trim() || `${profile.value?.name?.split(' ')[0] ?? 'My'} meet`,
-        trackId: t?.trackId ?? null,
-        trackTitle: t?.title ?? '',
-        catalogTrackId: t && published.has(t.trackId) ? t.trackId : null,
+        trackId: fromCatalog?.trackId ?? t?.trackId ?? null,
+        trackTitle: fromCatalog?.title ?? t?.title ?? '',
+        // Performers load the track from the catalog: my published track, or the public one picked.
+        catalogTrackId: fromCatalog?.trackId ?? (t && (published.has(t.trackId) ? t.trackId : catalog.find((c) => isSameTrack(t.trackId, c.trackId))?.trackId)) ?? null,
         backgroundId: app.backgroundId,
       });
       go(`/meet/${encodeURIComponent(r.meet.meetId)}`);
@@ -81,7 +93,22 @@ export function MeetsHome() {
     }
   };
 
-  const selectedPublished = trackId && published.has(trackId);
+  const selectedMine = tracks.find((t) => t.trackId === trackId);
+  const selectedPublished = Boolean(trackId && (trackId.startsWith('catalog:') || published.has(trackId) || catalog.some((c) => isSameTrack(trackId, c.trackId))));
+
+  const publishSelected = async () => {
+    if (!selectedMine) return;
+    setPublishing({ label: 'Publishing', fraction: 0.1 });
+    try {
+      await publishTrack(selectedMine.trackId, setPublishing);
+      setPublished((s) => new Set([...s, selectedMine.trackId]));
+      toast(`"${selectedMine.title}" is public — every performer can load it`, 'ok', 6000);
+    } catch (e) {
+      toast(errorText(e), 'error', 8000);
+    } finally {
+      setPublishing(null);
+    }
+  };
 
   return (
     <Page title="Live Meets">
@@ -103,19 +130,40 @@ export function MeetsHome() {
           <Field label="Title">
             <input class="input" value={title} onInput={(e) => setTitle((e.currentTarget as HTMLInputElement).value)} placeholder="Sunday SV music meet" maxLength={80} />
           </Field>
-          <Field label="Track (performers need it on their device — publish it to the catalog so everyone can load it)">
+          <Field label="Track (every performer loads it from the public catalog — my published tracks and any public track)">
             <select class="input" value={trackId} onChange={(e) => setTrackId((e.currentTarget as HTMLSelectElement).value)}>
               <option value="">Pick later</option>
-              {tracks.map((t) => (
-                <option key={t.trackId} value={t.trackId}>
-                  {t.title} {published.has(t.trackId) ? '· public' : '· private'}
-                </option>
-              ))}
+              {tracks.length > 0 && (
+                <optgroup label={`My tracks (${isDrive.value ? 'Drive' : 'this device'})`}>
+                  {tracks.map((t) => (
+                    <option key={t.trackId} value={t.trackId}>
+                      {t.title} {published.has(t.trackId) || catalog.some((c) => isSameTrack(t.trackId, c.trackId)) ? '· public' : '· private'}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {catalog.length > 0 && (
+                <optgroup label="Public catalog">
+                  {catalog.map((c) => (
+                    <option key={c.trackId} value={`catalog:${c.trackId}`}>
+                      {c.title} · {c.artist || 'Unknown artist'} · by {c.ownerName}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </Field>
           {trackId && !selectedPublished && (
-            <div class="callout warn">
-              This track is private: other performers won't be able to load it. Publish it first in <a href={href('/tracks')}>Tracks → Publish to public catalog</a>.
+            <div class="callout warn stack" style="gap:8px">
+              <span>This track is private: other performers won't be able to load it.</span>
+              {publishing && <Progress fraction={publishing.fraction} label={publishing.label} />}
+              {canPublish() ? (
+                <button class="btn sm accent" disabled={publishing !== null} onClick={() => void publishSelected()}>
+                  Publish it to the public catalog now
+                </button>
+              ) : (
+                <span class="small">Sign in with Google to publish it (tracks are shared from your Drive).</span>
+              )}
             </div>
           )}
           <div class="row">

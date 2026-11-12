@@ -16,6 +16,7 @@ import {
   APP_PROPS,
   DRIVE_FOLDER_PATHS,
   DRIVE_ROOT,
+  normalizeTrack,
   performanceFolderName,
   safeName,
   type DriveFolderKey,
@@ -323,7 +324,7 @@ export class DriveProvider implements StorageProvider {
     const audio = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'trackAudio');
     if (!json || !audio) return null;
     const [track, blob] = await Promise.all([this.downloadJson<TrackPackageV2>(json.id), this.download(audio.id)]);
-    return { track, audio: blob, audioMime: audio.mimeType || blob.type };
+    return { track: normalizeTrack(track), audio: blob, audioMime: audio.mimeType || blob.type };
   }
 
   async saveTrack(track: TrackPackageV2, audio: Blob | null, onProgress?: Progress): Promise<TrackSummary> {
@@ -500,7 +501,7 @@ export class DriveProvider implements StorageProvider {
     const json = files.find((f) => f.name.endsWith('.json'));
     const audio = files.find((f) => (f.mimeType || '').startsWith('audio/') || /\.(mp3|m4a|wav|ogg|webm|flac)$/i.test(f.name));
     if (!json || !audio) throw new Error('That folder has no track.json + audio pair');
-    const track = await this.downloadJson<TrackPackageV2>(json.id);
+    const track = normalizeTrack(await this.downloadJson<TrackPackageV2>(json.id));
     const blob = await this.download(audio.id);
     return { track, audio: blob, audioMime: audio.mimeType || blob.type };
   }

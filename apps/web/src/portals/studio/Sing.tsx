@@ -1,13 +1,14 @@
-import { formatMs, SLOT_COLORS, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
+import { formatMs, SLOT_COLORS, type CatalogTrack, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { CameraTile } from '../../components/CameraTile.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcFlip, IcHeadphones, IcImage, IcPlay, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPlay, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
+import { catalogAvailable, isSameTrack, myCatalogUserId, pullCatalogTrack, searchCatalog } from '../../lib/catalog.ts';
 import { go, href } from '../../lib/nav.ts';
 import { headphonesLikely, isIOS, keepAwake } from '../../lib/platform.ts';
 import { buildManifest, saveTake as persistTake, type TakeResult } from '../../lib/takes.ts';
@@ -20,42 +21,94 @@ import { Camera, pickVideoMime, ZOOM_LEVELS, type ZoomPreset } from '../../video
 type Phase = 'loading' | 'ready' | 'starting' | 'countdown' | 'playing' | 'finishing' | 'review';
 export type { TakeResult };
 
-/** Track picker (/sing). */
+/** Track picker (/sing): my library first, then anything in the public catalog (pulled on demand). */
 export function SingPicker() {
   const [tracks, setTracks] = useState<TrackSummary[] | null>(null);
-  useEffect(() => {
-    void withProvider(async (p) => {
+  const [catalog, setCatalog] = useState<CatalogTrack[]>([]);
+  const [q, setQ] = useState('');
+  const [pulling, setPulling] = useState<{ id: string; label: string; fraction: number } | null>(null);
+  const reload = () =>
+    withProvider(async (p) => {
       await p.ready();
       setTracks(await p.listTracks());
     }).catch(() => setTracks([]));
-  }, []);
+  useEffect(() => void reload(), []);
+  useEffect(() => {
+    if (!catalogAvailable()) return;
+    const t = setTimeout(() => void searchCatalog(q, { limit: 24 }).then((r) => setCatalog(r.items)).catch(() => undefined), 250);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const me = myCatalogUserId();
+  const mine = (tracks ?? []).filter((t) => `${t.title} ${t.artist}`.toLowerCase().includes(q.toLowerCase()));
+  const publicOnly = catalog.filter((c) => c.ownerUserId !== me && !(tracks ?? []).some((t) => isSameTrack(t.trackId, c.trackId)));
+
+  const pullAndSing = async (c: CatalogTrack) => {
+    setPulling({ id: c.trackId, label: 'Fetching', fraction: 0.05 });
+    try {
+      const saved = await pullCatalogTrack(c, (pr) => setPulling({ id: c.trackId, ...pr }));
+      toast(`"${saved.title}" added to ${isDrive.value ? 'your Drive' : 'this device'}`, 'ok', 4000);
+      go(`/studio/sing/${encodeURIComponent(saved.trackId)}`);
+    } catch (e) {
+      toast(errorText(e), 'error', 8000);
+    } finally {
+      setPulling(null);
+    }
+  };
+
   return (
     <Page title="Pick a track">
-      {tracks === null && (
-        <div class="row">
-          <Spinner /> Loading…
-        </div>
-      )}
-      {tracks && !tracks.length && (
-        <Empty title="No tracks yet" body="Make one in Track Maker first — it takes a song file and your lyrics.">
-          <a class="btn primary" href={href('/studio/trackmaker')}>
-            Open Track Maker
-          </a>
-        </Empty>
-      )}
-      <div class="list">
-        {tracks?.map((t) => (
-          <a class="item" key={t.trackId} href={href(`/studio/sing/${encodeURIComponent(t.trackId)}`)}>
-            <div class="thumb">{t.title.charAt(0).toUpperCase()}</div>
-            <div class="meta">
-              <div class="t">{t.title}</div>
-              <div class="s">
-                {t.artist || 'Unknown artist'} · {formatMs(t.durationMs)} · {t.singerCount} singer{t.singerCount > 1 ? 's' : ''}
+      <div class="stack">
+        <input class="input" placeholder="Search my tracks and the public catalog" value={q} onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)} />
+        {tracks === null && (
+          <div class="row">
+            <Spinner /> Loading…
+          </div>
+        )}
+        {tracks && !tracks.length && !publicOnly.length && (
+          <Empty title="No tracks yet" body="Make one in Track Maker first — it takes a song file and your lyrics — or pull a public one below.">
+            <a class="btn primary" href={href('/studio/trackmaker')}>
+              Open Track Maker
+            </a>
+          </Empty>
+        )}
+        {mine.length > 0 && <h3 class="small muted" style="margin:0">My tracks</h3>}
+        <div class="list">
+          {mine.map((t) => (
+            <a class="item" key={t.trackId} href={href(`/studio/sing/${encodeURIComponent(t.trackId)}`)}>
+              <div class="thumb">{t.title.charAt(0).toUpperCase()}</div>
+              <div class="meta">
+                <div class="t">{t.title}</div>
+                <div class="s">
+                  {t.artist || 'Unknown artist'} · {formatMs(t.durationMs)} · {t.singerCount} singer{t.singerCount > 1 ? 's' : ''}
+                </div>
               </div>
+              <span class="btn sm primary">Sing</span>
+            </a>
+          ))}
+        </div>
+        {publicOnly.length > 0 && (
+          <>
+            <h3 class="small muted" style="margin:0">Public catalog — pulled into {isDrive.value ? 'your Drive' : 'this device'} when you pick one</h3>
+            <div class="list">
+              {publicOnly.map((c) => (
+                <div class="item" key={c.trackId}>
+                  <div class="thumb">{c.title.charAt(0).toUpperCase()}</div>
+                  <div class="meta">
+                    <div class="t">{c.title}</div>
+                    <div class="s">
+                      {c.artist || 'Unknown artist'} · {formatMs(c.durationMs)} · {c.singerCount} singer{c.singerCount > 1 ? 's' : ''} · by {c.ownerName}
+                    </div>
+                    {pulling?.id === c.trackId && <Progress fraction={pulling.fraction} label={pulling.label} />}
+                  </div>
+                  <button class="btn sm accent" disabled={pulling !== null} onClick={() => void pullAndSing(c)}>
+                    <IcDownload size={16} /> Add & sing
+                  </button>
+                </div>
+              ))}
             </div>
-            <span class="btn sm primary">Sing</span>
-          </a>
-        ))}
+          </>
+        )}
       </div>
     </Page>
   );

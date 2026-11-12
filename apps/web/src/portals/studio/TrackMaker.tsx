@@ -20,11 +20,14 @@ import {
   type TrackPackageV2,
 } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { IcCheck, IcMusic, IcPlay, IcPause, IcSkipBack, IcUpload } from '../../components/icons.tsx';
+import { IcCheck, IcDrive, IcMusic, IcPlay, IcPause, IcShare, IcSkipBack, IcUpload, IcUsers } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Field, Progress, Seg, Spinner } from '../../components/ui.tsx';
+import { canPublish, catalogAvailable, myPublishedIds, publishTrack } from '../../lib/catalog.ts';
 import { decodeBlob, probeDuration } from '../../lib/decode.ts';
+import { shareOrCopy } from '../../lib/download.ts';
 import { go, href } from '../../lib/nav.ts';
+import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { isDrive, withProvider } from '../../state/session.ts';
 
@@ -37,7 +40,10 @@ export function TrackMaker(props: { id?: string }) {
   const [audioUrl, setAudioUrl] = useState('');
   const [loading, setLoading] = useState(Boolean(props.id));
   const [saving, setSaving] = useState<{ label: string; fraction: number } | null>(null);
-  const [savedRef, setSavedRef] = useState<string | null>(null);
+  const [saved, setSaved] = useState<TrackSummary | null>(null);
+  /** Public-catalog state of the saved track: null = not published, string = public Drive link. */
+  const [publicLink, setPublicLink] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState<{ label: string; fraction: number } | null>(null);
 
   // Load an existing track for editing.
   useEffect(() => {
@@ -48,6 +54,10 @@ export function TrackMaker(props: { id?: string }) {
       setTrack(loaded.track);
       setAudio(loaded.audio);
       setStep(2);
+      if (catalogAvailable()) {
+        const ids = await myPublishedIds();
+        if (ids.has(loaded.track.trackId)) setPublicLink(p.links().tracks ?? '');
+      }
     })
       .catch((e) => toast(errorText(e), 'error'))
       .finally(() => setLoading(false));
@@ -61,6 +71,8 @@ export function TrackMaker(props: { id?: string }) {
   }, [audio]);
 
   const patch = (p: Partial<TrackPackageV2>) => setTrack((t) => ({ ...t, ...p }));
+  /** A title the singer has not typed yet (createTrack's placeholder) counts as empty. */
+  const ownTitle = track.title && track.title !== 'Untitled track' ? track.title : '';
 
   const onAudioFile = async (file: File) => {
     const durationMs = await probeDuration(file);
@@ -69,7 +81,7 @@ export function TrackMaker(props: { id?: string }) {
     setAudio(file);
     patch({
       durationMs,
-      title: track.title || file.name.replace(/\.[^.]+$/, ''),
+      title: ownTitle || file.name.replace(/\.[^.]+$/, ''),
       layers: [{ id: 'L1', kind: 'backing', file: 'backing', mimeType: file.type || 'audio/mpeg', gain: 1, enabledByDefault: true }],
     });
   };
@@ -79,11 +91,11 @@ export function TrackMaker(props: { id?: string }) {
       const text = await file.text();
       if (file.name.toLowerCase().endsWith('.lrc')) {
         const { lines, meta } = parseLrc(text);
-        patch({ lyrics: lines, singerCount: singerCountOf(lines), title: track.title || meta.ti || '', artist: track.artist || meta.ar || '' });
+        patch({ lyrics: lines, singerCount: singerCountOf(lines), title: ownTitle || meta.ti || '', artist: track.artist || meta.ar || '' });
       } else {
         const j = JSON.parse(text) as { schema?: string };
         const imported = j.schema === 'singersvoice.trackmaker.v1' ? importTrackV1(j as TrackMakerV1) : createTrack({ ...(j as TrackPackageV2), trackId: undefined });
-        patch({ lyrics: imported.lyrics, singerCount: imported.singerCount, title: track.title || imported.title, artist: track.artist || imported.artist, genre: imported.genre, language: imported.language, bpm: imported.bpm, keySignature: imported.keySignature });
+        patch({ lyrics: imported.lyrics, singerCount: imported.singerCount, title: ownTitle || imported.title, artist: track.artist || imported.artist, genre: imported.genre, language: imported.language, bpm: imported.bpm, keySignature: imported.keySignature });
       }
       toast('Lyrics & timing loaded', 'ok');
     } catch (e) {
@@ -99,12 +111,28 @@ export function TrackMaker(props: { id?: string }) {
     try {
       const summary = await withProvider((p) => p.saveTrack(final, props.id ? null : audio, (pr) => setSaving(pr)));
       setTrack(final);
-      setSavedRef(summary.trackId);
+      setSaved(summary);
       toast(`Saved "${final.title}" to ${isDrive.value ? 'Google Drive › SingersVoice › Tracks' : 'this device'}`, 'ok', 5000);
+      // An already-public track: refresh its catalog entry (title, line count…) so pulls get the new version.
+      if (publicLink !== null && canPublish()) await publishTrack(summary.trackId).catch(() => undefined);
     } catch (e) {
       toast(errorText(e), 'error', 8000);
     } finally {
       setSaving(null);
+    }
+  };
+
+  const publish = async () => {
+    if (!saved) return;
+    setPublishing({ label: 'Publishing', fraction: 0.1 });
+    try {
+      const r = await publishTrack(saved.trackId, setPublishing);
+      setPublicLink(r.link);
+      toast(`"${saved.title}" is in the public catalog — anyone in SingersVoice can pull it for live meets and solo singing`, 'ok', 7000);
+    } catch (e) {
+      toast(errorText(e), 'error', 8000);
+    } finally {
+      setPublishing(null);
     }
   };
 
@@ -162,14 +190,63 @@ export function TrackMaker(props: { id?: string }) {
               <button class="btn primary lg block" disabled={saving !== null || issues.some((i) => i.level === 'error')} onClick={() => void save()}>
                 {saving ? <Spinner /> : <IcUpload />} {props.id ? 'Save changes' : 'Save track'}
               </button>
-              {savedRef && (
-                <div class="row">
-                  <a class="btn accent" href={href(`/studio/sing/${encodeURIComponent(savedRef)}`)}>
-                    <IcPlay /> Sing it now
-                  </a>
-                  <a class="btn" href={href('/tracks')}>
-                    Library
-                  </a>
+              {saved && (
+                <div class="stack" style="gap:10px">
+                  <div class="callout">
+                    <IcCheck size={16} /> Saved{isDrive.value ? ' permanently in Google Drive › SingersVoice › Tracks › ' : ' on this device: '}
+                    <b>{saved.title}</b> (track.json + audio)
+                    {saved.link && (
+                      <>
+                        {' '}
+                        ·{' '}
+                        <a href={saved.link} target="_blank" rel="noopener">
+                          Open in Drive
+                        </a>
+                      </>
+                    )}
+                  </div>
+                  <div class="card stack" style="gap:8px">
+                    <div class="row between">
+                      <b>
+                        <IcShare size={16} /> Share with every SingersVoice singer
+                      </b>
+                      {publicLink !== null && <span class="chip ok">public</span>}
+                    </div>
+                    {publicLink === null ? (
+                      <>
+                        <p class="small muted" style="margin:0">
+                          Publishing shares the Drive folder "anyone with the link" and lists the track in the public catalog (SVT DB), so anyone can pull it from Tracks, the Studio or a Live Meet.
+                        </p>
+                        {publishing && <Progress fraction={publishing.fraction} label={publishing.label} />}
+                        <button class="btn accent block" disabled={!canPublish() || publishing !== null} onClick={() => void publish()}>
+                          {publishing ? <Spinner /> : <IcShare />} Publish to public catalog
+                        </button>
+                        {!canPublish() && <div class="small faint">{isDrive.value ? 'The catalog service is not configured for this build.' : 'Sign in with Google to publish (tracks are shared from your Drive).'}</div>}
+                      </>
+                    ) : (
+                      <div class="row">
+                        {publicLink && (
+                          <button class="btn sm" onClick={() => void shareOrCopy(saved.title, `${saved.title} — a SingersVoice track`, publicLink).then((r) => toast(r === 'failed' ? 'Could not share the link' : r === 'copied' ? 'Drive link copied' : 'Shared', r === 'failed' ? 'error' : 'ok'))}>
+                            <IcDrive size={16} /> Share Drive link
+                          </button>
+                        )}
+                        <a class="btn sm" href={href('/tracks')}>
+                          Manage in Tracks
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                  <div class="row">
+                    <a class="btn accent" href={href(`/studio/sing/${encodeURIComponent(saved.trackId)}`)}>
+                      <IcPlay /> Sing it now
+                    </a>
+                    <a class="btn" href={href(`/meets?track=${encodeURIComponent(saved.trackId)}`)}>
+                      <IcUsers size={18} /> Start a live meet with it
+                    </a>
+                    <a class="btn ghost" href={href('/tracks')}>
+                      Library
+                    </a>
+                  </div>
                 </div>
               )}
             </div>
@@ -539,7 +616,7 @@ function TimingStep(props: { track: TrackPackageV2; audio: Blob | null; audioUrl
           </div>
         </div>
         <button class="btn accent mark-btn block" onClick={mark} disabled={cur >= t.lyrics.length}>
-          {cur < t.lyrics.length ? `Mark line ${cur + 1}: ${t.lyrics[cur]!.text.split('\n')[0]!.slice(0, 32)}` : 'All lines timed'}
+          {cur < t.lyrics.length ? `Mark line ${cur + 1}: ${t.lyrics[cur]!.text.slice(0, 32)}` : 'All lines timed'}
         </button>
         <div class="row" style="gap:6px">
           <button class="btn sm" onClick={undo} disabled={cur === 0}>

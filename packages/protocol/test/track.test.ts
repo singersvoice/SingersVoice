@@ -3,10 +3,12 @@ import {
   activeLineIndex,
   assignSlots,
   autoSpace,
+  cleanLyricText,
   cleanV1Text,
   createTrack,
   cueDeck,
   importTrackV1,
+  normalizeTrack,
   lyricsWindow,
   normalizeLyrics,
   parseLrc,
@@ -90,8 +92,9 @@ describe('import v1', () => {
     expect(t.schema).toBe('singersvoice.track.v2');
     expect(t.trackId).toBe('trk-trackmaker-1');
     expect(t.lyrics).toHaveLength(3);
-    expect(t.lyrics[1]!.text).toBe('నువ్వే దగ్గరైతే\nహాయి లోన తేలిపోతా');
-    expect(t.lyrics[2]!.text).toBe('సరా\nగా\nల\nసంబ\nర\nమవు\nతా');
+    // SVOld's stray markers never meant line breaks: every lyric line is one row.
+    expect(t.lyrics[1]!.text).toBe('నువ్వే దగ్గరైతే హాయి లోన తేలిపోతా');
+    expect(t.lyrics[2]!.text).toBe('సరా గా ల సంబ ర మవు తా');
     expect(t.singerCount).toBe(4);
     expect(t.origin).toBe('import-v1');
   });
@@ -100,6 +103,17 @@ describe('import v1', () => {
   });
   it('cleanV1Text handles plain text', () => {
     expect(cleanV1Text('hello')).toBe('hello');
+  });
+  it('cleanLyricText collapses markers and embedded breaks, keeps a lone slash', () => {
+    expect(cleanLyricText('చెలి\\నువ్వు\\అవునంటే//??')).toBe('చెలి నువ్వు అవునంటే');
+    expect(cleanLyricText('one\ntwo\r\nthree')).toBe('one two three');
+    expect(cleanLyricText('rock/roll  tonight??')).toBe('rock/roll tonight');
+    expect(cleanLyricText('  a \\\\ b  ')).toBe('a b');
+  });
+  it('normalizeTrack repairs multi-row lines in older saves', () => {
+    const pkg = createTrack({ durationMs: 10000, lyrics: [{ startMs: 0, endMs: 1000, text: 'x', singerSlot: 1 }] });
+    pkg.lyrics[0]!.text = 'సరా\nగా\nల';
+    expect(normalizeTrack(pkg).lyrics[0]!.text).toBe('సరా గా ల');
   });
 });
 

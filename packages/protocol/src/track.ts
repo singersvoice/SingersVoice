@@ -91,13 +91,26 @@ export function clampSlot(n: unknown): SingerSlot {
   return Math.max(0, Math.min(MAX_SINGER_SLOTS, v)) as SingerSlot;
 }
 
+/**
+ * One lyric line is one row of text. SVOld's editor left stray `\`, `//` and `??` runs inside
+ * lines (shown as syllable-by-syllable breaks — never intended); those and any embedded line
+ * breaks collapse to a single space. A lone `/` ("rock/roll") is kept.
+ */
+export function cleanLyricText(text: string): string {
+  return String(text ?? '')
+    .replace(/[\\/]*\\[\\/]*|\/{2,}/g, ' ')
+    .replace(/\?{2,}/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Sort by start, clamp to >=0, make ends monotonic, clip to duration when known. */
 export function normalizeLyrics(lines: LyricLine[], durationMs?: number): LyricLine[] {
   const out = lines
     .map((l) => ({
       startMs: Math.max(0, Math.round(Number(l.startMs) || 0)),
       endMs: Math.max(0, Math.round(Number(l.endMs) || 0)),
-      text: String(l.text ?? '').replace(/\r\n?/g, '\n').trim(),
+      text: cleanLyricText(l.text),
       singerSlot: clampSlot(l.singerSlot),
       ...(l.words ? { words: l.words } : {}),
     }))
@@ -169,16 +182,15 @@ export function importTrackV1(v1: TrackMakerV1): TrackPackageV2 {
   });
 }
 
-/** SVOld lyrics used `\` and `//` as manual break markers; turn them into real line breaks. */
+/** SVOld lyric text → one clean row (its stray `\`, `//`, `??` markers are dropped). */
 export function cleanV1Text(text: string): string {
-  return String(text ?? '')
-    .replace(/\\+/g, '\n')
-    .replace(/\/\/+/g, '\n')
-    .replace(/\?\?+/g, '')
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join('\n');
+  return cleanLyricText(text);
+}
+
+/** Re-normalize a stored package (older saves may carry multi-row lines); safe to call on every load. */
+export function normalizeTrack(pkg: TrackPackageV2): TrackPackageV2 {
+  const lyrics = normalizeLyrics(pkg.lyrics ?? [], pkg.durationMs);
+  return { ...pkg, lyrics, singerCount: pkg.singerCount || singerCountOf(lyrics) };
 }
 
 export type SlotPattern = 'solo' | 'alternate' | 'duet-verse' | 'all';

@@ -24,12 +24,28 @@ that the code depends on.
 | Portal | Route | State it owns | Talks to |
 | --- | --- | --- | --- |
 | Tracks | `/tracks` | track files in Drive, catalog entries | Drive API, `sv-control /catalog/*` |
-| Studio | `/studio/*` | tracks, takes, audio settings | Drive API only (works offline) |
+| Studio | `/studio/*` | tracks, takes, audio settings | Drive API (works offline); the catalog only to publish a saved track or pull one to sing |
 | Live Meets | `/meets`, `/meet/:id` | meet session (poll), personal take | `sv-control /meets/*`, Drive for the take |
 | Publishing | `/publishing`, `/watch/:id` | destinations, jobs | `sv-control /publishing/*`, `/watch/*` |
 
 No portal imports another's screens; they share only `packages/protocol`, `lib/` (storage, api, audio) and
 `state/` (session, settings). The SVT DB (sv-control) is the only shared backend and holds no media.
+
+### A track's life (every step is self-contained)
+
+1. **Save** (Track Maker, or an import in Tracks): `StorageProvider.saveTrack` writes `track.json` + the
+   backing audio to Google Drive `SingersVoice/Tracks/<title>/` (IndexedDB in developer preview). Both
+   files carry `appProperties` (`svType`, `svTrackId`) so they are found by id, never by path.
+2. **Publish** (`lib/catalog.ts: publishTrack`): the Drive folder gets an *anyone with the link* permission
+   and the catalog (SVT DB) gets the entry with the public Drive file ids. Offered right after saving in
+   Track Maker, in Tracks, and inline in Live Meets when a private track is picked.
+3. **Pull** (`lib/catalog.ts: pullCatalogTrack` / `fetchCatalogTrack`): any signed-in singer fetches the
+   two files straight from the owner's Drive (own token → API key → public download URL) and saves a copy
+   in their own storage. The Sing picker ("Add & sing"), Tracks ("Add to my Drive") and a meet room
+   (streamed for the performance, no copy) all use the same two functions.
+
+`lib/catalog.ts` is the only place that knows how publishing and pulling work; portals call it and never
+each other, so any portal can be removed or replaced without touching the others.
 
 ## Live meet timing
 

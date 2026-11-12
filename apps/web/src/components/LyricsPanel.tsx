@@ -65,7 +65,7 @@ export function CueDeck(props: { lines: LyricLine[]; tMs: number; mySlot: number
       </div>
       {next.map((l, i) => (
         <div key={i} style={{ opacity: 1 - i * 0.3 }}>
-          {l.text.split('\n')[0]}
+          {l.text}
         </div>
       ))}
     </aside>

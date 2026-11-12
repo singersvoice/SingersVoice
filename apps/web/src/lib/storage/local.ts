@@ -2,7 +2,7 @@
  * Local provider: IndexedDB on this device. Used when Google isn't configured/linked and as
  * the always-available staging area (local-first recording). Same shapes as the Drive provider.
  */
-import type { PerformanceManifest, TrackPackageV2 } from '@singersvoice/protocol';
+import { normalizeTrack, type PerformanceManifest, type TrackPackageV2 } from '@singersvoice/protocol';
 import { idb, STORES } from '../idb.ts';
 import { storageEstimate } from '../platform.ts';
 import type { LoadedPerformance, LoadedTrack, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
@@ -48,7 +48,7 @@ export class LocalProvider implements StorageProvider {
   async getTrack(trackId: string): Promise<LoadedTrack | null> {
     const r = await idb.get<TrackRecord>(STORES.tracks, trackId);
     if (!r || !r.audio) return null;
-    return { track: r.track, audio: r.audio, audioMime: r.audioMime };
+    return { track: normalizeTrack(r.track), audio: r.audio, audioMime: r.audioMime };
   }
 
   async saveTrack(track: TrackPackageV2, audio: Blob | null, onProgress?: Progress): Promise<TrackSummary> {
