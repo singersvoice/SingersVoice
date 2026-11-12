@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import type { CatalogTrack, ChatMessage, Destination, Meet, MeetRecording, Participant, PublishJob, UserRecord } from '@singersvoice/protocol';
+import type { CatalogTrack, ChatMessage, Destination, Meet, MeetRecording, MeetSignal, Participant, PublishJob, UserRecord } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { SCHEMA_SQL } from './schema.ts';
 
@@ -186,6 +186,11 @@ export class SqlStore {
     return r ? (JSON.parse(r.data) as StoredParticipant) : null;
   }
 
+  async getParticipant(meetId: string, participantId: string): Promise<StoredParticipant | null> {
+    const r = await this.db.get<{ data: string }>('SELECT data FROM participants WHERE meet_id=? AND participant_id=?', [meetId, participantId]);
+    return r ? (JSON.parse(r.data) as StoredParticipant) : null;
+  }
+
   async getParticipantByUser(meetId: string, userId: string): Promise<StoredParticipant | null> {
     const r = await this.db.get<{ data: string }>('SELECT data FROM participants WHERE meet_id=? AND user_id=? ORDER BY last_seen_at DESC LIMIT 1', [meetId, userId]);
     return r ? (JSON.parse(r.data) as StoredParticipant) : null;
@@ -217,6 +222,24 @@ export class SqlStore {
   async chatTail(meetId: string, limit = 50): Promise<ChatMessage[]> {
     const rows = await this.db.all<{ data: string }>('SELECT data FROM chat WHERE meet_id=? ORDER BY seq DESC LIMIT ?', [meetId, limit]);
     return rows.map((r) => JSON.parse(r.data) as ChatMessage).reverse();
+  }
+
+  // ---------- WebRTC signalling (performer ↔ performer, relayed) ----------
+
+  async addSignal(meetId: string, sig: Omit<MeetSignal, 'seq'>): Promise<MeetSignal> {
+    const seq = Number((await this.db.get<{ n: number }>('SELECT COALESCE(MAX(seq),0)+1 AS n FROM signals WHERE meet_id=?', [meetId]))?.n ?? 1);
+    const full: MeetSignal = { ...sig, seq };
+    await this.db.run('INSERT INTO signals (meet_id, seq, to_id, data) VALUES (?,?,?,?)', [meetId, seq, sig.to, JSON.stringify(full)]);
+    return full;
+  }
+
+  async signalsFor(meetId: string, to: string, since: number, limit = 200): Promise<MeetSignal[]> {
+    const rows = await this.db.all<{ data: string }>('SELECT data FROM signals WHERE meet_id=? AND to_id=? AND seq>? ORDER BY seq ASC LIMIT ?', [meetId, to, since, limit]);
+    return rows.map((r) => JSON.parse(r.data) as MeetSignal);
+  }
+
+  async clearSignals(meetId: string): Promise<void> {
+    await this.db.run('DELETE FROM signals WHERE meet_id=?', [meetId]);
   }
 
   // ---------- recordings ----------

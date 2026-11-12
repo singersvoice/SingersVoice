@@ -54,6 +54,29 @@ each other, so any portal can be removed or replaced without touching the others
 3. Every performer's device converts that instant to its own AudioContext time and schedules the backing
    track (and the sample-accurate recorder) there. Nobody waits for anybody; network jitter only affects
    when a device *learns* the instant, not when it plays.
+4. **Pause / resume / restart** are host-only and cued the same way (`Meet.playback`): a pause takes
+   effect at `pauseAtEpochMs = now + 3 s`, so every device freezes at the same track position
+   (`pausedAtMs`); resume and restart set a new `kickstartEpochMs` with `offsetMs` = the position to
+   continue from and bump `playback.epoch`, which is what clients key their re-scheduling on. The
+   recorder worklet drops frames between the pause and resume instants, so a personal take stays on the
+   track timeline across any number of pauses. Performers poll every 1.5 s while live; the audience's
+   lyrics and "listen" player follow `playbackPositionMs()`.
+
+## The virtual stage
+
+Nobody is shown as a boxed camera tile. `video/segmenter.ts` cuts the singer out of their camera with
+MediaPipe Selfie Segmentation (bundled under `/mediapipe`, ~6 MB, cached by the service worker after
+the first use; CDN fallback; soft-focus oval when no model can load), and `video/stage.ts` draws every
+performer, left to right by stage slot, evenly spaced and bottom-anchored over the stage background —
+one shared stage whether there is 1 singer or 10, on every device.
+
+Other performers' video arrives over a WebRTC mesh (`video/peers.ts`, video only — singers never hear
+each other, by design): each device sends its cut-out **alpha-packed** (left half colour, right half
+the mask as grey, `video/alphaPack.ts`), which survives compression far better than chroma keying, and
+receivers unpack it with a one-line WebGL shader. Signalling is relayed by the SVT DB
+(`POST /meets/:id/signal`, polled) so no socket server is needed; ICE servers come from `GET /ice`
+(Google STUN by default; set `ICE_SERVERS` on the service to add TURN for strict NATs). Per-peer
+bitrate is capped and scaled with the mesh size (≈1.6 Mbit/s total uplink).
 4. Performers hear only themselves + the track (Solo foldback). The composed mix for the audience comes from
    the session container (next increment); until then the watch page shows lyrics in sync and chat.
 5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.

@@ -52,6 +52,7 @@ Then set the repo variable `VITE_CONTROL_URL` to `https://<your host>` and run *
 | `PRIVILEGED_EMAILS` | var/secret | Accounts allowed to use Publishing mode (the first account ever seen is privileged too) |
 | `PUBLISH_KEY_SECRET` | secret | AES-GCM key (base64, 32 bytes) for stream keys at rest — generated on the worker if not given |
 | `DEV_AUTH` | var | `1` accepts `X-Dev-User` headers — local dev and CI only, never in production |
+| `ICE_SERVERS` | var/secret | JSON array of RTCIceServer for performer-to-performer video, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]`. Default: Google STUN only (works for most home/mobile networks; add TURN for corporate NATs) |
 | `SV_DB` | env (Node only) | SQLite file path, default `./sv-control.sqlite` |
 
 ## Testing against a different service

@@ -1,6 +1,6 @@
 /** sv-control HTTP API shapes shared by the client and the server. All routes are JSON. */
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
-import type { ChatMessage, Meet, MeetRecording, MeetRole, Participant } from './meet.ts';
+import type { ChatMessage, Meet, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant } from './meet.ts';
 import type { Destination, DestinationKind, DestinationUpdate, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 
 export interface ApiError {
@@ -81,6 +81,27 @@ export interface StartMeetRequest {
   leadMs: number;
 }
 
+export interface PlaybackRequest {
+  resumeToken: string;
+  /** resume/restart: shared lead before the new kickstart (ms). */
+  leadMs?: number;
+  /** restart: position to restart from (ms), default 0. */
+  fromMs?: number;
+}
+
+export interface SignalRequest {
+  resumeToken: string;
+  to: string;
+  type: MeetSignalType;
+  data: string;
+}
+
+export interface IceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
 export interface RegisterRecordingRequest {
   resumeToken: string;
   performanceId: string;
@@ -115,6 +136,12 @@ export interface Routes {
   'POST /meets/:id/chat': { req: ChatRequest; res: { message: ChatMessage } };
   'POST /meets/:id/start': { req: StartMeetRequest; res: MeetSnapshot };
   'POST /meets/:id/stop': { req: { resumeToken: string }; res: MeetSnapshot };
+  'POST /meets/:id/pause': { req: PlaybackRequest; res: MeetSnapshot };
+  'POST /meets/:id/resume': { req: PlaybackRequest; res: MeetSnapshot };
+  'POST /meets/:id/restart': { req: PlaybackRequest; res: MeetSnapshot };
+  'POST /meets/:id/signal': { req: SignalRequest; res: { seq: number } };
+  'POST /meets/:id/signals': { req: { resumeToken: string; since: number }; res: { signals: MeetSignal[]; serverEpochMs: number } };
+  'GET /ice': { res: { iceServers: IceServer[] } };
   'POST /meets/:id/leave': { req: { resumeToken: string }; res: { ok: true } };
   'POST /meets/:id/recordings': { req: RegisterRecordingRequest; res: { recording: MeetRecording } };
   'GET /watch/:id': { res: WatchResponse };

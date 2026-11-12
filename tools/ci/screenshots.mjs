@@ -1,7 +1,6 @@
 // Viewport matrix screenshots of the built app (device mode, no Google), using Playwright.
 //   npm run build && node tools/ci/screenshots.mjs [outDir]
-// Starts `vite preview` on :4173, walks Welcome → Setup → Home → Library → Track Maker → Sing → Meets → Settings.
-import { spawn } from 'node:child_process';
+// Starts sv-control + `vite preview` on free ports, walks Welcome → Setup → Home → Library → Track Maker → Sing → Meets → Settings.
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -9,6 +8,7 @@ import { createRequire } from 'node:module';
 // Playwright is resolved at runtime so the repo doesn't pin a browser build: a local install
 // (devDependency or global) or the agent image's /opt/npm-tools copy both work.
 const require = createRequire(import.meta.url);
+import { startServers } from './servers.mjs';
 const pw = (() => {
   for (const spec of ['playwright', '/opt/npm-tools/node_modules/playwright']) {
     try {
@@ -26,23 +26,9 @@ const out = process.argv[2] ?? 'screenshots';
 const e2eJson = process.env.SV_E2E_JSON;
 const e2eAudio = process.env.SV_E2E_AUDIO;
 const base = process.env.BASE_PATH ?? '/SingersVoice/';
-const port = 4173;
-mkdirSync(out, { recursive: true });
-
-// Local sv-control (SVT DB) with dev auth so the meets/publishing portals can be exercised end to end.
-const controlPort = 8798;
-const control = spawn('node', ['--no-warnings=ExperimentalWarning', 'src/index.ts'], {
-  cwd: path.resolve('services/control'),
-  env: { ...process.env, PORT: String(controlPort), DEV_AUTH: '1', SV_DB: ':memory:', ALLOWED_ORIGINS: `http://localhost:${port}` },
-  stdio: 'ignore',
-});
-const preview = spawn('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], {
-  cwd: path.resolve('apps/web'),
-  env: { ...process.env, BASE_PATH: base },
-  stdio: 'ignore',
-});
+const servers = await startServers({ base });
+const { port, controlPort } = servers;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-await wait(2500);
 
 const matrix = [
   { name: 'iphone-se-320x568', viewport: { width: 320, height: 568 }, mobile: true },
@@ -200,6 +186,5 @@ for (const m of matrix) {
   await ctx.close();
 }
 await browser.close();
-preview.kill();
-control.kill();
+servers.stop();
 if (failures) process.exit(1);

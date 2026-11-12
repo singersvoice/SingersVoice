@@ -3,15 +3,18 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "SingersVoice PWA (iOS · Android · web) — Preact + Vite + TypeScript",
+  "description": "SingersVoice PWA (iOS \u00b7 Android \u00b7 web) \u2014 Preact + Vite + TypeScript",
   "scripts": {
     "dev": "vite --host",
     "build": "vite build && node scripts/postbuild.mjs",
     "preview": "vite preview --host --port 4173",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "predev": "node scripts/mediapipe-assets.mjs",
+    "prebuild": "node scripts/mediapipe-assets.mjs"
   },
   "dependencies": {
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "@preact/signals": "^2.11.4",
     "@singersvoice/protocol": "2.0.0",
     "preact": "^10.29.8",

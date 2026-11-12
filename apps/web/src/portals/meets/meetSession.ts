@@ -3,10 +3,11 @@
  * is forming or counting down (the kickstart instant is absolute, so 2 s is plenty), 5 s otherwise.
  */
 import { signal } from '@preact/signals';
-import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetSnapshot, type Participant } from '@singersvoice/protocol';
+import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetSignal, type MeetSignalType, type MeetSnapshot, type Participant } from '@singersvoice/protocol';
 import { api, ApiError, clock, serverNow, syncClock } from '../../lib/api.ts';
 
 const POLL_FORMING_MS = 2000;
+const POLL_ONSTAGE_MS = 1500;
 const POLL_SETTLED_MS = 5000;
 
 export class MeetSession {
@@ -57,7 +58,9 @@ export class MeetSession {
     if (this.stopped) return;
     const m = this.snapshot.value?.meet;
     const forming = m && (m.state === 'lobby' || m.state === 'countdown');
-    this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), forming ? POLL_FORMING_MS : POLL_SETTLED_MS);
+    // Performers follow the host's transport cues (pause/resume), so they poll faster while live.
+    const onStageLive = m?.state === 'live' && this.you.value?.slot != null;
+    this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), forming ? POLL_FORMING_MS : onStageLive ? POLL_ONSTAGE_MS : POLL_SETTLED_MS);
   }
 
   private apply(snap: MeetSnapshot): void {
@@ -113,6 +116,29 @@ export class MeetSession {
   }
   stopMeet(): Promise<void> {
     return this.act('stop', {});
+  }
+  /** Host transport: pause freezes everyone's position; resume/restart cue a new shared kickstart. */
+  pause(leadMs = 3000): Promise<void> {
+    return this.act('pause', { leadMs });
+  }
+  resume(leadMs = 4000): Promise<void> {
+    return this.act('resume', { leadMs });
+  }
+  restart(leadMs = 5000, fromMs = 0): Promise<void> {
+    return this.act('restart', { leadMs, fromMs });
+  }
+
+  // ---- WebRTC signalling relay (performer ↔ performer) ----
+  private lastSignalSeq = 0;
+  async sendSignal(to: string, type: MeetSignalType, data: unknown): Promise<void> {
+    await api.post('POST /meets/:id/signal', `/meets/${encodeURIComponent(this.meetId)}/signal`, { resumeToken: this.resumeToken, to, type, data: typeof data === 'string' ? data : JSON.stringify(data) });
+  }
+  /** Signals addressed to me that arrived since the last poll. */
+  async pollSignals(): Promise<MeetSignal[]> {
+    if (!this.resumeToken || this.stopped) return [];
+    const r = await api.post('POST /meets/:id/signals', `/meets/${encodeURIComponent(this.meetId)}/signals`, { resumeToken: this.resumeToken, since: this.lastSignalSeq });
+    for (const s of r.signals) this.lastSignalSeq = Math.max(this.lastSignalSeq, s.seq);
+    return r.signals;
   }
   async say(text: string): Promise<void> {
     const r = await api.post('POST /meets/:id/chat', `/meets/${encodeURIComponent(this.meetId)}/chat`, { resumeToken: this.resumeToken, text });

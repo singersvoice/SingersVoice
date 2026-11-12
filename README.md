@@ -26,9 +26,10 @@ and use *Share → Add to Home Screen* / *Install app* to get the standalone app
 | Sign-in + Google Drive link | ✅ browser-only OAuth (`drive.file`), folder tree created at onboarding | needs `VITE_GOOGLE_CLIENT_ID` ([docs/GOOGLE_OAUTH.md](docs/GOOGLE_OAUTH.md)) |
 | Track Maker / Sing / Performances | ✅ | see Studio |
 | VoxForge voice | ✅ Web Audio chain + pitch/auto-tune worklet, 8 presets, tempo with key kept, key shift | presets autosave to `Config/audio_plugin_settings.json` |
-| Recording | ✅ sample-accurate WAV + camera video; resumable, md5-verified uploads | |
+| Virtual stage | ✅ singers cut out of their cameras (on-device segmentation) and placed side by side on the stage background, 1–10 performers, no boxed tiles | soft-focus oval when the model can't load |
+| Recording | ✅ sample-accurate WAV + camera video, pause/resume on the track timeline; resumable, md5-verified uploads | |
 | Public catalog (SVT DB) | ✅ publish / unpublish / search / pull | sv-control |
-| Live meets | ✅ rooms, slots, ready, chat, kickstart sync, personal takes, 5-min expiry, watch page | performers don't hear each other yet (Solo foldback by design); the audience stream needs the session container |
+| Live meets | ✅ rooms, slots, ready, chat, kickstart sync, host pause/resume/restart cued for everyone, performer video mesh on one virtual stage, personal takes, 5-min expiry, watch page | performers don't hear each other (Solo foldback by design); the audience stream needs the session container |
 | Publishing | ✅ destinations + jobs + history + in-house watch page | the encoder (RTMPS push, LL-HLS) is the session container, next increment |
 | sv-control | ✅ Hono on Node 22 (node:sqlite) **and** Cloudflare Workers (SQLite Durable Object); Google token auth; tests + boot smoke | [docs/DEPLOY_CONTROL.md](docs/DEPLOY_CONTROL.md) — one workflow run after two secrets |
 | Session container (mixer/encoder) | ⏳ next | mediasoup ingest · VoxForge C++ mixer · FFmpeg → RTMPS/LL-HLS |

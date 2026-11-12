@@ -2,9 +2,9 @@ import { formatMs, SLOT_COLORS, type CatalogTrack, type SingerSlot, type TrackPa
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
-import { CameraTile } from '../../components/CameraTile.tsx';
+import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPlay, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
@@ -17,8 +17,10 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { isDrive, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera, pickVideoMime, ZOOM_LEVELS, type ZoomPreset } from '../../video/camera.ts';
+import { LocalFeed } from '../../video/localFeed.ts';
+import { StageCompositor } from '../../video/stage.ts';
 
-type Phase = 'loading' | 'ready' | 'starting' | 'countdown' | 'playing' | 'finishing' | 'review';
+type Phase = 'loading' | 'ready' | 'starting' | 'countdown' | 'playing' | 'paused' | 'finishing' | 'review';
 export type { TakeResult };
 
 /** Track picker (/sing): my library first, then anything in the public catalog (pulled on demand). */
@@ -127,7 +129,9 @@ export function Sing(props: { id: string }) {
   const [headphones, setHeadphones] = useState<boolean | null>(null);
   const engineRef = useRef<AudioEngine | null>(null);
   const camera = useMemo(() => new Camera(), []);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const feed = useMemo(() => new LocalFeed(), []);
+  const compositor = useMemo(() => new StageCompositor(), []);
+  const [blend, setBlend] = useState<'loading' | 'model' | 'oval' | 'off'>('off');
   const mediaRec = useRef<MediaRecorder | null>(null);
   const videoChunks = useRef<Blob[]>([]);
   const videoStartCtx = useRef<number | null>(null);
@@ -155,11 +159,28 @@ export function Sing(props: { id: string }) {
     return () => {
       cancelAnimationFrame(raf.current);
       camera.close();
+      feed.dispose();
       void engineRef.current?.close();
       engineRef.current = null;
       void keepAwake(false);
     };
   }, [props.id]);
+
+  // My cut-out on the virtual stage follows the camera stream, framing and slot.
+  const camStream = camera.stream;
+  const camOn = camera.on.value;
+  useEffect(() => {
+    feed.onMode = (m) => setBlend(m);
+    feed.attach(camOn ? camStream : null, app.cutout);
+    if (camOn && camStream) camera.startAutoFrame(feed.video);
+    else camera.stopAutoFrame();
+  }, [camStream, camOn, app.cutout]);
+  const zoom = camera.zoom.value;
+  const origin = camera.origin.value;
+  const facing = camera.facing.value;
+  useEffect(() => {
+    compositor.setPerformers([{ id: 'me', slot: mySlot, label: `You · S${mySlot}`, color: SLOT_COLORS[mySlot], source: feed.source, mirror: facing === 'user', zoom, origin, isMe: true }]);
+  }, [camStream, camOn, mySlot, zoom, origin.x, origin.y, facing]);
 
   // Apply FX whenever settings change.
   useEffect(() => {
@@ -182,7 +203,7 @@ export function Sing(props: { id: string }) {
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
-      if (phase === 'playing' || phase === 'countdown') {
+      if (phase === 'playing' || phase === 'countdown' || phase === 'paused') {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -271,6 +292,57 @@ export function Sing(props: { id: string }) {
     }
   };
 
+  /** Pause the song, the vocal recorder and the camera recorder together: the take stays on the track timeline. */
+  const pause = () => {
+    const engine = engineRef.current;
+    const player = engine?.player;
+    if (!engine || !player?.playing) return;
+    const at = engine.ctx.currentTime;
+    player.pause();
+    engine.recorder?.pause(at);
+    try {
+      if (mediaRec.current?.state === 'recording') mediaRec.current.pause();
+    } catch {
+      /* ignore */
+    }
+    setPhase('paused');
+  };
+
+  const resume = () => {
+    const engine = engineRef.current;
+    const player = engine?.player;
+    if (!engine || !player || player.playing) return;
+    const t0 = engine.ctx.currentTime + 0.12;
+    player.play(t0, player.positionMs());
+    engine.recorder?.resume(t0);
+    try {
+      if (mediaRec.current?.state === 'paused') mediaRec.current.resume();
+    } catch {
+      /* ignore */
+    }
+    player.onEnded = () => void finish();
+    setPhase('playing');
+  };
+
+  /** Throw the current take away and start the song again from the top. */
+  const restart = async () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    cancelAnimationFrame(raf.current);
+    engine.player?.stop();
+    if (engine.recorder?.recording) await engine.recorder.stop().catch(() => undefined);
+    const mr = mediaRec.current;
+    mediaRec.current = null;
+    if (mr && mr.state !== 'inactive') {
+      mr.ondataavailable = null;
+      mr.stop();
+    }
+    videoChunks.current = [];
+    setTMs(0);
+    setPhase('ready');
+    await start();
+  };
+
   const finish = async () => {
     const engine = engineRef.current;
     if (!engine || !loaded) return;
@@ -341,9 +413,8 @@ export function Sing(props: { id: string }) {
       />
     );
 
-  const stageSolo = true; // live "others" tiles arrive with meets (sv-control)
   const busy = phase === 'starting' || phase === 'finishing';
-  const live = phase === 'playing' || phase === 'countdown';
+  const live = phase === 'playing' || phase === 'countdown' || phase === 'paused';
   const engine = engineRef.current;
   const pitch = engine?.pitch.value ?? null;
   const level = engine?.recorder?.level.value ?? 0;
@@ -352,9 +423,11 @@ export function Sing(props: { id: string }) {
     <Page title={track.title} nav={false} full>
       <div class="sing">
         <StageBackground id={app.backgroundId} />
-        <section class={`stage ${stageSolo ? 'solo' : ''}`}>
-          {!stageSolo && <div class="others" />}
-          <CameraTile camera={camera} cutout={app.cutout} label={`You · S${mySlot}`} videoRef={videoRef} onCutoutError={() => toast('Cutout unavailable here — showing plain video', 'warn')} />
+        <VirtualStage compositor={compositor} extra={[feed.video]} />
+        <section class="stagebar" data-blend={blend} data-performers={compositor.tiles.length}>
+          {camOn && blend === 'loading' && <span class="chip">blending you into the stage…</span>}
+          {camOn && blend === 'oval' && app.cutout && <span class="chip warn">soft-focus mode (cut-out model unavailable)</span>}
+          {!camOn && <span class="chip">camera off</span>}
         </section>
         <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} countdown={phase === 'countdown' ? countdown : null} showWho={track.singerCount > 1} title={track.title} />
         {app.showCueDeck && track.singerCount > 1 && phase === 'playing' && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} />}
@@ -375,9 +448,23 @@ export function Sing(props: { id: string }) {
               <IcHeadphones />
             </button>
             {live ? (
-              <button class="btn big accent" onClick={() => void finish()}>
-                <IcStop /> Finish
-              </button>
+              <>
+                {phase === 'paused' ? (
+                  <button class="btn big primary" aria-label="Resume" onClick={resume}>
+                    <IcPlay /> Resume
+                  </button>
+                ) : (
+                  <button class="btn big" aria-label="Pause" disabled={phase !== 'playing'} onClick={pause}>
+                    <IcPause /> Pause
+                  </button>
+                )}
+                <button class="btn icon" aria-label="Restart from the top" title="Restart from the top" onClick={() => void restart()} disabled={phase === 'countdown'}>
+                  <IcSkipBack />
+                </button>
+                <button class="btn big accent" onClick={() => void finish()}>
+                  <IcStop /> Finish
+                </button>
+              </>
             ) : (
               <button class="btn big primary" onClick={() => void start()} disabled={busy}>
                 {busy ? <Spinner /> : <IcPlay />} {busy ? (phase === 'finishing' ? 'Wrapping up…' : 'Starting…') : 'Start singing'}
@@ -460,7 +547,7 @@ export function Sing(props: { id: string }) {
             </div>
           </Field>
           <Switch checked={app.autoZoom} onChange={(v) => updateApp({ autoZoom: v })} label="AutoZoom" hint="Eases from wide to your framing during the intro." />
-          <Switch checked={app.cutout} onChange={(v) => updateApp({ cutout: v })} label="Person cut-out (no rectangle)" hint="Loads a small segmentation model; uses more battery." />
+          <Switch checked={app.cutout} onChange={(v) => updateApp({ cutout: v })} label="Blend me into the stage (cut-out)" hint="Removes your real background with an on-device model. Off = soft-focus oval (saves battery)." />
           <Switch checked={app.countIn} onChange={(v) => updateApp({ countIn: v })} label="3-2-1 count-in" />
           <Switch checked={app.showCueDeck} onChange={(v) => updateApp({ showCueDeck: v })} label="Cue deck (my next lines)" />
           <Field label="Stage background">

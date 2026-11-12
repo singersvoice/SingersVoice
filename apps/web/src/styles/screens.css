@@ -231,9 +231,38 @@
   height: calc(100dvh - var(--topbar) - var(--safe-top));
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 16fr) minmax(0, 60fr) minmax(0, 24fr);
+  /* status strip · lyrics (the virtual stage sits behind both) · controls */
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   isolation: isolate;
+}
+/* The virtual stage: performers cut out of their cameras, drawn over the stage background. */
+.vstage {
+  grid-row: 1 / 3;
+  grid-column: 1 / -1;
+  position: relative;
+  z-index: 0;
+  min-height: 0;
+  pointer-events: none;
+}
+.vstage canvas.stagecanvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+.stagebar {
+  grid-row: 1;
+  grid-column: 1;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px var(--pad) 0;
+  min-height: 0;
+  pointer-events: none;
+}
+.stagebar:empty {
+  padding: 0;
 }
 .sing > * {
   min-width: 0;
@@ -251,78 +280,19 @@
   height: 100%;
   object-fit: cover;
 }
-.stage {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px;
-  padding: 10px var(--pad) 0;
-  min-height: 0;
-}
-.stage.solo {
-  grid-template-columns: 1fr;
-  justify-items: end;
-}
-.tile {
-  position: relative;
-  height: 100%;
-  aspect-ratio: 4 / 3;
-  border-radius: 14px;
-  overflow: hidden;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid var(--line-strong);
-}
-.tile video,
-.tile canvas {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transform-origin: var(--ox, 50%) var(--oy, 40%);
-  transform: scale(var(--zoom, 1));
-  transition: transform 0.12s linear;
-}
-.tile video.mirror {
-  transform: scale(calc(var(--zoom, 1) * -1), var(--zoom, 1));
-}
-.tile .tag {
-  position: absolute;
-  left: 6px;
-  bottom: 6px;
-  padding: 2px 8px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.55);
-  font-size: 0.72em;
-  font-weight: 700;
-}
-.tile .silhouette {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-}
-.others {
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-  min-height: 0;
-  scrollbar-width: none;
-}
-.others::-webkit-scrollbar {
-  display: none;
-}
-.others .tile {
-  flex: none;
-  aspect-ratio: 1;
-  border-radius: 50%;
-}
 .lyrics {
+  grid-row: 2;
+  grid-column: 1;
+  z-index: 1;
   display: grid;
-  align-content: center;
+  align-content: start;
   gap: 6px;
-  padding: 8px var(--pad);
+  padding: 10px var(--pad) 8px;
   min-height: 0;
   overflow: hidden;
   text-align: center;
+  pointer-events: none;
+  background: linear-gradient(rgba(10, 4, 20, 0.5), rgba(10, 4, 20, 0.25) 45%, transparent 70%);
 }
 .lyric {
   font-size: var(--lyric-size);
@@ -377,7 +347,8 @@
 .cue {
   position: absolute;
   right: var(--pad);
-  top: calc(16% + 8px);
+  top: auto;
+  bottom: calc(31% + 8px);
   max-width: 44%;
   display: grid;
   gap: 4px;
@@ -390,6 +361,9 @@
   color: var(--accent);
 }
 .controls {
+  grid-row: 3;
+  grid-column: 1;
+  z-index: 1;
   display: grid;
   gap: 8px;
   padding: 8px var(--pad) calc(var(--safe-bottom) + 10px);
@@ -418,15 +392,22 @@
   background: var(--accent);
 }
 .controls .main {
-  display: grid;
-  grid-template-columns: var(--btn) var(--btn) 1fr var(--btn) var(--btn);
-  gap: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
   align-items: center;
+  justify-content: center;
 }
 .controls .main .btn.big {
+  flex: 1 1 128px;
   min-height: 56px;
   border-radius: var(--radius-lg);
   font-size: 1.05em;
+  white-space: nowrap;
+}
+.controls .main .pitch-pill,
+.controls .main > .chip {
+  margin-left: auto;
 }
 .controls .btn.icon {
   background: rgba(255, 255, 255, 0.1);
@@ -475,43 +456,15 @@
   font-variant-numeric: tabular-nums;
 }
 @media (orientation: landscape) and (min-width: 700px) {
-  .sing {
-    grid-template-columns: minmax(220px, 30%) 1fr;
-    grid-template-rows: 1fr auto;
-  }
-  .stage {
-    grid-row: 1;
-    grid-column: 1;
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
-    padding: var(--pad);
-    align-content: start;
-  }
-  .stage.solo {
-    justify-items: stretch;
-  }
-  .stage .tile {
-    height: auto;
-    width: 100%;
-  }
-  .others {
-    flex-wrap: wrap;
-    overflow: visible;
-  }
-  .others .tile {
-    width: 72px;
-    height: 72px;
-  }
   .lyrics {
-    grid-row: 1;
-    grid-column: 2;
+    padding-left: 12%;
+    padding-right: 12%;
   }
   .controls {
-    grid-row: 2;
+    grid-row: 3;
     grid-column: 1 / -1;
   }
   .cue {
-    top: auto;
     bottom: calc(26% + 8px);
   }
 }

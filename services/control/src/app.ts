@@ -12,6 +12,7 @@ import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
 import {
   DESTINATIONS,
+  meetIsOpen,
   newId,
   type CatalogPublishRequest,
   type CatalogTrack,
@@ -22,6 +23,7 @@ import {
   type DestinationKind,
   type DestinationUpdate,
   type HeartbeatRequest,
+  type IceServer,
   type JoinMeetRequest,
   type MeetSnapshot,
   type Participant,
@@ -29,16 +31,34 @@ import {
   type PublishJobRequest,
   type ReadyRequest,
   type RegisterRecordingRequest,
+  type SignalRequest,
   type SlotRequest,
   type StartMeetRequest,
   type UserRecord,
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
-import { claimSlot, isHost, newMeet, reconcile, reportClock, setReady, start, stop, tick, touch } from './meets.ts';
+import { claimSlot, ensurePlayback, isHost, newMeet, pause, reconcile, reportClock, resume, setReady, start, stop, tick, touch } from './meets.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
+export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+
+/** ICE_SERVERS env: a JSON array of RTCIceServer ({urls, username?, credential?}); invalid or empty → STUN defaults. */
+export function parseIceServers(raw: string | undefined): IceServer[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const v = JSON.parse(raw) as unknown;
+    if (!Array.isArray(v) || !v.length) return undefined;
+    const out = v.filter((x): x is IceServer => Boolean(x && typeof x === 'object' && (x as IceServer).urls));
+    return out.length ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface AppDeps {
+  /** ICE servers handed to performers (ICE_SERVERS env, JSON array); STUN only by default. */
+  iceServers?: IceServer[];
   store: SqlStore;
   auth: Authenticator;
   secrets: SecretBox;
@@ -189,6 +209,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const { store } = c.get('deps');
     const meet = await store.getMeet(meetId);
     if (!meet) return null;
+    ensurePlayback(meet);
     let changed = tick(meet);
     const stored = await store.listParticipants(meetId);
     const rec = reconcile(meet, stored);
@@ -370,8 +391,67 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!isHost(meet, p)) return err(c, 403, 'not_host', 'Only the host can end the meet');
     stop(meet);
     await store.saveMeet(meet);
+    await store.clearSignals(meet.meetId).catch(() => undefined);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
+
+  /** Host transport controls — pause freezes the shared position; resume/restart cue a new kickstart. */
+  for (const action of ['pause', 'resume', 'restart'] as const) {
+    app.post(`/meets/:id/${action}`, async (c) => {
+      const { store } = c.get('deps');
+      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; leadMs?: number; fromMs?: number };
+      const meet = await store.getMeet(c.req.param('id'));
+      if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+      const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+      if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+      if (!isHost(meet, p)) return err(c, 403, 'not_host', 'Only the host controls playback');
+      ensurePlayback(meet);
+      tick(meet);
+      const r =
+        action === 'pause'
+          ? pause(meet, Date.now(), Number(body.leadMs ?? 3000))
+          : action === 'resume'
+            ? resume(meet, Number(body.leadMs ?? 4000))
+            : resume(meet, Number(body.leadMs ?? 5000), Date.now(), Math.max(0, Number(body.fromMs ?? 0)));
+      if (!r.ok) return err(c, 409, r.reason ?? action, r.reason === 'not_started' ? 'Start the song first' : r.reason === 'already_playing' ? 'The song is already playing' : 'The song is not playing');
+      await store.saveMeet(meet);
+      return c.json((await snapshot(c, meet.meetId, p))!);
+    });
+  }
+
+  /** Relay one WebRTC signal to another performer of the same meet. */
+  app.post('/meets/:id/signal', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<SignalRequest>;
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (!meetIsOpen(meet)) return err(c, 410, 'meet_closed', 'This meet has ended');
+    const to = String(body.to ?? '');
+    const type = body.type;
+    const data = typeof body.data === 'string' ? body.data : JSON.stringify(body.data ?? null);
+    if (!to || !type || !['offer', 'answer', 'ice', 'bye'].includes(type)) return err(c, 400, 'bad_signal', 'to, type and data are required');
+    if (data.length > 64_000) return err(c, 400, 'bad_signal', 'Signal too large');
+    if (!(await store.getParticipant(meet.meetId, to))) return err(c, 404, 'no_peer', 'That performer is not in the meet');
+    const sig = await store.addSignal(meet.meetId, { meetId: meet.meetId, from: p.participantId, to, type, data, sentAt: new Date().toISOString() });
+    return c.json({ seq: sig.seq });
+  });
+
+  /** Signals addressed to me since `since` (polled while on stage). */
+  app.post('/meets/:id/signals', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; since?: number };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    const signals = await store.signalsFor(meet.meetId, p.participantId, Number(body.since ?? 0));
+    return c.json({ signals, serverEpochMs: Date.now() });
+  });
+
+  /** ICE servers for performer-to-performer video (STUN by default; TURN when the deployment sets ICE_SERVERS). */
+  app.get('/ice', (c) => c.json({ iceServers: c.get('deps').iceServers ?? DEFAULT_ICE_SERVERS }));
 
   app.post('/meets/:id/leave', async (c) => {
     const { store } = c.get('deps');
@@ -524,8 +604,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 export async function sweepMeets(store: SqlStore): Promise<number> {
   let n = 0;
   for (const m of await store.listOpenMeets()) {
+    ensurePlayback(m);
     if (tick(m)) {
       await store.saveMeet(m);
+      if (!meetIsOpen(m)) await store.clearSignals(m.meetId).catch(() => undefined);
       n++;
     }
   }

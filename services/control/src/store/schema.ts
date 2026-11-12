@@ -47,6 +47,14 @@ CREATE TABLE IF NOT EXISTS chat (
   data TEXT NOT NULL,
   PRIMARY KEY (meet_id, seq)
 );
+CREATE TABLE IF NOT EXISTS signals (
+  meet_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  to_id TEXT NOT NULL,
+  data TEXT NOT NULL,
+  PRIMARY KEY (meet_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_signals_to ON signals(meet_id, to_id, seq);
 CREATE TABLE IF NOT EXISTS recordings (
   meet_id TEXT NOT NULL,
   participant_id TEXT NOT NULL,

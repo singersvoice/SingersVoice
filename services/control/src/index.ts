@@ -7,9 +7,10 @@
  *   PRIVILEGED_EMAILS=a,b     accounts allowed to use Publishing mode (the first account ever seen is privileged too)
  *   PUBLISH_KEY_SECRET=…      base64 32-byte key for stream keys at rest (generate once: node -e "…randomSecretB64()")
  *   DEV_AUTH=1                accept X-Dev-User headers (local dev / CI only)
+ *   ICE_SERVERS=[…]           JSON array of RTCIceServer for performer video (default: Google STUN; add TURN for strict NATs)
  */
 import { serve } from '@hono/node-server';
-import { createApp, sweepMeets, type AppDeps } from './app.ts';
+import { createApp, parseIceServers, sweepMeets, type AppDeps } from './app.ts';
 import { createAuthenticator } from './auth.ts';
 import { SecretBox } from './crypto.ts';
 import { nodeSqliteDriver } from './store/driver.ts';
@@ -26,6 +27,7 @@ const deps: AppDeps = {
   auth: createAuthenticator({ googleClientId: process.env.GOOGLE_CLIENT_ID, devAuth: process.env.DEV_AUTH === '1' }),
   secrets: new SecretBox(process.env.PUBLISH_KEY_SECRET ?? ''),
   runtime: 'node',
+  iceServers: parseIceServers(process.env.ICE_SERVERS),
   allowedOrigins: (process.env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   privilegedEmails: (process.env.PRIVILEGED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   version: '2.1.0',

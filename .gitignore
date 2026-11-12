@@ -37,3 +37,6 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# generated at build/dev time from node_modules (scripts/mediapipe-assets.mjs)
+apps/web/public/mediapipe/

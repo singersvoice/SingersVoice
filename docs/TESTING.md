@@ -41,3 +41,15 @@ CI uploads the screenshots as an artifact on every PR.
 - The "Import a track shared with me" button needs `VITE_GOOGLE_API_KEY` (Google Picker).
 - Tempo changes are real-time granular time-stretch on the backing track (key kept); extreme values sound grainy.
 - On iOS the Google sign-in popup must be triggered by a tap (it is), and tokens last 1 h → *Reconnect Drive*.
+
+## Live meet with two performers (`tools/ci/live-duet.mjs`)
+
+Two Chromium contexts with fake cameras — the host on a desktop viewport, a guest on a phone — import
+the sample track, meet in one room, take two stage slots and sing. The test asserts that both devices
+lay out two performers on the virtual stage, that WebRTC video is linked both ways through the SVT DB
+relay (cut-outs drawn on both halves of the stage), that the host's cued pause freezes both timelines
+at the same position and that resume restarts both together. Runs in CI after the viewport screenshots:
+
+```bash
+BASE_PATH=/SingersVoice/ npm run build && node tools/ci/live-duet.mjs screenshots
+```

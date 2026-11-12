@@ -5,11 +5,17 @@
 // time of the first captured frame so the vocal can be aligned to the backing
 // track's scheduled start (see audio/recorder.ts). Also reports a peak level
 // every ~50 ms for the meter.
+//
+// 'pause' / 'resume' carry an audio-clock time: frames are dropped from `at` until the
+// resume instant, so the recording stays on the backing track's timeline across a pause
+// (sample-accurate when `at` matches the player's own pause/resume times).
 
 class SvRecorderProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.recording = false;
+    this.pauseAt = Infinity;
+    this.resumeAt = Infinity;
     this.chunkSize = 4096;
     this.chunk = new Float32Array(this.chunkSize);
     this.fill = 0;
@@ -23,6 +29,13 @@ class SvRecorderProcessor extends AudioWorkletProcessor {
         this.pendingStart = true;
         this.framesCaptured = 0;
         this.fill = 0;
+        this.pauseAt = Infinity;
+        this.resumeAt = Infinity;
+      } else if (msg.type === 'pause') {
+        this.pauseAt = typeof msg.at === 'number' ? msg.at : currentTime;
+        this.resumeAt = Infinity;
+      } else if (msg.type === 'resume') {
+        this.resumeAt = typeof msg.at === 'number' ? msg.at : currentTime;
       } else if (msg.type === 'stop') {
         this.recording = false;
         if (this.fill > 0) {
@@ -61,9 +74,31 @@ class SvRecorderProcessor extends AudioWorkletProcessor {
       this.pendingStart = false;
       this.port.postMessage({ type: 'started', contextTime: currentTime, frame: currentFrame, sampleRate });
     }
-    let i = 0;
-    while (i < src.length) {
-      const n = Math.min(src.length - i, this.chunkSize - this.fill);
+    // Paused window [pauseAt, resumeAt): drop whole frames inside it (sub-quantum precision
+    // at the edges: a quantum is 128 frames ≈ 3 ms).
+    const blockStart = currentTime;
+    const blockEnd = currentTime + src.length / sampleRate;
+    let from = 0;
+    let to = src.length;
+    if (this.pauseAt !== Infinity) {
+      if (blockEnd <= this.pauseAt) {
+        /* before the pause: keep all */
+      } else if (blockStart >= this.resumeAt) {
+        this.pauseAt = Infinity;
+        this.resumeAt = Infinity;
+      } else if (blockStart >= this.pauseAt && blockEnd <= this.resumeAt) {
+        return true; // fully inside the pause
+      } else if (blockStart < this.pauseAt) {
+        to = Math.max(0, Math.min(src.length, Math.round((this.pauseAt - blockStart) * sampleRate)));
+      } else {
+        from = Math.max(0, Math.min(src.length, Math.round((this.resumeAt - blockStart) * sampleRate)));
+        this.pauseAt = Infinity;
+        this.resumeAt = Infinity;
+      }
+    }
+    let i = from;
+    while (i < to) {
+      const n = Math.min(to - i, this.chunkSize - this.fill);
       this.chunk.set(src.subarray(i, i + n), this.fill);
       this.fill += n;
       i += n;

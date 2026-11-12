@@ -35,7 +35,7 @@ export const APP_DEFAULTS: AppSettings = {
   cameraDeviceId: '',
   zoomPreset: 'mid',
   autoZoom: true,
-  cutout: false,
+  cutout: true,
   singerSlot: 1,
   countIn: true,
   showCueDeck: true,

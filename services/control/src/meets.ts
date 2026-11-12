@@ -1,5 +1,6 @@
 /** Pure meet rules (no I/O) so they are unit-testable and identical on every runtime. */
-import { emptyStage, MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, meetIsOpen, newId, newJoinCode, type Meet, type Participant, type StageSlot } from '@singersvoice/protocol';
+import type { MeetPlayback } from '@singersvoice/protocol';
+import { emptyStage, idlePlayback, MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, meetIsOpen, newId, newJoinCode, playbackPositionMs, type Meet, type Participant, type StageSlot } from '@singersvoice/protocol';
 
 /** Participants unseen for this long are dropped from the stage/audience counts. */
 export const PARTICIPANT_TIMEOUT_MS = 60 * 1000;
@@ -24,10 +25,23 @@ export function newMeet(input: { title: string; hostUserId: string; hostName: st
     lastActivityAt: iso,
     expiresAt: new Date(now + MEET_IDLE_EXPIRY_MS).toISOString(),
     kickstartEpochMs: null,
+    playback: idlePlayback(),
     endedAt: null,
     streamUrl: null,
     openJoin: true,
   };
+}
+
+/** Rows written before playback existed: a running meet counts as playing from its kickstart. */
+export function ensurePlayback(m: Meet): MeetPlayback {
+  if (!m.playback) {
+    m.playback = idlePlayback();
+    if (m.kickstartEpochMs !== null && (m.state === 'live' || m.state === 'countdown')) {
+      m.playback.state = 'playing';
+      m.playback.epoch = 1;
+    }
+  }
+  return m.playback;
 }
 
 /** Any activity pushes the idle expiry out by 5 minutes. */
@@ -44,9 +58,19 @@ export function tick(m: Meet, now = Date.now()): boolean {
     m.state = 'live';
     changed = true;
   }
-  if (m.state === 'live' && m.kickstartEpochMs !== null && now - m.kickstartEpochMs > MAX_LIVE_TAKE_MS) {
+  // A cued pause lands at its instant (for devices that poll it later, the position is already frozen).
+  const pb = ensurePlayback(m);
+  if (pb.state === 'playing' && pb.pauseAtEpochMs !== null && now >= pb.pauseAtEpochMs) {
+    pb.state = 'paused';
+    pb.pauseAtEpochMs = null;
+    changed = true;
+  }
+  // A take can never run forever: the cap counts played time only (pauses don't count).
+  const played = playbackPositionMs(m, now);
+  if (m.state === 'live' && played !== null && played > MAX_LIVE_TAKE_MS) {
     m.state = 'ended';
     m.endedAt = new Date(now).toISOString();
+    ensurePlayback(m).state = 'idle';
     changed = true;
   }
   if (meetIsOpen(m) && now > Date.parse(m.expiresAt)) {
@@ -128,6 +152,46 @@ export function start(m: Meet, leadMs: number, now = Date.now()): { ok: boolean;
   if (!m.stage.some((s) => s.participantId)) return { ok: false, reason: 'no_performers' };
   m.kickstartEpochMs = now + Math.max(3000, Math.min(30000, leadMs));
   m.state = 'countdown';
+  const pb = ensurePlayback(m);
+  pb.state = 'playing';
+  pb.offsetMs = 0;
+  pb.pausedAtMs = 0;
+  pb.pauseAtEpochMs = null;
+  pb.epoch += 1;
+  touch(m, now);
+  return { ok: true };
+}
+
+/**
+ * Host pauses the song for everyone. Like the kickstart, the pause is cued at a shared instant
+ * `leadMs` ahead (≥ one poll interval), so every device freezes at the same track position.
+ */
+export function pause(m: Meet, now = Date.now(), leadMs = 3000): { ok: boolean; reason?: string } {
+  if (m.state !== 'live' && m.state !== 'countdown') return { ok: false, reason: 'not_playing' };
+  const pb = ensurePlayback(m);
+  if (pb.state !== 'playing' || pb.pauseAtEpochMs !== null) return { ok: false, reason: 'not_playing' };
+  const at = Math.max(now + Math.max(0, Math.min(10_000, leadMs)), m.kickstartEpochMs ?? now);
+  pb.pauseAtEpochMs = at;
+  pb.pausedAtMs = Math.max(0, pb.offsetMs + (at - (m.kickstartEpochMs ?? at)));
+  m.state = 'live';
+  touch(m, now);
+  return { ok: true };
+}
+
+/** Host resumes (from the paused position) or restarts (from `fromMs`) with a short shared lead. */
+export function resume(m: Meet, leadMs: number, now = Date.now(), fromMs?: number): { ok: boolean; reason?: string } {
+  if (m.state !== 'live' && m.state !== 'countdown') return { ok: false, reason: 'not_live' };
+  const pb = ensurePlayback(m);
+  if (pb.state === 'idle') return { ok: false, reason: 'not_started' };
+  const position = fromMs !== undefined ? Math.max(0, fromMs) : pb.pausedAtMs;
+  if (pb.state === 'playing' && pb.pauseAtEpochMs === null && fromMs === undefined) return { ok: false, reason: 'already_playing' };
+  m.kickstartEpochMs = now + Math.max(1500, Math.min(30000, leadMs));
+  pb.offsetMs = position;
+  pb.pausedAtMs = position;
+  pb.pauseAtEpochMs = null;
+  pb.state = 'playing';
+  pb.epoch += 1;
+  m.state = 'live';
   touch(m, now);
   return { ok: true };
 }
@@ -137,6 +201,7 @@ export function stop(m: Meet, now = Date.now()): void {
   m.state = 'ended';
   m.endedAt = new Date(now).toISOString();
   m.kickstartEpochMs = null;
+  ensurePlayback(m).state = 'idle';
 }
 
 export function isHost(m: Meet, p: Participant): boolean {

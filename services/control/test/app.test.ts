@@ -79,6 +79,32 @@ describe('sv-control API', () => {
     expect(started.meet.state).toBe('countdown');
     expect(started.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(4000);
 
+    // host transport controls (bob is a performer, not the host)
+    expect((await app.request(`/meets/${meet.meetId}/pause`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken }) })).status).toBe(403);
+    const paused = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/pause`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 0 }) }));
+    // Pausing during the countdown is cued at the kickstart itself: everyone stops at position 0.
+    expect(paused.meet.playback).toMatchObject({ state: 'playing', pauseAtEpochMs: started.meet.kickstartEpochMs, pausedAtMs: 0 });
+    expect(paused.meet.state).toBe('live');
+    const resumed = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/resume`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 2000 }) }));
+    expect(resumed.meet.playback).toMatchObject({ state: 'playing', epoch: 2 });
+    expect(resumed.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(1000);
+    const restarted = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/restart`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 2000, fromMs: 0 }) }));
+    expect(restarted.meet.playback).toMatchObject({ state: 'playing', offsetMs: 0, epoch: 3 });
+
+    // WebRTC signalling relay between the two performers
+    const sent = await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, to: bob.you.participantId, type: 'offer', data: JSON.stringify({ sdp: 'v=0' }) }) });
+    expect(sent.status).toBe(200);
+    expect((await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, to: 'nobody', type: 'offer', data: '{}' }) })).status).toBe(404);
+    const inbox = await json<{ signals: { from: string; type: string; data: string; seq: number }[] }>(await app.request(`/meets/${meet.meetId}/signals`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, since: 0 }) }));
+    expect(inbox.signals).toHaveLength(1);
+    expect(inbox.signals[0]).toMatchObject({ from: host.you.participantId, type: 'offer' });
+    const nothingNew = await json<{ signals: unknown[] }>(await app.request(`/meets/${meet.meetId}/signals`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, since: inbox.signals[0]!.seq }) }));
+    expect(nothingNew.signals).toHaveLength(0);
+    const aliceInbox = await json<{ signals: unknown[] }>(await app.request(`/meets/${meet.meetId}/signals`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, since: 0 }) }));
+    expect(aliceInbox.signals).toHaveLength(0); // not addressed to her
+    const ice = await json<{ iceServers: { urls: string | string[] }[] }>(await app.request('/ice', { headers: as('bob') }));
+    expect(ice.iceServers[0]!.urls).toContain('stun:stun.l.google.com:19302');
+
     const rec = await app.request(`/meets/${meet.meetId}/recordings`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, performanceId: 'perf-1', driveFolderLink: 'https://drive/x', durationMs: 1000 }) });
     expect(rec.status).toBe(201);
     const stopped = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/stop`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken }) }));

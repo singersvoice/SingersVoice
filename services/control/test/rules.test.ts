@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, type Participant } from '@singersvoice/protocol';
-import { claimSlot, newMeet, reconcile, start, stop, tick, touch } from '../src/meets.ts';
+import { MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, playbackPositionMs, type Participant } from '@singersvoice/protocol';
+import { claimSlot, ensurePlayback, newMeet, pause, reconcile, resume, start, stop, tick, touch } from '../src/meets.ts';
 
 const T0 = Date.parse('2026-11-11T10:00:00Z');
 const person = (id: string, userId = `u-${id}`): Participant => ({
@@ -58,5 +58,50 @@ describe('meet rules', () => {
     stop(m, T0 + 60_000);
     expect(m.state).toBe('ended');
     expect(m.kickstartEpochMs).toBeNull();
+  });
+
+  it('pause freezes the shared position; resume and restart cue a new kickstart with a new epoch', () => {
+    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' }, T0);
+    claimSlot(m, person('p1'), 1);
+    expect(pause(m, T0)).toEqual({ ok: false, reason: 'not_playing' });
+    start(m, 5000, T0);
+    expect(m.playback).toMatchObject({ state: 'playing', offsetMs: 0, epoch: 1 });
+    tick(m, T0 + 5000);
+    // 12 s into the song the host presses pause: it is cued 3 s ahead so everyone stops at 15 s
+    expect(playbackPositionMs(m, T0 + 17_000)).toBe(12_000);
+    expect(pause(m, T0 + 17_000, 3000)).toEqual({ ok: true });
+    expect(m.playback).toMatchObject({ state: 'playing', pauseAtEpochMs: T0 + 20_000, pausedAtMs: 15_000 });
+    expect(pause(m, T0 + 17_500, 3000)).toEqual({ ok: false, reason: 'not_playing' }); // already cued
+    expect(playbackPositionMs(m, T0 + 18_000)).toBe(13_000); // still running until the cue
+    expect(playbackPositionMs(m, T0 + 25_000)).toBe(15_000); // frozen at the cue, even before tick()
+    expect(tick(m, T0 + 25_000)).toBe(true);
+    expect(m.playback).toMatchObject({ state: 'paused', pausedAtMs: 15_000, pauseAtEpochMs: null });
+    expect(playbackPositionMs(m, T0 + 60_000)).toBe(15_000); // frozen while paused
+    expect(resume(m, 3000, T0 + 60_000)).toEqual({ ok: true });
+    expect(m.kickstartEpochMs).toBe(T0 + 63_000);
+    expect(m.playback).toMatchObject({ state: 'playing', offsetMs: 15_000, epoch: 2 });
+    expect(playbackPositionMs(m, T0 + 64_000)).toBe(16_000);
+    expect(resume(m, 3000, T0 + 64_000)).toEqual({ ok: false, reason: 'already_playing' });
+    // restart from 0 while playing
+    expect(resume(m, 4000, T0 + 70_000, 0)).toEqual({ ok: true });
+    expect(m.playback).toMatchObject({ state: 'playing', offsetMs: 0, epoch: 3 });
+    expect(playbackPositionMs(m, T0 + 74_500)).toBe(500);
+    // the 15-minute cap counts played time, not paused time
+    pause(m, T0 + 80_000, 0);
+    tick(m, T0 + 80_000);
+    expect(m.playback.state).toBe('paused');
+    expect(tick(m, T0 + 80_000 + MAX_LIVE_TAKE_MS * 2)).toBe(true); // idle expiry only
+    expect(m.state).toBe('expired');
+  });
+
+  it('a meet saved before playback existed is treated as playing from its kickstart', () => {
+    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' }, T0);
+    claimSlot(m, person('p1'), 1);
+    start(m, 3000, T0);
+    tick(m, T0 + 3000);
+    delete (m as { playback?: unknown }).playback;
+    ensurePlayback(m);
+    expect(m.playback.state).toBe('playing');
+    expect(playbackPositionMs(m, T0 + 4000)).toBe(1000);
   });
 });

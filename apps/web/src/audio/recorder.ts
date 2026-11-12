@@ -58,6 +58,17 @@ export class PcmRecorder {
     });
   }
 
+  /** Drop frames from `atCtxTime` (default now) until `resume`; the take stays on the track timeline. */
+  pause(atCtxTime?: number): void {
+    if (!this.recording) return;
+    this.node.port.postMessage({ type: 'pause', at: atCtxTime ?? this.ctx.currentTime });
+  }
+
+  resume(atCtxTime?: number): void {
+    if (!this.recording) return;
+    this.node.port.postMessage({ type: 'resume', at: atCtxTime ?? this.ctx.currentTime });
+  }
+
   async stop(): Promise<Take> {
     if (!this.recording) throw new Error('Not recording');
     this.recording = false;

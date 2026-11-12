@@ -18,6 +18,38 @@ export const MEET_POLL_IDLE_MS = 3000;
 export type MeetRole = 'host' | 'performer' | 'audience';
 export type MeetState = 'lobby' | 'countdown' | 'live' | 'ended' | 'expired';
 
+/**
+ * Transport state of the backing track, shared by every device. The track position at server
+ * time T is `offsetMs + (T − kickstartEpochMs)` while playing and `pausedAtMs` while paused;
+ * `epoch` increments on every start/resume/restart so clients re-schedule exactly once per cue.
+ */
+export interface MeetPlayback {
+  state: 'idle' | 'playing' | 'paused';
+  /** Track position (ms) at `kickstartEpochMs`: 0 for the first start, the paused position on resume. */
+  offsetMs: number;
+  /** Track position (ms) frozen by the host's pause. */
+  pausedAtMs: number;
+  /**
+   * A pause is cued like a kickstart: the host's pause takes effect at this server instant, so every
+   * device stops at the same track position instead of whenever its next poll happens to land.
+   */
+  pauseAtEpochMs: number | null;
+  epoch: number;
+}
+
+/** WebRTC signalling between performers, relayed by the SVT DB (no socket needed). */
+export type MeetSignalType = 'offer' | 'answer' | 'ice' | 'bye';
+export interface MeetSignal {
+  seq: number;
+  meetId: string;
+  from: string;
+  to: string;
+  type: MeetSignalType;
+  /** JSON payload (SDP or ICE candidate). */
+  data: string;
+  sentAt: string;
+}
+
 export interface StageSlot {
   slot: number; // 1..10
   participantId: string | null;
@@ -50,8 +82,9 @@ export interface Meet {
   createdAt: string;
   lastActivityAt: string;
   expiresAt: string;
-  /** Shared instant the backing track starts, ms since epoch (the "GMT kickstart"). */
+  /** Shared instant the backing track starts (or resumes), ms since epoch (the "GMT kickstart"). */
   kickstartEpochMs: number | null;
+  playback: MeetPlayback;
   /** Set when the host stops or the song ends. */
   endedAt: string | null;
   /** Public stream for the audience (LL-HLS URL or YouTube embed), when a session container publishes it. */
@@ -126,6 +159,21 @@ export function emptyStage(): StageSlot[] {
 
 export function meetIsOpen(m: Pick<Meet, 'state'>): boolean {
   return m.state === 'lobby' || m.state === 'countdown' || m.state === 'live';
+}
+
+export function idlePlayback(): MeetPlayback {
+  return { state: 'idle', offsetMs: 0, pausedAtMs: 0, pauseAtEpochMs: null, epoch: 0 };
+}
+
+/** Track position (ms) every device agrees on at server time `serverNowMs`; null before the first start. */
+export function playbackPositionMs(m: Pick<Meet, 'kickstartEpochMs' | 'playback'>, serverNowMs: number): number | null {
+  const pb = m.playback ?? idlePlayback();
+  if (pb.state === 'paused') return pb.pausedAtMs;
+  if (pb.state === 'playing' && m.kickstartEpochMs !== null) {
+    if (pb.pauseAtEpochMs !== null && serverNowMs >= pb.pauseAtEpochMs) return pb.pausedAtMs;
+    return pb.offsetMs + Math.max(0, serverNowMs - m.kickstartEpochMs);
+  }
+  return null;
 }
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

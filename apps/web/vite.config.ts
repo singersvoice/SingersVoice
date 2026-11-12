@@ -40,7 +40,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,woff2,webmanifest}', 'brand/icon-192.png', 'brand/sv-mark.png', 'worklets/*.js'],
-        globIgnores: ['backgrounds/**', 'brand/*.mp4', 'brand/og-image.png'],
+        globIgnores: ['backgrounds/**', 'brand/*.mp4', 'brand/og-image.png', 'mediapipe/**'],
         navigateFallback: `${base}index.html`,
         // Static pages (privacy/terms) must not be swallowed by the SPA fallback.
         navigateFallbackDenylist: [/^\/api\//, /\/(privacy|terms)\.html$/],
@@ -50,6 +50,12 @@ export default defineConfig({
             urlPattern: ({ url }) => url.pathname.includes('/backgrounds/') || url.pathname.includes('/brand/'),
             handler: 'CacheFirst',
             options: { cacheName: 'sv-media', expiration: { maxEntries: 80, maxAgeSeconds: 60 * 86400 } },
+          },
+          {
+            // Segmentation runtime (~6 MB): fetched once, then served from cache so the cut-out works offline.
+            urlPattern: ({ url }) => url.pathname.includes('/mediapipe/'),
+            handler: 'CacheFirst',
+            options: { cacheName: 'sv-mediapipe', expiration: { maxEntries: 16, maxAgeSeconds: 180 * 86400 } },
           },
           {
             urlPattern: ({ url }) => url.origin === 'https://accounts.google.com' || url.origin === 'https://apis.google.com',

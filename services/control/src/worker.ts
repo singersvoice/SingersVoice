@@ -3,9 +3,9 @@
  * Object ("main"), so deploying needs only the standard Workers permissions (no D1 setup).
  *
  * Bindings (wrangler.jsonc): SVT_DB (Durable Object namespace, class SvtDb)
- * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH
+ * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH, ICE_SERVERS
  */
-import { createApp, sweepMeets, type AppDeps } from './app.ts';
+import { createApp, parseIceServers, sweepMeets, type AppDeps } from './app.ts';
 import { createAuthenticator } from './auth.ts';
 import { SecretBox } from './crypto.ts';
 import { durableSqlDriver, type SqlStorageLike } from './store/driver.ts';
@@ -18,6 +18,7 @@ interface Env {
   PRIVILEGED_EMAILS?: string;
   PUBLISH_KEY_SECRET?: string;
   DEV_AUTH?: string;
+  ICE_SERVERS?: string;
 }
 
 interface DurableState {
@@ -38,6 +39,7 @@ export class SvtDb {
       auth: createAuthenticator({ googleClientId: env.GOOGLE_CLIENT_ID, devAuth: env.DEV_AUTH === '1' }),
       secrets: new SecretBox(env.PUBLISH_KEY_SECRET ?? ''),
       runtime: 'cloudflare',
+      iceServers: parseIceServers(env.ICE_SERVERS),
       allowedOrigins: (env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
       privilegedEmails: (env.PRIVILEGED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
       version: '2.1.0',
