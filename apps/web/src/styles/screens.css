@@ -757,7 +757,18 @@
 .show[data-idle='1'] {
   cursor: none;
 }
-.show .bg {
+/* The picture itself (show view and Preview tiles): fills its positioned parent; text scales with it. */
+.showpic {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  isolation: isolate;
+  background: #000;
+  color: #fff;
+  container-type: inline-size;
+}
+.showpic .bg {
   position: absolute;
   inset: 0;
   z-index: -1;
@@ -765,18 +776,18 @@
   background-position: center;
   filter: brightness(0.6) saturate(1.05);
 }
-.show .bg video {
+.showpic .bg video {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-.show .vstage {
+.showpic .vstage {
   position: absolute;
   inset: 0;
   grid-row: auto;
   z-index: 0;
 }
-.show .vstage canvas.stagecanvas {
+.showpic .vstage canvas.stagecanvas {
   position: absolute;
   inset: 0;
   display: block;
@@ -858,8 +869,8 @@
   }
 }
 .show-center {
-  grid-row: 2;
-  position: relative;
+  position: absolute;
+  inset: 0;
   z-index: 1;
   display: grid;
   place-content: center;
@@ -873,14 +884,15 @@
 }
 .show-center h2 {
   margin: 0;
-  font-size: clamp(22px, 3.4vw, 40px);
+  font-size: clamp(14px, 3.2cqw, 40px);
   text-shadow: 0 2px 16px rgba(0, 0, 0, 0.7);
 }
 .show-center .muted {
   color: rgba(255, 255, 255, 0.75);
+  font-size: clamp(11px, 1.4cqw, 16px);
 }
 .show-count {
-  font-size: clamp(96px, 22vw, 260px);
+  font-size: clamp(48px, 20cqw, 260px);
   font-weight: 800;
   line-height: 1;
   letter-spacing: -0.04em;
@@ -892,11 +904,49 @@
   top: 14%;
   transform: translateX(-50%);
   z-index: 1;
-  padding: 8px 18px;
+  padding: 0.5em 1.3em;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.55);
   font-weight: 600;
+  font-size: clamp(11px, 1.6cqw, 16px);
   letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+/* Preview tab: a wall of monitor tiles, each the exact broadcast picture in 16:9 */
+.monitors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+  gap: var(--gap);
+}
+.monitor-card .monitor-title {
+  min-width: 0;
+}
+.monitor-card .monitor-title b,
+.monitor-card .monitor-title .small {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.monitor-chips {
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+.monitor {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #000;
+  color: #fff;
+  isolation: isolate;
+  container-type: inline-size;
+}
+.monitor > .show-center {
+  gap: 10px;
 }
 .showbar {
   grid-row: 3;

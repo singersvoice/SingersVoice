@@ -106,6 +106,14 @@ backing track in sync with the meet's transport, full screen) fades out while th
 comes back on any pointer movement. Only the host, or a privileged account that joined the meet
 (the show view does), may queue a job for it. The singers' rooms are untouched: they keep their
 lyrics, cue deck and transport; the show view only listens to the meet and pulls video.
+
+**Preview** (admin monitoring) lists every open meet the account may publish (hosted or joined,
+any other by link / code) as a monitor tile: the exact broadcast picture (`showStage.tsx`, the
+same feed and compositor as the show view) in a 16:9 box, status (meet state, LIVE / requested,
+performers linked) in the card and never in the frame, with *Show view* and *Publish* at hand.
+Every publisher view — the show view, each tile — is its own participant resumed only by its own
+token, so monitoring a meet and running its show view at the same time never fight over one video
+link; the first four tiles connect by themselves, the rest on request.
 4. Performers hear only themselves + the track (Solo foldback). The composed mix for the audience comes from
    the session container (next increment); until then the watch page shows lyrics in sync and chat.
 5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.

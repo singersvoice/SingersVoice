@@ -22,14 +22,19 @@ export class MeetSession {
   private stopped = false;
   private inFlight = false;
 
-  /** Resume token per meet — and per kind: a publisher's show view is its own participant, so its own token. */
+  /**
+   * Resume token per meet — and per kind: the member record (host / performer / audience), the
+   * publisher's show view and a Publishing Preview tile are each their own participant, so each
+   * keeps its own token (a `view` tag tells several tiles of the same meet apart).
+   */
   private readonly storageKey: string;
 
   constructor(
     readonly meetId: string,
-    readonly kind: 'member' | 'publisher' = 'member',
+    readonly kind: 'member' | 'publisher' | 'preview' = 'member',
+    view = '',
   ) {
-    this.storageKey = `sv.meet.${meetId}.${kind === 'publisher' ? 'pub.' : ''}rt`;
+    this.storageKey = `sv.meet.${meetId}.${kind === 'member' ? '' : `${kind}${view ? `.${view}` : ''}.`}rt`;
     try {
       this.resumeToken = sessionStorage.getItem(this.storageKey) ?? '';
     } catch {

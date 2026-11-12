@@ -161,6 +161,37 @@ try {
   const a2 = await stageInfo(alice.page);
   check(a2.performers === '2' && /1\/1 video linked/.test(a2.text), 'the performers\' stage is unaffected by the show view joining');
 
+  // Preview tab (admin monitoring), in a second tab of the same account while the show view stays open:
+  // the live meet gets a monitor tile with the exact broadcast picture, through its own publisher participant.
+  const monitor = await carol.ctx.newPage();
+  monitor.on('pageerror', (e) => errors.carol.push(String(e)));
+  monitor.on('console', (m) => m.type() === 'error' && errors.carol.push(m.text()));
+  await monitor.setViewportSize({ width: 1280, height: 800 });
+  await monitor.goto(`${base}publishing?tab=preview&${control}`, { waitUntil: 'networkidle' });
+  await monitor.locator('.monitor[data-state="live"]').waitFor({ timeout: 30000 });
+  const t2 = Date.now();
+  while (Date.now() - t2 < 25000 && (await remoteFrames(monitor)) < 2) await wait(500);
+  check((await remoteFrames(monitor)) >= 2, `the Preview tile receives both performers' video (${Math.round((Date.now() - t2) / 1000)} s)`);
+  await wait(1200);
+  const tile = await monitor.evaluate(() => {
+    const m = document.querySelector('.monitor[data-state="live"]');
+    const c = m.querySelector('canvas.stagecanvas');
+    const x = c.getContext('2d');
+    const d = x.getImageData(0, 0, c.width, c.height).data;
+    let left = 0, right = 0; const w = c.width;
+    for (let i = 3, px = 0; i < d.length; i += 4, px++) if (d[i] > 40) { if (px % w < w / 2) left++; else right++; }
+    const r = m.getBoundingClientRect();
+    return { left, right, w, h: c.height, ratio: r.width / r.height, lyrics: m.querySelectorAll('.lyrics, .cue').length, performers: m.dataset.performers, linked: m.dataset.linked, card: m.closest('.monitor-card').innerText.replace(/\s+/g, ' ') };
+  });
+  console.log('preview tile:', JSON.stringify(tile));
+  check(tile.performers === '2' && tile.linked === '2', `the tile reports 2 on stage, 2 linked (${tile.card})`);
+  check(tile.left > 500 && tile.right > 500 && tile.lyrics === 0, 'the tile draws both cut-outs, no lyrics (the exact broadcast picture)');
+  check(Math.abs(tile.ratio - 16 / 9) < 0.05, `the tile is 16:9 (${tile.ratio.toFixed(2)})`);
+  check(/LIVE|requested/.test(tile.card), 'the tile shows the publish state of the meet');
+  const showStill = await carol.page.evaluate(() => Object.values(window.__svMesh.peerStates()).filter((s) => s === 'connected').length);
+  check(showStill === 2, `the show view keeps both links while the Preview tile watches too (${showStill})`);
+  await monitor.screenshot({ path: `${out}/preview-carol.png` });
+
   // Host restarts the song from the top (cued 5 s ahead) so the 20 s sample has room for the pause/resume checks.
   await alice.page.getByRole('button', { name: /Restart the song for everyone/ }).click();
   await wait(7000);
@@ -198,6 +229,7 @@ try {
   await carol.page.locator('.show[data-idle="0"]').waitFor({ timeout: 5000 });
   await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
   await carol.page.locator('.showbar .jobline', { hasText: 'stopped' }).waitFor({ timeout: 15000 });
+  await monitor.close();
   const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon/.test(e))]));
   check(Object.values(errs).every((v) => !v.length), `no page errors (${JSON.stringify(errs).slice(0, 300)})`);
   console.log('both takes reviewed');

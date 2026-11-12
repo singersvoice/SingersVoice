@@ -280,7 +280,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (publisher && !user.privileged) return err(c, 403, 'not_privileged', 'Publishing mode is for privileged accounts');
     // A publisher's show view is its own participant: the same account may be performing on another device.
     let p = body.resumeToken ? await store.getParticipantByToken(meet.meetId, body.resumeToken) : null;
-    if (!p) p = await store.getParticipantByUser(meet.meetId, user.userId, publisher ? 'publisher' : 'member');
+    // A member (host / performer / audience) is one per account; every publisher view (the show view,
+    // each Preview tile) is its own participant, resumed by its token only, so an admin can monitor a
+    // meet and run its show view at the same time without the two fighting over one video link.
+    if (!p && !publisher) p = await store.getParticipantByUser(meet.meetId, user.userId, 'member');
     if (p && (p.userId !== user.userId || (publisher ? p.role !== 'publisher' : p.role === 'publisher'))) p = null;
     if (!p) {
       p = {

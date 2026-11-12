@@ -6,30 +6,28 @@
  * stage, never counted as audience), receives every performer's video over the same mesh the singers
  * use (receive-only), and runs the broadcast from a bar that hides itself while the show plays.
  * Nothing here touches the singers' rooms: they keep their lyrics and controls; the show view only
- * listens to the meet (stage, transport) and pulls video.
+ * listens to the meet (stage, transport) and pulls video. The picture itself is `showStage.tsx`,
+ * shared with the Preview tab's monitor tiles.
  */
-import { DESTINATIONS, formatMs, playbackPositionMs, SLOT_COLORS, type Destination, type DestinationKind, type Meet, type Participant, type PublishJob, type SingerSlot } from '@singersvoice/protocol';
+import { DESTINATIONS, formatMs, playbackPositionMs, type Destination, type DestinationKind, type Meet, type Participant, type PublishJob } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { IcMusic, IcPlay, IcStop, IcUsers, IcX, IcZoom } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Spinner } from '../../components/ui.tsx';
-import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { api, ApiError, clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
 import { go, href } from '../../lib/nav.ts';
 import { keepAwake } from '../../lib/platform.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { privileged } from '../../state/session.ts';
-import { PerformerMesh, type PeerState } from '../../video/peers.ts';
-import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
 import { MeetSession } from '../meets/meetSession.ts';
 import { loadMeetTrack } from '../meets/trackSource.ts';
+import { ShowPicture, useCountdown, useShowFeed } from './showStage.tsx';
 
 const IDLE_MS = 3000;
 const JOB_POLL_MS = 8000;
 const SYNC_TOLERANCE_MS = 300;
 
-const activeJob = (j: PublishJob) => j.state === 'requested' || j.state === 'starting' || j.state === 'live';
+export const activeJob = (j: PublishJob) => j.state === 'requested' || j.state === 'starting' || j.state === 'live';
 
 export function ShowView(props: { id: string }) {
   const [checked, setChecked] = useState(false);
@@ -100,13 +98,10 @@ function Show(props: { id: string }) {
 
 function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }) {
   const { session, meet } = props;
-  const compositor = useMemo(() => new StageCompositor('show'), []);
-  const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, props.you.participantId, true) : null), [session, props.you.participantId]);
-  const remoteVideos = useRef(new Map<string, HTMLVideoElement>());
-  const [peerStates, setPeerStates] = useState<Record<string, PeerState>>({});
+  const feed = useShowFeed(session, meet, props.you);
+  const countdown = useCountdown(meet);
   const [idle, setIdle] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const [countdown, setCountdown] = useState<number | null>(null);
   const [job, setJob] = useState<PublishJob | null>(null);
   const [dests, setDests] = useState<Destination[] | null>(null);
   const [picked, setPicked] = useState<DestinationKind[] | null>(null);
@@ -120,61 +115,10 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   const over = meet.state === 'ended' || meet.state === 'expired';
   const pb = meet.playback ?? { state: 'idle' as const, offsetMs: 0, pausedAtMs: 0, pauseAtEpochMs: null, epoch: 0 };
 
-  // ---- receive every performer's video (receive-only mesh; the publisher never sends a camera) ----
   useEffect(() => {
-    if (!mesh) return;
-    mesh.onRemote = (id, stream, state) => {
-      let v = remoteVideos.current.get(id);
-      if (stream) {
-        if (!v) {
-          v = document.createElement('video');
-          v.muted = true;
-          v.playsInline = true;
-          v.autoplay = true;
-          v.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
-          document.body.appendChild(v);
-          remoteVideos.current.set(id, v);
-        }
-        if (v.srcObject !== stream) {
-          v.srcObject = stream;
-          void v.play().catch(() => undefined);
-        }
-      } else if (v) {
-        v.srcObject = null;
-        v.remove();
-        remoteVideos.current.delete(id);
-      }
-      setPeerStates((s) => ({ ...s, [id]: state }));
-    };
-    void mesh.start();
-    (window as unknown as { __svMesh?: PerformerMesh; __svShow?: StageCompositor }).__svMesh = mesh; // support / e2e hooks
-    (window as unknown as { __svShow?: StageCompositor }).__svShow = compositor;
-    return () => {
-      mesh.close();
-      for (const v of remoteVideos.current.values()) {
-        v.srcObject = null;
-        v.remove();
-      }
-      remoteVideos.current.clear();
-    };
-  }, [mesh]);
-
-  const stagePerformers = meet.stage.filter((s) => s.participantId);
-  const peerIds = stagePerformers.map((s) => s.participantId!);
-  const peerKey = peerIds.join(',');
-  useEffect(() => {
-    mesh?.setPeers(peerIds);
-  }, [peerKey]);
-
-  // Everyone on stage, left to right by slot — huge, like a stage show (no "me": the publisher is not a performer).
-  useEffect(() => {
-    const list: StagePerformer[] = stagePerformers.map((s) => {
-      const v = remoteVideos.current.get(s.participantId!);
-      const color = SLOT_COLORS[Math.max(1, Math.min(10, s.slot)) as SingerSlot];
-      return { id: s.participantId!, slot: s.slot, label: s.displayName.split(' ')[0] || 'Singer', picture: s.picture, color, source: v ? { kind: 'packed', video: v } : { kind: 'none' } };
-    });
-    compositor.setPerformers(list);
-  }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), peerStates]);
+    (window as unknown as { __svMesh?: unknown; __svShow?: unknown }).__svMesh = feed.mesh; // support / e2e hooks
+    (window as unknown as { __svShow?: unknown }).__svShow = feed.compositor;
+  }, [feed.mesh]);
 
   // ---- the broadcast: destinations + the publish job for this meet ----
   useEffect(() => {
@@ -298,18 +242,6 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     };
   }, [music, trackUrl, pb.state, pb.epoch, pb.pauseAtEpochMs, meet.kickstartEpochMs, clock.value.offsetMs]);
 
-  // ---- countdown to the kickstart (shown big, like a show opener) ----
-  useEffect(() => {
-    if (meet.state !== 'countdown' || meet.kickstartEpochMs === null) {
-      setCountdown(null);
-      return;
-    }
-    const tick = () => setCountdown(Math.max(0, Math.ceil((meet.kickstartEpochMs! - serverNow()) / 1000)));
-    tick();
-    const t = setInterval(tick, 200);
-    return () => clearInterval(t);
-  }, [meet.state, meet.kickstartEpochMs]);
-
   // ---- chrome hides itself while the show plays; any movement brings it back ----
   const wake = () => {
     setIdle(false);
@@ -347,7 +279,6 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     go('/publishing');
   };
 
-  const linked = stagePerformers.filter((s) => peerStates[s.participantId!] === 'connected').length;
   const onAir = job?.state === 'live';
   const requested = job !== null && activeJob(job) && !onAir;
   const enabledDests = (dests ?? []).filter((d) => d.enabled);
@@ -356,9 +287,12 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   const position = live ? playbackPositionMs(meet, serverNow()) : null;
 
   return (
-    <div class="show" data-state={meet.state} data-performers={compositor.tiles.length} data-linked={linked} data-idle={hideChrome ? '1' : '0'} onPointerMove={wake} onPointerDown={wake}>
-      <StageBackground id={meet.backgroundId} />
-      <VirtualStage compositor={compositor} />
+    <div class="show" data-state={meet.state} data-performers={feed.compositor.tiles.length} data-linked={feed.linked} data-idle={hideChrome ? '1' : '0'} onPointerMove={wake} onPointerDown={wake}>
+      <ShowPicture meet={meet} compositor={feed.compositor} countdown={countdown}>
+        <button class="btn" onClick={exit}>
+          Back to Publishing
+        </button>
+      </ShowPicture>
       <audio ref={audioRef} src={trackUrl ?? undefined} preload="auto" />
 
       <header class="show-top">
@@ -373,37 +307,10 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
           {onAir && <span class="onair">LIVE</span>}
           {requested && <span class="chip warn">publishing requested</span>}
           <span class="chip">
-            <IcUsers size={14} /> {stagePerformers.length} on stage · {linked}/{stagePerformers.length} video
+            <IcUsers size={14} /> {feed.onStage} on stage · {feed.linked}/{feed.onStage} video
           </span>
         </div>
       </header>
-
-      {!live && (
-        <div class="show-center">
-          {meet.state === 'lobby' && (
-            <>
-              <h2>{stagePerformers.length ? 'The stage is set' : 'Waiting for the singers'}</h2>
-              <p class="muted">The show starts when the host starts the song.</p>
-            </>
-          )}
-          {meet.state === 'countdown' && countdown !== null && (
-            <>
-              <div class="show-count">{countdown || 'GO'}</div>
-              <p class="muted">{meet.trackTitle}</p>
-            </>
-          )}
-          {over && (
-            <>
-              <h2>{meet.state === 'expired' ? 'The meet closed' : 'Show over'}</h2>
-              <p class="muted">Thanks for watching {meet.title}.</p>
-              <button class="btn" onClick={exit}>
-                Back to Publishing
-              </button>
-            </>
-          )}
-        </div>
-      )}
-      {live && pb.state === 'paused' && <div class="show-note">Paused by the host</div>}
 
       <footer class="showbar" aria-label="Broadcast controls">
         <div class="dests" role="group" aria-label="Destinations">

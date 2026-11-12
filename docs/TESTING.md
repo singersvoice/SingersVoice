@@ -54,8 +54,10 @@ at the same position and that resume restarts both together. A third, privileged
 meet on a 1080p viewport: both performers arrive over the receive-only mesh and stand huge on the show
 stage (tiles over 90 % of the frame height), there are no lyrics, the chrome hides itself while the
 show plays, *Go live* queues a publish job (in-house destination), the pause shows on the show view,
-*Stop publishing* ends the job — and the singers' own stage is unaffected. Runs in CI after the
-viewport screenshots:
+*Stop publishing* ends the job — and the singers' own stage is unaffected. A second tab of the same
+account opens Publishing › Preview while the show view stays up: the live meet's monitor tile
+receives both performers, draws the exact 16:9 broadcast picture without lyrics, reports the publish
+state, and the show view keeps its own links. Runs in CI after the viewport screenshots:
 
 ```bash
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/live-duet.mjs screenshots

@@ -125,12 +125,18 @@ describe('sv-control API', () => {
     const hostAgain = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'performer', resumeToken: host.resumeToken }) }));
     expect(hostAgain.you.participantId).toBe(host.you.participantId); // the performer participant is untouched
     expect(hostAgain.meet.audienceCount).toBe(1); // carol; the publisher is not audience
-    // Without any token, each kind of join resumes its own record: the show view its publisher, the room its performer.
-    const pubAgain = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'publisher' }) }));
-    expect(pubAgain.you.participantId).toBe(pub.you.participantId);
+    // A publisher view resumes only by its own token (a second view — a Preview tile — is its own participant);
+    // a member join without a token still resumes the account's member record, never the publisher one.
+    const pubByToken = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'publisher', resumeToken: pub.resumeToken }) }));
+    expect(pubByToken.you.participantId).toBe(pub.you.participantId);
+    const pubView2 = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'publisher' }) }));
+    expect(pubView2.you.role).toBe('publisher');
+    expect(pubView2.you.participantId).not.toBe(pub.you.participantId);
     const roomAgain = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'audience' }) }));
     expect(roomAgain.you.participantId).toBe(host.you.participantId);
     expect(roomAgain.you.slot).toBe(1);
+    expect(roomAgain.meet.audienceCount).toBe(1); // still only carol: publisher views never count as audience
+    expect((await app.request(`/meets/${meet.meetId}/leave`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: pubView2.resumeToken }) })).status).toBe(200);
     const ice = await json<{ iceServers: { urls: string | string[] }[] }>(await app.request('/ice', { headers: as('bob') }));
     expect(ice.iceServers[0]!.urls).toContain('stun:stun.l.google.com:19302');
 

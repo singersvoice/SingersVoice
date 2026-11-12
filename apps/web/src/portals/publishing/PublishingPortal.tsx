@@ -1,9 +1,11 @@
 /**
  * Publishing mode — its own portal, for privileged accounts only: push a meet to YouTube / Facebook /
  * Instagram / Twitch and the in-house watch portal. Screens: Publish (pick a meet — one you host or
- * joined, or any meet by link / code — pick destinations, Publish → the show view), Destinations
- * (ingest URL + stream key per platform), History (jobs with their event timeline). The show view
- * (/publishing/show/:id) is the broadcast picture: performers huge on one stage, no lyrics.
+ * joined, or any meet by link / code — pick destinations, Publish → the show view), Preview (admin
+ * monitoring: every open meet eligible to publish, each with the exact picture the platforms would
+ * play), Destinations (ingest URL + stream key per platform), History (jobs with their event
+ * timeline). The show view (/publishing/show/:id) is the broadcast picture: performers huge on one
+ * stage, no lyrics.
  * The encoder that executes a job lives in the session container (next increment); jobs queue here.
  */
 import { DESTINATIONS, meetIsOpen, type Destination, type DestinationKind, type Meet, type PublishJob } from '@singersvoice/protocol';
@@ -15,25 +17,17 @@ import { api, ApiError, controlConfigured, refreshAccount } from '../../lib/api.
 import { go, href } from '../../lib/nav.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { privileged } from '../../state/session.ts';
+import { resolveMeet } from './meetLookup.ts';
+import { Preview } from './Preview.tsx';
 
-type Tab = 'publish' | 'destinations' | 'history';
+type Tab = 'publish' | 'preview' | 'destinations' | 'history';
 
 const initialTab = (): Tab => {
   const q = new URLSearchParams(location.search);
   const t = q.get('tab');
-  if (t === 'publish' || t === 'destinations' || t === 'history') return t;
+  if (t === 'publish' || t === 'preview' || t === 'destinations' || t === 'history') return t;
   return 'publish';
 };
-
-/** `/meet/<id>` link, a bare meet id, or a 6-letter join code → the meet. */
-async function resolveMeet(input: string): Promise<Meet> {
-  const s = input.trim();
-  const m = /\/meet\/([^/?#\s]+)/.exec(s);
-  if (m) return (await api.get('GET /meets/:id', `/meets/${encodeURIComponent(m[1]!)}`)).meet;
-  if (/^[a-z0-9]{6}$/i.test(s)) return (await api.get('GET /meets/code/:code', `/meets/code/${encodeURIComponent(s.toUpperCase())}`)).meet;
-  if (s) return (await api.get('GET /meets/:id', `/meets/${encodeURIComponent(s)}`)).meet;
-  throw new Error('Paste a meet link or its 6-letter code');
-}
 
 export function PublishingPortal() {
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -74,12 +68,14 @@ export function PublishingPortal() {
           onChange={setTab}
           options={[
             { v: 'publish', label: 'Publish a meet' },
+            { v: 'preview', label: 'Preview' },
             { v: 'destinations', label: 'Destinations' },
             { v: 'history', label: 'History' },
           ]}
         />
         {tab === 'destinations' && <Destinations />}
         {tab === 'publish' && <Publish onDone={() => setTab('history')} />}
+        {tab === 'preview' && <Preview />}
         {tab === 'history' && <History />}
       </div>
     </Page>
