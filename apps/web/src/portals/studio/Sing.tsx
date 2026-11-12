@@ -6,6 +6,7 @@ import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
+import { SeekBar } from '../../components/SeekBar.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { catalogAvailable, isSameTrack, myCatalogUserId, pullCatalogTrack, searchCatalog } from '../../lib/catalog.ts';
@@ -265,6 +266,7 @@ export function Sing(props: { id: string }) {
       // Recorder runs from before the song starts; its first-frame clock gives the exact offset.
       const recStart = engine.recorder ? engine.recorder.start() : Promise.resolve(engine.ctx.currentTime);
       player.play(t0, 0);
+      takeOrigin.current = player.originCtxTime();
       startedEpoch.current = Date.now() + Math.round((t0 - engine.ctx.currentTime) * 1000);
       void recStart;
 
@@ -290,12 +292,39 @@ export function Sing(props: { id: string }) {
     }
   };
 
-  /** Pause the song, the vocal recorder and the camera recorder together: the take stays on the track timeline. */
+  /** While paused: the track position the vocal recording's end corresponds to (a seek while paused moves the take on resume). */
+  const recPos = useRef(0);
+  /**
+   * The take's timeline origin: the context time of track position 0 at the first start. Pauses
+   * (frames dropped) and jumps (silence inserted / re-sung parts replaced) keep the take on that one
+   * timeline, so this never moves — unlike the player's own origin, which shifts with every cue.
+   */
+  const takeOrigin = useRef(0);
+  /**
+   * Move back or forth in the song. Playing: a cued jump a few frames ahead (seamless), the take
+   * following on the track timeline; paused: the paused position moves, the take catches up on resume.
+   */
+  const seek = (ms: number) => {
+    const engine = engineRef.current;
+    const player = engine?.player;
+    if (!engine || !player?.buffer || !(phase === 'playing' || phase === 'paused')) return;
+    const to = Math.max(0, Math.min(player.durationMs, ms));
+    if (player.playing) {
+      const at = engine.ctx.currentTime + 0.08;
+      const delta = to - player.positionAt(at);
+      player.cue(at, to);
+      if (Math.abs(delta) > 30) engine.recorder?.seek(at, delta / audio.tempo);
+    } else player.seek(to);
+    setTMs(to);
+  };
+
+  /** Pause the song, the vocal recorder and the show recorder together: the take stays on the track timeline. */
   const pause = () => {
     const engine = engineRef.current;
     const player = engine?.player;
     if (!engine || !player?.playing) return;
     const at = engine.ctx.currentTime;
+    recPos.current = player.positionAt(at);
     player.pause();
     engine.recorder?.pause(at);
     show.pause();
@@ -307,8 +336,11 @@ export function Sing(props: { id: string }) {
     const player = engine?.player;
     if (!engine || !player || player.playing) return;
     const t0 = engine.ctx.currentTime + 0.12;
-    player.play(t0, player.positionMs());
+    const from = player.positionMs();
+    player.play(t0, from);
     engine.recorder?.resume(t0);
+    const delta = from - recPos.current; // a seek made while paused
+    if (Math.abs(delta) > 30) engine.recorder?.seek(t0, delta / audio.tempo);
     show.resume();
     player.onEnded = () => void finish();
     setPhase('playing');
@@ -335,7 +367,7 @@ export function Sing(props: { id: string }) {
     setCountdown(null);
     try {
       const player = engine.player!;
-      const origin = player.originCtxTime();
+      const origin = takeOrigin.current || player.originCtxTime();
       const durationMs = Math.round(player.positionMs());
       player.onEnded = null;
       player.stop();
@@ -408,13 +440,7 @@ export function Sing(props: { id: string }) {
         {app.showCueDeck && track.singerCount > 1 && phase === 'playing' && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} />}
         <section class="controls">
           <PresetChips value={audio} onChange={updateAudio} />
-          <div class="timeline">
-            <span class="mono">{formatMs(tMs)}</span>
-            <div class="track">
-              <i style={{ width: `${track.durationMs ? Math.min(100, (tMs / track.durationMs) * 100) : 0}%` }} />
-            </div>
-            <span class="mono">{formatMs(track.durationMs)}</span>
-          </div>
+          <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={phase === 'playing' || phase === 'paused' ? seek : undefined} />
           <div class="main">
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })} disabled={busy}>
               {app.cameraOn ? <IcCamera /> : <IcCameraOff />}

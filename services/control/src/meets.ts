@@ -358,6 +358,39 @@ export function resume(m: Meet, leadMs: number, now = Date.now(), fromMs?: numbe
   return { ok: true };
 }
 
+/**
+ * A jump on the song's timeline, for everyone: while playing it is cued `leadMs` ahead like a
+ * kickstart (every device keeps playing and jumps at the same instant — seamless); while paused the
+ * paused position simply moves (and the epoch bumps so every device re-seeks). Any singer on stage
+ * may do it; the devices stay in sync whoever asks.
+ */
+export function seek(m: Meet, leadMs: number, toMs: number, now = Date.now()): { ok: boolean; reason?: string } {
+  if (m.state !== 'live' && m.state !== 'countdown') return { ok: false, reason: 'not_live' };
+  const pb = ensurePlayback(m);
+  if (pb.state === 'idle') return { ok: false, reason: 'not_started' };
+  const to = Math.max(0, Math.round(toMs));
+  if (pb.state === 'paused') {
+    pb.pausedAtMs = to;
+    pb.offsetMs = to;
+    pb.epoch += 1;
+    touch(m, now);
+    return { ok: true };
+  }
+  if (pb.pauseAtEpochMs !== null) return { ok: false, reason: 'pausing' };
+  m.kickstartEpochMs = now + Math.max(1500, Math.min(30000, leadMs));
+  pb.offsetMs = to;
+  pb.pausedAtMs = to;
+  pb.epoch += 1;
+  m.state = 'live';
+  touch(m, now);
+  return { ok: true };
+}
+
+/** Who may pause, resume and seek: the host and any singer on stage (the song belongs to the stage). */
+export function canTransport(m: Meet, p: Participant): boolean {
+  return isHost(m, p) || (p.slot !== null && p.role !== 'publisher');
+}
+
 export function stop(m: Meet, now = Date.now()): void {
   if (!meetIsOpen(m)) return;
   m.state = 'ended';

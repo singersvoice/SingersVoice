@@ -67,7 +67,7 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 
 | Option | Who | What it does |
 | --- | --- | --- |
-| **Pick your selection of song** | host, singers | Opens the picker: *My songs* (your Drive library) and *Songs from other singers*, with search. Picking is all you do: the song loads on every device in the meet, so all the singers sing the same lines at the same time. A song of yours that other devices cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission — needs a Google sign-in; otherwise only your own devices can play it, and the others say so). The first song picked becomes the current one; later picks queue up. |
+| **Pick your selection of song** | host, singers | Opens the picker: one search box over *My songs* (your Drive library) and *Songs from other singers* (the catalog — built for thousands: every word you type must match, in any order, in the title, artist, genre, language or the singer who shared it; results come a page at a time with counts; Enter picks the top match). Picking is all you do: the song loads on every device in the meet, so all the singers sing the same lines at the same time. A song of yours that other devices cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission — needs a Google sign-in; otherwise only your own devices can play it, and the others say so) — and every singer on stage gets a copy of it in their own Drive library, in the background. The first song picked becomes the current one; later picks queue up. |
 | **Now** (in the picker / on a queued song) | host | Makes that song the current one (the previous current goes back to the top of the queue). Only between songs. |
 | ▲ / × on a queued song | host (× also the one who added it) | Move up / remove. |
 | **Skip** | host | Drops the current song; the next one comes up. |
@@ -88,10 +88,17 @@ deck shows who sings what in a duet) and the singers are small — each one's fr
 camera framed it, in the lower part under the lyrics, no zoom of any kind. (The zoom that fills the
 picture with the singers is Publisher mode's, below.) Controls: camera on/off, hear myself, **Set
 list** (a drawer over the stage: what is playing, what is next, add a song — the song picker is at
-hand while singing too), FX presets, timeline. Host-only transport: **Pause** (cued 3 s ahead,
-everyone freezes at the same position), **Resume**, **Restart** (from the top), and **Stop song** —
-which stops the song for everyone. A singer's **Stop** stops only their own take; the song goes on
-for the others. The backing track ending on the host's device ends the song for everyone too.
+hand while singing too), FX presets, and the **timeline — drag it (or use the arrow keys on it) to
+move back or forth in the song**. Transport belongs to the stage: every singer on stage may
+**Pause** (cued 3 s ahead, everyone freezes at the same position), **Resume**, and **seek** — a
+jump is cued too (*jumping to 1:23…*), so the song keeps playing and every device jumps at the
+same instant; while paused the paused position simply moves for everyone. **Restart** (from the
+top) and **Stop song** — which stops the song for everyone — are the host's. A singer's **Stop**
+stops only their own take; the song goes on for the others. The backing track ending on the host's
+device ends the song for everyone too. Whoever plays, pauses or seeks, the devices stay in sync:
+every cue is a shared GMT instant, never "when the message arrives". A take follows every pause and
+jump on the track timeline (a part sung again replaces the old one); the saved show records what
+happened, jumps included.
 
 **What gets saved — by itself.** Every take is a personal session: your vocal, sample-accurate on
 the track timeline across any number of pauses — and its video is **the show**: exactly the

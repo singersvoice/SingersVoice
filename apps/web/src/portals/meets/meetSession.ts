@@ -162,8 +162,12 @@ export class MeetSession {
   resume(leadMs = 4000): Promise<void> {
     return this.act('resume', { leadMs });
   }
-  restart(leadMs = 5000, fromMs = 0): Promise<void> {
+  restart(leadMs = 3000, fromMs = 0): Promise<void> {
     return this.act('restart', { leadMs, fromMs });
+  }
+  /** Jump the song for everyone (cued while playing, so every device jumps at the same instant). */
+  seek(toMs: number, leadMs = 3000): Promise<void> {
+    return this.act('seek', { leadMs, toMs });
   }
 
   // ---- WebRTC signalling relay (performer ↔ performer) ----

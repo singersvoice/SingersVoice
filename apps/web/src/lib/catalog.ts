@@ -122,6 +122,11 @@ export function isSameTrack(trackId: string, catalogTrackId: string): boolean {
 /** Pull a published track into my own storage; returns the saved copy. */
 export async function pullCatalogTrack(entry: CatalogTrack, onProgress?: Progress): Promise<TrackSummary> {
   const loaded = await fetchCatalogTrack(entry, onProgress);
+  return keepCatalogCopy(entry, loaded, onProgress);
+}
+
+/** Save an already-fetched published track as my own copy (a singer on stage keeps what the meet sings). */
+export async function keepCatalogCopy(entry: CatalogTrack, loaded: LoadedTrack, onProgress?: Progress): Promise<TrackSummary> {
   const copy = createTrack({
     ...loaded.track,
     trackId: catalogCopyId(entry.trackId),

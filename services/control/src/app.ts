@@ -43,7 +43,7 @@ import {
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
-import { addSong, claimSlot, decideRequest, ensureMeet, isHost, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, withdrawRequest } from './meets.ts';
+import { addSong, claimSlot, decideRequest, ensureMeet, isHost, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, withdrawRequest, seek, canTransport } from './meets.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
 export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -599,16 +599,20 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
-  /** Host transport controls — pause freezes the shared position; resume/restart cue a new kickstart. */
-  for (const action of ['pause', 'resume', 'restart'] as const) {
+  /**
+   * Transport — pause freezes the shared position at a cued instant; resume / seek / restart cue a new
+   * kickstart, so every device moves together whoever asked. The host and any singer on stage may
+   * pause, resume and seek; restart (from the top) is the host's.
+   */
+  for (const action of ['pause', 'resume', 'restart', 'seek'] as const) {
     app.post(`/meets/:id/${action}`, async (c) => {
       const { store } = c.get('deps');
-      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; leadMs?: number; fromMs?: number };
+      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; leadMs?: number; fromMs?: number; toMs?: number };
       const meet = await store.getMeet(c.req.param('id'));
       if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
       const p = await participantFromBody(c, meet.meetId, body.resumeToken);
       if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
-      if (!isHost(meet, p)) return err(c, 403, 'not_host', 'Only the host controls playback');
+      if (action === 'restart' ? !isHost(meet, p) : !canTransport(meet, p)) return err(c, 403, 'not_host', action === 'restart' ? 'Only the host restarts the song' : 'Only the singers on stage control the song');
       ensureMeet(meet);
       tick(meet);
       const r =
@@ -616,8 +620,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
           ? pause(meet, Date.now(), Number(body.leadMs ?? 3000))
           : action === 'resume'
             ? resume(meet, Number(body.leadMs ?? 4000))
-            : resume(meet, Number(body.leadMs ?? 5000), Date.now(), Math.max(0, Number(body.fromMs ?? 0)));
-      if (!r.ok) return err(c, 409, r.reason ?? action, r.reason === 'not_started' ? 'Start the song first' : r.reason === 'already_playing' ? 'The song is already playing' : 'The song is not playing');
+            : action === 'seek'
+              ? seek(meet, Number(body.leadMs ?? 3000), Number(body.toMs ?? 0))
+              : resume(meet, Number(body.leadMs ?? 3000), Date.now(), Math.max(0, Number(body.fromMs ?? 0)));
+      if (!r.ok) return err(c, 409, r.reason ?? action, r.reason === 'not_started' ? 'Start the song first' : r.reason === 'already_playing' ? 'The song is already playing' : r.reason === 'pausing' ? 'A pause is on its way — seek once it landed' : 'The song is not playing');
       await store.saveMeet(meet);
       return c.json((await snapshot(c, meet.meetId, p))!);
     });

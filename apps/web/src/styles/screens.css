@@ -391,6 +391,59 @@
   border-radius: 4px;
   background: var(--accent);
 }
+/* Seekable: the range input sits invisibly over the bar (pointer, touch, arrow keys); the thumb is drawn by the bar. */
+.timeline.seekable .track {
+  cursor: pointer;
+}
+.timeline.seekable .track input[type='range'] {
+  position: absolute;
+  left: 0;
+  top: -10px;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  touch-action: none;
+}
+.timeline.seekable .track input[type='range']:focus-visible + *,
+.timeline.seekable .track:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.timeline.seekable .track > i::after {
+  content: '';
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-50%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+.timeline .track > b.cue {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 3px;
+  margin-left: -1px;
+  border-radius: 2px;
+  background: var(--warn);
+  animation: cue-blink 0.8s ease-in-out infinite alternate;
+}
+@keyframes cue-blink {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 1;
+  }
+}
 .controls .main {
   display: flex;
   flex-wrap: wrap;

@@ -7,6 +7,8 @@
 export class BackingPlayer {
   buffer: AudioBuffer | null = null;
   private source: AudioBufferSourceNode | null = null;
+  /** A cued jump not yet reached (see `cue`). */
+  private pending: { src: AudioBufferSourceNode; at: number; offsetMs: number; old: AudioBufferSourceNode | null } | null = null;
   readonly gain: GainNode;
   private pitch: AudioWorkletNode | null = null;
   private startAt = 0; // ctx time when source.start fired
@@ -98,19 +100,81 @@ export class BackingPlayer {
     return when;
   }
 
+  /**
+   * A cued jump: keep playing until `atCtxTime`, then continue from `offsetMs` — seamless, sample-
+   * accurate, the same instant on every device of a meet (a seek, a restart from the top). While
+   * paused it is a plain seek that stays paused.
+   */
+  cue(atCtxTime: number, offsetMs: number): number {
+    if (!this.buffer) throw new Error('No track loaded');
+    const offset = Math.max(0, Math.min(this.durationMs, offsetMs));
+    if (!this.playing) {
+      this.startOffsetMs = offset;
+      return this.ctx.currentTime;
+    }
+    const at = Math.max(this.ctx.currentTime, atCtxTime);
+    const old = this.source;
+    this.pending?.src.stop();
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.buffer;
+    src.playbackRate.value = this.tempo;
+    src.connect(this.pitch ?? this.gain);
+    src.start(at, offset / 1000);
+    src.onended = () => {
+      if (this.source === src) {
+        this.playing = false;
+        this.source = null;
+        this.onEnded?.();
+      }
+    };
+    if (old) {
+      old.onended = null; // the old source ending at the cue is not the song ending
+      try {
+        old.stop(at);
+      } catch {
+        /* not started */
+      }
+    }
+    this.pending = { src, at, offsetMs: offset, old };
+    this.applyPitch();
+    return at;
+  }
+
+  /** A cued jump whose instant has passed becomes the current source. */
+  private settle(): void {
+    const p = this.pending;
+    if (!p || this.ctx.currentTime < p.at) return;
+    this.pending = null;
+    p.old?.disconnect();
+    this.source = p.src;
+    this.startAt = p.at;
+    this.startOffsetMs = p.offsetMs;
+    this.playing = true;
+  }
+
   /** Current position on the track timeline, ms (clamped to duration). Valid while playing or paused. */
   positionMs(): number {
+    this.settle();
     if (!this.playing) return this.startOffsetMs;
     const elapsed = Math.max(0, this.ctx.currentTime - this.startAt);
     return Math.min(this.durationMs, this.startOffsetMs + elapsed * this.tempo * 1000);
   }
 
+  /** The position the track will have (or had) at a context time, on the current (pre-cue) schedule. */
+  positionAt(ctxTime: number): number {
+    this.settle();
+    if (!this.playing) return this.startOffsetMs;
+    return Math.min(this.durationMs, this.startOffsetMs + Math.max(0, ctxTime - this.startAt) * this.tempo * 1000);
+  }
+
   /** Context time the track's position 0 corresponds to (for recorder alignment). */
   originCtxTime(): number {
+    this.settle();
     return this.startAt - this.startOffsetMs / 1000 / this.tempo;
   }
 
   pause(): void {
+    this.settle();
     const pos = this.positionMs();
     this.stop(false);
     this.startOffsetMs = pos;
@@ -124,6 +188,17 @@ export class BackingPlayer {
   }
 
   stop(reset = true): void {
+    if (this.pending) {
+      const p = this.pending;
+      this.pending = null;
+      p.src.onended = null;
+      try {
+        p.src.stop();
+      } catch {
+        /* not started */
+      }
+      p.src.disconnect();
+    }
     if (this.source) {
       const s = this.source;
       this.source = null;

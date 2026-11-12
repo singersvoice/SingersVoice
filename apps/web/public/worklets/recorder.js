@@ -9,6 +9,10 @@
 // 'pause' / 'resume' carry an audio-clock time: frames are dropped from `at` until the
 // resume instant, so the recording stays on the backing track's timeline across a pause
 // (sample-accurate when `at` matches the player's own pause/resume times).
+// 'seek' carries an audio-clock time and a frame delta: at `at` the song jumped on its own
+// timeline — forward, the main thread is told to insert that many silent frames ('gap');
+// backward, to keep only the frames up to the new position ('truncate'), which the singing
+// that follows replaces. Either way the take stays on the track timeline.
 
 class SvRecorderProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -16,6 +20,7 @@ class SvRecorderProcessor extends AudioWorkletProcessor {
     this.recording = false;
     this.pauseAt = Infinity;
     this.resumeAt = Infinity;
+    this.seeks = [];
     this.chunkSize = 4096;
     this.chunk = new Float32Array(this.chunkSize);
     this.fill = 0;
@@ -31,11 +36,15 @@ class SvRecorderProcessor extends AudioWorkletProcessor {
         this.fill = 0;
         this.pauseAt = Infinity;
         this.resumeAt = Infinity;
+        this.seeks = [];
       } else if (msg.type === 'pause') {
         this.pauseAt = typeof msg.at === 'number' ? msg.at : currentTime;
         this.resumeAt = Infinity;
       } else if (msg.type === 'resume') {
         this.resumeAt = typeof msg.at === 'number' ? msg.at : currentTime;
+      } else if (msg.type === 'seek') {
+        this.seeks.push({ at: typeof msg.at === 'number' ? msg.at : currentTime, frames: msg.frames | 0 });
+        this.seeks.sort((a, b) => a.at - b.at);
       } else if (msg.type === 'stop') {
         this.recording = false;
         if (this.fill > 0) {
@@ -96,6 +105,30 @@ class SvRecorderProcessor extends AudioWorkletProcessor {
         this.resumeAt = Infinity;
       }
     }
+    // A jump on the track timeline inside this block: capture up to its instant, apply it, then the rest.
+    let seekAtFrame = -1;
+    let seekFrames = 0;
+    if (this.seeks.length && this.seeks[0].at < blockEnd) {
+      const sk = this.seeks.shift();
+      seekAtFrame = Math.max(from, Math.min(to, Math.round((sk.at - blockStart) * sampleRate)));
+      seekFrames = sk.frames;
+    }
+    this.capture(src, from, seekAtFrame < 0 ? to : seekAtFrame);
+    if (seekAtFrame >= 0) {
+      this.flush();
+      if (seekFrames > 0) {
+        this.port.postMessage({ type: 'gap', frames: seekFrames });
+        this.framesCaptured += seekFrames;
+      } else if (seekFrames < 0) {
+        this.framesCaptured = Math.max(0, this.framesCaptured + seekFrames);
+        this.port.postMessage({ type: 'truncate', frames: this.framesCaptured });
+      }
+      this.capture(src, seekAtFrame, to);
+    }
+    return true;
+  }
+
+  capture(src, from, to) {
     let i = from;
     while (i < to) {
       const n = Math.min(to - i, this.chunkSize - this.fill);
@@ -110,7 +143,13 @@ class SvRecorderProcessor extends AudioWorkletProcessor {
         this.fill = 0;
       }
     }
-    return true;
+  }
+
+  flush() {
+    if (this.fill > 0) {
+      this.port.postMessage({ type: 'chunk', data: this.chunk.slice(0, this.fill) });
+      this.fill = 0;
+    }
   }
 }
 

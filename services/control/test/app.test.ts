@@ -119,9 +119,9 @@ describe('sv-control API', () => {
     expect(started.meet.state).toBe('countdown');
     expect(started.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(4000);
 
-    // host transport controls (bob is a performer, not the host)
-    expect((await app.request(`/meets/${meet.meetId}/pause`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken }) })).status).toBe(403);
-    const paused = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/pause`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 0 }) }));
+    // transport: the host and any singer on stage pause / resume / seek (the song belongs to the stage); restart is the host's
+    expect((await app.request(`/meets/${meet.meetId}/restart`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, fromMs: 0 }) })).status).toBe(403);
+    const paused = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/pause`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, leadMs: 0 }) }));
     // Pausing during the countdown is cued at the kickstart itself: everyone stops at position 0.
     expect(paused.meet.playback).toMatchObject({ state: 'playing', pauseAtEpochMs: started.meet.kickstartEpochMs, pausedAtMs: 0 });
     expect(paused.meet.state).toBe('live');
@@ -130,6 +130,17 @@ describe('sv-control API', () => {
     expect(resumed.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(1000);
     const restarted = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/restart`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 2000, fromMs: 0 }) }));
     expect(restarted.meet.playback).toMatchObject({ state: 'playing', offsetMs: 0, epoch: 3 });
+    // A seek while playing is cued like a kickstart (everyone jumps at the same instant); by a singer on stage too.
+    const sought = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/seek`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, leadMs: 2000, toMs: 45000 }) }));
+    expect(sought.meet.playback).toMatchObject({ state: 'playing', offsetMs: 45000, pausedAtMs: 45000, epoch: 4 });
+    expect(sought.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(1000);
+    // A seek while paused moves the paused position for everyone and bumps the epoch (devices re-seek), no kickstart.
+    await app.request(`/meets/${meet.meetId}/pause`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 0 }) });
+    const pausedSeekRes = await app.request(`/meets/${meet.meetId}/seek`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, toMs: 30000 }) });
+    // (the pause is still cued at the coming kickstart here, so the seek waits: 409 'pausing'; once paused it moves the position)
+    expect([200, 409]).toContain(pausedSeekRes.status);
+    if (pausedSeekRes.status === 200) expect((await json<MeetSnapshot>(pausedSeekRes)).meet.playback.pausedAtMs).toBe(30000);
+    else expect((await json<{ code: string }>(pausedSeekRes)).code).toBe('pausing');
     // Song over (host): back to the lobby with the next song up; the stage stays as it was.
     expect((await app.request(`/meets/${meet.meetId}/songs/next`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken }) })).status).toBe(403);
     const over = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/songs/next`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken }) }));

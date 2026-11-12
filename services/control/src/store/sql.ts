@@ -109,9 +109,10 @@ export class SqlStore {
   async listCatalog(q: string, offset: number, limit: number, ownerUserId?: string): Promise<{ items: CatalogTrack[]; total: number }> {
     const where: string[] = [];
     const params: unknown[] = [];
-    if (q) {
-      where.push('search LIKE ?');
-      params.push(`%${q.toLowerCase()}%`);
+    // Every word of the query must appear (in the title, artist, genre, language or owner), in any order.
+    for (const word of q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8)) {
+      where.push("search LIKE ? ESCAPE '\\'");
+      params.push(`%${word.replace(/[%_\\]/g, (c) => `\\${c}`)}%`);
     }
     if (ownerUserId) {
       where.push('owner_user_id=?');

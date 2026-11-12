@@ -103,13 +103,20 @@ once the meet is back in the lobby. The full walk-through is in [LIVE_MEET_FLOW.
 3. Every performer's device converts that instant to its own AudioContext time and schedules the backing
    track (and the sample-accurate recorder) there. Nobody waits for anybody; network jitter only affects
    when a device *learns* the instant, not when it plays.
-4. **Pause / resume / restart** are host-only and cued the same way (`Meet.playback`): a pause takes
-   effect at `pauseAtEpochMs = now + 3 s`, so every device freezes at the same track position
-   (`pausedAtMs`); resume and restart set a new `kickstartEpochMs` with `offsetMs` = the position to
-   continue from and bump `playback.epoch`, which is what clients key their re-scheduling on. The
-   recorder worklet drops frames between the pause and resume instants, so a personal take stays on the
-   track timeline across any number of pauses. Performers poll every 1.5 s while live; the audience's
-   lyrics and "listen" player follow `playbackPositionMs()`.
+4. **Pause / resume / seek / restart** are cued the same way (`Meet.playback`), whoever asks: a pause
+   takes effect at `pauseAtEpochMs = now + 3 s`, so every device freezes at the same track position
+   (`pausedAtMs`); resume, seek and restart set a new `kickstartEpochMs` with `offsetMs` = the position to
+   continue from and bump `playback.epoch`, which is what clients key their re-scheduling on. The host
+   and any singer on stage may pause, resume and seek (the song belongs to the stage); restart from the
+   top is the host's. A seek while playing is a **cued jump**: every device keeps playing and switches
+   to the new position at the shared instant (`BackingPlayer.cue`, a second buffer source scheduled
+   sample-accurately against the first); a seek while paused moves the paused position for everyone.
+   The recorder worklet drops frames between the pause and resume instants and, at a jump, inserts
+   that much silence (forward) or keeps only the frames before the new position (backward: the part sung
+   again replaces the old one), so a personal take stays on the track timeline across any number of
+   pauses and jumps; its alignment is anchored to the timeline origin captured at the first cue. The
+   show recording runs on in wall time (the song simply jumps in it). Performers poll every 1.5 s while
+   live; the audience's lyrics and "listen" player follow `playbackPositionMs()`.
 
 ## The virtual stage
 

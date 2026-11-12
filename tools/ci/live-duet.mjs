@@ -313,6 +313,16 @@ try {
   await wait(7000);
   const tr = await alice.page.locator('.timeline .mono').first().innerText();
   check(secs(tr) < 6, `restart took everyone back to the top (${tr})`);
+  // Any singer on stage may move the song: the guest jumps it back to 0:02 — cued, so both devices jump at the same
+  // instant (the song keeps playing until then), and every take follows on the track timeline.
+  await bob.page.locator('.sing .timeline.seekable input[type="range"]').fill('2000');
+  await bob.page.locator('.sing .stagebar', { hasText: /jumping to 0:02/ }).waitFor({ timeout: 5000 }).catch(() => undefined);
+  await wait(5500);
+  const ta4 = await alice.page.locator('.timeline .mono').first().innerText();
+  const tb4 = await bob.page.locator('.timeline .mono').first().innerText();
+  console.log('after the seek:', { alice: ta4, bob: tb4 });
+  check(secs(ta4) >= 2 && secs(ta4) <= 9 && secs(tb4) >= 2 && secs(tb4) <= 9 && Math.abs(secs(ta4) - secs(tb4)) <= 1, `a singer's seek moved the song back for everyone, in sync (${ta4} / ${tb4})`);
+  check(!/jumping to/.test(await bob.page.locator('.sing .stagebar').innerText()), 'the cued jump landed (no "jumping to…" left)');
   // Host pauses: cued 3 s ahead; both freeze at the same position.
   await alice.page.getByRole('button', { name: /Pause for everyone/ }).click();
   await wait(5500);
@@ -324,7 +334,7 @@ try {
   console.log('paused:', { alice: [ta1, ta2], bob: [tb1, tb2] });
   check(ta1 === ta2 && tb1 === tb2, 'the timeline freezes on both devices after the cued pause');
   check(ta1 === tb1, `both devices froze at the same position (${ta1} / ${tb1})`);
-  check(/paused by the host/.test(await bob.page.locator('.sing .stagebar').innerText()), 'the guest sees "paused by the host"');
+  check(/\bpaused\b/.test(await bob.page.locator('.sing .stagebar').innerText()), 'the guest sees "paused"');
   await bob.page.screenshot({ path: `${out}/duet-bob-paused.png` });
   check(await carol.page.locator('.show-note', { hasText: 'Paused by the host' }).isVisible(), 'the show view shows the pause');
   // Resume: cued 4 s ahead.
@@ -364,10 +374,17 @@ try {
   await alice.page.getByRole('button', { name: /Start the song/ }).click();
   await alice.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
   await bob.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
-  await wait(9500);
-  const a3 = await stageInfo(alice.page);
-  const b3 = await stageInfo(bob.page);
-  check(a3.performers === '3' && b3.performers === '3' && /2\/2 video linked/.test(a3.text) && /2\/2 video linked/.test(b3.text), `the second song runs on the same stage, now with three singers (${a3.text} / ${b3.text})`);
+  await wait(6000);
+  // The third link may take a heal round under load: wait for both stages to report 2/2 rather than a fixed moment.
+  const t3 = Date.now();
+  let a3 = await stageInfo(alice.page);
+  let b3 = await stageInfo(bob.page);
+  while (Date.now() - t3 < 30000 && !(/2\/2 video linked/.test(a3.text) && /2\/2 video linked/.test(b3.text))) {
+    await wait(1000);
+    a3 = await stageInfo(alice.page);
+    b3 = await stageInfo(bob.page);
+  }
+  check(a3.performers === '3' && b3.performers === '3' && /2\/2 video linked/.test(a3.text) && /2\/2 video linked/.test(b3.text), `the second song runs on the same stage, now with three singers (${a3.text} / ${b3.text}, ${Math.round((Date.now() - t3) / 1000)} s)`);
   check(/Up next|Now singing/.test(await carol.page.locator('.show-top').innerText().catch(() => '')) || (await carol.page.locator('.show[data-state="live"]').isVisible()), 'the show view follows the second song');
   // The set list is at hand on the live stage: the drawer shows what is playing and lets anyone add a song.
   await bob.page.getByRole('button', { name: 'Set list' }).click();

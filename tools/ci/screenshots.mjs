@@ -107,6 +107,9 @@ for (const m of matrix) {
       await wait(400);
       await shot('14-sing-fx');
       await page.keyboard.press('Escape');
+      // Move back in the song (the take follows on the track timeline), then finish.
+      await page.locator('.sing .timeline.seekable input[type="range"]').fill('3000');
+      await wait(1200);
       await page.getByRole('button', { name: 'Finish' }).click();
       await page.getByText('Your take').waitFor({ timeout: 30000 });
       await wait(1500);

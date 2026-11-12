@@ -93,10 +93,12 @@ export interface StartMeetRequest {
 
 export interface PlaybackRequest {
   resumeToken: string;
-  /** resume/restart: shared lead before the new kickstart (ms). */
+  /** resume/restart/seek: shared lead before the new kickstart (ms). */
   leadMs?: number;
   /** restart: position to restart from (ms), default 0. */
   fromMs?: number;
+  /** seek: the position to jump to (ms) — cued while playing (everyone jumps at the same instant), immediate while paused. */
+  toMs?: number;
 }
 
 export interface SignalRequest {
@@ -164,6 +166,7 @@ export interface Routes {
   'POST /meets/:id/pause': { req: PlaybackRequest; res: MeetSnapshot };
   'POST /meets/:id/resume': { req: PlaybackRequest; res: MeetSnapshot };
   'POST /meets/:id/restart': { req: PlaybackRequest; res: MeetSnapshot };
+  'POST /meets/:id/seek': { req: PlaybackRequest; res: MeetSnapshot };
   /** `gone`: the addressee left the meet (no error — the sender just forgets the link). */
   'POST /meets/:id/signal': { req: SignalRequest; res: { seq: number; gone?: boolean } };
   'POST /meets/:id/signals': { req: { resumeToken: string; since: number }; res: { signals: MeetSignal[]; serverEpochMs: number } };

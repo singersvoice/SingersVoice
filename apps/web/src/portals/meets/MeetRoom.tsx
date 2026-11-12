@@ -30,9 +30,10 @@ import { privileged } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
+import { SeekBar } from '../../components/SeekBar.tsx';
 import { saveLiveTake } from './liveTake.ts';
 import { MeetSession } from './meetSession.ts';
-import { loadMeetTrack, type MeetTrack } from './trackSource.ts';
+import { keepMeetTrack, loadMeetTrack, type MeetTrack } from './trackSource.ts';
 
 const LEAD_MS = 8000;
 
@@ -83,6 +84,10 @@ export function MeetRoom(props: { id: string }) {
       cancelled = true;
     };
   }, [trackKey]);
+  // A singer on stage keeps what the meet sings: a shared song lands in their own library (Drive) in the background.
+  useEffect(() => {
+    if (track?.source === 'catalog' && you?.slot != null) keepMeetTrack(track);
+  }, [track, you?.slot]);
 
   /** User-gesture pre-flight: audio context, mic (+camera on iOS), decode the track. Then "ready". */
   const prepare = async () => {
@@ -632,6 +637,12 @@ function LiveStage(props: {
   const [songsOpen, setSongsOpen] = useState(false);
   /** Who was on stage during this take (the manifest and the meet's performance name them). */
   const singersRef = useRef<{ slot: number; displayName: string; userId?: string }[]>([]);
+  /** While paused: the track position the vocal recording's end corresponds to (a resume elsewhere jumps the take there). */
+  const recPos = useRef(0);
+  /** The take's timeline origin (context time of track position 0 at the first cue): pauses and jumps never move it. */
+  const takeOrigin = useRef(0);
+  /** A seek on its way: where the song is about to jump (cleared when the cue lands). */
+  const [seekTarget, setSeekTarget] = useState<number | null>(null);
   const raf = useRef(0);
   const scheduledEpoch = useRef(0);
   const pausedLocally = useRef(false);
@@ -683,22 +694,35 @@ function LiveStage(props: {
     if (firstCue) {
       void engine.recorder?.start();
       player.play(t0, offsetMs);
+      takeOrigin.current = player.originCtxTime();
+      recPos.current = offsetMs;
       // The show — the stage with everyone and the whole mix — records from the kickstart.
       show.start(engine, t0);
       setStarted(true);
       props.onSinging(true);
+    } else if (player.playing && !pausedLocally.current) {
+      // A jump while playing (a seek, a restart from the top): the song keeps playing and jumps at the cued
+      // instant — the same instant on every device — and the take follows it on the track timeline.
+      const delta = offsetMs - player.positionAt(t0);
+      player.cue(t0, offsetMs);
+      if (Math.abs(delta) > 30) engine.recorder?.seek(t0, delta);
     } else {
-      // Resume / restart: the recorder keeps the take on the track timeline by dropping the pause.
+      // Resume (from our pause — or a pause we only learned of late): the recorder kept the take on the
+      // track timeline by dropping the pause; a seek made while paused moves it there too.
       clearTimeout(pauseTimer.current);
       if (!pausedLocally.current) {
+        recPos.current = player.positionAt(engine.ctx.currentTime);
         engine.recorder?.pause(engine.ctx.currentTime);
         player.pause();
       }
       pausedLocally.current = false;
       player.play(t0, offsetMs);
       engine.recorder?.resume(t0);
+      const delta = offsetMs - recPos.current;
+      if (Math.abs(delta) > 30) engine.recorder?.seek(t0, delta);
       show.resume();
     }
+    setSeekTarget(null);
     player.onEnded = () => void finish();
     cancelAnimationFrame(raf.current);
     const tick = () => {
@@ -726,15 +750,22 @@ function LiveStage(props: {
       if (pausedLocally.current) return;
       pausedLocally.current = true;
       if (player.playing) {
+        recPos.current = player.positionAt(ctxAt);
         player.pause();
         engine.recorder?.pause(ctxAt);
-      }
+      } else recPos.current = player.positionMs();
       player.seek(pb.pausedAtMs);
       setTMs(pb.pausedAtMs);
       show.pause();
     };
     if (pb.state === 'paused') {
-      doPause(engine.ctx.currentTime);
+      if (!pausedLocally.current) doPause(engine.ctx.currentTime);
+      else if (Math.abs(player.positionMs() - pb.pausedAtMs) > 1) {
+        // A seek while paused: everyone's paused position moves; the take jumps there on resume.
+        player.seek(pb.pausedAtMs);
+        setTMs(pb.pausedAtMs);
+      }
+      setSeekTarget(null);
       return;
     }
     if (pb.state === 'playing' && pauseAt !== null) {
@@ -766,7 +797,7 @@ function LiveStage(props: {
     cancelAnimationFrame(raf.current);
     try {
       const player = engine.player!;
-      const origin = player.originCtxTime();
+      const origin = takeOrigin.current || player.originCtxTime();
       const durationMs = Math.round(player.positionMs());
       player.onEnded = null;
       player.stop();
@@ -812,9 +843,21 @@ function LiveStage(props: {
     try {
       if (what === 'pause') await session.pause(3000);
       else if (what === 'resume') await session.resume(4000);
-      else await session.restart(5000, 0);
+      else await session.restart(3000, 0);
     } catch (e) {
       toast(errorText(e), 'error');
+    }
+  };
+  /** Move the song back or forth for everyone: cued, so every device jumps at the same instant (the take follows). */
+  const seek = async (ms: number) => {
+    if (!started) return;
+    const to = Math.max(0, Math.min(track.durationMs, ms));
+    setSeekTarget(to);
+    try {
+      await session.seek(to, paused ? 0 : 3000);
+    } catch (e) {
+      setSeekTarget(null);
+      toast(errorText(e), 'warn');
     }
   };
 
@@ -834,8 +877,9 @@ function LiveStage(props: {
           </span>
           {camOn && blend === 'loading' && <span class="chip">blending you into the stage…</span>}
           {camOn && blend === 'oval' && app.cutout && <span class="chip warn">soft-focus mode</span>}
-          {paused && <span class="chip warn">paused by the host</span>}
+          {paused && <span class="chip warn">paused</span>}
           {!paused && pauseAt !== null && <span class="chip warn">pausing…</span>}
+          {seekTarget !== null && !paused && <span class="chip warn">jumping to {formatMs(seekTarget)}…</span>}
           {host && meet.requests.length > 0 && <span class="chip">wait list · {meet.requests.length} — seated when the song is over</span>}
           <SaveStatus compact />
         </section>
@@ -854,13 +898,7 @@ function LiveStage(props: {
         {app.showCueDeck && track.singerCount > 1 && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} />}
         <section class="controls">
           <PresetChips value={audio} onChange={updateAudio} />
-          <div class="timeline">
-            <span class="mono">{formatMs(tMs)}</span>
-            <div class="track">
-              <i style={{ width: `${track.durationMs ? Math.min(100, (tMs / track.durationMs) * 100) : 0}%` }} />
-            </div>
-            <span class="mono">{formatMs(track.durationMs)}</span>
-          </div>
+          <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={started && props.prepared ? (ms) => void seek(ms) : undefined} pending={seekTarget} disabled={countdown !== null} />
           <div class="main">
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
               {app.cameraOn ? <IcCamera /> : <IcCameraOff />}
@@ -877,16 +915,15 @@ function LiveStage(props: {
               </button>
             ) : started ? (
               <>
-                {host &&
-                  (paused ? (
-                    <button class="btn big primary" aria-label="Resume for everyone" onClick={() => void transport('resume')}>
-                      <IcPlay /> Resume
-                    </button>
-                  ) : (
-                    <button class="btn big" aria-label="Pause for everyone" disabled={countdown !== null || pauseAt !== null} onClick={() => void transport('pause')}>
-                      <IcPause /> {pauseAt !== null ? 'Pausing…' : 'Pause'}
-                    </button>
-                  ))}
+                {paused ? (
+                  <button class="btn big primary" aria-label="Resume for everyone" onClick={() => void transport('resume')}>
+                    <IcPlay /> Resume
+                  </button>
+                ) : (
+                  <button class="btn big" aria-label="Pause for everyone" disabled={countdown !== null || pauseAt !== null} onClick={() => void transport('pause')}>
+                    <IcPause /> {pauseAt !== null ? 'Pausing…' : 'Pause'}
+                  </button>
+                )}
                 {host && (
                   <button class="btn icon" aria-label="Restart the song for everyone" title="Restart from the top" onClick={() => void transport('restart')}>
                     <IcSkipBack />
