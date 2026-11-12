@@ -1,10 +1,11 @@
 /**
  * Meet room (/meet/:id): lobby with stage slots + chat, the clock-synced live stage for
  * performers (GMT kickstart), the audience view, and the ended/expired summary.
- * Every take on stage is a personal session: recorded locally, kept in the singer's own Drive —
- * its video being the show (the stage with everyone on it and the whole mix, as Publisher mode
- * shows it). The host's take of each song is the meet's saved performance: kept at once, shared
- * with everyone who was in the meet.
+ * Every take on stage is a personal session: recorded locally and saved by itself, in the
+ * background (`liveTake.ts`), to the singer's own Drive — its video being the show (the stage
+ * with everyone on it and the whole mix, as Publisher mode shows it) — while the singer stays on
+ * stage for the next song. The host's take of each song is the meet's saved performance, shared
+ * with everyone who was in the meet. Nothing here ever waits for a review or an approval.
  */
 import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, type Meet, type Participant, type SingerSlot, type SongPick, type StageSlot } from '@singersvoice/protocol';
 import { activeRoomInfo } from './activeRoom.ts';
@@ -19,16 +20,17 @@ import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcMusic, I
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Progress, Seg, Spinner, Switch } from '../../components/ui.tsx';
-import { api, clock, controlConfigured, serverNow } from '../../lib/api.ts';
+import { clock, controlConfigured, serverNow } from '../../lib/api.ts';
 import { shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
 import { isIOS, keepAwake } from '../../lib/platform.ts';
 import type { TakeResult } from '../../lib/takes.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { privileged, withProvider } from '../../state/session.ts';
+import { privileged } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
-import { Review } from '../studio/Sing.tsx';
+import { SaveStatus } from '../../components/SaveStatus.tsx';
+import { saveLiveTake } from './liveTake.ts';
 import { MeetSession } from './meetSession.ts';
 import { loadMeetTrack, type MeetTrack } from './trackSource.ts';
 
@@ -43,8 +45,6 @@ export function MeetRoom(props: { id: string }) {
   /** Which song is decoded in the player (a karaoke event is many songs: each one is loaded when it comes up). */
   const loadedKey = useRef('');
   const camera = useMemo(() => new Camera(), []);
-  /** A finished take with the song it was sung to (the set list may already have moved on) and who was on stage. */
-  const [take, setTake] = useState<{ take: TakeResult; loaded: NonNullable<MeetTrack['loaded']>; singers: { slot: number; displayName: string; userId?: string }[] } | null>(null);
   const snap = session.snapshot.value;
   const you = session.you.value;
   const meet = snap?.meet ?? null;
@@ -160,12 +160,10 @@ export function MeetRoom(props: { id: string }) {
       preparing={preparing}
       onPrepare={prepare}
       participants={snap?.participants ?? []}
-      take={take}
-      onTake={(t, loaded, singers) => setTake({ take: t, loaded, singers })}
-      onAgain={() => {
-        // Back to the stage: still a performer, camera on — the next song may already be up.
-        setTake(null);
+      onTake={(t, loaded, singers) => {
+        // The take saves itself in the background; the singer is already back on the stage (ready again for the next song, or to rejoin this one).
         setPrepared(false);
+        saveLiveTake({ take: t, loaded, slot: you.slot ?? 1, meet: { meetId: meet.meetId, title: meet.title, hostName: meet.hostName }, host: you.userId === meet.hostUserId, singers, resumeToken: session.resumeToken || undefined });
       }}
     />
   );
@@ -183,12 +181,9 @@ function Room(props: {
   preparing: boolean;
   onPrepare: () => Promise<void>;
   participants: Participant[];
-  take: { take: TakeResult; loaded: NonNullable<MeetTrack['loaded']>; singers: { slot: number; displayName: string; userId?: string }[] } | null;
   onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>, singers: { slot: number; displayName: string; userId?: string }[]) => void;
-  onAgain: () => void;
 }) {
   const { session, meet, you, track, camera, engine } = props;
-  const host = you.userId === meet.hostUserId;
   const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, level: () => engine?.recorder?.level.value ?? 0, engine });
   const onStage = you.slot !== null;
   const live = meet.state === 'countdown' || meet.state === 'live';
@@ -197,56 +192,6 @@ function Room(props: {
   const [singing, setSinging] = useState(false);
   const liveLoaded = useRef<NonNullable<MeetTrack['loaded']> | null>(null);
   if (live && track?.loaded) liveLoaded.current = track.loaded;
-
-  if (props.take) {
-    const t = props.take;
-    // The host's take is the meet's performance: registered with the meet and shared with everyone in it.
-    const saved = async (s: { performanceId: string; link?: string; videoLink?: string; state: 'temp' | 'kept' }) => {
-      void session.registerRecording(s.performanceId, s.link ?? null, t.take.durationMs).catch(() => undefined);
-      if (!host || !t.take.video) return;
-      try {
-        let link = s.link ?? null;
-        let videoLink = s.videoLink ?? null;
-        try {
-          const shared = await withProvider((p) => p.sharePerformance(s.performanceId, { type: 'anyone' }));
-          link = shared.link;
-          videoLink = shared.videoLink ?? videoLink;
-        } catch {
-          /* no Drive (local storage): listed for the meet without a link */
-        }
-        const r = await session.registerPerformance({
-          performanceId: s.performanceId,
-          songTitle: t.loaded.track.title,
-          trackId: t.loaded.track.trackId,
-          singers: t.singers,
-          link,
-          videoLink,
-          durationMs: t.take.durationMs,
-          bytes: t.take.video.size,
-          mimeType: t.take.video.type,
-        });
-        for (const email of r.shareWith) void withProvider((p) => p.sharePerformance(s.performanceId, { type: 'user', email })).catch(() => undefined);
-        toast(`Saved as the meet's performance — shared with ${r.shareWith.length ? `${r.shareWith.length} other ${r.shareWith.length === 1 ? 'singer' : 'people'} in the meet` : 'everyone in the meet'}`, 'ok', 6000);
-      } catch (e) {
-        toast(`Saved, but not shared with the meet: ${errorText(e)}`, 'warn', 8000);
-      }
-    };
-    return (
-      <Review
-        take={t.take}
-        loaded={t.loaded}
-        slot={(you.slot ?? 1) as SingerSlot}
-        mode="live"
-        meetId={meet.meetId}
-        meet={{ title: meet.title, hostName: meet.hostName, singers: t.singers }}
-        autoKeep={host && Boolean(t.take.video)}
-        againLabel="Back to the stage"
-        onSaved={(s) => void saved(s)}
-        onDiscarded={(id) => void (host && session.unregisterPerformance(id).catch(() => undefined))}
-        onAgain={props.onAgain}
-      />
-    );
-  }
 
   if ((live || singing) && onStage && liveLoaded.current && engine) return <LiveStage session={session} meet={meet} you={you} loaded={liveLoaded.current} engine={engine} camera={camera} stage={stage} track={track} prepared={props.prepared} onPrepare={props.onPrepare} onTake={props.onTake} onSinging={setSinging} participants={props.participants} />;
 
@@ -416,6 +361,7 @@ function Lobby(props: {
               <div class={msLeft < 60_000 ? 'chip warn' : ''}>closes in {formatMs(msLeft)} without activity</div>
             </div>
           </div>
+          <SaveStatus />
         </section>
 
         {live && (
@@ -891,6 +837,7 @@ function LiveStage(props: {
           {paused && <span class="chip warn">paused by the host</span>}
           {!paused && pauseAt !== null && <span class="chip warn">pausing…</span>}
           {host && meet.requests.length > 0 && <span class="chip">wait list · {meet.requests.length} — seated when the song is over</span>}
+          <SaveStatus compact />
         </section>
         <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} countdown={countdown} showWho={track.singerCount > 1} title={track.title} />
         {songsOpen && (
@@ -995,7 +942,7 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
           {!shows.length && <div class="muted small">No song was recorded in this meet.</div>}
           <div class="list">
             {shows.map((p) => (
-              <div class="item" key={p.performanceId} data-performance={p.performanceId}>
+              <div class="item wide-actions" key={p.performanceId} data-performance={p.performanceId}>
                 <div class="thumb">
                   <IcPlay size={18} />
                 </div>
@@ -1005,14 +952,16 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
                     {new Date(p.createdAt).toLocaleString()} · {formatMs(p.durationMs)} · {p.singers.map((x) => x.displayName.split(' ')[0]).join(', ') || p.hostName}
                   </div>
                 </div>
-                {(p.videoLink ?? p.link) && (
-                  <a class="btn sm" href={p.videoLink ?? p.link ?? '#'} target="_blank" rel="noopener">
-                    Watch
-                  </a>
-                )}
-                <button class="btn sm" onClick={() => void shareShow(p)}>
-                  <IcShare size={14} /> Share
-                </button>
+                <div class="actions">
+                  {(p.videoLink ?? p.link) && (
+                    <a class="btn sm" href={p.videoLink ?? p.link ?? '#'} target="_blank" rel="noopener">
+                      Watch
+                    </a>
+                  )}
+                  <button class="btn sm" onClick={() => void shareShow(p)}>
+                    <IcShare size={14} /> Share
+                  </button>
+                </div>
               </div>
             ))}
           </div>

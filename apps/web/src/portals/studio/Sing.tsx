@@ -544,19 +544,10 @@ export function Review(props: {
   loaded: LoadedTrack;
   slot: SingerSlot;
   onAgain: () => void;
-  /** 'live' takes are filed under Performances/Live and reported to the meet. */
+  /** 'live' takes are filed under Performances/Live (a live stage saves its takes by itself; this review is the Studio's). */
   mode?: 'offline' | 'live';
   meetId?: string | null;
-  /** The meet this was sung in: filed with the manifest so a saved show says who sang it where. */
-  meet?: { title: string; hostName: string; singers: { slot: number; displayName: string; userId?: string }[] };
-  /**
-   * The host's take of a meet song is the meet's saved performance: kept straight away (never
-   * Temp) and shared with everyone in the meet — `onSaved` registers it.
-   */
-  autoKeep?: boolean;
   onSaved?: (summary: { performanceId: string; link?: string; videoLink?: string; state: 'temp' | 'kept' }) => void;
-  /** The saved take was deleted from here (a registered performance is unregistered too). */
-  onDiscarded?: (performanceId: string) => void;
   againLabel?: string;
 }) {
   const { take, loaded } = props;
@@ -573,10 +564,9 @@ export function Review(props: {
 
   const alignMs = take.vocalOffsetMs - take.latencyCompMs + nudge; // vocal sample 0 sits here on the track timeline
 
-  // Auto-save as soon as the take exists (nothing is lost if the tab closes): Temp for a personal take,
-  // kept for the meet's performance.
+  // Auto-save to Temp as soon as the take exists (nothing is lost if the tab closes).
   useEffect(() => {
-    void saveTake(props.autoKeep ? 'kept' : 'temp');
+    void saveTake('temp');
     return () => stop();
   }, []);
 
@@ -641,14 +631,13 @@ export function Review(props: {
           meetId: props.meetId ?? null,
           performanceId: savedId ?? undefined,
           nudgeMs: nudge,
-          ...(props.meet ? { meetTitle: props.meet.title, hostName: props.meet.hostName, singers: props.meet.singers } : {}),
         });
         const s = await persistTake(manifest, take, (pr) => setSaving(pr));
         setSavedId(s.performanceId);
         props.onSaved?.({ performanceId: s.performanceId, link: s.link, videoLink: s.videoLink, state });
       }
       setSavedState(state);
-      if (state === 'kept' && !props.autoKeep) toast(`Kept in ${isDrive.value ? `Drive › SingersVoice › Performances › ${props.mode === 'live' ? 'Live' : 'Offline'}` : 'Performances'}`, 'ok', 5000);
+      if (state === 'kept') toast(`Kept in ${isDrive.value ? `Drive › SingersVoice › Performances › ${props.mode === 'live' ? 'Live' : 'Offline'}` : 'Performances'}`, 'ok', 5000);
     } catch (e) {
       toast(`Could not save the take: ${errorText(e)}`, 'error', 10000, { label: 'Retry', onClick: () => void saveTake(state) });
     } finally {
@@ -657,13 +646,10 @@ export function Review(props: {
   }
 
   const discard = async () => {
-    if (!confirm(props.autoKeep ? 'Delete this performance for everyone in the meet?' : 'Discard this take?')) return;
+    if (!confirm('Discard this take?')) return;
     stop();
     try {
-      if (savedId) {
-        await withProvider((p) => p.deletePerformance(savedId));
-        props.onDiscarded?.(savedId);
-      }
+      if (savedId) await withProvider((p) => p.deletePerformance(savedId));
     } catch (e) {
       toast(errorText(e), 'warn');
     }
@@ -680,13 +666,12 @@ export function Review(props: {
             {take.video && take.video.size ? ` · show video ${(take.video.size / 1048576).toFixed(1)} MB` : ''}
           </div>
           {savedState === 'temp' && <span class="chip warn">In Temp — auto-deletes in 7 days unless kept</span>}
-          {savedState === 'kept' && !props.autoKeep && <span class="chip ok">Kept</span>}
-          {savedState === 'kept' && props.autoKeep && <span class="chip ok">Saved as this meet's performance — shared with everyone in the meet</span>}
+          {savedState === 'kept' && <span class="chip ok">Kept</span>}
           {saving && <Progress fraction={saving.fraction} label={saving.label} />}
         </div>
         <div class="perf-player">
           {videoUrl && <video ref={videoRef} src={videoUrl} muted playsInline />}
-          {videoUrl && <div class="small faint">The video is the show itself — the stage with everyone on it, as Publisher mode shows it, with the whole mix as its sound.</div>}
+          {videoUrl && <div class="small faint">The video is the show itself — your cut-out on the stage, as Publisher mode shows it, with the mix as its sound.</div>}
           <div class="row">
             <button class="btn primary" onClick={() => (playing ? stop() : void play())}>
               {playing ? <IcStop /> : <IcPlay />} {playing ? 'Stop' : 'Play mix'}
@@ -699,13 +684,11 @@ export function Review(props: {
           <div class="small faint">Auto-aligned by the audio clock (offset {take.vocalOffsetMs} ms, latency comp {take.latencyCompMs} ms). Nudge if your voice lands early/late.</div>
         </div>
         <div class="grid-2">
-          {!props.autoKeep && (
-            <button class="btn accent lg" disabled={saving !== null || savedState === 'kept'} onClick={() => void saveTake('kept')}>
-              Keep
-            </button>
-          )}
+          <button class="btn accent lg" disabled={saving !== null || savedState === 'kept'} onClick={() => void saveTake('kept')}>
+            Keep
+          </button>
           <button class="btn danger lg" disabled={saving !== null} onClick={() => void discard()}>
-            {props.autoKeep ? 'Delete this performance' : 'Discard'}
+            Discard
           </button>
         </div>
         <div class="row">

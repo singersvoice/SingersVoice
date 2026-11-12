@@ -93,16 +93,20 @@ everyone freezes at the same position), **Resume**, **Restart** (from the top), 
 which stops the song for everyone. A singer's **Stop** stops only their own take; the song goes on
 for the others. The backing track ending on the host's device ends the song for everyone too.
 
-**What gets saved.** Every take is a personal session: your vocal, sample-accurate on the track
-timeline across any number of pauses — and its video is **the show**: exactly the broadcast picture
-Publisher mode shows (every singer on stage over the stage background, huge, no lyrics), with the
-whole mix as its sound (the backing track, your vocal after FX, and every other singer's vocal,
-which travels over the links for the recording only — nobody ever hears it). It is reviewed on
-**Your take** (play, align, Keep → your Drive `Performances/Live`, or Discard). **The host's take of
-a song is the meet's saved performance**: kept at once (never Temp), registered with the meet and
-shared with everyone who was in it — anyone with its link can watch it. **Back to the stage**
-returns to the lobby — you are still on stage, the camera stays on, and the next song may already
-be up.
+**What gets saved — by itself.** Every take is a personal session: your vocal, sample-accurate on
+the track timeline across any number of pauses — and its video is **the show**: exactly the
+broadcast picture Publisher mode shows (every singer on stage over the stage background, huge, no
+lyrics), with the whole mix as its sound (the backing track, your vocal after FX, and every other
+singer's vocal, which travels over the links for the recording only — nobody ever hears it).
+When the song is over (or you stop your take) **nothing asks you anything**: you are straight
+back on the stage — the lobby with the next song up, or, after your own Stop mid-song, the live
+stage with *Join the song* — and the take saves itself in the background, kept at once in your
+Drive `Performances/Live` (never Temp). A chip in the room says *Saving "song"… · 40 %* → *Saved
+"song"* (→ Performances), or *Could not save — Retry*; the saver keeps going when you change page,
+leave the room or the meet ends, retries by itself, and the app never reloads under it. **The
+host's take of a song is the meet's saved performance**: registered with the meet and shared with
+everyone who was in it — anyone with its link can watch it. Pick the next song, sing, and on, until
+the singers drop off.
 
 ## 4 · The room — audience
 
@@ -126,7 +130,8 @@ Everything you ever sang, by date and name:
 | Section | What is in it |
 | --- | --- |
 | **Meet performances** | One saved show per song of every meet you hosted or were in: *meet · song*, date and time, length, who sang, who hosted. **Play** (your own: in the app) / **Watch** (the host's Drive link — anyone with it can watch), **Share** (copies the link, or the phone's share sheet). The host can remove one from the meet. |
-| **Your takes** | Your own takes (Studio, or your personal take of a meet song): Temp (7 days unless kept) or kept. Open one to play it, keep it, download it (vocal WAV, show video, manifest), **Share link** (shares the Drive folder anyone-with-the-link and copies the video's link), or delete it. |
+| **Your takes** | Your own takes: every take of a meet song (kept by itself) and Studio takes (Temp for 7 days unless kept). Open one to play it, keep it, download it (vocal WAV, show video, manifest), **Share link** (shares the Drive folder anyone-with-the-link and copies the video's link), or delete it. |
+| **Saving now** | Whatever the background saver is still on (with Retry when something is stuck). |
 
 In Drive: `SingersVoice/Performances/Live/<date time song (id)>/manifest.json + vocal.wav +
 video.webm` (the show), `Performances/Offline/…` for Studio takes, `Temp/…` until kept. A meet's

@@ -10,6 +10,7 @@
 import { formatMs, type MeetPerformance } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { IcDownload, IcPlay, IcShare, IcStop, IcTrash, IcUsers } from '../../components/icons.tsx';
+import { SaveStatus } from '../../components/SaveStatus.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Seg, Sheet, Spinner } from '../../components/ui.tsx';
 import { api, controlConfigured } from '../../lib/api.ts';
@@ -17,6 +18,7 @@ import { downloadBlob, shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
 import type { LoadedPerformance, PerformanceSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
+import { saveJobs } from '../../lib/saveQueue.ts';
 import { accountUserId, isDrive, withProvider } from '../../state/session.ts';
 
 export function Performances() {
@@ -56,9 +58,23 @@ export function Performances() {
     toast(r === 'copied' ? 'Link copied' : r === 'shared' ? 'Shared' : url, r === 'failed' ? 'warn' : 'ok');
   };
 
+  const saving = saveJobs.value;
+  // A save that just finished changes the lists: refresh when the saver goes quiet.
+  const doneCount = saving.filter((j) => j.state === 'done').length;
+  useEffect(() => {
+    if (doneCount) reload();
+  }, [doneCount]);
+
   return (
     <Page title="Performances">
       <div class="stack">
+        {saving.length > 0 && (
+          <section class="card stack pad-sm">
+            <h3 style="margin:0">Saving now</h3>
+            <div class="muted small">Takes save themselves after every song — you never have to wait for them.</div>
+            <SaveStatus />
+          </section>
+        )}
         <section class="card stack pad-sm">
           <div class="row between">
             <h3 style="margin:0">Meet performances</h3>
@@ -77,7 +93,7 @@ export function Performances() {
               const hosted = s.hostUserId === me;
               const url = s.videoLink ?? own?.videoLink ?? s.link ?? own?.link ?? null;
               return (
-                <div class="item" key={s.performanceId} data-show={s.performanceId}>
+                <div class="item wide-actions" key={s.performanceId} data-show={s.performanceId}>
                   <div class="thumb" style="background:linear-gradient(135deg,#3a1a6a,#7a3aa8)">
                     <IcUsers size={20} />
                   </div>
@@ -90,7 +106,7 @@ export function Performances() {
                       {hosted ? ' · you hosted' : ` · host ${s.hostName}`}
                     </div>
                   </div>
-                  <div class="row monitor-chips">
+                  <div class="actions">
                     {own ? (
                       <button class="btn sm primary" onClick={() => setOpen(own)}>
                         <IcPlay size={14} /> Play

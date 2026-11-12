@@ -675,20 +675,23 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json({ ok: true as const });
   });
 
+  // Takes save themselves in the background, after the song — by then the singer may have left the room
+  // (or the meet may be over), so a take is registered by account: anyone who was ever in the meet.
   app.post('/meets/:id/recordings', async (c) => {
     const { store } = c.get('deps');
+    const user = c.get('user');
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<RegisterRecordingRequest>;
     const meet = await store.getMeet(c.req.param('id'));
     if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
     const p = await participantFromBody(c, meet.meetId, body.resumeToken);
-    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (!p && !(await store.listMembers(meet.meetId)).some((m) => m.userId === user.userId)) return err(c, 403, 'not_participant', 'Join the meet first');
     if (!body.performanceId) return err(c, 400, 'bad_request', 'performanceId is required');
     const recording = {
       meetId: meet.meetId,
-      participantId: p.participantId,
-      userId: p.userId,
-      displayName: p.displayName,
-      slot: p.slot,
+      participantId: p?.participantId ?? '',
+      userId: user.userId,
+      displayName: p?.displayName ?? user.name,
+      slot: p?.slot ?? (typeof body.slot === 'number' ? Math.max(1, Math.min(10, body.slot)) : null),
       performanceId: String(body.performanceId),
       driveFolderLink: body.driveFolderLink ?? null,
       durationMs: Math.max(0, Number(body.durationMs) || 0),
@@ -704,11 +707,9 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<RegisterPerformanceRequest>;
     const meet = await store.getMeet(c.req.param('id'));
     if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
-    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
-    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
-    if (p.userId !== meet.hostUserId) return err(c, 403, 'not_host', 'Only the host registers the saved show');
-    if (!body.performanceId) return err(c, 400, 'bad_request', 'performanceId is required');
     const user = c.get('user');
+    if (user.userId !== meet.hostUserId) return err(c, 403, 'not_host', 'Only the host registers the saved show'); // by account: the upload may finish after the host left the room
+    if (!body.performanceId) return err(c, 400, 'bad_request', 'performanceId is required');
     const singers = Array.isArray(body.singers) ? body.singers.slice(0, 10).map((s) => ({ slot: Math.max(1, Math.min(10, Number(s?.slot) || 1)), displayName: String(s?.displayName ?? '').slice(0, 60), ...(s?.userId ? { userId: String(s.userId) } : {}) })) : [];
     const performance: MeetPerformance = {
       performanceId: String(body.performanceId),

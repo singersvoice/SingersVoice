@@ -113,10 +113,12 @@ export interface IceServer {
 }
 
 export interface RegisterRecordingRequest {
-  resumeToken: string;
+  /** Optional: a take registers after the song, by account, even once the singer left the room. */
+  resumeToken?: string;
   performanceId: string;
   driveFolderLink: string | null;
   durationMs: number;
+  slot?: number | null;
 }
 
 export interface WatchResponse {

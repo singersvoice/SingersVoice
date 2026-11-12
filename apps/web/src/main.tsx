@@ -2,6 +2,7 @@ import { effect } from '@preact/signals';
 import { render } from 'preact';
 import { registerSW } from 'virtual:pwa-register';
 import { App } from './app.tsx';
+import { savesPending } from './lib/saveQueue.ts';
 import { toast } from './lib/toast.ts';
 import { activeMeetId } from './portals/meets/activeRoom.ts';
 import './styles/tokens.css';
@@ -15,7 +16,8 @@ render(<App />, root);
 // Service worker: offline shell + updates. A new version is checked for every minute and applied by
 // itself the moment it is safe — never in the middle of a meet or a take (that would drop the singer
 // mid-song); then it waits with a toast and reloads once they leave.
-const busy = () => activeMeetId.value !== null || /\/studio\/sing\//.test(location.pathname) || /\/publishing\/show\//.test(location.pathname);
+// Never reload under a meet, a take, a show — or a take still saving itself (it lives in memory until it is uploaded).
+const busy = () => activeMeetId.value !== null || savesPending.value > 0 || /\/studio\/sing\//.test(location.pathname) || /\/publishing\/show\//.test(location.pathname);
 let updatePending = false;
 const updateSW = registerSW({
   immediate: true,

@@ -196,7 +196,8 @@ export interface MeetPerformance {
 }
 
 export interface RegisterPerformanceRequest {
-  resumeToken: string;
+  /** Optional: the host registers by account (the upload may finish after they left the room). */
+  resumeToken?: string;
   performanceId: string;
   songTitle: string;
   trackId: string;

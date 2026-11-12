@@ -153,13 +153,11 @@ for (const m of matrix) {
       await shot('23-meet-live');
       // The host's "Stop song" ends the song for everyone (a singer's button is "Stop": their own take only).
       await page.getByRole('button', { name: /Stop the song for everyone/ }).click();
-      await page.getByText('Your take').waitFor({ timeout: 30000 });
-      await wait(1200);
-      await shot('24-meet-review');
-      // The host's take is the meet's saved performance: kept by itself and shared with the meet (no Keep button).
-      await page.getByText(/Saved as this meet's performance/).waitFor({ timeout: 30000 });
-      await page.getByRole('button', { name: 'Back to the stage' }).click();
+      // Straight back to the lobby stage; the take saves itself in the background as the meet's performance.
       await page.getByRole('button', { name: 'End meet' }).waitFor({ timeout: 30000 });
+      await page.locator('[data-save="done"]').first().waitFor({ timeout: 60000 });
+      await wait(600);
+      await shot('24-meet-saved');
       page.once('dialog', (d) => d.accept());
       await page.getByRole('button', { name: 'End meet' }).click();
       await page.getByText(/Meet ended/).waitFor({ timeout: 30000 });

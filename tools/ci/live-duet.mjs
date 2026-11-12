@@ -334,41 +334,16 @@ try {
   const tb3 = await bob.page.locator('.timeline .mono').first().innerText();
   console.log('resumed:', { alice: ta3, bob: tb3 });
   check(secs(ta3) > secs(ta1) && secs(tb3) > secs(tb1) && Math.abs(secs(ta3) - secs(tb3)) <= 1, 'both devices resumed together from the paused position');
-  // The 20 s sample ends on the host's device → the song is over for everyone: both takes go to review by themselves.
-  for (const p of [alice.page, bob.page]) await p.getByText('Your take').waitFor({ timeout: 40000 });
-  check(true, 'the song ending on the host device ends it for everyone (both takes reviewed)');
-  // Every take's video is the show (the stage with everyone, with the mix); the host's take is the meet's saved performance.
-  const reviewA = (await alice.page.locator('.review-hero').innerText()).replace(/\s+/g, ' ');
-  const reviewB = (await bob.page.locator('.review-hero').innerText()).replace(/\s+/g, ' ');
-  console.log('reviews:', { alice: reviewA, bob: reviewB });
-  check(/show video \d+(\.\d+)? MB/.test(reviewA) && /show video \d+(\.\d+)? MB/.test(reviewB), 'both takes carry the show video (stage + background + mix)');
-  await alice.page.getByText(/Saved as this meet's performance/).waitFor({ timeout: 30000 });
-  check(true, "the host's take is saved as the meet's performance, shared with everyone in the meet");
-  check(/In Temp/.test(await bob.page.locator('.review-hero').innerText().catch(() => '')) || (await bob.page.getByText(/In Temp/).isVisible().catch(() => false)), "a singer's own take stays personal (Temp until kept)");
-  const showMeta = await alice.page.evaluate(async () => {
-    const v = document.querySelector('.perf-player video');
-    if (!v) return null;
-    await new Promise((r) => (v.readyState >= 1 ? r() : v.addEventListener('loadedmetadata', r, { once: true })));
-    return { w: v.videoWidth, h: v.videoHeight };
-  });
-  console.log('show video:', JSON.stringify(showMeta));
-  // Keep the host's recorded show beside the screenshots (inspect its frames / sound with ffmpeg).
-  const showB64 = await alice.page.evaluate(async () => {
-    const v = document.querySelector('.perf-player video');
-    if (!v) return '';
-    const buf = await (await fetch(v.src)).arrayBuffer();
-    let bin = '';
-    const bytes = new Uint8Array(buf);
-    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    return btoa(bin);
-  });
-  if (showB64) await writeFile(`${out}/show-alice.webm`, Buffer.from(showB64, 'base64'));
-  check(showMeta && showMeta.w === 1280 && showMeta.h === 720, `the saved show is the 1280×720 broadcast picture (${JSON.stringify(showMeta)})`);
-  // Back to the stage: still performers, the meet is back in the lobby, the video mesh never dropped.
-  for (const p of [alice.page, bob.page]) {
-    await p.getByRole('button', { name: 'Back to the stage' }).click();
-    await p.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
-  }
+  // The 20 s sample ends on the host's device → the song is over for everyone: both singers are straight back on the
+  // lobby stage (no review, no approval); each take saves itself in the background — the host's as the meet's performance.
+  for (const p of [alice.page, bob.page]) await p.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 40000 });
+  check(true, 'the song ending on the host device ends it for everyone — both singers stay on stage, no review screen');
+  for (const p of [alice.page, bob.page]) await p.locator('[data-save="done"]').first().waitFor({ timeout: 60000 });
+  const saveA = (await alice.page.locator('[data-save="done"]').first().innerText()).replace(/\s+/g, ' ');
+  const saveB = (await bob.page.locator('[data-save="done"]').first().innerText()).replace(/\s+/g, ' ');
+  console.log('saved:', { alice: saveA, bob: saveB });
+  check(/Saved “CI Sample Song” · shared with the meet/.test(saveA), "the host's take saved itself as the meet's performance, shared with everyone in the meet");
+  check(/Saved “CI Sample Song”/.test(saveB) && !/shared/.test(saveB), "a singer's take saved itself to their own performances");
   const meshAfterSong = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   check(meshAfterSong === meshBefore, 'the same video mesh carries on after the song (stage never left)');
   check(/No song picked yet/.test(await alice.page.locator('.setlist').innerText()), 'the set list is empty again after the only song');
@@ -399,17 +374,18 @@ try {
   await bob.page.locator('.sing .drawer .setlist').waitFor({ timeout: 10000 });
   check(/Now singing/.test(await bob.page.locator('.sing .drawer').innerText()), 'the live stage has a set list drawer (song picker) for the singers');
   await bob.page.getByRole('button', { name: 'Close the set list' }).click();
-  // A singer stops only their own take; the song goes on for the host.
+  // A singer stops only their own take; the song goes on for the host — the singer stays on the live stage and may rejoin.
   await bob.page.getByRole('button', { name: 'Stop my take' }).click();
-  await bob.page.getByText('Your take').waitFor({ timeout: 30000 });
-  check(await alice.page.locator('.sing .stagebar').isVisible(), "a singer's Stop ends only their take — the host keeps singing");
-  await bob.page.getByRole('button', { name: 'Back to the stage' }).click();
-  // The host stops the song for everyone, then ends the meet.
+  await bob.page.getByRole('button', { name: 'Join the song' }).waitFor({ timeout: 30000 });
+  check(await alice.page.locator('.sing .stagebar').isVisible(), "a singer's Stop ends only their take — the host keeps singing, the singer stays on the live stage");
+  // The host stops the song for everyone: everyone is back on the lobby stage; the takes save themselves.
   await alice.page.getByRole('button', { name: 'Stop the song for everyone' }).click();
-  await alice.page.getByText('Your take').waitFor({ timeout: 30000 });
-  check(true, '"Stop song" on the host device wraps up the song for everyone');
-  await alice.page.getByRole('button', { name: 'Back to the stage' }).click();
-  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
+  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
+  await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
+  check(true, '"Stop song" on the host device wraps up the song for everyone — straight back to the lobby stage');
+  await alice.page.locator('[data-save="done"][data-save-id]').nth(0).waitFor({ timeout: 60000 });
+  await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 90000 });
+  check((await alice.page.locator('[data-save="failed"]').count()) === 0, 'the second song saved itself too (nothing stuck)');
   alice.page.once('dialog', (d) => void d.accept());
   await alice.page.getByRole('button', { name: 'End meet' }).click();
   await alice.page.getByText(/Meet ended/).waitFor({ timeout: 15000 });
@@ -423,6 +399,34 @@ try {
   const bobShows = await bob.page.locator('[data-show]').allInnerTexts();
   check(bobShows.length === 2 && bobShows.every((t) => /Duet e2e · CI Sample Song/.test(t.replace(/\s+/g, ' '))), `a singer finds the meet's performances under Performances, by name and date (${bobShows.length})`);
   await bob.page.screenshot({ path: `${out}/performances-bob.png` });
+  const bobTakes = (await bob.page.locator('.list .item').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+  check(bobTakes.some((t) => /CI Sample Song/.test(t) && /show video/.test(t) && /Kept/.test(t)), `a singer's own takes are kept by themselves, their video the show (${bobTakes.length} items)`);
+  // The host plays her meet performance: the saved show is the 1280×720 broadcast picture.
+  await navigate(alice.page, `${new URL(base).pathname}studio/performances`);
+  await alice.page.locator('[data-show]').first().waitFor({ timeout: 20000 });
+  await alice.page.locator('[data-show]').first().getByRole('button', { name: 'Play' }).click();
+  const showMeta = await alice.page.evaluate(async () => {
+    const started = Date.now();
+    let v = null;
+    while (!(v = document.querySelector('.sheet video')) && Date.now() - started < 20000) await new Promise((r) => setTimeout(r, 200));
+    if (!v) return null;
+    await new Promise((r) => (v.readyState >= 1 ? r() : v.addEventListener('loadedmetadata', r, { once: true })));
+    return { w: v.videoWidth, h: v.videoHeight };
+  });
+  console.log('show video:', JSON.stringify(showMeta));
+  check(showMeta && showMeta.w === 1280 && showMeta.h === 720, `the saved show is the 1280×720 broadcast picture (${JSON.stringify(showMeta)})`);
+  // Keep the host's recorded show beside the screenshots (inspect its frames / sound with ffmpeg).
+  const showB64 = await alice.page.evaluate(async () => {
+    const v = document.querySelector('.sheet video');
+    if (!v) return '';
+    const buf = await (await fetch(v.src)).arrayBuffer();
+    let bin = '';
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  });
+  if (showB64) await writeFile(`${out}/show-alice.webm`, Buffer.from(showB64, 'base64'));
+  await alice.page.screenshot({ path: `${out}/performances-alice.png` });
   // Meets list maintenance: the ended meet is listed with Delete; open meets are counted against the limit of 3.
   await navigate(alice.page, `${new URL(base).pathname}meets`);
   await alice.page.locator('.meet-item').first().waitFor({ timeout: 15000 });

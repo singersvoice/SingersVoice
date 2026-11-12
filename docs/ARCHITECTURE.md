@@ -186,12 +186,18 @@ after FX, held back by the same quarter second through a DelayNode — and this 
 through a frame ring, so its picture is in step with its sound — plus every other singer's vocal as
 it arrives, through a limiter), one MediaRecorder (VP9/Opus WebM, or MP4 where that is what the
 browser has) from the kickstart to the end of the song, paused with the transport. The take's video
-is that recording (`videoOffsetMs` = its first frame's place on the track timeline, lag included);
-the host's take of each song is **the meet's performance**: saved kept in `Performances/Live`,
-registered with the meet (`POST /meets/:id/performances` → the `performances` table; `meet_members`
-remembers everyone who was ever in the meet) and shared from the host's Drive anyone-with-the-link
-and with each member's Google account. `GET /performances` lists every show of every meet the
-account hosted or was in — the Performances page, with the shareable links.
+is that recording (`videoOffsetMs` = its first frame's place on the track timeline, lag included).
+A live take never waits for a review: the stage hands it to the **background saver**
+(`lib/saveQueue.ts`, one job at a time, each stage memoised so a retry never uploads twice, three
+automatic retries then a Retry chip; `portals/meets/liveTake.ts` is the job) and the singer is
+already back on the stage. The take is kept at once in `Performances/Live`, registered as the
+singer's take (`POST /meets/:id/recordings`, by account — the singer may have left the room by
+then), and the host's copy is **the meet's performance**: shared from the host's Drive
+anyone-with-the-link and with each member's Google account, registered with the meet
+(`POST /meets/:id/performances`, host by account → the `performances` table; `meet_members`
+remembers everyone who was ever in the meet). `GET /performances` lists every show of every meet
+the account hosted or was in — the Performances page, with the shareable links. The PWA never
+applies an update while a save is pending.
 
 **Preview** (admin monitoring) lists every open meet the account may publish (hosted or joined,
 any other by link / code) as a monitor tile: the exact broadcast picture (`showStage.tsx`, the

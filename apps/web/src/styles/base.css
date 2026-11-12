@@ -715,3 +715,45 @@ input[type='range'] {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The background saver's chips (the room, the Performances page). */
+.savestatus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.savestatus .chip {
+  gap: 6px;
+  max-width: 100%;
+  white-space: normal;
+}
+.savestatus .chip .spin {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+.savestatus.compact .chip {
+  font-size: 0.78em;
+}
+
+/* An item with several actions: on a narrow screen the actions take a row of their own under the name. */
+.item .actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+@media (max-width: 560px) {
+  .item.wide-actions {
+    grid-template-columns: auto 1fr;
+  }
+  .item.wide-actions .actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+  .item.wide-actions .meta .t,
+  .item.wide-actions .meta .s {
+    white-space: normal;
+  }
+}
