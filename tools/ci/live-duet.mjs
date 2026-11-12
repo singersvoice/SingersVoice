@@ -75,15 +75,15 @@ try {
     for (let i = 3, px = 0; i < d.length; i += 4, px++) if (d[i] > 40) { if (px % w < w / 2) left++; else right++; }
     return { onstage: el.dataset.onstage, performers: el.dataset.performers, linked: el.dataset.linked, blend: el.dataset.blend, mask: el.dataset.mask, left, right, w, h: c.height, text: el.querySelector('.stagebar').innerText.replace(/\s+/g, ' ') };
   });
-  // The host (admin) steps on freely.
-  await alice.page.getByRole('button', { name: 'Take a stage slot' }).click();
-  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
+  // The host (admin) is on stage the moment the meet starts: nothing to tap.
   const tStrip = Date.now();
+  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
+  check(!(await alice.page.getByRole('button', { name: 'Take a stage slot' }).isVisible().catch(() => false)), 'the host is seated on S1 by the meet itself (no "take a slot" tap)');
   while (Date.now() - tStrip < 25000 && (await stripInfo(alice.page)).blend !== 'model') await wait(500);
   await wait(800);
   const sa = await stripInfo(alice.page);
   console.log('alice lobby stage:', JSON.stringify(sa));
-  check(sa.onstage === '1' && sa.performers === '1' && sa.blend === 'model' && sa.left + sa.right > 300, `the host sees herself on the stage the moment she takes a slot (${Math.round((Date.now() - tStrip) / 1000)} s, blend ${sa.blend})`);
+  check(sa.onstage === '1' && sa.performers === '1' && sa.blend === 'model' && sa.left + sa.right > 300, `the host sees herself on the stage the moment her meet starts (${Math.round((Date.now() - tStrip) / 1000)} s, blend ${sa.blend})`);
   await alice.page.screenshot({ path: `${out}/lobby-alice-onstage.png` });
 
   // Guest joins by link: audience first. He has to ask; the host lets him on.

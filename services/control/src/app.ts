@@ -302,7 +302,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       };
     }
     p.lastSeenAt = now;
-    if (body.role === 'performer' && p.slot === null) {
+    // The host is on stage the moment their meet starts (first arrival), and anyone asking to join as a
+    // performer is seated when the rules allow it (the host, or an open stage); everyone else is audience.
+    const firstArrival = p.joinedAt === now;
+    if ((body.role === 'performer' || (firstArrival && user.userId === meet.hostUserId)) && p.slot === null && p.role !== 'publisher') {
       const free = meet.stage.find((s) => !s.participantId);
       if (free) claimSlot(meet, p, free.slot);
     }

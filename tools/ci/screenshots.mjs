@@ -135,8 +135,9 @@ for (const m of matrix) {
       await page.getByRole('button', { name: 'Create meet' }).click();
       await page.waitForURL(/\/meet\//);
       await page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
+      // The host is on stage the moment the meet starts (no slot to take); the lobby stage shows them at once.
+      await page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
       await shot('20-meet-lobby');
-      await page.getByRole('button', { name: 'Take a stage slot' }).click();
       await page.getByRole('button', { name: /I'm ready/ }).click();
       await page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
       await page.getByRole('radio', { name: /Chat/ }).click();

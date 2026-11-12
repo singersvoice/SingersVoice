@@ -57,11 +57,19 @@ describe('sv-control API', () => {
     const byCode = await json<{ meet: Meet }>(await app.request(`/meets/code/${meet.joinCode.toLowerCase()}`, { headers: as('bob') }));
     expect(byCode.meet.meetId).toBe(meet.meetId);
 
-    const host = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'performer' }) }));
+    // The host is on stage the moment the meet starts (plain join, no slot asked for); guests arrive as audience.
+    const host = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'audience' }) }));
     expect(host.you.role).toBe('performer');
     expect(host.you.slot).toBe(1);
     const bob = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ role: 'audience' }) }));
     expect(bob.you.slot).toBeNull();
+    // A host who steps off stays off when they come back (only the first arrival seats them).
+    const off = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, slot: null }) }));
+    expect(off.you?.slot).toBeNull();
+    const back = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'audience', resumeToken: host.resumeToken }) }));
+    expect(back.you.slot).toBeNull();
+    const seated = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, slot: 1 }) }));
+    expect(seated.you?.slot).toBe(1);
 
     // Everyone enters as audience: bob asks to sing, the host (admin) lets him on; the stage policy can be opened.
     const askFirst = await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, slot: 2 }) });

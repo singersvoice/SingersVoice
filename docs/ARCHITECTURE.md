@@ -49,8 +49,9 @@ each other, so any portal can be removed or replaced without touching the others
 
 ## Live meet: who is on stage
 
-Everyone who enters a meet is **audience**. The host (the meet's admin) steps on a slot freely; anyone
-else **asks to sing** (`POST /meets/:id/requests`) and the host **lets them on** or declines
+Everyone who enters a meet is **audience** — except the host, who is seated on S1 by the meet itself
+the moment they start it (their first arrival; stepping off later sticks). The host (the meet's
+admin) takes any slot freely; anyone else **asks to sing** (`POST /meets/:id/requests`) and the host **lets them on** or declines
 (`…/requests/:pid/decide` — the server seats them in the first free slot, so the singer touches
 nothing), clears a slot (`…/stage/:pid/remove`) or opens the stage to everyone
 (`…/policy` → `stagePolicy: 'open'`, default `'ask'`). Requests live on the meet (`meet.requests`),
