@@ -23,8 +23,9 @@ export const smoothStep = (e0: number, e1: number, v: number): number => {
  * Turn the model's raw mask pixels into a white-with-alpha mask, in place. The legacy MediaPipe
  * solution returns the person probability either in the alpha channel or only as brightness with
  * alpha fully opaque (it differs by browser / GPU path), so use whichever channel actually varies,
- * normalise it and feather with a smoothstep. Returns 'unusable' when the mask carries no
- * information or the coverage is implausible (nobody in frame / the whole frame "is" the person).
+ * normalise it and feather with a smoothstep. Returns 'unusable' only when the mask carries no
+ * information at all (a broken readback); an empty mask (nobody in frame) is a valid answer and
+ * leaves that spot on the stage empty rather than showing the real background.
  */
 export function alphaFromMaskPixels(d: Uint8ClampedArray): { mode: 'adaptive-alpha' | 'adaptive-luma' | 'unusable'; coverage: number } {
   let minLuma = 255;
@@ -56,7 +57,6 @@ export function alphaFromMaskPixels(d: Uint8ClampedArray): { mode: 'adaptive-alp
     d[i + 3] = alpha;
   }
   const coverage = visible / (d.length / 4);
-  if (coverage < 0.006 || coverage > 0.92) return { mode: 'unusable', coverage };
   return { mode: useAlpha ? 'adaptive-alpha' : 'adaptive-luma', coverage };
 }
 
@@ -154,37 +154,45 @@ export class PersonSegmenter {
     return typeof WebAssembly === 'object';
   }
 
-  /** Start on a playing <video>. `useModel=false` goes straight to the oval fallback (battery saver). */
+  /**
+   * Start on a playing <video>. The soft silhouette shows at once; the model takes over the moment it
+   * is ready (first visit downloads ~6 MB, cached afterwards) and loading is retried until it works —
+   * the singer is never left in a rectangle, and never permanently in the fallback either.
+   */
   async start(video: HTMLVideoElement, useModel = true, onModeChange?: (m: SegmenterMode) => void): Promise<void> {
     this.stop();
     this.video = video;
     this.running = true;
     this.onModeChange = onModeChange ?? null;
-    if (!useModel || !PersonSegmenter.supported()) {
-      this.setMode('oval');
-      this.loopOval();
-      return;
-    }
-    this.setMode('loading');
-    this.loopOval(); // show something immediately while the model loads
-    try {
-      const base = await withTimeout(loadRuntime(), LOAD_TIMEOUT_MS);
-      if (!this.running || this.video !== video) return;
-      const Ctor = (window as unknown as { SelfieSegmentation: SegCtor }).SelfieSegmentation;
-      const seg = new Ctor({ locateFile: (f) => `${base}/${f}` });
-      seg.setOptions({ modelSelection: 1, selfieMode: false });
-      seg.onResults((r) => this.drawModel(r));
-      if (seg.initialize) await withTimeout(seg.initialize(), LOAD_TIMEOUT_MS);
-      if (!this.running || this.video !== video) {
-        void seg.close();
+    this.setMode(useModel && PersonSegmenter.supported() ? 'loading' : 'oval');
+    this.loopOval();
+    if (this.mode !== 'loading') return;
+    let attempt = 0;
+    while (this.running && this.video === video) {
+      try {
+        const base = await loadRuntime();
+        if (!this.running || this.video !== video) return;
+        const Ctor = (window as unknown as { SelfieSegmentation: SegCtor }).SelfieSegmentation;
+        const seg = new Ctor({ locateFile: (f) => `${base}/${f}` });
+        seg.setOptions({ modelSelection: 1, selfieMode: false });
+        seg.onResults((r) => this.drawModel(r));
+        if (seg.initialize) await withTimeout(seg.initialize(), LOAD_TIMEOUT_MS);
+        if (!this.running || this.video !== video) {
+          void seg.close();
+          return;
+        }
+        this.seg = seg;
+        clearTimeout(this.timer);
+        this.setMode('model');
+        this.loopModel();
         return;
+      } catch {
+        attempt++;
+        this.setMode('oval'); // keep showing the silhouette while we retry
+        await new Promise((r) => setTimeout(r, Math.min(30_000, 3000 * attempt)));
+        if (!this.running || this.video !== video) return;
+        this.setMode('loading');
       }
-      this.seg = seg;
-      clearTimeout(this.timer);
-      this.setMode('model');
-      this.loopModel();
-    } catch {
-      if (this.running) this.setMode('oval');
     }
   }
 

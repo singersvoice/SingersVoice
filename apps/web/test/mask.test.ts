@@ -56,10 +56,12 @@ describe('adaptive person mask (ported from the original SingersVoice app)', () 
     expect(d[2]).toBe(255);
   });
 
-  it('reports an unusable mask (flat, or nobody in frame) so the soft silhouette takes over', () => {
+  it('reports an unusable mask only when it carries no information; nobody in frame is a valid, empty mask', () => {
     expect(alphaFromMaskPixels(mask(240, 320, 'flat')).mode).toBe('unusable');
     const d = mask(240, 320, 'alpha');
-    for (let i = 3; i < d.length; i += 4) d[i] = i % 4000 === 3 ? 255 : 0; // a few stray pixels: < 0.6 % coverage
-    expect(alphaFromMaskPixels(d).mode).toBe('unusable');
+    for (let i = 3; i < d.length; i += 4) d[i] = i % 4000 === 3 ? 255 : 0; // a few stray pixels
+    const r = alphaFromMaskPixels(d);
+    expect(r.mode).toBe('adaptive-alpha');
+    expect(r.coverage).toBeLessThan(0.01); // the stage spot stays empty — never the real background
   });
 });

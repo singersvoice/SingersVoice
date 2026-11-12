@@ -21,7 +21,7 @@ import type { TakeResult } from '../../lib/takes.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { privileged } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
-import { Camera, pickVideoMime, ZOOM_LEVELS } from '../../video/camera.ts';
+import { Camera, pickVideoMime } from '../../video/camera.ts';
 import { LocalFeed } from '../../video/localFeed.ts';
 import { PerformerMesh, type PeerState } from '../../video/peers.ts';
 import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
@@ -468,7 +468,7 @@ function LiveStage(props: {
   const camOn = camera.on.value;
   useEffect(() => {
     feed.onMode = (m) => setBlend(m);
-    feed.attach(camOn ? camStream : null, app.cutout);
+    feed.attach(camOn ? camStream : null, true);
     if (camOn && camStream) {
       camera.startAutoFrame(feed.video);
       mesh?.setLocalStream(feed.packedStream());
@@ -476,7 +476,15 @@ function LiveStage(props: {
       camera.stopAutoFrame();
       mesh?.setLocalStream(null);
     }
-  }, [camStream, camOn, app.cutout]);
+  }, [camStream, camOn]);
+  useEffect(() => feed.setFraming(app.zoomPreset, app.autoZoom), [app.zoomPreset, app.autoZoom]);
+  const origin = camera.origin.value;
+  useEffect(() => feed.setOrigin(origin), [origin.x, origin.y]);
+  // Vocal-driven auto zoom: whoever sings comes closer, and everyone sees it (the sender frames its own stream).
+  useEffect(() => {
+    const t = setInterval(() => feed.reportLevel(engine.recorder?.level.value ?? 0), 100);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     if (!mesh) return;
@@ -504,6 +512,8 @@ function LiveStage(props: {
       setPeerStates((s) => ({ ...s, [id]: state }));
     };
     void mesh.start();
+    (window as unknown as { __svMesh?: PerformerMesh; __svFeed?: LocalFeed }).__svMesh = mesh; // support / e2e hooks
+    (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed;
     return () => {
       mesh.close();
       for (const v of remoteVideos.current.values()) {
@@ -523,19 +533,17 @@ function LiveStage(props: {
   }, [peerKey]);
 
   // Everyone on stage, left to right by slot, on one shared stage.
-  const zoom = camera.zoom.value;
-  const origin = camera.origin.value;
   const facing = camera.facing.value;
   useEffect(() => {
     const list: StagePerformer[] = stagePerformers.map((s) => {
       const me = s.participantId === props.you.participantId;
       const color = SLOT_COLORS[Math.max(1, Math.min(track.singerCount, s.slot)) as SingerSlot];
-      if (me) return { id: 'me', slot: s.slot, label: `You · S${s.slot}`, color, source: feed.source, mirror: facing === 'user', zoom, origin, isMe: true };
+      if (me) return { id: 'me', slot: s.slot, label: `You · S${s.slot}`, color, source: feed.source, mirror: facing === 'user', isMe: true };
       const v = remoteVideos.current.get(s.participantId!);
       return { id: s.participantId!, slot: s.slot, label: `${s.displayName.split(' ')[0] || 'Singer'} · S${s.slot}`, picture: s.picture, color, source: v ? { kind: 'packed', video: v } : { kind: 'none' } };
     });
     compositor.setPerformers(list);
-  }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), camStream, camOn, zoom, origin.x, origin.y, facing, peerStates]);
+  }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), camStream, camOn, facing, peerStates]);
 
   // ---- follow the shared transport: schedule playback + recording at every kickstart (start / resume / restart) ----
   useEffect(() => {
@@ -565,10 +573,6 @@ function LiveStage(props: {
         } catch {
           mediaRec.current = null;
         }
-      }
-      if (app.autoZoom && camera.on.value) {
-        camera.zoom.value = ZOOM_LEVELS.wide;
-        camera.autoZoom(ZOOM_LEVELS[app.zoomPreset] + 0.1, 8000);
       }
       setStarted(true);
     } else {
@@ -679,7 +683,6 @@ function LiveStage(props: {
       mediaRec.current = null;
       mesh?.close();
       engine.closeMic();
-      camera.cancelAutoZoom();
       await keepAwake(false);
       props.onTake({
         vocal,

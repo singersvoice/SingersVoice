@@ -25,6 +25,8 @@ interface Peer {
   makingOffer: boolean;
   ignoreOffer: boolean;
   stream: MediaStream | null;
+  /** Every remote video track seen on this connection; the live (unmuted) one is shown. */
+  tracks: Set<MediaStreamTrack>;
   state: PeerState;
   restarts: number;
 }
@@ -88,9 +90,36 @@ export class PerformerMesh {
     return out;
   }
 
+  /** Per-peer RTP counters (support / tests): frames sent & received, bytes, and the sender track state. */
+  async stats(): Promise<Record<string, { framesSent: number; framesReceived: number; bytesSent: number; bytesReceived: number; senderTrack: string; connection: string }>> {
+    const out: Record<string, { framesSent: number; framesReceived: number; bytesSent: number; bytesReceived: number; senderTrack: string; connection: string }> = {};
+    for (const [id, p] of this.peers) {
+      const row = { framesSent: 0, framesReceived: 0, bytesSent: 0, bytesReceived: 0, senderTrack: '', connection: p.pc.connectionState };
+      const t = p.pc.getSenders().find((s) => s.track)?.track;
+      row.senderTrack = t ? `${t.readyState}${t.muted ? '/muted' : ''}${t.enabled ? '' : '/disabled'}` : 'none';
+      try {
+        const stats = await p.pc.getStats();
+        stats.forEach((r: { type: string; kind?: string; framesSent?: number; framesDecoded?: number; bytesSent?: number; bytesReceived?: number }) => {
+          if (r.type === 'outbound-rtp' && r.kind === 'video') {
+            row.framesSent += r.framesSent ?? 0;
+            row.bytesSent += r.bytesSent ?? 0;
+          }
+          if (r.type === 'inbound-rtp' && r.kind === 'video') {
+            row.framesReceived += r.framesDecoded ?? 0;
+            row.bytesReceived += r.bytesReceived ?? 0;
+          }
+        });
+      } catch {
+        /* stats unavailable */
+      }
+      out[id] = row;
+    }
+    return out;
+  }
+
   private connect(id: string): void {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers as RTCIceServer[], bundlePolicy: 'max-bundle' });
-    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, state: 'connecting', restarts: 0 };
+    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0 };
     this.peers.set(id, peer);
     // Always have a video transceiver so the offer is the same whether or not our camera is ready.
     const track = this.local?.getVideoTracks()[0] ?? null;
@@ -112,10 +141,26 @@ export class PerformerMesh {
     pc.onicecandidate = (e) => {
       if (e.candidate) void this.channel.sendSignal(id, 'ice', e.candidate.toJSON()).catch(() => undefined);
     };
+    // Simultaneous offers can leave a connection with more than one video transceiver; only one of
+    // them carries RTP. Show whichever remote track is actually live (unmuted), and follow changes.
     pc.ontrack = (e) => {
-      const stream = e.streams[0] ?? new MediaStream([e.track]);
-      peer.stream = stream;
-      this.onRemote?.(id, stream, peer.state);
+      const track = e.track;
+      if (track.kind !== 'video') return;
+      peer.tracks.add(track);
+      const update = () => {
+        const live = [...peer.tracks].find((t) => t.readyState === 'live' && !t.muted) ?? [...peer.tracks].find((t) => t.readyState === 'live') ?? null;
+        const current = peer.stream?.getVideoTracks()[0] ?? null;
+        if (live === current) return;
+        peer.stream = live ? new MediaStream([live]) : null;
+        this.onRemote?.(id, peer.stream, peer.state);
+      };
+      track.onmute = update;
+      track.onunmute = update;
+      track.onended = () => {
+        peer.tracks.delete(track);
+        update();
+      };
+      update();
     };
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;

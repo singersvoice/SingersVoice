@@ -14,9 +14,14 @@ export interface AppSettings {
   cameraOn: boolean;
   cameraFacing: 'user' | 'environment';
   cameraDeviceId: string;
+  /** Base framing on the virtual stage: wide (default) shows the whole camera frame, scaled down on stage. */
   zoomPreset: 'wide' | 'mid' | 'close';
+  /** Vocal-driven auto zoom: ease closer while this singer sings, back to the preset when silent. */
   autoZoom: boolean;
+  /** Kept for older saves; the stage always blends the singer (the model is the only mode). */
   cutout: boolean;
+  /** One-time migration marker for the virtual-stage defaults. */
+  stageV3: boolean;
   singerSlot: number;
   countIn: boolean;
   showCueDeck: boolean;
@@ -33,9 +38,10 @@ export const APP_DEFAULTS: AppSettings = {
   cameraOn: true,
   cameraFacing: 'user',
   cameraDeviceId: '',
-  zoomPreset: 'mid',
+  zoomPreset: 'wide',
   autoZoom: true,
   cutout: true,
+  stageV3: true,
   singerSlot: 1,
   countIn: true,
   showCueDeck: true,
@@ -57,7 +63,20 @@ function read<T>(key: string, fallback: T): T {
   }
 }
 
-export const appSettings = signal<AppSettings>(read(APP_KEY, APP_DEFAULTS));
+function migrateApp(v: AppSettings): AppSettings {
+  // Saves from before the virtual stage carried the old defaults (mid framing, cut-out off):
+  // reset those once so every device starts wide, blended, with vocal-driven auto zoom.
+  let stored: Partial<AppSettings> = {};
+  try {
+    stored = JSON.parse(localStorage.getItem(APP_KEY) ?? '{}') as Partial<AppSettings>;
+  } catch {
+    /* fresh */
+  }
+  if (stored.stageV3 === true) return v;
+  return { ...v, zoomPreset: 'wide', autoZoom: true, cutout: true, stageV3: true };
+}
+
+export const appSettings = signal<AppSettings>(migrateApp(read(APP_KEY, APP_DEFAULTS)));
 export const audioSettings = signal<AudioPluginSettings>(sanitizeAudio(read(AUDIO_KEY, AUDIO_SETTINGS_DEFAULTS)));
 
 function sanitizeAudio(a: AudioPluginSettings): AudioPluginSettings {

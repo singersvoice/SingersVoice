@@ -60,6 +60,8 @@ export class StageCompositor {
   private performers: StagePerformer[] = [];
   private unpackers = new Map<string, AlphaUnpacker>();
   private avatars = new Map<string, HTMLImageElement>();
+  /** Last time each packed <video> advanced (frames stop → placeholder after a grace period). */
+  private seen = new Map<string, { t: number; at: number }>();
   private raf = 0;
   private lastDraw = 0;
   private running = false;
@@ -94,6 +96,7 @@ export class StageCompositor {
       if (!this.performers.some((p) => p.id === id && p.source.kind === 'packed')) {
         this.unpackers.get(id)?.dispose();
         this.unpackers.delete(id);
+        this.seen.delete(id);
       }
     }
     for (const p of this.performers) {
@@ -163,9 +166,12 @@ export class StageCompositor {
     if (p.source.kind === 'packed') {
       const v = p.source.video;
       if (v.readyState < 2 || !v.videoWidth) return null;
-      // No frames flowing (camera off on their side, or the link is still coming up) → placeholder.
-      const track = (v.srcObject as MediaStream | null)?.getVideoTracks?.()[0];
-      if (!track || track.muted || track.readyState === 'ended') return null;
+      // Frames stopped (camera off on their side, link dropped) → placeholder after a short grace;
+      // judged by the video clock advancing, which is robust at any frame rate.
+      const now = performance.now();
+      const seen = this.seen.get(p.id);
+      if (!seen || seen.t !== v.currentTime) this.seen.set(p.id, { t: v.currentTime, at: now });
+      else if (now - seen.at > 2500) return null;
       let u = this.unpackers.get(p.id);
       if (!u) {
         u = new AlphaUnpacker(Math.round(v.videoWidth / 2), v.videoHeight);
@@ -177,21 +183,16 @@ export class StageCompositor {
     return null;
   }
 
+  /** The framed cut-out is already composed (crop + stage scale by its own device); fit it into the tile. */
   private drawPerson(c: CanvasRenderingContext2D, src: HTMLCanvasElement, p: StagePerformer, t: StageTile): void {
-    const zoom = Math.max(1, p.zoom ?? 1);
-    const ox = (p.origin?.x ?? 50) / 100;
-    const oy = (p.origin?.y ?? 45) / 100;
-    // Cover-fit the 3:4 person canvas into the tile, then crop in by `zoom` around the origin.
     const sr = src.width / src.height;
     const dr = t.w / t.h;
     let cw = src.width;
     let ch = src.height;
     if (sr > dr) cw = src.height * dr;
     else ch = src.width / dr;
-    cw /= zoom;
-    ch /= zoom;
-    const sx = Math.max(0, Math.min(src.width - cw, src.width * ox - cw / 2));
-    const sy = Math.max(0, Math.min(src.height - ch, src.height * oy - ch / 2));
+    const sx = (src.width - cw) / 2;
+    const sy = src.height - ch; // keep the floor: crop from the top if the tile is wider
     c.save();
     if (p.mirror) {
       c.translate(t.x + t.w, t.y);

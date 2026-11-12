@@ -16,7 +16,8 @@ import type { LoadedTrack, TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { isDrive, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
-import { Camera, pickVideoMime, ZOOM_LEVELS, type ZoomPreset } from '../../video/camera.ts';
+import { Camera, pickVideoMime } from '../../video/camera.ts';
+import type { ZoomPreset } from '../../video/framing.ts';
 import { LocalFeed } from '../../video/localFeed.ts';
 import { StageCompositor } from '../../video/stage.ts';
 
@@ -171,16 +172,22 @@ export function Sing(props: { id: string }) {
   const camOn = camera.on.value;
   useEffect(() => {
     feed.onMode = (m) => setBlend(m);
-    feed.attach(camOn ? camStream : null, app.cutout);
+    feed.attach(camOn ? camStream : null, true);
     if (camOn && camStream) camera.startAutoFrame(feed.video);
     else camera.stopAutoFrame();
-  }, [camStream, camOn, app.cutout]);
-  const zoom = camera.zoom.value;
+  }, [camStream, camOn]);
+  useEffect(() => feed.setFraming(app.zoomPreset, app.autoZoom), [app.zoomPreset, app.autoZoom]);
   const origin = camera.origin.value;
+  useEffect(() => feed.setOrigin(origin), [origin.x, origin.y]);
+  // Vocal-driven auto zoom: the mic meter decides when I'm singing.
+  useEffect(() => {
+    const t = setInterval(() => feed.reportLevel(engineRef.current?.recorder?.level.value ?? 0), 100);
+    return () => clearInterval(t);
+  }, []);
   const facing = camera.facing.value;
   useEffect(() => {
-    compositor.setPerformers([{ id: 'me', slot: mySlot, label: `You · S${mySlot}`, color: SLOT_COLORS[mySlot], source: feed.source, mirror: facing === 'user', zoom, origin, isMe: true }]);
-  }, [camStream, camOn, mySlot, zoom, origin.x, origin.y, facing]);
+    compositor.setPerformers([{ id: 'me', slot: mySlot, label: `You · S${mySlot}`, color: SLOT_COLORS[mySlot], source: feed.source, mirror: facing === 'user', isMe: true }]);
+  }, [camStream, camOn, mySlot, facing]);
 
   // Apply FX whenever settings change.
   useEffect(() => {
@@ -267,11 +274,6 @@ export function Sing(props: { id: string }) {
           mediaRec.current = null;
         }
       }
-      if (app.autoZoom && camera.on.value) {
-        camera.zoom.value = ZOOM_LEVELS.wide;
-        camera.autoZoom(ZOOM_LEVELS[app.zoomPreset] + 0.1, 8000);
-      }
-
       player.onEnded = () => void finish();
       setPhase(app.countIn ? 'countdown' : 'playing');
       const tick = () => {
@@ -379,7 +381,6 @@ export function Sing(props: { id: string }) {
       }
       mediaRec.current = null;
       engine.closeMic();
-      camera.cancelAutoZoom();
       await keepAwake(false);
       const latencyCompMs = Math.round(engine.outputLatencyMs * 2);
       setTake({ vocal, video, durationMs, vocalOffsetMs: Math.round(vocalOffsetMs), videoOffsetMs: videoOffsetMs === null ? null : Math.round(videoOffsetMs), latencyCompMs, sampleRate, startedAtEpochMs: startedEpoch.current });
@@ -527,14 +528,11 @@ export function Sing(props: { id: string }) {
               ))}
             </div>
           </Field>
-          <Field label="Camera framing">
+          <Field label="Stage framing (wide = whole frame, standing small on stage)">
             <div class="row">
               <Seg<ZoomPreset>
                 value={app.zoomPreset}
-                onChange={(v) => {
-                  updateApp({ zoomPreset: v });
-                  camera.setPreset(v);
-                }}
+                onChange={(v) => updateApp({ zoomPreset: v })}
                 options={[
                   { v: 'wide', label: 'Wide' },
                   { v: 'mid', label: 'Mid' },
@@ -546,8 +544,7 @@ export function Sing(props: { id: string }) {
               </button>
             </div>
           </Field>
-          <Switch checked={app.autoZoom} onChange={(v) => updateApp({ autoZoom: v })} label="AutoZoom" hint="Eases from wide to your framing during the intro." />
-          <Switch checked={app.cutout} onChange={(v) => updateApp({ cutout: v })} label="Blend me into the stage (cut-out)" hint="Removes your real background with an on-device model. Off = soft-focus oval (saves battery)." />
+          <Switch checked={app.autoZoom} onChange={(v) => updateApp({ autoZoom: v })} label="Auto zoom" hint="Eases closer while you sing and back out when you're silent — on everyone's screen." />
           <Switch checked={app.countIn} onChange={(v) => updateApp({ countIn: v })} label="3-2-1 count-in" />
           <Switch checked={app.showCueDeck} onChange={(v) => updateApp({ showCueDeck: v })} label="Cue deck (my next lines)" />
           <Field label="Stage background">

@@ -71,7 +71,11 @@ brightness with opaque alpha depending on the browser/GPU path, so — as in the
 app — `alphaFromMaskPixels` uses whichever channel varies, normalises and feathers it, and falls back
 to a soft head-and-shoulders silhouette when the mask is unusable (never a rectangle). `video/stage.ts` draws every
 performer, left to right by stage slot, evenly spaced and bottom-anchored over the stage background —
-one shared stage whether there is 1 singer or 10, on every device.
+one shared stage whether there is 1 singer or 10, on every device. Framing (`video/framing.ts`) has
+three levels — wide (the whole frame, standing small on stage; the default), mid, close — and a
+vocal-driven auto zoom: the mic meter eases a singer's cut-out towards "close" while they sing and
+back out when they fall silent. The sender applies the framing to its own stream, so whoever takes
+the vocal comes closer on everyone's screen.
 
 Other performers' video arrives over a WebRTC mesh (`video/peers.ts`, video only — singers never hear
 each other, by design): each device sends its cut-out **alpha-packed** (left half colour, right half

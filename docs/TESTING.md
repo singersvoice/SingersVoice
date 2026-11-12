@@ -44,7 +44,8 @@ CI uploads the screenshots as an artifact on every PR.
 
 ## Live meet with two performers (`tools/ci/live-duet.mjs`)
 
-Two Chromium contexts with fake cameras — the host on a desktop viewport, a guest on a phone — import
+Two Chromium contexts with a synthetic-person clip as the fake camera (`tools/ci/fake-person.mjs`,
+so the real segmentation model has someone to cut out) — the host on a desktop viewport, a guest on a phone — import
 the sample track, meet in one room, take two stage slots and sing. The test asserts that both devices
 lay out two performers on the virtual stage, that WebRTC video is linked both ways through the SVT DB
 relay (cut-outs drawn on both halves of the stage), that the host's cued pause freezes both timelines

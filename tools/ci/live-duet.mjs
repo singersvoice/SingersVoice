@@ -10,7 +10,13 @@ let pw; try { pw = require('playwright'); } catch { pw = require('/opt/npm-tools
 const servers = await startServers({ base: process.env.BASE_PATH ?? '/SingersVoice/' });
 const base = servers.appUrl;
 const control = `control=${servers.controlUrl}`;
-const browser = await pw.chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
+// A synthetic person as the fake camera, so the real segmentation model has something to cut out.
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+const clip = path.join(tmpdir(), 'sv-fake-person.y4m');
+execFileSync('node', [new URL('./fake-person.mjs', import.meta.url).pathname, clip], { stdio: 'inherit' });
+const browser = await pw.chromium.launch({ args: ['--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${clip}`, '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
 const out = process.argv[2] ?? 'screenshots';
 import { mkdirSync } from 'node:fs';
 mkdirSync(out, { recursive: true });
@@ -68,7 +74,18 @@ try {
   // Both land on the live stage; wait for the kickstart (8 s lead) and the mesh.
   await alice.page.locator('.stagebar').waitFor({ timeout: 30000 });
   await bob.page.locator('.stagebar').waitFor({ timeout: 30000 });
-  await wait(11000);
+  await wait(9000);
+  // Wait until the other singer's video actually carries frames on both sides (not just "connected").
+  const remoteFrames = (p) => p.evaluate(async () => { const vs = [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0 && v.readyState >= 2); const t = vs.map((v) => v.currentTime); await new Promise((r) => setTimeout(r, 700)); return vs.filter((v, i) => v.currentTime !== t[i]).length; });
+  const t0 = Date.now();
+  while (Date.now() - t0 < 25000 && ((await remoteFrames(alice.page)) < 2 || (await remoteFrames(bob.page)) < 2)) await wait(500);
+  const vids = (p) => p.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ w: v.videoWidth, rs: v.readyState, paused: v.paused, muted: v.srcObject ? (v.srcObject.getVideoTracks()[0] || {}).muted : null, tracks: v.srcObject ? v.srcObject.getVideoTracks().length : 0 })));
+  console.log('videos alice:', JSON.stringify(await vids(alice.page)), 'bob:', JSON.stringify(await vids(bob.page)));
+  const rtp = (p) => p.evaluate(async () => ({ mesh: window.__svMesh ? await window.__svMesh.stats() : null, feed: window.__svFeed ? { frame: window.__svFeed.frame, seg: window.__svFeed.segmenter.frame, mode: window.__svFeed.mode, level: window.__svFeed.level } : null }));
+  console.log('rtp alice:', JSON.stringify(await rtp(alice.page)), 'bob:', JSON.stringify(await rtp(bob.page)));
+
+  check((await remoteFrames(alice.page)) >= 2 && (await remoteFrames(bob.page)) >= 2, `remote video frames flowing on both devices (${Math.round((Date.now() - t0) / 1000)} s)`);
+  await wait(1500);
   const stageInfo = async (p) => p.evaluate(() => {
     const bar = document.querySelector('.stagebar');
     const c = document.querySelector('canvas.stagecanvas');
@@ -77,7 +94,7 @@ try {
     const band = x.getImageData(0, Math.round(c.height * 0.45), c.width, Math.round(c.height * 0.5)).data;
     let left = 0, right = 0; const w = c.width;
     for (let i = 3, px = 0; i < band.length; i += 4, px++) if (band[i] > 40) { if (px % w < w / 2) left++; else right++; }
-    return { text: bar.innerText.replace(/\s+/g, ' '), blend: bar.dataset.blend, performers: bar.dataset.performers, left, right, t: document.querySelector('.timeline .mono')?.innerText };
+    return { text: bar.innerText.replace(/\s+/g, ' '), blend: bar.dataset.blend, mask: bar.dataset.mask, performers: bar.dataset.performers, left, right, t: document.querySelector('.timeline .mono')?.innerText };
   });
   const a = await stageInfo(alice.page);
   const b = await stageInfo(bob.page);
@@ -86,6 +103,7 @@ try {
   check(a.performers === '2' && b.performers === '2', 'both devices lay out 2 performers on the stage');
   check(/1\/1 video linked/.test(a.text) && /1\/1 video linked/.test(b.text), 'WebRTC video linked both ways (through the SVT DB relay)');
   check(a.left > 100 && a.right > 100 && b.left > 100 && b.right > 100, 'both singers are drawn (cut-outs on both halves of the stage)');
+  check(a.blend === 'model' && b.blend === 'model' && /^adaptive-/.test(a.mask ?? '') && /^adaptive-/.test(b.mask ?? ''), `the real segmentation model cut both singers out (${a.mask} / ${b.mask})`);
   await alice.page.screenshot({ path: `${out}/duet-alice-live.png` });
   await bob.page.screenshot({ path: `${out}/duet-bob-live.png` });
 
