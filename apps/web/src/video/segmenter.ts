@@ -11,6 +11,54 @@ const CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.167
 const LOCAL = `${import.meta.env.BASE_URL}mediapipe`;
 const TARGET_FPS = 15;
 const LOAD_TIMEOUT_MS = 20_000;
+const MASK_W = 240;
+const MASK_H = 320;
+
+export const smoothStep = (e0: number, e1: number, v: number): number => {
+  const t = Math.max(0, Math.min(1, (v - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Turn the model's raw mask pixels into a white-with-alpha mask, in place. The legacy MediaPipe
+ * solution returns the person probability either in the alpha channel or only as brightness with
+ * alpha fully opaque (it differs by browser / GPU path), so use whichever channel actually varies,
+ * normalise it and feather with a smoothstep. Returns 'unusable' when the mask carries no
+ * information or the coverage is implausible (nobody in frame / the whole frame "is" the person).
+ */
+export function alphaFromMaskPixels(d: Uint8ClampedArray): { mode: 'adaptive-alpha' | 'adaptive-luma' | 'unusable'; coverage: number } {
+  let minLuma = 255;
+  let maxLuma = 0;
+  let minAlpha = 255;
+  let maxAlpha = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const luma = d[i]! * 0.2126 + d[i + 1]! * 0.7152 + d[i + 2]! * 0.0722;
+    if (luma < minLuma) minLuma = luma;
+    if (luma > maxLuma) maxLuma = luma;
+    const a = d[i + 3]!;
+    if (a < minAlpha) minAlpha = a;
+    if (a > maxAlpha) maxAlpha = a;
+  }
+  const lumaRange = maxLuma - minLuma;
+  const alphaRange = maxAlpha - minAlpha;
+  const useAlpha = alphaRange > lumaRange && alphaRange > 8;
+  const min = useAlpha ? minAlpha : minLuma;
+  const range = useAlpha ? alphaRange : lumaRange;
+  if (range < 6) return { mode: 'unusable', coverage: 0 };
+  let visible = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const raw = useAlpha ? d[i + 3]! : d[i]! * 0.2126 + d[i + 1]! * 0.7152 + d[i + 2]! * 0.0722;
+    const alpha = Math.round(smoothStep(0.18, 0.58, (raw - min) / range) * 255);
+    if (alpha > 8) visible++;
+    d[i] = 255;
+    d[i + 1] = 255;
+    d[i + 2] = 255;
+    d[i + 3] = alpha;
+  }
+  const coverage = visible / (d.length / 4);
+  if (coverage < 0.006 || coverage > 0.92) return { mode: 'unusable', coverage };
+  return { mode: useAlpha ? 'adaptive-alpha' : 'adaptive-luma', coverage };
+}
 
 interface SegResults {
   image: CanvasImageSource;
@@ -74,6 +122,13 @@ export class PersonSegmenter {
   private maskCtx: CanvasRenderingContext2D;
   private lastFrameAt = 0;
   private onModeChange: ((m: SegmenterMode) => void) | null = null;
+  /** Alpha mask built from the model output (white RGB, person = opaque), at the model's own resolution. */
+  private alphaMask: HTMLCanvasElement;
+  private alphaCtx: CanvasRenderingContext2D;
+  private softMask: HTMLCanvasElement | null = null;
+  /** Diagnostics (shown in the stage bar when something looks off). */
+  maskMode: 'adaptive-alpha' | 'adaptive-luma' | 'soft-center' | 'none' = 'none';
+  maskCoverage = 0;
 
   constructor(
     readonly width = 480,
@@ -87,6 +142,12 @@ export class PersonSegmenter {
     this.maskCanvas.width = width;
     this.maskCanvas.height = height;
     this.maskCtx = this.maskCanvas.getContext('2d', { alpha: false })!;
+    // The selfie model answers at 256×144 / 256×256: a 240×320 work canvas loses nothing and keeps
+    // the per-pixel pass cheap on phones (77k pixels per frame).
+    this.alphaMask = document.createElement('canvas');
+    this.alphaMask.width = MASK_W;
+    this.alphaMask.height = MASK_H;
+    this.alphaCtx = this.alphaMask.getContext('2d', { willReadFrequently: true })!;
   }
 
   static supported(): boolean {
@@ -161,53 +222,97 @@ export class PersonSegmenter {
     step();
   }
 
-  /** Model result → person canvas (image masked by the feathered segmentation) + grayscale mask. */
+  /**
+   * Model result → person canvas + grey mask. The legacy solution hands the mask back either in the
+   * alpha channel or only as brightness with alpha fully opaque (it differs by browser / GPU path), so
+   * — like the original SingersVoice app — read a few pixels, use whichever channel actually varies,
+   * normalise it and feather it with a smoothstep. Implausible coverage (nobody in frame, or the whole
+   * frame "is" the person) falls back to a soft head-and-shoulders mask, never a rectangle.
+   */
   private drawModel(r: SegResults): void {
+    const mask = this.buildAlphaMask(r.segmentationMask);
     const c = this.ctx2d;
     const { width, height } = this.canvas;
     c.save();
     c.clearRect(0, 0, width, height);
-    c.filter = 'blur(1.5px)';
-    c.drawImage(r.segmentationMask, 0, 0, width, height);
-    c.filter = 'none';
-    c.globalCompositeOperation = 'source-in';
     c.drawImage(r.image, 0, 0, width, height);
+    c.globalCompositeOperation = 'destination-in';
+    c.drawImage(mask, 0, 0, width, height);
     c.restore();
-    this.updateMaskFromCanvas();
+    this.updateMaskFromAlpha(mask);
     this.bump();
   }
 
-  /** Fallback: the camera frame through a soft oval, so the singer still blends with the stage. */
+  private buildAlphaMask(source: CanvasImageSource): HTMLCanvasElement {
+    const ctx = this.alphaCtx;
+    ctx.clearRect(0, 0, MASK_W, MASK_H);
+    ctx.drawImage(source, 0, 0, MASK_W, MASK_H);
+    const img = ctx.getImageData(0, 0, MASK_W, MASK_H);
+    const r = alphaFromMaskPixels(img.data);
+    if (r.mode === 'unusable') return this.softCenterMask();
+    ctx.putImageData(img, 0, 0);
+    this.maskMode = r.mode;
+    this.maskCoverage = r.coverage;
+    return this.alphaMask;
+  }
+
+  /** Head-and-shoulders silhouette with soft edges (the original app's fallback when the mask is unusable). */
+  private softCenterMask(): HTMLCanvasElement {
+    if (!this.softMask) {
+      const cv = document.createElement('canvas');
+      cv.width = MASK_W;
+      cv.height = MASK_H;
+      const sc = cv.getContext('2d')!;
+      const img = sc.createImageData(MASK_W, MASK_H);
+      const d = img.data;
+      const cx = MASK_W * 0.5;
+      const cy = MASK_H * 0.48;
+      const rx = MASK_W * 0.28;
+      const ry = MASK_H * 0.46;
+      for (let y = 0; y < MASK_H; y++) {
+        for (let x = 0; x < MASK_W; x++) {
+          const i = (y * MASK_W + x) * 4;
+          const dx = (x - cx) / rx;
+          const dy = (y - cy) / ry;
+          const torso = smoothStep(1.05, 0.52, Math.sqrt(dx * dx + dy * dy));
+          const hx = (x - cx) / (MASK_W * 0.18);
+          const hy = (y - MASK_H * 0.32) / (MASK_H * 0.22);
+          const head = smoothStep(1.0, 0.42, Math.sqrt(hx * hx + hy * hy));
+          d[i] = 255;
+          d[i + 1] = 255;
+          d[i + 2] = 255;
+          d[i + 3] = Math.round(Math.max(torso, head) * 230);
+        }
+      }
+      sc.putImageData(img, 0, 0);
+      this.softMask = cv;
+    }
+    this.maskMode = 'soft-center';
+    return this.softMask;
+  }
+
+  /** Fallback without a model: the camera frame through the soft head-and-shoulders mask. */
   private drawOval(video: HTMLVideoElement): void {
+    const mask = this.softCenterMask();
     const c = this.ctx2d;
     const { width, height } = this.canvas;
     c.save();
     c.clearRect(0, 0, width, height);
-    const g = c.createRadialGradient(width / 2, height * 0.42, Math.min(width, height) * 0.18, width / 2, height * 0.5, Math.min(width, height) * 0.62);
-    g.addColorStop(0, 'rgba(0,0,0,1)');
-    g.addColorStop(0.75, 'rgba(0,0,0,1)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    c.fillStyle = g;
-    c.fillRect(0, 0, width, height);
-    c.globalCompositeOperation = 'source-in';
     drawCover(c, video, width, height);
+    c.globalCompositeOperation = 'destination-in';
+    c.drawImage(mask, 0, 0, width, height);
     c.restore();
-    this.updateMaskFromCanvas();
+    this.updateMaskFromAlpha(mask);
     this.bump();
   }
 
-  /** Grayscale mask = alpha of the person canvas (white fill ∩ person, over black). */
-  private updateMaskFromCanvas(): void {
+  /** Grey mask for the alpha packer: the white-with-alpha mask over black → grey = alpha. */
+  private updateMaskFromAlpha(mask: HTMLCanvasElement): void {
     const m = this.maskCtx;
     const { width, height } = this.maskCanvas;
-    m.save();
-    m.globalCompositeOperation = 'source-over';
     m.fillStyle = '#000';
     m.fillRect(0, 0, width, height);
-    m.globalCompositeOperation = 'lighter';
-    // Draw white where the person is: a white rect masked by the person's alpha.
-    m.drawImage(whiteThrough(this.canvas), 0, 0);
-    m.restore();
+    m.drawImage(mask, 0, 0, width, height);
   }
 
   private bump(): void {
@@ -246,26 +351,6 @@ export function drawCover(c: CanvasRenderingContext2D, source: HTMLVideoElement 
     sy = (sh - ch) / 2;
   }
   c.drawImage(source, sx, sy, cw, ch, 0, 0, w, h);
-}
-
-let scratchCanvas: HTMLCanvasElement | null = null;
-/** A canvas that is white wherever `person` is opaque (its alpha preserved). */
-function whiteThrough(person: HTMLCanvasElement): HTMLCanvasElement {
-  if (!scratchCanvas || scratchCanvas.width !== person.width || scratchCanvas.height !== person.height) {
-    scratchCanvas = document.createElement('canvas');
-    scratchCanvas.width = person.width;
-    scratchCanvas.height = person.height;
-  }
-  const c = scratchCanvas.getContext('2d')!;
-  c.save();
-  c.globalCompositeOperation = 'source-over';
-  c.clearRect(0, 0, scratchCanvas.width, scratchCanvas.height);
-  c.fillStyle = '#fff';
-  c.fillRect(0, 0, scratchCanvas.width, scratchCanvas.height);
-  c.globalCompositeOperation = 'destination-in';
-  c.drawImage(person, 0, 0);
-  c.restore();
-  return scratchCanvas;
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {

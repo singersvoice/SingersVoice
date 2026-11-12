@@ -66,7 +66,10 @@ each other, so any portal can be removed or replaced without touching the others
 
 Nobody is shown as a boxed camera tile. `video/segmenter.ts` cuts the singer out of their camera with
 MediaPipe Selfie Segmentation (bundled under `/mediapipe`, ~6 MB, cached by the service worker after
-the first use; CDN fallback; soft-focus oval when no model can load), and `video/stage.ts` draws every
+the first use; CDN fallback). The model's mask comes back either in the alpha channel or only as
+brightness with opaque alpha depending on the browser/GPU path, so — as in the original SingersVoice
+app — `alphaFromMaskPixels` uses whichever channel varies, normalises and feathers it, and falls back
+to a soft head-and-shoulders silhouette when the mask is unusable (never a rectangle). `video/stage.ts` draws every
 performer, left to right by stage slot, evenly spaced and bottom-anchored over the stage background —
 one shared stage whether there is 1 singer or 10, on every device.
 

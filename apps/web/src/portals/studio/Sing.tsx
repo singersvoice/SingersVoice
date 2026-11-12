@@ -424,7 +424,7 @@ export function Sing(props: { id: string }) {
       <div class="sing">
         <StageBackground id={app.backgroundId} />
         <VirtualStage compositor={compositor} extra={[feed.video]} />
-        <section class="stagebar" data-blend={blend} data-performers={compositor.tiles.length}>
+        <section class="stagebar" data-blend={blend} data-mask={feed.segmenter.maskMode} data-performers={compositor.tiles.length}>
           {camOn && blend === 'loading' && <span class="chip">blending you into the stage…</span>}
           {camOn && blend === 'oval' && app.cutout && <span class="chip warn">soft-focus mode (cut-out model unavailable)</span>}
           {!camOn && <span class="chip">camera off</span>}

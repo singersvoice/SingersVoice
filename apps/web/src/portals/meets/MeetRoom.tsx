@@ -717,7 +717,7 @@ function LiveStage(props: {
       <div class="sing">
         <StageBackground id={meet.backgroundId} />
         <VirtualStage compositor={compositor} extra={[feed.video]} />
-        <section class="stagebar" data-blend={blend} data-performers={compositor.tiles.length}>
+        <section class="stagebar" data-blend={blend} data-mask={feed.segmenter.maskMode} data-performers={compositor.tiles.length}>
           <span class="chip">
             <IcUsers size={14} /> {stagePerformers.length} on stage{others.length ? ` · ${connected}/${others.length} video linked` : ''}
           </span>
