@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import type { CatalogTrack, ChatMessage, Destination, Meet, MeetRecording, MeetSignal, Participant, PublishJob, UserRecord } from '@singersvoice/protocol';
+import type { CatalogTrack, ChatMessage, Destination, Meet, MeetPerformance, MeetRecording, MeetSignal, Participant, PublishJob, UserRecord } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { SCHEMA_SQL } from './schema.ts';
 
@@ -209,9 +209,56 @@ export class SqlStore {
     return rows.map((r) => JSON.parse(r.data) as StoredParticipant);
   }
 
-  /** Delete a meet and everything that hangs off it (the takes themselves live in each singer's Drive). */
+  /** Delete a meet and everything that hangs off it (the takes and shows themselves live in the singers' Drives). */
   async deleteMeet(meetId: string): Promise<void> {
-    for (const t of ['recordings', 'signals', 'chat', 'participants', 'meets']) await this.db.run(`DELETE FROM ${t} WHERE meet_id=?`, [meetId]);
+    for (const t of ['performances', 'meet_members', 'recordings', 'signals', 'chat', 'participants', 'meets']) await this.db.run(`DELETE FROM ${t} WHERE meet_id=?`, [meetId]);
+  }
+
+  // ---------- members: every account that was ever in a meet (participants come and go; the shows are shared with all of them) ----------
+
+  async addMember(meetId: string, userId: string): Promise<void> {
+    await this.db.run('INSERT OR IGNORE INTO meet_members (meet_id, user_id, joined_at) VALUES (?,?,?)', [meetId, userId, new Date().toISOString()]);
+  }
+
+  async listMembers(meetId: string): Promise<UserRecord[]> {
+    const rows = await this.db.all<{ user_id: string; email: string; name: string; picture: string; privileged: number; created_at: string; last_seen_at: string }>(
+      'SELECT u.* FROM meet_members m JOIN users u ON u.user_id = m.user_id WHERE m.meet_id=? ORDER BY m.joined_at ASC',
+      [meetId],
+    );
+    return rows.map((r) => ({ userId: r.user_id, email: r.email, name: r.name, picture: r.picture, privileged: !!r.privileged, createdAt: r.created_at, lastSeenAt: r.last_seen_at }));
+  }
+
+  // ---------- performances: the saved shows (one per song, registered by the host) ----------
+
+  async addPerformance(p: MeetPerformance): Promise<void> {
+    await this.db.run(
+      `INSERT INTO performances (performance_id, meet_id, host_user_id, data, created_at) VALUES (?,?,?,?,?)
+       ON CONFLICT(performance_id) DO UPDATE SET data=excluded.data`,
+      [p.performanceId, p.meetId, p.hostUserId, JSON.stringify(p), p.createdAt],
+    );
+  }
+
+  async getPerformance(performanceId: string): Promise<MeetPerformance | null> {
+    const r = await this.db.get<{ data: string }>('SELECT data FROM performances WHERE performance_id=?', [performanceId]);
+    return r ? (JSON.parse(r.data) as MeetPerformance) : null;
+  }
+
+  async listPerformancesForMeet(meetId: string): Promise<MeetPerformance[]> {
+    const rows = await this.db.all<{ data: string }>('SELECT data FROM performances WHERE meet_id=? ORDER BY created_at ASC', [meetId]);
+    return rows.map((r) => JSON.parse(r.data) as MeetPerformance);
+  }
+
+  /** Every show of every meet the user hosted or was ever in, newest first. */
+  async listPerformancesForUser(userId: string, limit = 200): Promise<MeetPerformance[]> {
+    const rows = await this.db.all<{ data: string }>(
+      `SELECT data FROM performances WHERE host_user_id=? OR meet_id IN (SELECT meet_id FROM meet_members WHERE user_id=?) ORDER BY created_at DESC LIMIT ?`,
+      [userId, userId, limit],
+    );
+    return rows.map((r) => JSON.parse(r.data) as MeetPerformance);
+  }
+
+  async deletePerformance(performanceId: string): Promise<void> {
+    await this.db.run('DELETE FROM performances WHERE performance_id=?', [performanceId]);
   }
 
   async removeParticipant(meetId: string, participantId: string): Promise<void> {

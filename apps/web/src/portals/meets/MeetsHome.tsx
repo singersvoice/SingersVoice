@@ -139,7 +139,14 @@ export function MeetsHome() {
 
 
   return (
-    <Page title="Live Meets">
+    <Page
+      title="Live Meets"
+      right={
+        <a class="btn sm" href={href('/studio/performances')} title="Every saved show of your meets, shared with everyone who was in them">
+          Performances
+        </a>
+      }
+    >
       <div class="stack" style="gap:18px">
         {!configured && (
           <div class="callout warn">

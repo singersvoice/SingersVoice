@@ -21,13 +21,12 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { privileged } from '../../state/session.ts';
 import { MeetSession } from '../meets/meetSession.ts';
 import { loadMeetTrack } from '../meets/trackSource.ts';
+import { VOCAL_LAG_MS } from '../../video/showRecorder.ts';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
 
 const IDLE_MS = 3000;
 const JOB_POLL_MS = 8000;
 const SYNC_TOLERANCE_MS = 300;
-/** The singers' vocals arrive a network hop late; the backing track plays this much behind the shared clock to meet them. */
-const VOCAL_LAG_MS = 250;
 
 export const activeJob = (j: PublishJob) => j.state === 'requested' || j.state === 'starting' || j.state === 'live';
 

@@ -170,6 +170,44 @@ export interface MeetRecording {
   createdAt: string;
 }
 
+/**
+ * The saved performance of one song of a meet: the show — every singer on stage over the stage
+ * background with the whole mix — recorded on the host's device, kept in the host's Drive
+ * (`Performances/Live`) and shared with everyone who was in the meet: it is listed in each
+ * member's Performances, with a link anyone can open.
+ */
+export interface MeetPerformance {
+  performanceId: string;
+  meetId: string;
+  meetTitle: string;
+  hostUserId: string;
+  hostName: string;
+  songTitle: string;
+  trackId: string;
+  singers: { slot: number; displayName: string; userId?: string }[];
+  /** The performance folder (manifest, vocal, video) — anyone with the link. */
+  link: string | null;
+  /** The video itself, for watching in a browser. */
+  videoLink: string | null;
+  durationMs: number;
+  bytes: number;
+  mimeType: string;
+  createdAt: string;
+}
+
+export interface RegisterPerformanceRequest {
+  resumeToken: string;
+  performanceId: string;
+  songTitle: string;
+  trackId: string;
+  singers: { slot: number; displayName: string; userId?: string }[];
+  link: string | null;
+  videoLink: string | null;
+  durationMs: number;
+  bytes: number;
+  mimeType: string;
+}
+
 /** NTP-style clock offset from a request/response pair. offset = server − local. */
 export function clockOffsetMs(sentAt: number, serverEpochMs: number, receivedAt: number): { offsetMs: number; rttMs: number } {
   const rttMs = receivedAt - sentAt;

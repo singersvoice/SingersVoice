@@ -1,19 +1,27 @@
 /**
  * The virtual stage: every performer (1..10) is cut out of their camera and drawn side by side
  * over the shared stage background, evenly spaced from left to right by stage slot — as if all
- * of them stood on the same stage, wherever they really are. The stage frames each of them
- * itself: it finds the person in their cut-out (the bounding box of the opaque pixels) and scales
- * them to fill their slot — head near the top, the camera's cut edge on the picture's bottom edge,
- * feet on the floor when the camera sees them — so a singer stands as big as the stage allows
- * whatever their camera, distance or framing, and ten singers make one even row. The canvas is
- * transparent: the background itself is the stage's CSS background (image or video), so nothing is
- * drawn twice.
+ * of them stood on the same stage, wherever they really are. Two modes, two priorities:
+ *
+ * - 'show' (Publisher mode: the broadcast picture, the lobby stage, the saved performance): the
+ *   singers are the picture. The stage frames each of them itself — it finds the person in their
+ *   cut-out (the bounding box of the opaque pixels) and scales them to fill their slot: head near
+ *   the top, the camera's cut edge on the picture's bottom edge, feet on the floor when the camera
+ *   sees them — so a singer stands as big as the stage allows whatever their camera, distance or
+ *   framing, and ten singers make one even row with their heads level.
+ * - 'stage' (Performer mode: the live stage, Studio): the lyrics are the picture. Each singer's
+ *   frame is drawn as their own camera framed it, small, in the lower part under the lyrics —
+ *   no zoom of any kind.
+ *
+ * The canvas is transparent: the background itself is the stage's CSS background (image or
+ * video), so nothing is drawn twice; a recorder draws the background under it itself.
  */
-import { AlphaUnpacker } from './alphaPack.ts';
+import type { UnpackedFrame } from './alphaPack.ts';
 
 export type PerformerSource =
   | { kind: 'person'; canvas: HTMLCanvasElement; version: () => number }
-  | { kind: 'packed'; video: HTMLVideoElement }
+  /** A remote performer's unpacked frames (shared with every other drawer of them). */
+  | { kind: 'frame'; frame: UnpackedFrame }
   | { kind: 'none' };
 
 export interface StagePerformer {
@@ -87,9 +95,10 @@ export type StageMode = 'stage' | 'show';
 
 /**
  * Pure layout: N slots evenly spaced across the width, bottom-anchored on the floor line; fewer
- * performers → wider slots. 'stage' leaves the top ~40 % to the lyrics (3:4 tiles); 'show'
- * (Publishing mode, the lobby stage) has no lyrics: every slot is as tall as the frame, so the
- * performers stand huge, like a televised stage show, in one even row whether there are 1 or 10.
+ * performers → wider slots. 'stage' (Performer mode) leaves the top ~55 % to the lyrics — small
+ * 3:4 tiles, the singers' own camera framing; 'show' (Publisher mode, the lobby stage) has no
+ * lyrics: every slot is as tall as the frame, so the performers stand huge, like a televised stage
+ * show, in one even row whether there are 1 or 10.
  */
 export function layoutStage(width: number, height: number, count: number, mode: StageMode = 'stage'): StageTile[] {
   const n = Math.max(1, count);
@@ -100,7 +109,7 @@ export function layoutStage(width: number, height: number, count: number, mode: 
     h = height * 0.96;
     w = Math.min(slotW * FILL_W, h * 0.9);
   } else {
-    const hFrac = n === 1 ? 0.62 : n === 2 ? 0.6 : n <= 4 ? 0.56 : n <= 6 ? 0.5 : 0.44;
+    const hFrac = n === 1 ? 0.44 : n === 2 ? 0.42 : n <= 4 ? 0.4 : n <= 6 ? 0.36 : 0.32;
     h = height * hFrac;
     w = h * 0.75;
     if (w > slotW * 0.96) {
@@ -202,9 +211,8 @@ export class StageCompositor {
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private performers: StagePerformer[] = [];
-  private unpackers = new Map<string, AlphaUnpacker>();
   private avatars = new Map<string, HTMLImageElement>();
-  /** Last time each packed <video> advanced (frames stop → placeholder after a grace period). */
+  /** Last time each remote frame advanced (frames stop → placeholder after a grace period). */
   private seen = new Map<string, { t: number; at: number }>();
   /** Where each person is in their frame: the box drawn (eased) and the box last measured. */
   private boxes = new Map<string, { box: PersonBox; target: PersonBox; at: number }>();
@@ -228,8 +236,9 @@ export class StageCompositor {
     this.ctx = this.canvas.getContext('2d', { alpha: true })!;
   }
 
-  resize(cssW: number, cssH: number): void {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
+  /** Size the canvas; `pixelRatio` fixes the backing pixels (a recorder's 1280×720) instead of following the screen. */
+  resize(cssW: number, cssH: number, pixelRatio?: number): void {
+    const dpr = pixelRatio ?? Math.min(2, window.devicePixelRatio || 1);
     const scale = Math.min(1, MAX_WIDTH / Math.max(1, cssW * dpr));
     this.cssW = cssW;
     this.cssH = cssH;
@@ -243,13 +252,7 @@ export class StageCompositor {
 
   setPerformers(list: StagePerformer[]): void {
     this.performers = [...list].sort((a, b) => a.slot - b.slot);
-    for (const id of [...this.unpackers.keys()]) {
-      if (!this.performers.some((p) => p.id === id && p.source.kind === 'packed')) {
-        this.unpackers.get(id)?.dispose();
-        this.unpackers.delete(id);
-        this.seen.delete(id);
-      }
-    }
+    for (const id of [...this.seen.keys()]) if (!this.performers.some((p) => p.id === id && p.source.kind === 'frame')) this.seen.delete(id);
     for (const id of [...this.boxes.keys()]) if (!this.performers.some((p) => p.id === id)) this.boxes.delete(id);
     for (const p of this.performers) {
       if (p.picture && !this.avatars.has(p.id)) {
@@ -284,8 +287,6 @@ export class StageCompositor {
   stop(): void {
     this.running = false;
     cancelAnimationFrame(this.raf);
-    for (const u of this.unpackers.values()) u.dispose();
-    this.unpackers.clear();
   }
 
   draw(): void {
@@ -301,17 +302,20 @@ export class StageCompositor {
     const tiles = layoutStage(W, H, this.performers.length, this.mode);
     this.tiles = tiles.map((t, i) => ({ ...t, id: this.performers[i]!.id, performer: this.performers[i]! }));
     // Frame everyone first (so heads can be levelled across the row), then draw left to right.
+    // Performer mode draws the whole frame as the singer's own camera framed it — no zoom.
+    const show = this.mode === 'show';
     const frames = this.tiles.map((t) => {
       const src = this.sourceCanvas(t.performer);
       if (!src) return null;
-      const box = this.personBox(t.performer.id, src);
+      const box = show ? this.personBox(t.performer.id, src) : WHOLE;
       t.fit = fitPerson(t, src.width, src.height, box, this.mode, H);
       return { src, box };
     });
-    levelHeads(
-      this.tiles.map((t) => t.fit),
-      H * 0.02,
-    );
+    if (show)
+      levelHeads(
+        this.tiles.map((t) => t.fit),
+        H * 0.02,
+      );
     for (const [i, t] of this.tiles.entries()) {
       const p = t.performer;
       const f = frames[i];
@@ -331,22 +335,17 @@ export class StageCompositor {
   /** The RGBA person image for a performer (local person canvas, or the unpacked remote frame). */
   private sourceCanvas(p: StagePerformer): HTMLCanvasElement | null {
     if (p.source.kind === 'person') return p.source.canvas;
-    if (p.source.kind === 'packed') {
-      const v = p.source.video;
-      if (v.readyState < 2 || !v.videoWidth) return null;
+    if (p.source.kind === 'frame') {
+      const f = p.source.frame;
+      const c = f.current();
+      if (!c) return null;
       // Frames stopped (camera off on their side, link dropped) → placeholder after a short grace;
       // judged by the video clock advancing, which is robust at any frame rate.
       const now = performance.now();
       const seen = this.seen.get(p.id);
-      if (!seen || seen.t !== v.currentTime) this.seen.set(p.id, { t: v.currentTime, at: now });
+      if (!seen || seen.t !== f.currentTime) this.seen.set(p.id, { t: f.currentTime, at: now });
       else if (now - seen.at > 2500) return null;
-      let u = this.unpackers.get(p.id);
-      if (!u) {
-        u = new AlphaUnpacker(Math.round(v.videoWidth / 2), v.videoHeight);
-        this.unpackers.set(p.id, u);
-      }
-      u.draw(v);
-      return u.canvas;
+      return c;
     }
     return null;
   }

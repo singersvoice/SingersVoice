@@ -63,6 +63,22 @@ CREATE TABLE IF NOT EXISTS recordings (
   created_at TEXT NOT NULL,
   PRIMARY KEY (meet_id, performance_id)
 );
+CREATE TABLE IF NOT EXISTS meet_members (
+  meet_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  joined_at TEXT NOT NULL,
+  PRIMARY KEY (meet_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_members_user ON meet_members(user_id);
+CREATE TABLE IF NOT EXISTS performances (
+  performance_id TEXT PRIMARY KEY,
+  meet_id TEXT NOT NULL,
+  host_user_id TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_performances_meet ON performances(meet_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_performances_host ON performances(host_user_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS destinations (
   owner_user_id TEXT NOT NULL,
   kind TEXT NOT NULL,

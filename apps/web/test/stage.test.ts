@@ -110,12 +110,15 @@ describe('fitting a person into their slot', () => {
     expect(solo).toEqual(soloCopy);
   });
 
-  it('stage mode (lyrics above) keeps the person inside the lower tile, never cropped', () => {
+  it('performer mode (lyrics above) draws the whole camera frame small in the lower tile — no zoom', () => {
     const [t] = layoutStage(1280, 720, 1) as [StageTile];
-    const fit = fitPerson(t, 480, 640, BUST, 'stage', 720);
+    expect(t.h / 720).toBeLessThan(0.5); // the lyrics own the top half and more
+    const whole = { x: 0, y: 0, w: 1, h: 1 };
+    const fit = fitPerson(t, 480, 640, whole, 'stage', 720);
     expect(fit.cropped).toBe(false);
-    expect(fit.y).toBeGreaterThanOrEqual(t.y);
-    expect(fit.h).toBeGreaterThan(t.h * 0.9); // but still as big as the tile allows
+    expect(fit.w / fit.h).toBeCloseTo(480 / 640, 5); // the frame as the singer's own camera framed it
+    expect(fit.h).toBeLessThanOrEqual(t.h + 720 * 0.015 + 0.01);
+    expect(fit.y + fit.h).toBeCloseTo(720, 3); // the camera's cut edge on the bottom edge
   });
 
   it('with nobody found yet the whole frame is fitted, as before', () => {

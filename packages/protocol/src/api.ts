@@ -1,6 +1,6 @@
 /** sv-control HTTP API shapes shared by the client and the server. All routes are JSON. */
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
-import type { ChatMessage, Meet, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, SongPick, StagePolicy } from './meet.ts';
+import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
 import type { Destination, DestinationKind, DestinationUpdate, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 
 export interface ApiError {
@@ -58,6 +58,8 @@ export interface MeetSnapshot {
   participants: Participant[];
   chat: ChatMessage[];
   recordings: MeetRecording[];
+  /** The saved shows of this meet (one per song, recorded on the host's device, shared with everyone in it). */
+  performances: MeetPerformance[];
   serverEpochMs: number;
   you?: Participant;
 }
@@ -166,6 +168,11 @@ export interface Routes {
   'GET /ice': { res: { iceServers: IceServer[] } };
   'POST /meets/:id/leave': { req: { resumeToken: string }; res: { ok: true } };
   'POST /meets/:id/recordings': { req: RegisterRecordingRequest; res: { recording: MeetRecording } };
+  /** The host registers a song's saved show; `shareWith` = the Google accounts of everyone else in the meet, for the host's Drive to share the folder with. */
+  'POST /meets/:id/performances': { req: RegisterPerformanceRequest; res: { performance: MeetPerformance; shareWith: string[] } };
+  /** Every saved show of every meet this account hosted or took part in. */
+  'GET /performances': { res: { performances: MeetPerformance[] } };
+  'DELETE /performances/:id': { res: { ok: true } };
   'GET /watch/:id': { res: WatchResponse };
   'GET /publishing/destinations': { res: { destinations: Destination[] } };
   'PUT /publishing/destinations/:kind': { req: DestinationUpdate; res: { destination: Destination } };

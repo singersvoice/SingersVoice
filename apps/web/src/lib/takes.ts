@@ -1,5 +1,5 @@
 /** Build and save performance manifests for solo (Studio) and live (Meets) takes. */
-import { newId, tempExpiry, type FileEntry, type PerformanceManifest, type TrackPackageV2 } from '@singersvoice/protocol';
+import { newId, tempExpiry, type FileEntry, type PerformanceKind, type PerformanceManifest, type PerformanceSinger, type TrackPackageV2 } from '@singersvoice/protocol';
 import { sha256Blob } from './hash.ts';
 import { platformName } from './platform.ts';
 import type { PerformanceSummary, Progress } from './storage/types.ts';
@@ -8,6 +8,7 @@ import { withProvider } from '../state/session.ts';
 
 export interface TakeResult {
   vocal: Blob;
+  /** The show: the stage picture with everyone on it and the whole mix (see video/showRecorder.ts). */
   video: Blob | null;
   durationMs: number;
   vocalOffsetMs: number;
@@ -20,7 +21,18 @@ export interface TakeResult {
 export async function buildManifest(
   take: TakeResult,
   track: Pick<TrackPackageV2, 'trackId' | 'title' | 'artist'>,
-  opts: { state: 'temp' | 'kept'; mode: 'offline' | 'live'; slot: number; meetId: string | null; performanceId?: string; nudgeMs?: number },
+  opts: {
+    state: 'temp' | 'kept';
+    mode: 'offline' | 'live';
+    slot: number;
+    meetId: string | null;
+    performanceId?: string;
+    nudgeMs?: number;
+    kind?: PerformanceKind;
+    meetTitle?: string;
+    singers?: PerformanceSinger[];
+    hostName?: string;
+  },
 ): Promise<PerformanceManifest> {
   const files: FileEntry[] = [{ name: 'vocal.wav', mimeType: 'audio/wav', size: take.vocal.size, sha256: await sha256Blob(take.vocal) }];
   if (take.video && take.video.size) {
@@ -34,6 +46,10 @@ export async function buildManifest(
     performanceId: opts.performanceId ?? newId('perf-'),
     mode: opts.mode,
     state: opts.state,
+    kind: opts.kind ?? (take.video ? 'show' : 'take'),
+    ...(opts.meetTitle ? { meetTitle: opts.meetTitle } : {}),
+    ...(opts.singers ? { singers: opts.singers } : {}),
+    ...(opts.hostName ? { hostName: opts.hostName } : {}),
     createdAt,
     expiresAt: opts.state === 'temp' ? tempExpiry(new Date(createdAt)) : null,
     trackId: track.trackId,

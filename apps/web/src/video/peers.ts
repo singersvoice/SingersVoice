@@ -1,7 +1,9 @@
 /**
- * Performer-to-performer video for a live meet: a WebRTC mesh between the singers on stage
- * (≤ 10), video only (singers never hear each other — Solo foldback — the mix is the session
- * container's job). Signalling rides on the SVT DB relay (`/meets/:id/signal`, polled), so no
+ * Performer-to-performer links for a live meet: a WebRTC mesh between the singers on stage
+ * (≤ 10) carrying each one's alpha-packed video and, when asked (`wantAudio`), their vocal — for
+ * the saved show only: a vocal that arrives is never played, so singers never hear each other
+ * (Solo foldback) and latency never pulls them apart. A publisher's show view receives both and
+ * sends nothing. Signalling rides on the SVT DB relay (`/meets/:id/signal`, polled), so no
  * socket server is needed; ICE servers come from `/ice` (STUN by default, TURN when deployed).
  *
  * "Perfect negotiation": the peer with the lexically smaller participantId is polite, so two
@@ -33,9 +35,9 @@ interface Peer {
   restarts: number;
   /** Opened by the other side (a publisher's show view): kept until they say bye, not reconciled against the stage. */
   inbound: boolean;
-  /** Their offer carried an audio line: a publisher's show view that wants my vocal (singers' own links never do). */
+  /** Their offer carried an audio line: they want my vocal (a publisher's show view, a singer recording the show). */
   wantsAudio: boolean;
-  /** Remote audio (a publisher receiving a singer's vocal). */
+  /** Their vocal, when this link carries it (a publisher, or a singer recording the show). */
   audio: MediaStream | null;
   /** Signals to this peer go out one after another, so an offer always lands in the relay before its ICE candidates. */
   sendChain: Promise<void>;
@@ -65,16 +67,22 @@ export class PerformerMesh {
   private running = false;
   private polling = false;
   onRemote: ((id: string, stream: MediaStream | null, state: PeerState) => void) | null = null;
-  /** A singer's vocal arrived / went away (publisher side only). */
+  /** A singer's vocal arrived / went away (on links that carry vocals: a publisher's, a recording singer's). */
   onRemoteAudio: ((id: string, stream: MediaStream | null) => void) | null = null;
   private localAudio: MediaStreamTrack | null = null;
+  /** A publisher's show view only receives (never sends a camera). */
+  private readonly receiveOnly: boolean;
+  /** Ask every singer for their vocal (and offer mine): the saved show needs the whole mix. */
+  private readonly wantAudio: boolean;
 
   constructor(
     private channel: SignalChannel,
     readonly me: string,
-    /** A publisher's show view only receives (never sends a camera). */
-    private readonly receiveOnly = false,
-  ) {}
+    opts: { receiveOnly?: boolean; wantAudio?: boolean } = {},
+  ) {
+    this.receiveOnly = opts.receiveOnly ?? false;
+    this.wantAudio = opts.wantAudio ?? false;
+  }
 
   static supported(): boolean {
     return typeof RTCPeerConnection === 'function';
@@ -105,13 +113,13 @@ export class PerformerMesh {
   }
 
   /**
-   * My vocal (after FX) for the publisher links only — singers never hear each other. The sender
-   * slot already exists on every publisher link (their offer carries an audio line), so this
-   * never renegotiates; null stops sending.
+   * My vocal (after FX) for the links that carry vocals — a publisher's show view, and singers
+   * recording the show (who receive it, never play it). The sender slot already exists on those
+   * links (an audio line in the offer), so this never renegotiates; null stops sending.
    */
   setLocalAudio(track: MediaStreamTrack | null): void {
     this.localAudio = track;
-    for (const p of this.peers.values()) if (p.wantsAudio) this.attachAudio(p);
+    for (const p of this.peers.values()) this.attachAudio(p);
   }
 
   private attachAudio(peer: Peer): void {
@@ -187,8 +195,10 @@ export class PerformerMesh {
     const track = this.local?.getVideoTracks()[0] ?? null;
     if (track && this.local && !this.receiveOnly) pc.addTrack(track, this.local);
     else pc.addTransceiver('video', { direction: this.receiveOnly ? 'recvonly' : 'sendrecv' });
-    // A publisher also asks every singer for their vocal (the broadcast mix); singers never ask each other.
+    // A publisher asks every singer for their vocal (the broadcast mix); a singer recording the show
+    // asks the others for theirs and offers their own — received for the recording, never played.
     if (this.receiveOnly) pc.addTransceiver('audio', { direction: 'recvonly' });
+    else if (this.wantAudio) pc.addTransceiver(this.localAudio ?? 'audio', { direction: 'sendrecv' });
     this.applyCaps(peer);
 
     pc.onnegotiationneeded = async () => {
@@ -327,11 +337,12 @@ export class PerformerMesh {
         if (peer.ignoreOffer) return;
         await pc.setRemoteDescription(desc);
         if (desc.type === 'offer') {
-          // Their offer asks for my vocal (a publisher): answer with a sending audio line, fed when my mic is open.
+          // Their offer asks for my vocal (a publisher, a singer recording the show): answer with a sending
+          // audio line, fed when my mic is open — and ask for theirs back when I record the show too.
           const audioT = pc.getTransceivers().find((x) => x.receiver.track?.kind === 'audio');
           if (audioT && !this.receiveOnly) {
             peer.wantsAudio = true;
-            audioT.direction = 'sendonly';
+            audioT.direction = this.wantAudio ? 'sendrecv' : 'sendonly';
             if (this.localAudio) void audioT.sender.replaceTrack(this.localAudio).catch(() => undefined);
           }
           await pc.setLocalDescription();

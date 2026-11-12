@@ -156,8 +156,8 @@ for (const m of matrix) {
       await page.getByText('Your take').waitFor({ timeout: 30000 });
       await wait(1200);
       await shot('24-meet-review');
-      await page.getByRole('button', { name: 'Keep' }).click();
-      await page.getByText('Kept', { exact: true }).first().waitFor({ timeout: 30000 });
+      // The host's take is the meet's saved performance: kept by itself and shared with the meet (no Keep button).
+      await page.getByText(/Saved as this meet's performance/).waitFor({ timeout: 30000 });
       await page.getByRole('button', { name: 'Back to the stage' }).click();
       await page.getByRole('button', { name: 'End meet' }).waitFor({ timeout: 30000 });
       page.once('dialog', (d) => d.accept());

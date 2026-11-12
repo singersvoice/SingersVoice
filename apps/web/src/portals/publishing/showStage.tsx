@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { serverNow } from '../../lib/api.ts';
+import { UnpackedFrame } from '../../video/alphaPack.ts';
 import { PerformerMesh, type PeerState } from '../../video/peers.ts';
 import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
 import type { MeetSession } from '../meets/meetSession.ts';
@@ -28,8 +29,8 @@ export interface ShowFeed {
 /** Receive every performer's video (the publisher never sends a camera) and lay them out as a show. */
 export function useShowFeed(session: MeetSession, meet: Meet, you: Participant): ShowFeed {
   const compositor = useMemo(() => new StageCompositor('show'), []);
-  const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, you.participantId, true) : null), [session, you.participantId]);
-  const remoteVideos = useRef(new Map<string, HTMLVideoElement>());
+  const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, you.participantId, { receiveOnly: true }) : null), [session, you.participantId]);
+  const remoteVideos = useRef(new Map<string, { video: HTMLVideoElement; frame: UnpackedFrame }>());
   const [peerStates, setPeerStates] = useState<Record<string, PeerState>>({});
   const [vocals, setVocals] = useState<Record<string, MediaStream>>({});
 
@@ -43,24 +44,26 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
         return next;
       });
     mesh.onRemote = (id, stream, state) => {
-      let v = remoteVideos.current.get(id);
+      let r = remoteVideos.current.get(id);
       if (stream) {
-        if (!v) {
-          v = document.createElement('video');
+        if (!r) {
+          const v = document.createElement('video');
           v.muted = true;
           v.playsInline = true;
           v.autoplay = true;
           v.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
           document.body.appendChild(v);
-          remoteVideos.current.set(id, v);
+          r = { video: v, frame: new UnpackedFrame(v) };
+          remoteVideos.current.set(id, r);
         }
-        if (v.srcObject !== stream) {
-          v.srcObject = stream;
-          void v.play().catch(() => undefined);
+        if (r.video.srcObject !== stream) {
+          r.video.srcObject = stream;
+          void r.video.play().catch(() => undefined);
         }
-      } else if (v) {
-        v.srcObject = null;
-        v.remove();
+      } else if (r) {
+        r.frame.dispose();
+        r.video.srcObject = null;
+        r.video.remove();
         remoteVideos.current.delete(id);
       }
       setPeerStates((s) => ({ ...s, [id]: state }));
@@ -73,9 +76,10 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
       w.__svShowMeshes = (w.__svShowMeshes ?? []).filter((m) => m !== mesh);
       if (session.onLeave) session.onLeave = null;
       void mesh.close();
-      for (const v of remoteVideos.current.values()) {
-        v.srcObject = null;
-        v.remove();
+      for (const r of remoteVideos.current.values()) {
+        r.frame.dispose();
+        r.video.srcObject = null;
+        r.video.remove();
       }
       remoteVideos.current.clear();
       setVocals({});
@@ -92,9 +96,9 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
   // Everyone on stage, left to right by slot — huge, like a stage show (no "me": the publisher is not a performer).
   useEffect(() => {
     const list: StagePerformer[] = stagePerformers.map((s) => {
-      const v = remoteVideos.current.get(s.participantId!);
+      const r = remoteVideos.current.get(s.participantId!);
       const color = SLOT_COLORS[Math.max(1, Math.min(10, s.slot)) as SingerSlot];
-      return { id: s.participantId!, slot: s.slot, label: s.displayName.split(' ')[0] || 'Singer', picture: s.picture, color, source: v ? { kind: 'packed', video: v } : { kind: 'none' } };
+      return { id: s.participantId!, slot: s.slot, label: s.displayName.split(' ')[0] || 'Singer', picture: s.picture, color, source: r ? { kind: 'frame', frame: r.frame } : { kind: 'none' } };
     });
     compositor.setPerformers(list);
   }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), peerStates]);

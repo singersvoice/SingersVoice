@@ -1,7 +1,7 @@
 import { formatMs, SLOT_COLORS, type CatalogTrack, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
-import { StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
+import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
@@ -16,9 +16,10 @@ import type { LoadedTrack, TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { isDrive, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
-import { Camera, pickVideoMime } from '../../video/camera.ts';
+import { Camera } from '../../video/camera.ts';
 import type { ZoomPreset } from '../../video/framing.ts';
 import { LocalFeed } from '../../video/localFeed.ts';
+import { ShowRecorder } from '../../video/showRecorder.ts';
 import { StageCompositor } from '../../video/stage.ts';
 
 type Phase = 'loading' | 'ready' | 'starting' | 'countdown' | 'playing' | 'paused' | 'finishing' | 'review';
@@ -132,10 +133,9 @@ export function Sing(props: { id: string }) {
   const camera = useMemo(() => new Camera(), []);
   const feed = useMemo(() => new LocalFeed(), []);
   const compositor = useMemo(() => new StageCompositor(), []);
+  /** The take's video is the show: my cut-out on the stage background, as Publisher mode would show it, with the mix. */
+  const show = useMemo(() => new ShowRecorder(), []);
   const [blend, setBlend] = useState<'loading' | 'model' | 'oval' | 'off'>('off');
-  const mediaRec = useRef<MediaRecorder | null>(null);
-  const videoChunks = useRef<Blob[]>([]);
-  const videoStartCtx = useRef<number | null>(null);
   const startedEpoch = useRef(0);
   const raf = useRef(0);
 
@@ -161,6 +161,7 @@ export function Sing(props: { id: string }) {
       cancelAnimationFrame(raf.current);
       camera.close();
       feed.dispose();
+      show.dispose();
       void engineRef.current?.close();
       engineRef.current = null;
       void keepAwake(false);
@@ -186,8 +187,17 @@ export function Sing(props: { id: string }) {
   }, []);
   const facing = camera.facing.value;
   useEffect(() => {
-    compositor.setPerformers([{ id: 'me', slot: mySlot, label: `You · S${mySlot}`, color: SLOT_COLORS[mySlot], source: feed.source, mirror: facing === 'user', isMe: true }]);
+    const me = { id: 'me', slot: mySlot, label: `You · S${mySlot}`, color: SLOT_COLORS[mySlot], source: feed.source, mirror: facing === 'user', isMe: true } as const;
+    compositor.setPerformers([me]);
+    show.setPerformers([{ ...me, label: 'You' }]);
   }, [camStream, camOn, mySlot, facing]);
+  // The recording draws the same background the stage shows.
+  const bgItems = backgrounds.value;
+  useEffect(() => {
+    void loadBackgrounds();
+    const item = backgroundById(app.backgroundId);
+    show.setBackground(item ?? null, backgroundSrc(item));
+  }, [app.backgroundId, bgItems.length]);
 
   // Apply FX whenever settings change.
   useEffect(() => {
@@ -258,22 +268,8 @@ export function Sing(props: { id: string }) {
       startedEpoch.current = Date.now() + Math.round((t0 - engine.ctx.currentTime) * 1000);
       void recStart;
 
-      // Camera video via MediaRecorder (video only).
-      videoChunks.current = [];
-      videoStartCtx.current = null;
-      if (camera.stream && pickVideoMime()) {
-        try {
-          const mr = new MediaRecorder(camera.stream, { mimeType: pickVideoMime(), videoBitsPerSecond: 1_800_000 });
-          mr.ondataavailable = (e) => e.data.size && videoChunks.current.push(e.data);
-          mr.onstart = () => {
-            videoStartCtx.current = engine.ctx.currentTime;
-          };
-          mr.start(1000);
-          mediaRec.current = mr;
-        } catch {
-          mediaRec.current = null;
-        }
-      }
+      // The show (my cut-out on the stage, with the mix) records from the kickstart.
+      show.start(engine, t0);
       player.onEnded = () => void finish();
       setPhase(app.countIn ? 'countdown' : 'playing');
       const tick = () => {
@@ -302,11 +298,7 @@ export function Sing(props: { id: string }) {
     const at = engine.ctx.currentTime;
     player.pause();
     engine.recorder?.pause(at);
-    try {
-      if (mediaRec.current?.state === 'recording') mediaRec.current.pause();
-    } catch {
-      /* ignore */
-    }
+    show.pause();
     setPhase('paused');
   };
 
@@ -317,11 +309,7 @@ export function Sing(props: { id: string }) {
     const t0 = engine.ctx.currentTime + 0.12;
     player.play(t0, player.positionMs());
     engine.recorder?.resume(t0);
-    try {
-      if (mediaRec.current?.state === 'paused') mediaRec.current.resume();
-    } catch {
-      /* ignore */
-    }
+    show.resume();
     player.onEnded = () => void finish();
     setPhase('playing');
   };
@@ -333,13 +321,7 @@ export function Sing(props: { id: string }) {
     cancelAnimationFrame(raf.current);
     engine.player?.stop();
     if (engine.recorder?.recording) await engine.recorder.stop().catch(() => undefined);
-    const mr = mediaRec.current;
-    mediaRec.current = null;
-    if (mr && mr.state !== 'inactive') {
-      mr.ondataavailable = null;
-      mr.stop();
-    }
-    videoChunks.current = [];
+    await show.stop();
     setTMs(0);
     setPhase('ready');
     await start();
@@ -368,18 +350,10 @@ export function Sing(props: { id: string }) {
       } else {
         vocal = new Blob([], { type: 'audio/wav' });
       }
-      let video: Blob | null = null;
-      let videoOffsetMs: number | null = null;
-      const mr = mediaRec.current;
-      if (mr && mr.state !== 'inactive') {
-        await new Promise<void>((resolve) => {
-          mr.onstop = () => resolve();
-          mr.stop();
-        });
-        video = new Blob(videoChunks.current, { type: mr.mimeType });
-        videoOffsetMs = videoStartCtx.current !== null ? (videoStartCtx.current - origin) * 1000 : null;
-      }
-      mediaRec.current = null;
+      // The show's first frame shows the stage as it was a lag earlier (its sources are held back): frame 0 ↔ that track position.
+      const rec = await show.stop();
+      const video = rec?.video ?? null;
+      const videoOffsetMs = rec ? (rec.startCtxTime - origin) * 1000 - rec.lagMs : null;
       engine.closeMic();
       await keepAwake(false);
       const latencyCompMs = Math.round(engine.outputLatencyMs * 2);
@@ -573,7 +547,16 @@ export function Review(props: {
   /** 'live' takes are filed under Performances/Live and reported to the meet. */
   mode?: 'offline' | 'live';
   meetId?: string | null;
-  onSaved?: (summary: { performanceId: string; link?: string; state: 'temp' | 'kept' }) => void;
+  /** The meet this was sung in: filed with the manifest so a saved show says who sang it where. */
+  meet?: { title: string; hostName: string; singers: { slot: number; displayName: string; userId?: string }[] };
+  /**
+   * The host's take of a meet song is the meet's saved performance: kept straight away (never
+   * Temp) and shared with everyone in the meet — `onSaved` registers it.
+   */
+  autoKeep?: boolean;
+  onSaved?: (summary: { performanceId: string; link?: string; videoLink?: string; state: 'temp' | 'kept' }) => void;
+  /** The saved take was deleted from here (a registered performance is unregistered too). */
+  onDiscarded?: (performanceId: string) => void;
   againLabel?: string;
 }) {
   const { take, loaded } = props;
@@ -590,9 +573,10 @@ export function Review(props: {
 
   const alignMs = take.vocalOffsetMs - take.latencyCompMs + nudge; // vocal sample 0 sits here on the track timeline
 
-  // Auto-save to Temp as soon as the take exists (nothing is lost if the tab closes).
+  // Auto-save as soon as the take exists (nothing is lost if the tab closes): Temp for a personal take,
+  // kept for the meet's performance.
   useEffect(() => {
-    void saveTake('temp');
+    void saveTake(props.autoKeep ? 'kept' : 'temp');
     return () => stop();
   }, []);
 
@@ -650,13 +634,21 @@ export function Review(props: {
       if (savedId && state === 'kept') {
         await withProvider((p) => p.keepPerformance(savedId));
       } else {
-        const manifest = await buildManifest(take, loaded.track, { state, mode: props.mode ?? 'offline', slot: props.slot, meetId: props.meetId ?? null, performanceId: savedId ?? undefined, nudgeMs: nudge });
+        const manifest = await buildManifest(take, loaded.track, {
+          state,
+          mode: props.mode ?? 'offline',
+          slot: props.slot,
+          meetId: props.meetId ?? null,
+          performanceId: savedId ?? undefined,
+          nudgeMs: nudge,
+          ...(props.meet ? { meetTitle: props.meet.title, hostName: props.meet.hostName, singers: props.meet.singers } : {}),
+        });
         const s = await persistTake(manifest, take, (pr) => setSaving(pr));
         setSavedId(s.performanceId);
-        props.onSaved?.({ performanceId: s.performanceId, link: s.link, state });
+        props.onSaved?.({ performanceId: s.performanceId, link: s.link, videoLink: s.videoLink, state });
       }
       setSavedState(state);
-      if (state === 'kept') toast(`Kept in ${isDrive.value ? `Drive › SingersVoice › Performances › ${props.mode === 'live' ? 'Live' : 'Offline'}` : 'Performances'}`, 'ok', 5000);
+      if (state === 'kept' && !props.autoKeep) toast(`Kept in ${isDrive.value ? `Drive › SingersVoice › Performances › ${props.mode === 'live' ? 'Live' : 'Offline'}` : 'Performances'}`, 'ok', 5000);
     } catch (e) {
       toast(`Could not save the take: ${errorText(e)}`, 'error', 10000, { label: 'Retry', onClick: () => void saveTake(state) });
     } finally {
@@ -665,10 +657,13 @@ export function Review(props: {
   }
 
   const discard = async () => {
-    if (!confirm('Discard this take?')) return;
+    if (!confirm(props.autoKeep ? 'Delete this performance for everyone in the meet?' : 'Discard this take?')) return;
     stop();
     try {
-      if (savedId) await withProvider((p) => p.deletePerformance(savedId));
+      if (savedId) {
+        await withProvider((p) => p.deletePerformance(savedId));
+        props.onDiscarded?.(savedId);
+      }
     } catch (e) {
       toast(errorText(e), 'warn');
     }
@@ -682,14 +677,16 @@ export function Review(props: {
           <h2>{loaded.track.title}</h2>
           <div class="muted small">
             {formatMs(take.durationMs)} · vocal {take.vocal.size ? `${(take.vocal.size / 1048576).toFixed(1)} MB WAV` : 'not captured'}
-            {take.video && take.video.size ? ` · video ${(take.video.size / 1048576).toFixed(1)} MB` : ''}
+            {take.video && take.video.size ? ` · show video ${(take.video.size / 1048576).toFixed(1)} MB` : ''}
           </div>
           {savedState === 'temp' && <span class="chip warn">In Temp — auto-deletes in 7 days unless kept</span>}
-          {savedState === 'kept' && <span class="chip ok">Kept</span>}
+          {savedState === 'kept' && !props.autoKeep && <span class="chip ok">Kept</span>}
+          {savedState === 'kept' && props.autoKeep && <span class="chip ok">Saved as this meet's performance — shared with everyone in the meet</span>}
           {saving && <Progress fraction={saving.fraction} label={saving.label} />}
         </div>
         <div class="perf-player">
           {videoUrl && <video ref={videoRef} src={videoUrl} muted playsInline />}
+          {videoUrl && <div class="small faint">The video is the show itself — the stage with everyone on it, as Publisher mode shows it, with the whole mix as its sound.</div>}
           <div class="row">
             <button class="btn primary" onClick={() => (playing ? stop() : void play())}>
               {playing ? <IcStop /> : <IcPlay />} {playing ? 'Stop' : 'Play mix'}
@@ -702,11 +699,13 @@ export function Review(props: {
           <div class="small faint">Auto-aligned by the audio clock (offset {take.vocalOffsetMs} ms, latency comp {take.latencyCompMs} ms). Nudge if your voice lands early/late.</div>
         </div>
         <div class="grid-2">
-          <button class="btn accent lg" disabled={saving !== null || savedState === 'kept'} onClick={() => void saveTake('kept')}>
-            Keep
-          </button>
+          {!props.autoKeep && (
+            <button class="btn accent lg" disabled={saving !== null || savedState === 'kept'} onClick={() => void saveTake('kept')}>
+              Keep
+            </button>
+          )}
           <button class="btn danger lg" disabled={saving !== null} onClick={() => void discard()}>
-            Discard
+            {props.autoKeep ? 'Delete this performance' : 'Discard'}
           </button>
         </div>
         <div class="row">

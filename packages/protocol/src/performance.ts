@@ -16,12 +16,32 @@ export interface FileEntry {
   md5?: string;
 }
 
+/**
+ * What a performance's video is: a 'take' is this singer's own camera; a 'show' is the broadcast
+ * picture — every singer on stage cut out over the stage background, with the whole mix (backing
+ * track + every vocal) as its sound — exactly what Publishing mode shows. A meet's show, recorded
+ * on the host's device, is the one saved performance of that song, shared with everyone in the meet.
+ */
+export type PerformanceKind = 'take' | 'show';
+
+export interface PerformanceSinger {
+  slot: number;
+  displayName: string;
+  userId?: string;
+}
+
 /** singersvoice.performance.v2 — `manifest.json` inside each performance folder. */
 export interface PerformanceManifest {
   schema: 'singersvoice.performance.v2';
   performanceId: string;
   mode: PerformanceMode;
   state: PerformanceState;
+  /** Missing in older manifests = 'take'. */
+  kind?: PerformanceKind;
+  /** The meet this was sung in (live mode): its title, who was on stage, who hosted. */
+  meetTitle?: string;
+  singers?: PerformanceSinger[];
+  hostName?: string;
   /** ISO date; Temp performances are deleted after `expiresAt`. */
   createdAt: string;
   expiresAt: string | null;

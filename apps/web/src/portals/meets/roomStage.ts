@@ -8,15 +8,21 @@
  * One LocalFeed (camera → cut-out → framing), one StageCompositor and one PerformerMesh per room,
  * shared by the lobby's stage strip and the full live stage, so nothing reconnects when the song
  * starts. Audience devices draw the performers' placeholders (video is private to the stage).
+ * Beside the stage runs the ShowRecorder: the saved performance of each song, the broadcast
+ * picture with the whole mix, drawn from the same cut-outs (the other singers' vocals come over
+ * the mesh for it — and are never played).
  */
 import { SLOT_COLORS, type Meet, type Participant, type SingerSlot } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AudioEngine } from '../../audio/engine.ts';
+import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
 import { appSettings } from '../../state/settings.ts';
+import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
 import { LocalFeed } from '../../video/localFeed.ts';
 import { PerformerMesh, type PeerState } from '../../video/peers.ts';
 import type { SegmenterMode } from '../../video/segmenter.ts';
+import { ShowRecorder } from '../../video/showRecorder.ts';
 import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
 import type { MeetSession } from './meetSession.ts';
 
@@ -24,6 +30,8 @@ export interface RoomStage {
   feed: LocalFeed;
   compositor: StageCompositor;
   mesh: PerformerMesh | null;
+  /** The saved performance of a song: the show picture with the whole mix, recorded on this device. */
+  show: ShowRecorder;
   peerStates: Record<string, PeerState>;
   /** How my cut-out is made right now (model / soft-focus oval / loading / off). */
   blend: SegmenterMode;
@@ -41,8 +49,10 @@ export interface RoomStage {
 export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; level: () => number; engine: AudioEngine | null }): RoomStage {
   const feed = useMemo(() => new LocalFeed(), []);
   const compositor = useMemo(() => new StageCompositor('show'), []);
-  const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, you.participantId) : null), [session, you.participantId]);
-  const remoteVideos = useRef(new Map<string, HTMLVideoElement>());
+  const show = useMemo(() => new ShowRecorder(), []);
+  // Every singer's link carries their vocal for the recording of the show (received, never played).
+  const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, you.participantId, { wantAudio: true }) : null), [session, you.participantId]);
+  const remoteVideos = useRef(new Map<string, { video: HTMLVideoElement; frame: UnpackedFrame }>());
   const [peerStates, setPeerStates] = useState<Record<string, PeerState>>({});
   const [blend, setBlend] = useState<SegmenterMode>('off');
   const [camError, setCamError] = useState<string | null>(null);
@@ -117,37 +127,41 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   useEffect(() => {
     if (!mesh) return;
     mesh.onRemote = (id, stream, state) => {
-      let v = remoteVideos.current.get(id);
+      let r = remoteVideos.current.get(id);
       if (stream) {
-        if (!v) {
-          v = document.createElement('video');
+        if (!r) {
+          const v = document.createElement('video');
           v.muted = true;
           v.playsInline = true;
           v.autoplay = true;
           v.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
           document.body.appendChild(v);
-          remoteVideos.current.set(id, v);
+          r = { video: v, frame: new UnpackedFrame(v) };
+          remoteVideos.current.set(id, r);
         }
-        if (v.srcObject !== stream) {
-          v.srcObject = stream;
-          void v.play().catch(() => undefined);
+        if (r.video.srcObject !== stream) {
+          r.video.srcObject = stream;
+          void r.video.play().catch(() => undefined);
         }
-      } else if (v) {
-        v.srcObject = null;
-        v.remove();
+      } else if (r) {
+        r.frame.dispose();
+        r.video.srcObject = null;
+        r.video.remove();
         remoteVideos.current.delete(id);
       }
       setPeerStates((s) => ({ ...s, [id]: state }));
     };
+    mesh.onRemoteAudio = (id, stream) => show.setVocal(id, stream); // the recording's mix only — never the speakers
     (window as unknown as { __svMesh?: PerformerMesh; __svFeed?: LocalFeed }).__svMesh = mesh; // support / e2e hooks
     (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed;
     session.onLeave = () => mesh.close(); // goodbyes before the session leaves
     return () => {
       session.onLeave = null;
       void mesh.close();
-      for (const v of remoteVideos.current.values()) {
-        v.srcObject = null;
-        v.remove();
+      for (const r of remoteVideos.current.values()) {
+        r.frame.dispose();
+        r.video.srcObject = null;
+        r.video.remove();
       }
       remoteVideos.current.clear();
       setPeerStates({});
@@ -158,15 +172,31 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     if (onStage) void mesh.start();
     else {
       void mesh.close();
-      for (const v of remoteVideos.current.values()) {
-        v.srcObject = null;
-        v.remove();
+      for (const r of remoteVideos.current.values()) {
+        r.frame.dispose();
+        r.video.srcObject = null;
+        r.video.remove();
       }
       remoteVideos.current.clear();
       setPeerStates({});
     }
   }, [mesh, onStage]);
-  useEffect(() => () => feed.dispose(), []);
+  useEffect(
+    () => () => {
+      feed.dispose();
+      show.dispose();
+    },
+    [],
+  );
+
+  // The recording draws the same background the show view does (the meet's, as an image or looping video).
+  const bgItems = backgrounds.value;
+  useEffect(() => {
+    void loadBackgrounds();
+    const item = backgroundById(meet.backgroundId);
+    show.setBackground(item ?? null, backgroundSrc(item));
+  }, [meet.backgroundId, bgItems.length]);
+  show.youLabel = you.displayName.split(' ')[0] || 'You';
 
   // My vocal (after FX) goes to publisher links only, from the moment my mic is open (I'm ready / singing).
   const micOpen = opts.engine?.micOpen.value ?? false;
@@ -182,18 +212,20 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   }, [peerKey, onStage]);
 
   // Everyone on stage, left to right by slot, on one shared stage (placeholders for video I don't receive).
+  // The recording gets the same people with the show view's labels (first names, no "You").
   useEffect(() => {
     const list: StagePerformer[] = stagePerformers.map((s) => {
       const me = s.participantId === you.participantId;
       const color = SLOT_COLORS[Math.max(1, Math.min(10, s.slot)) as SingerSlot];
       if (me) return { id: 'me', slot: s.slot, label: `You · S${s.slot}`, color, source: feed.source, mirror: facing === 'user', isMe: true };
-      const v = remoteVideos.current.get(s.participantId!);
-      return { id: s.participantId!, slot: s.slot, label: `${s.displayName.split(' ')[0] || 'Singer'} · S${s.slot}`, picture: s.picture, color, source: v ? { kind: 'packed', video: v } : { kind: 'none' } };
+      const r = remoteVideos.current.get(s.participantId!);
+      return { id: s.participantId!, slot: s.slot, label: `${s.displayName.split(' ')[0] || 'Singer'} · S${s.slot}`, picture: s.picture, color, source: r ? { kind: 'frame', frame: r.frame } : { kind: 'none' } };
     });
     compositor.setPerformers(list);
+    show.setPerformers(list.map((p) => ({ ...p, label: p.isMe ? 'You' : p.label.replace(/ · S\d+$/, '') })));
   }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), camStream, camOn, facing, peerStates, you.participantId]);
 
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, peerStates, blend, camOn, camStream, camError, openCamera, linked, others };
+  return { feed, compositor, mesh, show, peerStates, blend, camOn, camStream, camError, openCamera, linked, others };
 }

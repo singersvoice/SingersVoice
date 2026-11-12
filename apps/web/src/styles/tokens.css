@@ -24,7 +24,7 @@
   --lyric-done: #8e86a0;
   --lyric-active: #38d39f;
   --lyric-next: #ffa447;
-  --lyric-size: clamp(22px, 5.2vw, 34px);
+  --lyric-size: clamp(26px, 6.4vw, 48px);
 
   --pad: 16px;
   --gap: 12px;

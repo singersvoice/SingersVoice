@@ -31,6 +31,8 @@ import {
   type PublishJob,
   type PublishJobRequest,
   type ReadyRequest,
+  type MeetPerformance,
+  type RegisterPerformanceRequest,
   type RegisterRecordingRequest,
   type SignalRequest,
   type SlotRequest,
@@ -225,9 +227,9 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (changed) await store.saveMeet(meet);
     const participants: Participant[] = (rec.active as StoredParticipant[]).map(({ resumeToken: _t, meetId: _m, ...p }) => p);
     const chat = chatSince !== undefined ? await store.chatSince(meetId, chatSince) : await store.chatTail(meetId, 50);
-    const recordings = await store.listRecordings(meetId);
+    const [recordings, performances] = await Promise.all([store.listRecordings(meetId), store.listPerformancesForMeet(meetId)]);
     const youPublic: Participant | undefined = you ? (({ resumeToken: _t, meetId: _m, ...p }: StoredParticipant) => p)(you) : undefined;
-    return { meet, participants, chat, recordings, serverEpochMs: Date.now(), ...(youPublic ? { you: youPublic } : {}) };
+    return { meet, participants, chat, recordings, performances, serverEpochMs: Date.now(), ...(youPublic ? { you: youPublic } : {}) };
   }
 
   async function participantFromBody(c: Context<Env>, meetId: string, token: string | undefined): Promise<StoredParticipant | null> {
@@ -347,6 +349,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     }
     touch(meet);
     await store.saveParticipant(p);
+    if (!publisher) await store.addMember(meet.meetId, user.userId); // the shows of this meet are shared with everyone who was ever in it
     await store.saveMeet(meet);
     const snap = (await snapshot(c, meet.meetId, p))!;
     const { resumeToken: _t, meetId: _m, ...you } = p;
@@ -693,6 +696,56 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     };
     await store.addRecording(recording);
     return c.json({ recording }, 201);
+  });
+
+  // The saved show of a song: recorded on the host's device, kept in the host's Drive, shared with everyone in the meet.
+  app.post('/meets/:id/performances', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<RegisterPerformanceRequest>;
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (p.userId !== meet.hostUserId) return err(c, 403, 'not_host', 'Only the host registers the saved show');
+    if (!body.performanceId) return err(c, 400, 'bad_request', 'performanceId is required');
+    const user = c.get('user');
+    const singers = Array.isArray(body.singers) ? body.singers.slice(0, 10).map((s) => ({ slot: Math.max(1, Math.min(10, Number(s?.slot) || 1)), displayName: String(s?.displayName ?? '').slice(0, 60), ...(s?.userId ? { userId: String(s.userId) } : {}) })) : [];
+    const performance: MeetPerformance = {
+      performanceId: String(body.performanceId),
+      meetId: meet.meetId,
+      meetTitle: meet.title,
+      hostUserId: user.userId,
+      hostName: user.name,
+      songTitle: String(body.songTitle ?? meet.trackTitle ?? '').slice(0, 120),
+      trackId: String(body.trackId ?? ''),
+      singers,
+      link: body.link ? String(body.link) : null,
+      videoLink: body.videoLink ? String(body.videoLink) : null,
+      durationMs: Math.max(0, Number(body.durationMs) || 0),
+      bytes: Math.max(0, Number(body.bytes) || 0),
+      mimeType: String(body.mimeType ?? '').slice(0, 80),
+      createdAt: new Date().toISOString(),
+    };
+    await store.addPerformance(performance);
+    touch(meet);
+    await store.saveMeet(meet);
+    const members = await store.listMembers(meet.meetId);
+    const shareWith = members.filter((m) => m.userId !== user.userId && m.email && !m.email.endsWith('.local')).map((m) => m.email);
+    return c.json({ performance, shareWith }, 201);
+  });
+
+  app.get('/performances', async (c) => {
+    const performances = await c.get('deps').store.listPerformancesForUser(c.get('user').userId);
+    return c.json({ performances });
+  });
+
+  app.delete('/performances/:id', async (c) => {
+    const { store } = c.get('deps');
+    const p = await store.getPerformance(c.req.param('id'));
+    if (!p) return c.json({ ok: true as const });
+    if (p.hostUserId !== c.get('user').userId) return err(c, 403, 'not_host', 'Only the host can remove a saved show');
+    await store.deletePerformance(p.performanceId);
+    return c.json({ ok: true as const });
   });
 
   // ---------- Publishing mode (privileged) ----------

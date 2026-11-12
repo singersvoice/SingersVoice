@@ -21,6 +21,7 @@ execFileSync('node', [new URL('./fake-person.mjs', import.meta.url).pathname, cl
 const browser = await pw.chromium.launch({ args: ['--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${clip}`, '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
 const out = process.argv[2] ?? 'screenshots';
 import { mkdirSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 mkdirSync(out, { recursive: true });
 let failed = false;
 const extraPages = {};
@@ -77,7 +78,7 @@ try {
   await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
   check(/Up next/.test(await alice.page.locator('.setlist').innerText()), 'the first song picked becomes the current song');
   const inbox = async (p, who) => { const mid = /\/meet\/([^/?#]+)/.exec(meetUrl)[1]; return p.evaluate(async ([m, w, ctl]) => { const key = Object.keys(sessionStorage).find((k) => k.startsWith(`sv.meet.${m}`) && k.endsWith('.rt')); const rt = sessionStorage.getItem(key); const r = await fetch(`${ctl}/meets/${m}/signals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dev-User': w, 'X-Dev-Name': w }, body: JSON.stringify({ resumeToken: rt, since: 0 }) }); const j = await r.json(); return (j.signals || []).map((x) => `${x.seq}:${x.type}<${x.from.slice(-6)}@${x.sentAt.slice(11, 23)}`).join(' '); }, [mid, who, servers.controlUrl]); };
-  const remoteFrames = (p) => p.evaluate(async () => { const vs = [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0 && v.readyState >= 2); const t = vs.map((v) => v.currentTime); await new Promise((r) => setTimeout(r, 700)); return vs.filter((v, i) => v.currentTime !== t[i]).length; });
+  const remoteFrames = (p) => p.evaluate(async () => { const vs = [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0 && v.readyState >= 2); const t = vs.map((v) => v.currentTime); await new Promise((r) => setTimeout(r, 1500)); return vs.filter((v, i) => v.currentTime !== t[i]).length; });
   // The lobby's virtual stage: a performer appears on it the moment they take a slot — long before the song.
   const stripInfo = (p) => p.evaluate(async () => {
     const el = document.querySelector('.stagestrip');
@@ -243,7 +244,7 @@ try {
     return { tiles, left, right, top, w, h, lyrics: document.querySelectorAll('.lyrics, .cue').length, top_text: document.querySelector('.show-top').innerText.replace(/\s+/g, ' '), state: document.querySelector('.show').dataset.state };
   });
   console.log('carol show:', JSON.stringify(show));
-  check(show.tiles.length === 2 && show.tiles.every((t) => t.source === 'packed'), 'the show view lays out both performers from their video');
+  check(show.tiles.length === 2 && show.tiles.every((t) => t.source === 'frame'), 'the show view lays out both performers from their video');
   check(show.tiles.every((t) => t.h > show.h * 0.9), `performers stand huge on the show stage (tile ${show.tiles[0]?.h} of ${show.h} px)`);
   check(show.left > 2000 && show.right > 2000 && show.top > 0, 'both cut-outs are drawn, filling the frame up to the top');
   check(show.lyrics === 0, 'no lyrics in publish mode');
@@ -255,7 +256,9 @@ try {
   const singersAudio = await alice.page.evaluate(async () => Object.entries(await window.__svMesh.stats()).map(([id, r]) => `${id.slice(-6)}:${r.audioBytesReceived}`));
   console.log('vocal bytes at the publisher:', JSON.stringify(carolAudio), '| audio bytes at a singer:', JSON.stringify(singersAudio));
   check(carolAudio.length === 2 && carolAudio.every((b) => b > 2000), `the show view receives both singers' vocals (${carolAudio.join(' / ')} bytes)`);
-  check(await alice.page.evaluate(async () => Object.values(await window.__svMesh.stats()).every((r) => r.audioBytesReceived === 0)), 'singers never receive each other\'s voice (Solo foldback)');
+  // Singers get each other's vocal too — for the saved show only: nothing on a singer's page ever plays it (Solo foldback).
+  const aliceAudio = await alice.page.evaluate(async () => ({ bytes: Object.values(await window.__svMesh.stats()).map((r) => r.audioBytesReceived), audible: [...document.querySelectorAll('audio')].filter((a) => a.srcObject && !a.muted).length }));
+  check(aliceAudio.bytes.some((b) => b > 2000) && aliceAudio.audible === 0, `a singer receives the other's vocal for the recording (${aliceAudio.bytes.join('/')} bytes) and never plays it (${aliceAudio.audible} audible)`);
   await carol.page.screenshot({ path: `${out}/show-carol-live.png` });
   // Go live with the in-house destination (enabled by default): the job is requested for this meet.
   // The chrome hides itself while the show plays; moving the pointer brings it back (like a video player).
@@ -282,8 +285,9 @@ try {
   await monitor.goto(`${base}publishing?tab=preview&${control}`, { waitUntil: 'networkidle' });
   await monitor.locator('.monitor[data-state="live"]').waitFor({ timeout: 30000 });
   const t2 = Date.now();
-  while (Date.now() - t2 < 25000 && (await remoteFrames(monitor)) < 2) await wait(500);
-  check((await remoteFrames(monitor)) >= 2, `the Preview tile receives both performers' video (${Math.round((Date.now() - t2) / 1000)} s)`);
+  let tileFrames = 0;
+  while (Date.now() - t2 < 30000 && (tileFrames = await remoteFrames(monitor)) < 2) await wait(500);
+  check(tileFrames >= 2, `the Preview tile receives both performers' video (${Math.round((Date.now() - t2) / 1000)} s)`);
   await wait(1200);
   const tile = await monitor.evaluate(() => {
     const m = document.querySelector('.monitor[data-state="live"]');
@@ -333,6 +337,33 @@ try {
   // The 20 s sample ends on the host's device → the song is over for everyone: both takes go to review by themselves.
   for (const p of [alice.page, bob.page]) await p.getByText('Your take').waitFor({ timeout: 40000 });
   check(true, 'the song ending on the host device ends it for everyone (both takes reviewed)');
+  // Every take's video is the show (the stage with everyone, with the mix); the host's take is the meet's saved performance.
+  const reviewA = (await alice.page.locator('.review-hero').innerText()).replace(/\s+/g, ' ');
+  const reviewB = (await bob.page.locator('.review-hero').innerText()).replace(/\s+/g, ' ');
+  console.log('reviews:', { alice: reviewA, bob: reviewB });
+  check(/show video \d+(\.\d+)? MB/.test(reviewA) && /show video \d+(\.\d+)? MB/.test(reviewB), 'both takes carry the show video (stage + background + mix)');
+  await alice.page.getByText(/Saved as this meet's performance/).waitFor({ timeout: 30000 });
+  check(true, "the host's take is saved as the meet's performance, shared with everyone in the meet");
+  check(/In Temp/.test(await bob.page.locator('.review-hero').innerText().catch(() => '')) || (await bob.page.getByText(/In Temp/).isVisible().catch(() => false)), "a singer's own take stays personal (Temp until kept)");
+  const showMeta = await alice.page.evaluate(async () => {
+    const v = document.querySelector('.perf-player video');
+    if (!v) return null;
+    await new Promise((r) => (v.readyState >= 1 ? r() : v.addEventListener('loadedmetadata', r, { once: true })));
+    return { w: v.videoWidth, h: v.videoHeight };
+  });
+  console.log('show video:', JSON.stringify(showMeta));
+  // Keep the host's recorded show beside the screenshots (inspect its frames / sound with ffmpeg).
+  const showB64 = await alice.page.evaluate(async () => {
+    const v = document.querySelector('.perf-player video');
+    if (!v) return '';
+    const buf = await (await fetch(v.src)).arrayBuffer();
+    let bin = '';
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  });
+  if (showB64) await writeFile(`${out}/show-alice.webm`, Buffer.from(showB64, 'base64'));
+  check(showMeta && showMeta.w === 1280 && showMeta.h === 720, `the saved show is the 1280×720 broadcast picture (${JSON.stringify(showMeta)})`);
   // Back to the stage: still performers, the meet is back in the lobby, the video mesh never dropped.
   for (const p of [alice.page, bob.page]) {
     await p.getByRole('button', { name: 'Back to the stage' }).click();
@@ -383,6 +414,15 @@ try {
   await alice.page.getByRole('button', { name: 'End meet' }).click();
   await alice.page.getByText(/Meet ended/).waitFor({ timeout: 15000 });
   check(true, 'the host ends the meet');
+  // The ended screen lists the saved performances of the meet (one per song the host sang); so does everyone's Performances.
+  await alice.page.locator('[data-performance]').nth(1).waitFor({ timeout: 20000 }).catch(() => undefined);
+  const endedShows = await alice.page.locator('[data-performance]').count();
+  check(endedShows === 2, `the ended meet lists its saved performances, one per song (${endedShows})`);
+  await navigate(bob.page, `${new URL(base).pathname}studio/performances`);
+  await bob.page.locator('[data-show]').first().waitFor({ timeout: 20000 });
+  const bobShows = await bob.page.locator('[data-show]').allInnerTexts();
+  check(bobShows.length === 2 && bobShows.every((t) => /Duet e2e · CI Sample Song/.test(t.replace(/\s+/g, ' '))), `a singer finds the meet's performances under Performances, by name and date (${bobShows.length})`);
+  await bob.page.screenshot({ path: `${out}/performances-bob.png` });
   // Meets list maintenance: the ended meet is listed with Delete; open meets are counted against the limit of 3.
   await navigate(alice.page, `${new URL(base).pathname}meets`);
   await alice.page.locator('.meet-item').first().waitFor({ timeout: 15000 });

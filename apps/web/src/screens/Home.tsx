@@ -1,6 +1,6 @@
 /** Home — the four portals, each usable on its own: Tracks, Studio, Live Meets, Publishing. */
 import { useEffect } from 'preact/hooks';
-import { IcDrive, IcLibrary, IcMic, IcShare, IcUsers } from '../components/icons.tsx';
+import { IcDrive, IcLibrary, IcMic, IcPlay, IcShare, IcUsers } from '../components/icons.tsx';
 import { Page } from '../components/Shell.tsx';
 import { checkControl, controlConfigured, controlStatus, refreshAccount } from '../lib/api.ts';
 import { href } from '../lib/nav.ts';
@@ -51,6 +51,11 @@ export function Home() {
             <IcShare />
             <b>Publishing</b>
             <span>{privileged.value ? 'Stream meets to YouTube, Facebook, Instagram, Twitch, in-house' : 'For privileged users — streaming to YouTube, Facebook, Instagram, Twitch'}</span>
+          </a>
+          <a href={href('/studio/performances')}>
+            <IcPlay />
+            <b>Performances</b>
+            <span>Every saved show and take, by date and name — shared with everyone who sang, links to pass on</span>
           </a>
         </nav>
 

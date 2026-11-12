@@ -80,7 +80,8 @@ export class AlphaUnpacker {
     this.canvas = document.createElement('canvas');
     this.canvas.width = width;
     this.canvas.height = height;
-    this.gl = this.canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true, antialias: false }) as WebGLRenderingContext | null;
+    // The frame is read by whoever draws it (the stage, a recorder), in their own loops: keep it until the next draw.
+    this.gl = this.canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true, antialias: false, preserveDrawingBuffer: true }) as WebGLRenderingContext | null;
     if (this.gl) this.setup(this.gl);
     else this.fallback = this.canvas.getContext('2d')!;
   }
@@ -150,5 +151,38 @@ export class AlphaUnpacker {
     if (gl && this.tex) gl.deleteTexture(this.tex);
     this.tex = null;
     this.gl = null;
+  }
+}
+
+/**
+ * One remote performer's frames as RGBA, shared by everything that draws them (the room's stage,
+ * the show recorder): the packed video is unpacked once per frame, whoever asks first.
+ */
+export class UnpackedFrame {
+  private unpacker: AlphaUnpacker | null = null;
+  private lastTime = -1;
+
+  constructor(readonly video: HTMLVideoElement) {}
+
+  /** The video's clock — advancing means frames are arriving. */
+  get currentTime(): number {
+    return this.video.currentTime;
+  }
+
+  /** The RGBA canvas of the current frame, or null until the video has one. */
+  current(): HTMLCanvasElement | null {
+    const v = this.video;
+    if (v.readyState < 2 || !v.videoWidth) return null;
+    if (!this.unpacker) this.unpacker = new AlphaUnpacker(Math.round(v.videoWidth / 2), v.videoHeight);
+    if (v.currentTime !== this.lastTime) {
+      this.lastTime = v.currentTime;
+      this.unpacker.draw(v);
+    }
+    return this.unpacker.canvas;
+  }
+
+  dispose(): void {
+    this.unpacker?.dispose();
+    this.unpacker = null;
   }
 }

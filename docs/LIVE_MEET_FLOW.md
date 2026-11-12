@@ -81,20 +81,28 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 | **Start the song (8 s count-in)** | host | Needs a song and at least one singer. Every device starts the backing track at the same server instant (the GMT kickstart); a singer who is not ready yet can still **Join the song on stage** afterwards and starts mid-song. |
 | **End meet** | host | Ends the event for everyone (after a confirmation). |
 
-## 3 · The room — live stage (singers)
+## 3 · The room — live stage (singers) — Performer mode
 
-The same stage, with the lyrics laid over it (your line is highlighted; the cue deck shows who sings
-what in a duet). Controls: camera on/off, hear myself, **Set list** (a drawer over the stage: what is
-playing, what is next, add a song — the song picker is at hand while singing too), FX presets,
-timeline. Host-only transport: **Pause** (cued 3 s ahead, everyone freezes at the same position),
-**Resume**, **Restart** (from the top), and **Stop song** — which stops the song for everyone. A
-singer's **Stop** stops only their own take; the song goes on for the others. The backing track
-ending on the host's device ends the song for everyone too.
+**Performer mode is for singing**: the lyrics are the picture (big, your line highlighted; the cue
+deck shows who sings what in a duet) and the singers are small — each one's frame as their own
+camera framed it, in the lower part under the lyrics, no zoom of any kind. (The zoom that fills the
+picture with the singers is Publisher mode's, below.) Controls: camera on/off, hear myself, **Set
+list** (a drawer over the stage: what is playing, what is next, add a song — the song picker is at
+hand while singing too), FX presets, timeline. Host-only transport: **Pause** (cued 3 s ahead,
+everyone freezes at the same position), **Resume**, **Restart** (from the top), and **Stop song** —
+which stops the song for everyone. A singer's **Stop** stops only their own take; the song goes on
+for the others. The backing track ending on the host's device ends the song for everyone too.
 
-Every take is a personal session: vocal + camera video, sample-accurate on the track timeline
-across any number of pauses, reviewed on **Your take** (play the mix, align, Keep → your Drive,
-`Performances/Live`, or Discard). **Back to the stage** returns to the lobby — you are still on
-stage, the camera stays on, and the next song may already be up.
+**What gets saved.** Every take is a personal session: your vocal, sample-accurate on the track
+timeline across any number of pauses — and its video is **the show**: exactly the broadcast picture
+Publisher mode shows (every singer on stage over the stage background, huge, no lyrics), with the
+whole mix as its sound (the backing track, your vocal after FX, and every other singer's vocal,
+which travels over the links for the recording only — nobody ever hears it). It is reviewed on
+**Your take** (play, align, Keep → your Drive `Performances/Live`, or Discard). **The host's take of
+a song is the meet's saved performance**: kept at once (never Temp), registered with the meet and
+shared with everyone who was in it — anyone with its link can watch it. **Back to the stage**
+returns to the lobby — you are still on stage, the camera stays on, and the next song may already
+be up.
 
 ## 4 · The room — audience
 
@@ -106,9 +114,24 @@ in sync and *Play the backing track here, in sync* (voices arrive with the publi
 
 When a song is over the meet is back in the **lobby**: stage, slots and cameras untouched, ready
 flags cleared, the next queued song up (or nothing until somebody adds one). Any number of songs
-follow. **End meet** → the *Meet ended* screen: every singer's registered take (links to their
-Drive), *Create another meet*, *My performances*, and for the host with Publishing, *Publish this
-meet*. A meet that nobody touched for 5 minutes expires the same way.
+follow. **End meet** → the *Meet ended* screen: **the performances of this meet** (one saved show
+per song — Watch, Share), every singer's registered take (links to their Drive), *Create another
+meet*, *All performances*, and for the host with Publishing, *Publish this meet*. A meet that
+nobody touched for 5 minutes expires the same way.
+
+## 5a · Performances (`/studio/performances`, also from Home and the Meets page)
+
+Everything you ever sang, by date and name:
+
+| Section | What is in it |
+| --- | --- |
+| **Meet performances** | One saved show per song of every meet you hosted or were in: *meet · song*, date and time, length, who sang, who hosted. **Play** (your own: in the app) / **Watch** (the host's Drive link — anyone with it can watch), **Share** (copies the link, or the phone's share sheet). The host can remove one from the meet. |
+| **Your takes** | Your own takes (Studio, or your personal take of a meet song): Temp (7 days unless kept) or kept. Open one to play it, keep it, download it (vocal WAV, show video, manifest), **Share link** (shares the Drive folder anyone-with-the-link and copies the video's link), or delete it. |
+
+In Drive: `SingersVoice/Performances/Live/<date time song (id)>/manifest.json + vocal.wav +
+video.webm` (the show), `Performances/Offline/…` for Studio takes, `Temp/…` until kept. A meet's
+performance is also shared, from the host's Drive, with each singer's Google account (it shows up in
+their Drive's *Shared with me*).
 
 ## 6 · Publishing (privileged accounts) — its own process
 

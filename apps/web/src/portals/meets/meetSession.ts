@@ -3,7 +3,7 @@
  * is forming or counting down (the kickstart instant is absolute, so 2 s is plenty), 5 s otherwise.
  */
 import { signal } from '@preact/signals';
-import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetSignal, type MeetSignalType, type MeetSnapshot, type Participant, type SongPick, type StagePolicy } from '@singersvoice/protocol';
+import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type Participant, type RegisterPerformanceRequest, type SongPick, type StagePolicy } from '@singersvoice/protocol';
 import { api, ApiError, clock, serverNow, syncClock } from '../../lib/api.ts';
 
 const POLL_FORMING_MS = 2000;
@@ -193,6 +193,18 @@ export class MeetSession {
   }
   async registerRecording(performanceId: string, driveFolderLink: string | null, durationMs: number): Promise<void> {
     await api.post('POST /meets/:id/recordings', `/meets/${encodeURIComponent(this.meetId)}/recordings`, { resumeToken: this.resumeToken, performanceId, driveFolderLink, durationMs });
+  }
+  /** The host registers a song's saved show with the meet; the answer names who else to share it with. */
+  async registerPerformance(body: Omit<RegisterPerformanceRequest, 'resumeToken'>): Promise<{ performance: MeetPerformance; shareWith: string[] }> {
+    const r = await api.post('POST /meets/:id/performances', `/meets/${encodeURIComponent(this.meetId)}/performances`, { resumeToken: this.resumeToken, ...body });
+    const snap = this.snapshot.value;
+    if (snap) this.snapshot.value = { ...snap, performances: [...(snap.performances ?? []).filter((p) => p.performanceId !== r.performance.performanceId), r.performance] };
+    return r;
+  }
+  async unregisterPerformance(performanceId: string): Promise<void> {
+    await api.del('DELETE /performances/:id', `/performances/${encodeURIComponent(performanceId)}`);
+    const snap = this.snapshot.value;
+    if (snap) this.snapshot.value = { ...snap, performances: (snap.performances ?? []).filter((p) => p.performanceId !== performanceId) };
   }
   /** Set by whoever runs a video mesh on this session: says goodbye to the peers before the session leaves. */
   onLeave: (() => Promise<void> | void) | null = null;

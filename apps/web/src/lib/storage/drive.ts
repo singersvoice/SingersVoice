@@ -529,12 +529,17 @@ export class DriveProvider implements StorageProvider {
           trackTitle: p.svTitle ?? f.name,
           state: (p[APP_PROPS.state] === 'kept' ? 'kept' : 'temp') as 'temp' | 'kept',
           mode: (p.svMode === 'live' ? 'live' : 'offline') as 'offline' | 'live',
+          kind: (p.svKind === 'show' ? 'show' : 'take') as 'take' | 'show',
+          meetId: p[APP_PROPS.meetId] || null,
+          meetTitle: p.svMeet || undefined,
           durationMs: Number(p.svDurationMs ?? 0),
           createdAt: p.svCreatedAt ?? f.modifiedTime ?? '',
           expiresAt: p.svExpiresAt || null,
           ref: f.parents?.[0] ?? f.id,
           link: f.parents?.[0] ? `https://drive.google.com/drive/folders/${f.parents[0]}` : f.webViewLink,
+          videoLink: p.svVideoId ? `https://drive.google.com/file/d/${p.svVideoId}/view` : undefined,
           hasVideo: p.svVideo === '1',
+          shared: p.svShared === '1',
         } satisfies PerformanceSummary;
       })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -597,11 +602,15 @@ export class DriveProvider implements StorageProvider {
       [APP_PROPS.id]: manifest.performanceId,
       [APP_PROPS.state]: manifest.state,
       svMode: manifest.mode,
+      svKind: manifest.kind ?? 'take',
+      svMeet: (manifest.meetTitle ?? '').slice(0, 60),
       svTitle: manifest.trackTitle.slice(0, 60),
       svDurationMs: String(manifest.durationMs),
       svCreatedAt: manifest.createdAt,
       svExpiresAt: manifest.expiresAt ?? '',
       svVideo: files.video ? '1' : '0',
+      svVideoId: videoFile?.id ?? '',
+      svShared: '0',
     });
     onProgress?.({ label: 'Saved to Drive', fraction: 1 });
     return {
@@ -610,13 +619,43 @@ export class DriveProvider implements StorageProvider {
       trackTitle: manifest.trackTitle,
       state: manifest.state,
       mode: manifest.mode,
+      kind: manifest.kind ?? 'take',
+      meetId: manifest.meetId,
+      meetTitle: manifest.meetTitle,
+      singers: manifest.singers,
       durationMs: manifest.durationMs,
       createdAt: manifest.createdAt,
       expiresAt: manifest.expiresAt,
       ref: folder.id,
       link: `https://drive.google.com/drive/folders/${folder.id}`,
+      videoLink: videoFile ? `https://drive.google.com/file/d/${videoFile.id}/view` : undefined,
       hasVideo: Boolean(files.video),
+      shared: false,
     };
+  }
+
+  async sharePerformance(performanceId: string, with_: { type: 'anyone' } | { type: 'user'; email: string }): Promise<{ link: string; videoLink: string | null }> {
+    await this.ready();
+    const files = await this.perfFiles(performanceId);
+    const json = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performance');
+    const video = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performanceVideo');
+    const folderId = files.find((f) => f.mimeType === FOLDER_MIME)?.id ?? json?.parents?.[0];
+    if (!folderId) throw new Error('Performance folder not found in Drive');
+    const body = with_.type === 'anyone' ? { role: 'reader', type: 'anyone' } : { role: 'reader', type: 'user', emailAddress: with_.email };
+    const params = with_.type === 'user' ? '?sendNotificationEmail=true&emailMessage=' + encodeURIComponent('A SingersVoice performance you sang in was shared with you. It is also listed under Performances in SingersVoice.') : '';
+    await this.req(`${API}/files/${folderId}/permissions${params}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (json && with_.type === 'anyone') {
+      await this.req(`${API}/files/${json.id}?fields=id`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appProperties: { ...(json.appProperties ?? {}), svShared: '1' } }),
+      }).catch(() => undefined);
+    }
+    return { link: `https://drive.google.com/drive/folders/${folderId}`, videoLink: video ? `https://drive.google.com/file/d/${video.id}/view` : null };
   }
 
   async keepPerformance(performanceId: string): Promise<void> {

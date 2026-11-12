@@ -89,6 +89,10 @@ export class LocalProvider implements StorageProvider {
         trackTitle: r.manifest.trackTitle,
         state: r.manifest.state,
         mode: r.manifest.mode,
+        kind: r.manifest.kind ?? 'take',
+        meetId: r.manifest.meetId,
+        meetTitle: r.manifest.meetTitle,
+        singers: r.manifest.singers,
         durationMs: r.manifest.durationMs,
         createdAt: r.manifest.createdAt,
         expiresAt: r.manifest.expiresAt,
@@ -113,12 +117,20 @@ export class LocalProvider implements StorageProvider {
       trackTitle: manifest.trackTitle,
       state: manifest.state,
       mode: manifest.mode,
+      kind: manifest.kind ?? 'take',
+      meetId: manifest.meetId,
+      meetTitle: manifest.meetTitle,
+      singers: manifest.singers,
       durationMs: manifest.durationMs,
       createdAt: manifest.createdAt,
       expiresAt: manifest.expiresAt,
       ref: manifest.performanceId,
       hasVideo: Boolean(files.video),
     };
+  }
+
+  async sharePerformance(): Promise<{ link: string; videoLink: string | null }> {
+    throw new Error('Sharing a performance needs Google Drive — link your Drive in Settings.');
   }
 
   async keepPerformance(performanceId: string): Promise<void> {

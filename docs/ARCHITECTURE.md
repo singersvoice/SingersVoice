@@ -25,7 +25,7 @@ that the code depends on.
 | --- | --- | --- | --- |
 | Tracks | `/tracks` | track files in Drive, catalog entries | Drive API, `sv-control /catalog/*` |
 | Studio | `/studio/*` | tracks, takes, audio settings | Drive API (works offline); the catalog only to publish a saved track or pull one to sing |
-| Live Meets | `/meets`, `/meet/:id` | meet session (poll), personal take | `sv-control /meets/*`, Drive for the take |
+| Live Meets | `/meets`, `/meet/:id` | meet session (poll), personal take, the saved show | `sv-control /meets/*`, Drive for the take and the show |
 | Publishing | `/publishing`, `/publishing/show/:id`, `/watch/:id` | destinations, jobs, the show view | `sv-control /publishing/*`, `/meets/:id/*` (as a publisher), `/watch/*` |
 
 No portal imports another's screens; they share only `packages/protocol`, `lib/` (storage, api, audio) and
@@ -127,8 +127,10 @@ fill their slot — head near the top, the camera's cut edge on the picture's bo
 floor line when the camera sees them. The box is moved only when it really changed and eased, so
 nothing breathes with mask noise. Across a row, heads are levelled: whoever's head stands clearly
 above the median head line (a camera that sees them whole) is scaled down, feet staying put, so
-nobody towers over the bust shots beside them. Show mode (Publishing, the lobby stage) gives every
-slot the full frame height; stage mode (lyrics above) the lower ~60 %. Framing
+nobody towers over the bust shots beside them. That is **Publisher mode** ('show': Publishing, the
+lobby stage, the saved performance). **Performer mode** ('stage': the live stage, Studio) is for
+singing: the lyrics are the picture, big, and each singer's frame is drawn small in the lower ~45 %
+as their own camera framed it — no zoom. Framing
 (`video/framing.ts`) is therefore only the crop: wide (the whole frame; the default), mid, close
 (around the face), and a vocal-driven auto zoom that eases towards "close" while a singer sings and
 back out when they fall silent. The sender crops its own stream at full resolution, so whoever takes
@@ -169,10 +171,27 @@ events on it.
 
 **The broadcast sound.** A publisher's offers carry an audio line (`recvonly`); a singer's mesh
 answers it `sendonly` and feeds it their vocal after the VoxForge chain
-(`AudioEngine.vocalStream()`, a MediaStreamAudioDestinationNode) from the moment their mic is open
-— singer-to-singer links never carry audio (Solo foldback), so latency never pulls singers apart.
+(`AudioEngine.vocalStream()`, a MediaStreamAudioDestinationNode) from the moment their mic is open.
+Singer-to-singer links carry each other's vocal too (`wantAudio`: `sendrecv`) — **for the saved
+show only**: a vocal that arrives on a singer's device goes to the recording's mix and nowhere
+else, so singers still never hear each other (Solo foldback) and latency never pulls them apart.
 The show view plays the vocals (hidden audio elements) and the backing track a quarter second
 behind the shared clock to meet them; Preview tiles are muted unless asked to listen.
+
+**The saved performance (`video/showRecorder.ts`).** Every singer's device records the show while
+a song runs: its own 1280×720 canvas (the meet's background drawn as the show view shows it, then
+a 'show' compositor over the same cut-outs the stage draws — the remote frames are unpacked once
+and shared, `UnpackedFrame`), its own audio bus on the engine's context (backing track + own vocal
+after FX, held back by the same quarter second through a DelayNode — and this device's own cut-out
+through a frame ring, so its picture is in step with its sound — plus every other singer's vocal as
+it arrives, through a limiter), one MediaRecorder (VP9/Opus WebM, or MP4 where that is what the
+browser has) from the kickstart to the end of the song, paused with the transport. The take's video
+is that recording (`videoOffsetMs` = its first frame's place on the track timeline, lag included);
+the host's take of each song is **the meet's performance**: saved kept in `Performances/Live`,
+registered with the meet (`POST /meets/:id/performances` → the `performances` table; `meet_members`
+remembers everyone who was ever in the meet) and shared from the host's Drive anyone-with-the-link
+and with each member's Google account. `GET /performances` lists every show of every meet the
+account hosted or was in — the Performances page, with the shareable links.
 
 **Preview** (admin monitoring) lists every open meet the account may publish (hosted or joined,
 any other by link / code) as a monitor tile: the exact broadcast picture (`showStage.tsx`, the
@@ -182,7 +201,8 @@ Every publisher view — the show view, each tile — is its own participant res
 token, so monitoring a meet and running its show view at the same time never fight over one video
 link; the first four tiles connect by themselves, the rest on request.
 4. Performers hear only themselves + the track (Solo foldback). The composed mix for the audience comes from
-   the session container (next increment); until then the watch page shows lyrics in sync and chat.
+   the session container (next increment); until then the watch page shows lyrics in sync and chat, and the
+   saved show (recorded on the singers' devices) carries the whole mix.
 5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.
 
 ## Components
