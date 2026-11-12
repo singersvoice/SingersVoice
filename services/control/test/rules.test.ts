@@ -58,10 +58,11 @@ describe('meet rules', () => {
     expect(start(m, 5000, T0)).toEqual({ ok: true });
     expect(m.state).toBe('countdown');
     expect(m.kickstartEpochMs).toBe(T0 + 5000);
-    expect(claimSlot(m, person('p2'), 2).ok).toBe(true); // still allowed during countdown
+    expect(claimSlot(m, person('p2'), 2)).toEqual({ ok: false, reason: 'song_in_progress' }); // the count-in has started: the stage is the singers' own
     tick(m, T0 + 5001);
     expect(m.state).toBe('live');
-    expect(claimSlot(m, person('p3'), 3).ok).toBe(true); // the stage stays open during the song: a late singer starts mid-song
+    expect(claimSlot(m, person('p3'), 3)).toEqual({ ok: false, reason: 'song_in_progress' });
+    expect(claimSlot(m, person('p1'), 4).ok).toBe(true); // a singer already on stage may still move slots
     stop(m, T0 + 60_000);
     expect(m.state).toBe('ended');
     expect(m.kickstartEpochMs).toBeNull();
@@ -186,16 +187,22 @@ describe('meet rules', () => {
     expect(songAction(m, host, m.setList[0]!.id, 'now').ok).toBe(true);
     expect(m.trackTitle).toBe('One');
     expect(m.setList.map((e) => e.trackTitle)).toEqual(['Four', 'Two']);
-    // sing it: nothing may be swapped under a song in progress
+    // sing it: nothing may be swapped under a song in progress, and the wait list waits for the song to end
     m.stage[0]!.ready = true;
     expect(start(m, 5000, T0 + 10).ok).toBe(true);
+    const w = person('w');
+    expect(requestStage(m, w, T0 + 11)).toEqual({ ok: true }); // asking is fine during a song…
+    expect(decideRequest(m, w, true)).toEqual({ ok: false, reason: 'song_in_progress' }); // …seating waits
+    expect(m.requests.map((r) => r.participantId)).toEqual(['w']);
     expect(addSong(m, host, { trackId: 't5', catalogTrackId: null, trackTitle: 'Five' }, true)).toMatchObject({ ok: false, reason: 'song_in_progress' });
     expect(songAction(m, host, m.setList[0]!.id, 'now')).toMatchObject({ ok: false, reason: 'song_in_progress' });
     expect(addSong(m, host, { trackId: 't5', catalogTrackId: null, trackTitle: 'Five' }).ok).toBe(true); // queued instead
     tick(m, T0 + 6000);
     expect(m.state).toBe('live');
-    // song over → back to the lobby with the next song up; stage and slots untouched, ready reset
+    // song over → back to the lobby with the next song up; stage and slots untouched, ready reset; the wait list is served now
     expect(nextSong(m, T0 + 30_000)).toEqual({ ok: true });
+    expect(decideRequest(m, w, true)).toEqual({ ok: true });
+    expect(w.slot).toBe(3);
     expect(m).toMatchObject({ state: 'lobby', kickstartEpochMs: null, trackTitle: 'Four', songCount: 1 });
     expect(m.playback.state).toBe('idle');
     expect(m.stage[0]!.participantId).toBe('h');

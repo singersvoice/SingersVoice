@@ -11,6 +11,7 @@
  */
 import { SLOT_COLORS, type Meet, type Participant, type SingerSlot } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { AudioEngine } from '../../audio/engine.ts';
 import { appSettings } from '../../state/settings.ts';
 import type { Camera } from '../../video/camera.ts';
 import { LocalFeed } from '../../video/localFeed.ts';
@@ -37,7 +38,7 @@ export interface RoomStage {
   others: number;
 }
 
-export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; level: () => number }): RoomStage {
+export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; level: () => number; engine: AudioEngine | null }): RoomStage {
   const feed = useMemo(() => new LocalFeed(), []);
   const compositor = useMemo(() => new StageCompositor('show'), []);
   const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, you.participantId) : null), [session, you.participantId]);
@@ -166,6 +167,12 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     }
   }, [mesh, onStage]);
   useEffect(() => () => feed.dispose(), []);
+
+  // My vocal (after FX) goes to publisher links only, from the moment my mic is open (I'm ready / singing).
+  const micOpen = opts.engine?.micOpen.value ?? false;
+  useEffect(() => {
+    mesh?.setLocalAudio(micOpen && onStage ? (opts.engine?.vocalStream()?.getAudioTracks()[0] ?? null) : null);
+  }, [mesh, micOpen, onStage, opts.engine]);
 
   const stagePerformers = meet.stage.filter((s) => s.participantId);
   const peerIds = stagePerformers.map((s) => s.participantId!).filter((id) => id !== you.participantId);

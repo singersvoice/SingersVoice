@@ -185,7 +185,7 @@ function Room(props: {
   onAgain: () => void;
 }) {
   const { session, meet, you, track, camera, engine } = props;
-  const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, level: () => engine?.recorder?.level.value ?? 0 });
+  const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, level: () => engine?.recorder?.level.value ?? 0, engine });
   const onStage = you.slot !== null;
   const live = meet.state === 'countdown' || meet.state === 'live';
   // A take in progress keeps the live stage mounted until it wraps up, even once the meet is back in
@@ -412,17 +412,20 @@ function Lobby(props: {
             <SetListPanel session={session} meet={meet} you={you} track={props.track} host={host} onStage={onStage} live={live} />
             {host && meet.requests.length > 0 && (
               <div class="card stack pad-sm requests" data-requests={meet.requests.length}>
-                <b>Asking to sing</b>
+                <div class="row between">
+                  <b>Wait list · {meet.requests.length}</b>
+                  {live && <span class="chip warn">a song is running — seat them when it is over</span>}
+                </div>
                 {meet.requests.map((r) => (
                   <div class="row between" key={r.participantId}>
                     <span class="row" style="gap:8px">
                       {r.picture ? <img class="avatar-sm" src={r.picture} alt="" referrerpolicy="no-referrer" /> : <span class="avatar-sm">{(r.displayName || '?').charAt(0).toUpperCase()}</span>}
                       <span>
-                        <b>{r.displayName}</b> <span class="small muted">wants to join the stage</span>
+                        <b>{r.displayName}</b> <span class="small muted">wants to sing</span>
                       </span>
                     </span>
                     <span class="row" style="gap:6px;flex-wrap:nowrap">
-                      <button class="btn sm primary" disabled={deciding === r.participantId || meet.performerCount >= MAX_PERFORMERS} aria-label={`Let ${r.displayName} sing`} onClick={() => void decide(r.participantId, true)}>
+                      <button class="btn sm primary" disabled={live || deciding === r.participantId || meet.performerCount >= MAX_PERFORMERS} title={live ? 'Once the song is over' : undefined} aria-label={`Let ${r.displayName} sing`} onClick={() => void decide(r.participantId, true)}>
                         <IcCheck size={16} /> Let them sing
                       </button>
                       <button class="btn sm" disabled={deciding === r.participantId} aria-label={`Decline ${r.displayName}`} onClick={() => void decide(r.participantId, false)}>
@@ -435,44 +438,49 @@ function Lobby(props: {
             )}
             <div class="stage-grid">
               {meet.stage.map((s) => (
-                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} canClaim={!s.participantId && (host || openStage || onStage)} onClaim={() => void claim(s.slot)} onRemove={host && s.participantId && s.participantId !== you.participantId ? () => void remove(s.participantId!) : undefined} />
+                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} canClaim={!s.participantId && (onStage || (!live && (host || openStage)))} onClaim={() => void claim(s.slot)} onRemove={host && s.participantId && s.participantId !== you.participantId ? () => void remove(s.participantId!) : undefined} />
               ))}
             </div>
             <div class="row">
               {onStage ? (
                 <>
-                  {!props.prepared ? (
-                    <button class="btn accent" disabled={props.preparing || !props.track?.loaded} title={!hasSong ? 'Add a song to the set list first' : props.track?.loaded ? undefined : 'Loading the song on this device…'} onClick={() => void props.onPrepare()}>
-                      {props.preparing ? <Spinner /> : <IcMic />} {!hasSong ? 'Pick a song to get ready' : live ? 'Join the song on stage' : "I'm ready (mic & camera check)"}
-                    </button>
-                  ) : (
-                    <span class="chip ok">{live ? 'Joining the song…' : 'Ready — stage will start automatically'}</span>
-                  )}
+                  {hasSong &&
+                    (!props.prepared ? (
+                      <button class="btn accent" disabled={props.preparing || !props.track?.loaded} title={props.track?.loaded ? undefined : 'Loading the song on this device…'} onClick={() => void props.onPrepare()}>
+                        {props.preparing ? <Spinner /> : <IcMic />} {live ? 'Join the song on stage' : "I'm ready (mic & camera check)"}
+                      </button>
+                    ) : (
+                      <span class="chip ok">{live ? 'Joining the song…' : 'Ready — stage will start automatically'}</span>
+                    ))}
                   <button class="btn" onClick={() => void claim(null)}>
                     Leave stage
                   </button>
                 </>
               ) : host || openStage ? (
-                <button class="btn primary" disabled={meet.performerCount >= MAX_PERFORMERS} onClick={() => void claim(meet.stage.find((s) => !s.participantId)?.slot ?? null)}>
-                  <IcMic /> Take a stage slot
-                </button>
+                live ? (
+                  <span class="chip warn">A song is running — take a slot once it is over</span>
+                ) : (
+                  <button class="btn primary" disabled={meet.performerCount >= MAX_PERFORMERS} onClick={() => void claim(meet.stage.find((s) => !s.participantId)?.slot ?? null)}>
+                    <IcMic /> Take a stage slot
+                  </button>
+                )
               ) : askState === 'pending' ? (
                 <>
-                  <span class="chip warn">Asked to sing — waiting for {meet.hostName}</span>
+                  <span class="chip warn">On the wait list{live ? ' — the host seats singers once the song is over' : ` — waiting for ${meet.hostName}`}</span>
                   <button class="btn sm" onClick={() => void withdraw()}>
                     Withdraw
                   </button>
                 </>
               ) : (
                 <>
-                  <button class="btn primary" disabled={meet.performerCount >= MAX_PERFORMERS} onClick={() => void ask()}>
-                    <IcMic /> {askState === 'declined' ? 'Ask again to sing' : 'Ask to sing'}
+                  <button class="btn primary" disabled={meet.performerCount >= MAX_PERFORMERS} title={live ? 'A song is running — you join the wait list and step on once it is over' : undefined} onClick={() => void ask()}>
+                    <IcMic /> {askState === 'declined' ? 'Ask again to sing' : live ? 'Ask to sing next' : 'Ask to sing'}
                   </button>
                   {askState === 'declined' && <span class="chip">The host said not now</span>}
                 </>
               )}
               {host && !live && (
-                <button class="btn accent" disabled={meet.performerCount === 0 || !hasSong} title={!hasSong ? 'Add a song first' : undefined} onClick={() => void start()}>
+                <button class="btn accent" disabled={meet.performerCount === 0 || !hasSong} title={!hasSong ? 'Pick a song first' : undefined} onClick={() => void start()}>
                   <IcPlay /> Start the song (8 s count-in)
                 </button>
               )}
@@ -489,8 +497,8 @@ function Lobby(props: {
             </div>
             {host && <Switch checked={openStage} onChange={(v) => void setPolicy(v)} label="Open stage: anyone may take a free slot" hint={openStage ? 'Switch off to be asked first' : 'Off: the audience asks, you decide who sings'} />}
             <div class="small muted">
-              Audience: {props.participants.filter((p) => p.slot === null && p.role !== 'publisher').map((p) => p.displayName).join(', ') || 'nobody yet'}
-              {!host && !onStage && !openStage && ' · ask to sing and the host lets you on stage'}
+              Audience ({props.participants.filter((p) => p.slot === null && p.role !== 'publisher').length}): {props.participants.filter((p) => p.slot === null && p.role !== 'publisher').map((p) => p.displayName).join(', ') || 'nobody yet'}
+              {!host && !onStage && !openStage && ' · ask to sing and the host lets you on stage between songs'}
             </div>
             {meet.stage.some((s) => s.participantId && s.rttMs !== null) && (
               <div class="small faint">
@@ -849,6 +857,7 @@ function LiveStage(props: {
           {camOn && blend === 'oval' && app.cutout && <span class="chip warn">soft-focus mode</span>}
           {paused && <span class="chip warn">paused by the host</span>}
           {!paused && pauseAt !== null && <span class="chip warn">pausing…</span>}
+          {host && meet.requests.length > 0 && <span class="chip">wait list · {meet.requests.length} — seated when the song is over</span>}
         </section>
         <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} countdown={countdown} showWho={track.singerCount > 1} title={track.title} />
         {songsOpen && (

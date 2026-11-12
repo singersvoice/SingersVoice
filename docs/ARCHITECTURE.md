@@ -50,8 +50,10 @@ each other, so any portal can be removed or replaced without touching the others
 ## Live meet: who is on stage
 
 Everyone who enters a meet is **audience** — except the host, who is seated on S1 by the meet itself
-the moment they start it (their first arrival; stepping off later sticks). The host (the meet's
-admin) takes any slot freely; anyone else **asks to sing** (`POST /meets/:id/requests`) and the host **lets them on** or declines
+the moment they start it (their first arrival; stepping off later sticks). A running song belongs
+to the singers on stage: from the count-in to the end nobody new steps on (`claimSlot` →
+`song_in_progress`, the host's *let them sing* waits too); the wait list is served between songs.
+The host (the meet's admin) takes any slot freely; anyone else **asks to sing** (`POST /meets/:id/requests`) and the host **lets them on** or declines
 (`…/requests/:pid/decide` — the server seats them in the first free slot, so the singer touches
 nothing), clears a slot (`…/stage/:pid/remove`) or opens the stage to everyone
 (`…/policy` → `stagePolicy: 'open'`, default `'ask'`). Requests live on the meet (`meet.requests`),
@@ -156,6 +158,13 @@ lyrics, cue deck and transport; the show view only listens to the meet and pulls
 the performers' stage runs from the lobby on, the show view (and Preview) carry the singers before
 the host starts the song — the show is its own process, the song and the host's transport are
 events on it.
+
+**The broadcast sound.** A publisher's offers carry an audio line (`recvonly`); a singer's mesh
+answers it `sendonly` and feeds it their vocal after the VoxForge chain
+(`AudioEngine.vocalStream()`, a MediaStreamAudioDestinationNode) from the moment their mic is open
+— singer-to-singer links never carry audio (Solo foldback), so latency never pulls singers apart.
+The show view plays the vocals (hidden audio elements) and the backing track a quarter second
+behind the shared clock to meet them; Preview tiles are muted unless asked to listen.
 
 **Preview** (admin monitoring) lists every open meet the account may publish (hosted or joined,
 any other by link / code) as a monitor tile: the exact broadcast picture (`showStage.tsx`, the

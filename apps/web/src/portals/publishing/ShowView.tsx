@@ -11,7 +11,7 @@
  */
 import { DESTINATIONS, formatMs, playbackPositionMs, type Destination, type DestinationKind, type Meet, type Participant, type PublishJob } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { IcMusic, IcPlay, IcStop, IcUsers, IcX, IcZoom } from '../../components/icons.tsx';
+import { IcMic, IcMusic, IcPlay, IcStop, IcUsers, IcX, IcZoom } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Spinner } from '../../components/ui.tsx';
 import { api, ApiError, clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
@@ -21,11 +21,13 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { privileged } from '../../state/session.ts';
 import { MeetSession } from '../meets/meetSession.ts';
 import { loadMeetTrack } from '../meets/trackSource.ts';
-import { ShowPicture, useCountdown, useShowFeed } from './showStage.tsx';
+import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
 
 const IDLE_MS = 3000;
 const JOB_POLL_MS = 8000;
 const SYNC_TOLERANCE_MS = 300;
+/** The singers' vocals arrive a network hop late; the backing track plays this much behind the shared clock to meet them. */
+const VOCAL_LAG_MS = 250;
 
 export const activeJob = (j: PublishJob) => j.state === 'requested' || j.state === 'starting' || j.state === 'live';
 
@@ -107,6 +109,8 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   const [picked, setPicked] = useState<DestinationKind[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [music, setMusic] = useState(false);
+  /** The broadcast sound: every singer's vocal (after their FX) — on by default; the backing track joins with the music toggle. */
+  const [vocalsOn, setVocalsOn] = useState(true);
   const [trackUrl, setTrackUrl] = useState<string | null>(null);
   const [trackNote, setTrackNote] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -211,7 +215,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const apply = () => {
       clearTimeout(timer);
-      const now = serverNow();
+      const now = serverNow() - VOCAL_LAG_MS; // play the track where the singers' vocals are right now
       const pos = playbackPositionMs(meet, now);
       if (pos === null) {
         a.pause();
@@ -294,6 +298,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
         </button>
       </ShowPicture>
       <audio ref={audioRef} src={trackUrl ?? undefined} preload="auto" />
+      <Vocals vocals={feed.vocals} on={vocalsOn} />
 
       <header class="show-top">
         <div class="show-title">
@@ -306,8 +311,8 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
         <div class="show-badges">
           {onAir && <span class="onair">LIVE</span>}
           {requested && <span class="chip warn">publishing requested</span>}
-          <span class="chip">
-            <IcUsers size={14} /> {feed.onStage} on stage · {feed.linked}/{feed.onStage} video
+          <span class="chip" data-vocals={Object.keys(feed.vocals).length}>
+            <IcUsers size={14} /> {feed.onStage} on stage · {feed.linked}/{feed.onStage} video · {Object.keys(feed.vocals).length} vocal{Object.keys(feed.vocals).length === 1 ? '' : 's'}
           </span>
         </div>
       </header>
@@ -341,7 +346,10 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
               {busy ? <Spinner /> : <IcStop />} Stop publishing
             </button>
           )}
-          <button class={`btn icon ${music ? 'on' : ''}`} aria-label={music ? 'Mute the backing track' : 'Play the backing track here'} aria-pressed={music} disabled={!trackUrl} title={trackNote ?? (trackUrl ? 'Backing track, in sync with the meet (M)' : 'Loading the track…')} onClick={() => setMusic((m) => !m)}>
+          <button class={`btn icon ${vocalsOn ? 'on' : ''}`} aria-label={vocalsOn ? 'Mute the singers' : 'Hear the singers'} aria-pressed={vocalsOn} title={`The singers' vocals (${Object.keys(feed.vocals).length} arriving)`} onClick={() => setVocalsOn((v) => !v)}>
+            <IcMic />
+          </button>
+          <button class={`btn icon ${music ? 'on' : ''}`} aria-label={music ? 'Mute the backing track' : 'Play the backing track here'} aria-pressed={music} disabled={!trackUrl} title={trackNote ?? (trackUrl ? 'Backing track, in sync with the singers (M)' : 'Loading the track…')} onClick={() => setMusic((m) => !m)}>
             <IcMusic />
           </button>
           {typeof document !== 'undefined' && document.fullscreenEnabled && (

@@ -30,6 +30,7 @@ export class AudioEngine {
   recorder: PcmRecorder | null = null;
   player: BackingPlayer | null = null;
   private monitor: GainNode;
+  private vocalOut: MediaStreamAudioDestinationNode | null = null;
   private micStream: MediaStream | null = null;
   private micSource: MediaStreamAudioSourceNode | null = null;
   readonly pitch = signal<PitchReading | null>(null);
@@ -136,6 +137,20 @@ export class AudioEngine {
     this.chain?.apply(p);
   }
 
+  /**
+   * The vocal as the singer hears it (after the VoxForge chain), as a MediaStream — what a
+   * Publishing show view receives to blend with the backing track. Singers never get this from
+   * each other (Solo foldback); only publisher links carry it. Null until the mic chain exists.
+   */
+  vocalStream(): MediaStream | null {
+    if (!this.chain) return null;
+    if (!this.vocalOut) {
+      this.vocalOut = this.ctx.createMediaStreamDestination();
+      (this.recorder?.node ?? this.chain.output).connect(this.vocalOut);
+    }
+    return this.vocalOut.stream;
+  }
+
   /** Hear yourself (with FX). Off by default on phones to avoid speaker feedback. */
   setMonitor(on: boolean, gain = 0.9): void {
     this.monitor.gain.setTargetAtTime(on ? gain : 0, this.ctx.currentTime, 0.03);
@@ -148,6 +163,8 @@ export class AudioEngine {
 
   async close(): Promise<void> {
     this.closeMic();
+    this.vocalOut?.disconnect();
+    this.vocalOut = null;
     this.recorder?.dispose();
     this.chain?.dispose();
     this.player?.dispose();

@@ -21,6 +21,8 @@ export interface ShowFeed {
   linked: number;
   /** Performers on stage. */
   onStage: number;
+  /** Each singer's vocal (after their FX), by participant — the broadcast mix is these plus the backing track. */
+  vocals: Record<string, MediaStream>;
 }
 
 /** Receive every performer's video (the publisher never sends a camera) and lay them out as a show. */
@@ -29,9 +31,17 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
   const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, you.participantId, true) : null), [session, you.participantId]);
   const remoteVideos = useRef(new Map<string, HTMLVideoElement>());
   const [peerStates, setPeerStates] = useState<Record<string, PeerState>>({});
+  const [vocals, setVocals] = useState<Record<string, MediaStream>>({});
 
   useEffect(() => {
     if (!mesh) return;
+    mesh.onRemoteAudio = (id, stream) =>
+      setVocals((v) => {
+        const next = { ...v };
+        if (stream) next[id] = stream;
+        else delete next[id];
+        return next;
+      });
     mesh.onRemote = (id, stream, state) => {
       let v = remoteVideos.current.get(id);
       if (stream) {
@@ -68,6 +78,7 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
         v.remove();
       }
       remoteVideos.current.clear();
+      setVocals({});
     };
   }, [mesh]);
 
@@ -89,7 +100,51 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
   }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), peerStates]);
 
   const linked = stagePerformers.filter((s) => peerStates[s.participantId!] === 'connected').length;
-  return { compositor, mesh, linked, onStage: stagePerformers.length };
+  return { compositor, mesh, linked, onStage: stagePerformers.length, vocals };
+}
+
+/**
+ * Plays the singers' vocals (hidden audio elements, one per singer) — the broadcast sound together
+ * with the backing track. Muted when `on` is false (a Preview tile monitors silently by default).
+ */
+export function Vocals(props: { vocals: Record<string, MediaStream>; on: boolean }) {
+  const els = useRef(new Map<string, HTMLAudioElement>());
+  useEffect(() => {
+    const seen = new Set(Object.keys(props.vocals));
+    for (const [id, stream] of Object.entries(props.vocals)) {
+      let a = els.current.get(id);
+      if (!a) {
+        a = document.createElement('audio');
+        a.autoplay = true;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        els.current.set(id, a);
+      }
+      if (a.srcObject !== stream) {
+        a.srcObject = stream;
+        void a.play().catch(() => undefined);
+      }
+      a.muted = !props.on;
+    }
+    for (const [id, a] of [...els.current]) {
+      if (!seen.has(id)) {
+        a.srcObject = null;
+        a.remove();
+        els.current.delete(id);
+      }
+    }
+  }, [props.vocals, props.on]);
+  useEffect(
+    () => () => {
+      for (const a of els.current.values()) {
+        a.srcObject = null;
+        a.remove();
+      }
+      els.current.clear();
+    },
+    [],
+  );
+  return null;
 }
 
 /** Seconds to the kickstart while the meet counts down (null otherwise), ticking 5× a second. */

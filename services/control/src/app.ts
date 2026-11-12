@@ -379,7 +379,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const r = claimSlot(meet, p, body.slot === null || body.slot === undefined ? null : Number(body.slot));
     if (!r.ok) {
       if (r.reason === 'ask_first') return err(c, 403, 'ask_first', 'Ask the host to sing — they let you on stage');
-      return err(c, 409, r.reason ?? 'slot', r.reason === 'slot_taken' ? 'That stage slot is taken' : r.reason === 'meet_closed' ? 'This meet has ended' : 'Cannot take that slot');
+      return err(c, 409, r.reason ?? 'slot', r.reason === 'slot_taken' ? 'That stage slot is taken' : r.reason === 'song_in_progress' ? 'A song is running — you can step on stage once it is over' : r.reason === 'meet_closed' ? 'This meet has ended' : 'Cannot take that slot');
     }
     p.lastSeenAt = new Date().toISOString();
     touch(meet);
@@ -434,7 +434,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!target || target.role === 'publisher') return err(c, 404, 'no_participant', 'They are no longer in the meet');
     tick(meet);
     const r = decideRequest(meet, target, Boolean(body.allow), body.slot === undefined ? undefined : Number(body.slot));
-    if (!r.ok) return err(c, 409, r.reason ?? 'decide', r.reason === 'stage_full' ? 'The stage is full (10 singers)' : r.reason === 'slot_taken' ? 'That stage slot is taken' : 'Cannot seat them right now');
+    if (!r.ok) return err(c, 409, r.reason ?? 'decide', r.reason === 'stage_full' ? 'The stage is full (10 singers)' : r.reason === 'slot_taken' ? 'That stage slot is taken' : r.reason === 'song_in_progress' ? 'A song is running — seat them once it is over' : 'Cannot seat them right now');
     touch(meet);
     await store.saveParticipant(target);
     await store.saveMeet(meet);

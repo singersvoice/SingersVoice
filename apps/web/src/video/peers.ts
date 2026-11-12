@@ -33,6 +33,10 @@ interface Peer {
   restarts: number;
   /** Opened by the other side (a publisher's show view): kept until they say bye, not reconciled against the stage. */
   inbound: boolean;
+  /** Their offer carried an audio line: a publisher's show view that wants my vocal (singers' own links never do). */
+  wantsAudio: boolean;
+  /** Remote audio (a publisher receiving a singer's vocal). */
+  audio: MediaStream | null;
   /** Signals to this peer go out one after another, so an offer always lands in the relay before its ICE candidates. */
   sendChain: Promise<void>;
   /** Remote ICE candidates that arrived before the remote description (the relay may reorder them). */
@@ -61,6 +65,9 @@ export class PerformerMesh {
   private running = false;
   private polling = false;
   onRemote: ((id: string, stream: MediaStream | null, state: PeerState) => void) | null = null;
+  /** A singer's vocal arrived / went away (publisher side only). */
+  onRemoteAudio: ((id: string, stream: MediaStream | null) => void) | null = null;
+  private localAudio: MediaStreamTrack | null = null;
 
   constructor(
     private channel: SignalChannel,
@@ -97,6 +104,22 @@ export class PerformerMesh {
     }
   }
 
+  /**
+   * My vocal (after FX) for the publisher links only — singers never hear each other. The sender
+   * slot already exists on every publisher link (their offer carries an audio line), so this
+   * never renegotiates; null stops sending.
+   */
+  setLocalAudio(track: MediaStreamTrack | null): void {
+    this.localAudio = track;
+    for (const p of this.peers.values()) if (p.wantsAudio) this.attachAudio(p);
+  }
+
+  private attachAudio(peer: Peer): void {
+    const t = peer.pc.getTransceivers().find((x) => x.receiver.track?.kind === 'audio' || x.sender.track?.kind === 'audio');
+    if (!t) return;
+    void t.sender.replaceTrack(this.localAudio).catch(() => undefined);
+  }
+
   /** Reconcile the mesh with the performers currently on stage (excluding me); inbound peers stay. */
   setPeers(ids: string[]): void {
     const want = new Set(ids.filter((id) => id && id !== this.me));
@@ -116,10 +139,10 @@ export class PerformerMesh {
   }
 
   /** Per-peer RTP counters (support / tests): frames sent & received, bytes, and the sender track state. */
-  async stats(): Promise<Record<string, { framesSent: number; framesReceived: number; bytesSent: number; bytesReceived: number; senderTrack: string; connection: string }>> {
-    const out: Record<string, { framesSent: number; framesReceived: number; bytesSent: number; bytesReceived: number; senderTrack: string; connection: string }> = {};
+  async stats(): Promise<Record<string, { framesSent: number; framesReceived: number; bytesSent: number; bytesReceived: number; audioBytesSent: number; audioBytesReceived: number; senderTrack: string; connection: string }>> {
+    const out: Record<string, { framesSent: number; framesReceived: number; bytesSent: number; bytesReceived: number; audioBytesSent: number; audioBytesReceived: number; senderTrack: string; connection: string }> = {};
     for (const [id, p] of this.peers) {
-      const row = { framesSent: 0, framesReceived: 0, bytesSent: 0, bytesReceived: 0, senderTrack: '', connection: p.pc.connectionState };
+      const row = { framesSent: 0, framesReceived: 0, bytesSent: 0, bytesReceived: 0, audioBytesSent: 0, audioBytesReceived: 0, senderTrack: '', connection: p.pc.connectionState };
       const t = p.pc.getSenders().find((s) => s.track)?.track;
       row.senderTrack = t ? `${t.readyState}${t.muted ? '/muted' : ''}${t.enabled ? '' : '/disabled'}` : 'none';
       try {
@@ -133,6 +156,8 @@ export class PerformerMesh {
             row.framesReceived += r.framesDecoded ?? 0;
             row.bytesReceived += r.bytesReceived ?? 0;
           }
+          if (r.type === 'outbound-rtp' && r.kind === 'audio') row.audioBytesSent += r.bytesSent ?? 0;
+          if (r.type === 'inbound-rtp' && r.kind === 'audio') row.audioBytesReceived += r.bytesReceived ?? 0;
         });
       } catch {
         /* stats unavailable */
@@ -156,12 +181,14 @@ export class PerformerMesh {
 
   private connect(id: string, inbound: boolean): void {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers as RTCIceServer[], bundlePolicy: 'max-bundle' });
-    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0 };
+    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0 };
     this.peers.set(id, peer);
     // Always have a video transceiver so the offer is the same whether or not our camera is ready.
     const track = this.local?.getVideoTracks()[0] ?? null;
     if (track && this.local && !this.receiveOnly) pc.addTrack(track, this.local);
     else pc.addTransceiver('video', { direction: this.receiveOnly ? 'recvonly' : 'sendrecv' });
+    // A publisher also asks every singer for their vocal (the broadcast mix); singers never ask each other.
+    if (this.receiveOnly) pc.addTransceiver('audio', { direction: 'recvonly' });
     this.applyCaps(peer);
 
     pc.onnegotiationneeded = async () => {
@@ -186,7 +213,15 @@ export class PerformerMesh {
     // them carries RTP. Show whichever remote track is actually live (unmuted), and follow changes.
     pc.ontrack = (e) => {
       const track = e.track;
-      if (track.kind !== 'video') return;
+      if (track.kind === 'audio') {
+        peer.audio = new MediaStream([track]);
+        this.onRemoteAudio?.(id, peer.audio);
+        track.onended = () => {
+          peer.audio = null;
+          this.onRemoteAudio?.(id, null);
+        };
+        return;
+      }
       peer.tracks.add(track);
       const update = () => {
         const live = [...peer.tracks].find((t) => t.readyState === 'live' && !t.muted) ?? [...peer.tracks].find((t) => t.readyState === 'live') ?? null;
@@ -262,6 +297,7 @@ export class PerformerMesh {
     p.pc.onconnectionstatechange = null;
     p.pc.close();
     this.onRemote?.(id, null, 'failed');
+    if (p.audio) this.onRemoteAudio?.(id, null);
     return bye;
   }
 
@@ -291,6 +327,13 @@ export class PerformerMesh {
         if (peer.ignoreOffer) return;
         await pc.setRemoteDescription(desc);
         if (desc.type === 'offer') {
+          // Their offer asks for my vocal (a publisher): answer with a sending audio line, fed when my mic is open.
+          const audioT = pc.getTransceivers().find((x) => x.receiver.track?.kind === 'audio');
+          if (audioT && !this.receiveOnly) {
+            peer.wantsAudio = true;
+            audioT.direction = 'sendonly';
+            if (this.localAudio) void audioT.sender.replaceTrack(this.localAudio).catch(() => undefined);
+          }
           await pc.setLocalDescription();
           await this.send(peer, 'answer', pc.localDescription);
         }

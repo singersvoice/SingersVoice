@@ -14,7 +14,7 @@ import { canPublish, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack,
 import { go, href } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { accountUserId, isDrive, profile, withProvider } from '../../state/session.ts';
+import { accountUserId, profile, withProvider } from '../../state/session.ts';
 import { appSettings, updateApp } from '../../state/settings.ts';
 
 export function MeetsHome() {
@@ -64,12 +64,25 @@ export function MeetsHome() {
     try {
       const fromCatalog = trackId.startsWith('catalog:') ? catalog.find((c) => `catalog:${c.trackId}` === trackId) : undefined;
       const t = tracks.find((x) => x.trackId === trackId);
+      // Every device in the meet loads the song: a track of mine that others cannot reach yet is shared on the way.
+      let catalogTrackId = fromCatalog?.trackId ?? (t && (published.has(t.trackId) ? t.trackId : catalog.find((c) => isSameTrack(t.trackId, c.trackId))?.trackId)) ?? null;
+      if (t && !catalogTrackId && canPublish()) {
+        setPublishing({ label: 'Sharing the song with the meet', fraction: 0.1 });
+        try {
+          await publishTrack(t.trackId, setPublishing);
+          catalogTrackId = t.trackId;
+          setPublished((s) => new Set([...s, t.trackId]));
+        } catch (e) {
+          toast(`Could not share "${t.title}" with the other devices (${errorText(e)}) — only your own devices can play it`, 'warn', 8000);
+        } finally {
+          setPublishing(null);
+        }
+      }
       const r = await api.post('POST /meets', '/meets', {
         title: title.trim() || `${profile.value?.name?.split(' ')[0] ?? 'My'} meet`,
         trackId: fromCatalog?.trackId ?? t?.trackId ?? null,
         trackTitle: fromCatalog?.title ?? t?.title ?? '',
-        // Performers load the track from the catalog: my published track, or the public one picked.
-        catalogTrackId: fromCatalog?.trackId ?? (t && (published.has(t.trackId) ? t.trackId : catalog.find((c) => isSameTrack(t.trackId, c.trackId))?.trackId)) ?? null,
+        catalogTrackId,
         backgroundId: app.backgroundId,
       });
       go(`/meet/${encodeURIComponent(r.meet.meetId)}`);
@@ -124,22 +137,6 @@ export function MeetsHome() {
     }
   };
 
-  const selectedMine = tracks.find((t) => t.trackId === trackId);
-  const selectedPublished = Boolean(trackId && (trackId.startsWith('catalog:') || published.has(trackId) || catalog.some((c) => isSameTrack(trackId, c.trackId))));
-
-  const publishSelected = async () => {
-    if (!selectedMine) return;
-    setPublishing({ label: 'Publishing', fraction: 0.1 });
-    try {
-      await publishTrack(selectedMine.trackId, setPublishing);
-      setPublished((s) => new Set([...s, selectedMine.trackId]));
-      toast(`"${selectedMine.title}" is public — every performer can load it`, 'ok', 6000);
-    } catch (e) {
-      toast(errorText(e), 'error', 8000);
-    } finally {
-      setPublishing(null);
-    }
-  };
 
   return (
     <Page title="Live Meets">
@@ -161,42 +158,30 @@ export function MeetsHome() {
           <Field label="Title">
             <input class="input" value={title} onInput={(e) => setTitle((e.currentTarget as HTMLInputElement).value)} placeholder="Sunday SV music meet" maxLength={80} />
           </Field>
-          <Field label="Track (every performer loads it from the public catalog — my published tracks and any public track)">
+          <Field label="First song (optional — the set list in the room takes the rest; it loads on every device in the meet)">
             <select class="input" value={trackId} onChange={(e) => setTrackId((e.currentTarget as HTMLSelectElement).value)}>
-              <option value="">Pick later</option>
+              <option value="">Pick in the room</option>
               {tracks.length > 0 && (
-                <optgroup label={`My tracks (${isDrive.value ? 'Drive' : 'this device'})`}>
+                <optgroup label="My songs">
                   {tracks.map((t) => (
                     <option key={t.trackId} value={t.trackId}>
-                      {t.title} {published.has(t.trackId) || catalog.some((c) => isSameTrack(t.trackId, c.trackId)) ? '· public' : '· private'}
+                      {t.title}
                     </option>
                   ))}
                 </optgroup>
               )}
               {catalog.length > 0 && (
-                <optgroup label="Public catalog">
+                <optgroup label="Songs from other singers">
                   {catalog.map((c) => (
                     <option key={c.trackId} value={`catalog:${c.trackId}`}>
-                      {c.title} · {c.artist || 'Unknown artist'} · by {c.ownerName}
+                      {c.title} · {c.artist || 'Unknown artist'} · {c.ownerName}
                     </option>
                   ))}
                 </optgroup>
               )}
             </select>
           </Field>
-          {trackId && !selectedPublished && (
-            <div class="callout warn stack" style="gap:8px">
-              <span>This track is private: other performers won't be able to load it.</span>
-              {publishing && <Progress fraction={publishing.fraction} label={publishing.label} />}
-              {canPublish() ? (
-                <button class="btn sm accent" disabled={publishing !== null} onClick={() => void publishSelected()}>
-                  Publish it to the public catalog now
-                </button>
-              ) : (
-                <span class="small">Sign in with Google to publish it (tracks are shared from your Drive).</span>
-              )}
-            </div>
-          )}
+          {publishing && <Progress fraction={publishing.fraction} label={publishing.label} />}
           <div class="row">
             <button class="btn" onClick={() => setBgOpen(true)}>
               Stage background

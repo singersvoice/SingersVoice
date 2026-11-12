@@ -1,17 +1,19 @@
 /**
- * Pick a song for the meet's set list: one of my saved tracks (Drive library) or any public track from
- * the catalog. A private library track can only be loaded by my own devices, so the picker offers to
- * publish it first (the Tracks portal's own `publishTrack`, through lib/catalog.ts) — the meet itself
- * only ever stores ids; every device resolves them through `loadMeetTrack` (library, then catalog).
+ * Pick a song for the meet: one of my saved tracks (my Drive library) or a track another singer
+ * shares. Picking is all a singer does — the song then loads on every device in the meet so all
+ * the singers sing the same lines at the same time. A track of mine that other devices cannot
+ * reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission and a
+ * public catalog entry, through lib/catalog.ts — the same thing the Tracks portal does); nobody is
+ * asked about it here.
  */
 import { formatMs, type CatalogTrack, type SongPick } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
-import { IcMusic, IcPlus, IcX } from '../../components/icons.tsx';
+import { IcMusic, IcX } from '../../components/icons.tsx';
 import { Progress, Spinner } from '../../components/ui.tsx';
 import { canPublish, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, searchCatalog } from '../../lib/catalog.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { isDrive, withProvider } from '../../state/session.ts';
+import { withProvider } from '../../state/session.ts';
 
 export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; onClose: () => void; canPlayNow?: boolean; onPlayNow?: (song: SongPick) => Promise<void> }) {
   const [tracks, setTracks] = useState<TrackSummary[] | null>(null);
@@ -19,8 +21,7 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
   const [catalog, setCatalog] = useState<CatalogTrack[]>([]);
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
-  const [publishing, setPublishing] = useState<{ label: string; fraction: number } | null>(null);
-  const [confirmPrivate, setConfirmPrivate] = useState<TrackSummary | null>(null);
+  const [sharing, setSharing] = useState<{ label: string; fraction: number } | null>(null);
 
   useEffect(() => {
     void withProvider(async (p) => {
@@ -34,55 +35,67 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
     return () => clearTimeout(t);
   }, [q]);
 
-  const isPublic = (t: TrackSummary) => published.has(t.trackId) || catalog.some((c) => isSameTrack(t.trackId, c.trackId));
-  const catalogIdFor = (t: TrackSummary) => (published.has(t.trackId) ? t.trackId : (catalog.find((c) => isSameTrack(t.trackId, c.trackId))?.trackId ?? null));
+  const sharedId = (t: TrackSummary) => (published.has(t.trackId) ? t.trackId : (catalog.find((c) => isSameTrack(t.trackId, c.trackId))?.trackId ?? null));
   const needle = q.trim().toLowerCase();
   const mine = (tracks ?? []).filter((t) => !needle || `${t.title} ${t.artist}`.toLowerCase().includes(needle));
   const me = myCatalogUserId();
-  const publicOnly = catalog.filter((c) => c.ownerUserId !== me && !(tracks ?? []).some((t) => isSameTrack(t.trackId, c.trackId)));
+  const others = catalog.filter((c) => c.ownerUserId !== me && !(tracks ?? []).some((t) => isSameTrack(t.trackId, c.trackId)));
 
-  const pickMine = async (t: TrackSummary, now: boolean, force = false) => {
-    if (!isPublic(t) && !force) {
-      setConfirmPrivate(t);
-      return;
-    }
+  const deliver = async (song: SongPick, now: boolean) => {
+    await (now && props.onPlayNow ? props.onPlayNow(song) : props.onPick(song));
+    props.onClose();
+  };
+  /** My track: share it on the way if other devices cannot reach it yet (quietly; a failure still seats the song for my own devices). */
+  const pickMine = async (t: TrackSummary, now: boolean) => {
     setBusy(t.trackId);
     try {
-      const song: SongPick = { trackId: t.trackId, catalogTrackId: catalogIdFor(t), trackTitle: t.title, durationMs: t.durationMs };
-      await (now && props.onPlayNow ? props.onPlayNow(song) : props.onPick(song));
-      props.onClose();
+      let catalogTrackId = sharedId(t);
+      if (!catalogTrackId && canPublish()) {
+        setSharing({ label: 'Sharing the song with the meet', fraction: 0.1 });
+        try {
+          await publishTrack(t.trackId, setSharing);
+          catalogTrackId = t.trackId;
+          setPublished((s) => new Set([...s, t.trackId]));
+        } catch (e) {
+          toast(`Could not share "${t.title}" with the other devices (${errorText(e)}) — only your own devices can play it`, 'warn', 8000);
+        } finally {
+          setSharing(null);
+        }
+      }
+      await deliver({ trackId: t.trackId, catalogTrackId, trackTitle: t.title, durationMs: t.durationMs }, now);
     } catch (e) {
       toast(errorText(e), 'error', 7000);
     } finally {
       setBusy(null);
-      setConfirmPrivate(null);
     }
   };
-  const publishThenPick = async (t: TrackSummary, now: boolean) => {
-    setPublishing({ label: 'Publishing', fraction: 0.1 });
-    try {
-      await publishTrack(t.trackId, setPublishing);
-      setPublished((s) => new Set([...s, t.trackId]));
-      toast(`"${t.title}" is public — every performer can load it`, 'ok', 6000);
-      setPublishing(null);
-      await pickMine({ ...t }, now, true);
-    } catch (e) {
-      toast(errorText(e), 'error', 8000);
-      setPublishing(null);
-    }
-  };
-  const pickCatalog = async (c: CatalogTrack, now: boolean) => {
+  const pickShared = async (c: CatalogTrack, now: boolean) => {
     setBusy(c.trackId);
     try {
-      const song: SongPick = { trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs };
-      await (now && props.onPlayNow ? props.onPlayNow(song) : props.onPick(song));
-      props.onClose();
+      await deliver({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs }, now);
     } catch (e) {
       toast(errorText(e), 'error', 7000);
     } finally {
       setBusy(null);
     }
   };
+
+  const row = (key: string, title: string, sub: string, pick: (now: boolean) => Promise<void>) => (
+    <div class="item" key={key}>
+      <div class="meta">
+        <div class="t">{title}</div>
+        <div class="s">{sub}</div>
+      </div>
+      <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${title}`} onClick={() => void pick(false)}>
+        {busy === key ? <Spinner /> : <IcMusic size={16} />} Pick
+      </button>
+      {props.canPlayNow && (
+        <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${title} now`} onClick={() => void pick(true)}>
+          Now
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div class="card stack songpicker" role="dialog" aria-label="Pick a song">
@@ -94,82 +107,19 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
           <IcX size={16} />
         </button>
       </div>
-      <input class="input" value={q} placeholder="Search my tracks and the public catalog" aria-label="Search songs" onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)} />
-      {confirmPrivate && (
-        <div class="callout warn stack" style="gap:8px">
-          <span>
-            <b>{confirmPrivate.title}</b> is private: only your own devices can load it. Publish it to the public catalog so every performer can sing it?
-          </span>
-          {publishing && <Progress fraction={publishing.fraction} label={publishing.label} />}
-          <div class="row">
-            {canPublish() ? (
-              <button class="btn sm accent" disabled={publishing !== null} onClick={() => void publishThenPick(confirmPrivate, false)}>
-                Publish & add
-              </button>
-            ) : (
-              <span class="small">Sign in with Google to publish it (tracks are shared from your Drive).</span>
-            )}
-            <button class="btn sm" disabled={publishing !== null} onClick={() => void pickMine(confirmPrivate, false, true)}>
-              Add anyway (only my devices)
-            </button>
-            <button class="btn sm ghost" onClick={() => setConfirmPrivate(null)}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-      <div class="small muted">My tracks ({isDrive.value ? 'Drive' : 'this device'})</div>
+      <input class="input" value={q} placeholder="Search songs" aria-label="Search songs" onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)} />
+      {sharing && <Progress fraction={sharing.fraction} label={sharing.label} />}
+      <div class="small muted">My songs</div>
       {tracks === null ? (
         <Spinner />
       ) : !mine.length ? (
-        <div class="small muted">{tracks.length ? 'No match.' : 'No saved tracks yet — make one in the Studio or pull one from the catalog.'}</div>
+        <div class="small muted">{tracks.length ? 'No match.' : 'No saved songs yet — make one in the Studio.'}</div>
       ) : (
-        <div class="list">
-          {mine.map((t) => (
-            <div class="item" key={t.trackId}>
-              <div class="meta">
-                <div class="t">{t.title}</div>
-                <div class="s">
-                  {t.artist || 'Unknown artist'} · {formatMs(t.durationMs)} · {t.singerCount} singer{t.singerCount > 1 ? 's' : ''} · {isPublic(t) ? 'public' : 'private'}
-                </div>
-              </div>
-              <button class="btn sm primary" disabled={busy !== null} aria-label={`Add ${t.title} to the set list`} onClick={() => void pickMine(t, false)}>
-                {busy === t.trackId ? <Spinner /> : <IcPlus size={16} />} Add
-              </button>
-              {props.canPlayNow && (
-                <button class="btn sm" disabled={busy !== null} aria-label={`Play ${t.title} now`} onClick={() => void pickMine(t, true)}>
-                  Now
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
+        <div class="list">{mine.map((t) => row(t.trackId, t.title, `${t.artist || 'Unknown artist'} · ${formatMs(t.durationMs)} · ${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`, (now) => pickMine(t, now)))}</div>
       )}
-      <div class="small muted">Public catalog</div>
-      {!publicOnly.length ? (
-        <div class="small muted">{needle ? 'No public track matches.' : 'No other public tracks yet.'}</div>
-      ) : (
-        <div class="list">
-          {publicOnly.map((c) => (
-            <div class="item" key={c.trackId}>
-              <div class="meta">
-                <div class="t">{c.title}</div>
-                <div class="s">
-                  {c.artist || 'Unknown artist'} · {formatMs(c.durationMs)} · by {c.ownerName}
-                </div>
-              </div>
-              <button class="btn sm primary" disabled={busy !== null} aria-label={`Add ${c.title} to the set list`} onClick={() => void pickCatalog(c, false)}>
-                {busy === c.trackId ? <Spinner /> : <IcPlus size={16} />} Add
-              </button>
-              {props.canPlayNow && (
-                <button class="btn sm" disabled={busy !== null} aria-label={`Play ${c.title} now`} onClick={() => void pickCatalog(c, true)}>
-                  Now
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      <div class="small muted">Songs from other singers</div>
+      {!others.length ? <div class="small muted">{needle ? 'No match.' : 'None shared yet.'}</div> : <div class="list">{others.map((c) => row(c.trackId, c.title, `${c.artist || 'Unknown artist'} · ${formatMs(c.durationMs)} · ${c.ownerName}`, (now) => pickShared(c, now)))}</div>}
+      <div class="small faint">The song you pick loads on every device in the meet, so all the singers on stage sing the same lines at the same time.</div>
     </div>
   );
 }

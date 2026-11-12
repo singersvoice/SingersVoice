@@ -226,13 +226,15 @@ function clearSlot(s: StageSlot): void {
  * host steps on stage freely, anyone else needs the host's permission while the stage policy is
  * 'ask' (`approved` — the host's decision seats them) or an 'open' stage. Performers already on
  * stage may move to another free slot. The stage is live from the moment the meet exists — the
- * song is just one activity on it — so a slot may be taken during the song as well (a late
- * performer starts mid-song).
+ * song is just one activity on it — but a running song is the stage singers' own: nobody new
+ * steps on until it is over; they wait on the wait list.
  */
 export function claimSlot(m: Meet, p: Participant, slot: number | null, approved = false): { ok: boolean; reason?: string } {
   if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
   if (p.role === 'publisher' && slot !== null) return { ok: false, reason: 'publisher' };
   const entering = slot !== null && !m.stage.some((s) => s.participantId === p.participantId);
+  // A running song belongs to the singers on stage: nobody steps on until it is over (the wait list is served then).
+  if (entering && songInProgress(m)) return { ok: false, reason: 'song_in_progress' };
   if (entering && m.stagePolicy !== 'open' && !approved && p.userId !== m.hostUserId) return { ok: false, reason: 'ask_first' };
   if (slot !== null && (slot < 1 || slot > MAX_PERFORMERS)) return { ok: false, reason: 'bad_slot' };
   if (slot !== null) {
@@ -277,6 +279,7 @@ export function withdrawRequest(m: Meet, p: Participant): void {
 /** The host lets someone on stage (first free slot unless given) or declines; the decision clears the request. */
 export function decideRequest(m: Meet, target: Participant, allow: boolean, slot?: number): { ok: boolean; reason?: string } {
   if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  if (allow && songInProgress(m)) return { ok: false, reason: 'song_in_progress' }; // they stay on the wait list until the song is over
   m.requests = (m.requests ?? []).filter((r) => r.participantId !== target.participantId);
   if (!allow) {
     target.stageRequest = 'declined';

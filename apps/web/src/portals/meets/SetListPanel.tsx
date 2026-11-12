@@ -5,8 +5,7 @@
  */
 import { formatMs, type Meet, type Participant, type SongPick } from '@singersvoice/protocol';
 import { useState } from 'preact/hooks';
-import { IcPlay, IcPlus, IcX } from '../../components/icons.tsx';
-import { href } from '../../lib/nav.ts';
+import { IcMusic, IcPlay, IcX } from '../../components/icons.tsx';
 import { errorText, toast } from '../../lib/toast.ts';
 import type { MeetSession } from './meetSession.ts';
 import { SongPicker } from './SongPicker.tsx';
@@ -19,7 +18,7 @@ export function SetListPanel(props: { session: MeetSession; meet: Meet; you: Par
   const hasSong = Boolean(meet.trackId || meet.catalogTrackId);
   const addSong = async (song: SongPick, now = false) => {
     await session.addSong(song, now);
-    toast(now || !hasSong ? `"${song.trackTitle}" is up next` : `"${song.trackTitle}" added to the set list`, 'ok');
+    toast(now || !hasSong ? `"${song.trackTitle}" is up next — loading on every device` : `"${song.trackTitle}" is on the set list`, 'ok');
   };
   const songAction = async (id: string, action: 'remove' | 'up' | 'now') => {
     try {
@@ -41,12 +40,12 @@ export function SetListPanel(props: { session: MeetSession; meet: Meet; you: Par
   <div class="row between">
     <div class="min0">
       <div class="small muted">{hasSong ? (live ? 'Now singing' : `Up next${meet.songCount ? ` · song ${meet.songCount + 1}` : ''}`) : 'No song picked yet'}</div>
-      <b class="setlist-title">{hasSong ? meet.trackTitle || 'Untitled track' : canPick ? 'Add a song from your library or the public catalog' : 'The singers pick the songs'}</b>
+      <b class="setlist-title">{hasSong ? meet.trackTitle || 'Untitled track' : canPick ? 'Pick a song — it loads for everyone in the meet' : 'The singers pick the songs'}</b>
     </div>
     <div class="row monitor-chips">
       {canPick && !picking && (
         <button class="btn sm primary" onClick={() => setPicking(true)}>
-          <IcPlus size={16} /> Add a song
+          <IcMusic size={16} /> Pick a song
         </button>
       )}
       {host && hasSong && !live && (
@@ -94,15 +93,5 @@ export function TrackStatus(props: { track: MeetTrack | null; host: boolean }) {
   const t = props.track;
   if (!t) return <div class="small muted">Checking the track on this device…</div>;
   if (t.loaded) return <div class="small muted">Track ready on this device ({t.source === 'library' ? 'your library' : 'public catalog'}): {t.loaded.track.title} · {formatMs(t.loaded.track.durationMs)}</div>;
-  return (
-    <div class="callout warn">
-      {t.reason}
-      {props.host && (
-        <>
-          {' '}
-          Publish it from <a href={href('/tracks')}>Tracks</a> so everyone can load it.
-        </>
-      )}
-    </div>
-  );
+  return <div class="callout warn">{t.reason}</div>;
 }

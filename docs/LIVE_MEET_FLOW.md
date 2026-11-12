@@ -44,17 +44,22 @@ model loads, a camera on/off button for you.
 - The **host** is the admin: seated on S1 at the start, takes any slot freely, decides who sings,
   orders the set list, starts/pauses/resumes/restarts/ends songs, ends the meet.
 - A **singer** is anyone on a slot (up to 10). Audience become singers by **Ask to sing** → the
-  host's lobby shows *"<name> wants to join the stage"* with **Let them sing** / **Not now**. On yes,
-  the server seats them in the first free slot; their camera opens by itself. Declined singers may
-  ask again; a pending ask can be withdrawn. **Open stage** (host switch) lets anyone take a free
-  slot without asking. The host can clear any slot (×). Singers can move to another free slot and
-  **Leave stage**.
+  host's lobby shows the **wait list** (*"<name> wants to sing"*) with **Let them sing** / **Not
+  now**. On yes, the server seats them in the first free slot; their camera opens by itself.
+  Declined singers may ask again; a pending ask can be withdrawn. **Open stage** (host switch) lets
+  anyone take a free slot without asking. The host can clear any slot (×). Singers can move to
+  another free slot and **Leave stage**.
+- **A running song belongs to the singers on stage.** From the count-in to the end of the song
+  nobody new steps on: a newcomer sees *Ask to sing next* and joins the wait list (the host sees
+  *wait list · N* on the live stage, nothing else), *Let them sing* waits until the song is over,
+  and an open stage's *Take a stage slot* comes back between songs. Share the link with a hundred
+  people: they all arrive as audience at the bottom, and the stage changes only between songs.
 
 ### The set list (karaoke queue)
 
 | Option | Who | What it does |
 | --- | --- | --- |
-| **Add a song** | host, singers | Opens the picker: *My tracks* (your Drive library) and the *Public catalog*, with search. The first song picked becomes the current one; later picks queue up. A private library track asks *Publish & add* (so every device can load it) or *Add anyway* (only your devices can). |
+| **Pick a song** | host, singers | Opens the picker: *My songs* (your Drive library) and *Songs from other singers*, with search. Picking is all you do: the song loads on every device in the meet, so all the singers sing the same lines at the same time. A song of yours that other devices cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission — needs a Google sign-in; otherwise only your own devices can play it, and the others say so). The first song picked becomes the current one; later picks queue up. |
 | **Now** (in the picker / on a queued song) | host | Makes that song the current one (the previous current goes back to the top of the queue). Only between songs. |
 | ▲ / × on a queued song | host (× also the one who added it) | Move up / remove. |
 | **Skip** | host | Drops the current song; the next one comes up. |
@@ -64,7 +69,7 @@ model loads, a camera on/off button for you.
 
 | Option | Who | What it does |
 | --- | --- | --- |
-| **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS), decodes the current song, marks you *ready*. Needs a current song — the button says *Pick a song to get ready* until there is one. Ready resets whenever the set list moves on. |
+| **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS), decodes the current song, marks you *ready*. Shown once there is a song; ready resets whenever the set list moves on. |
 | **Start the song (8 s count-in)** | host | Needs a song and at least one singer. Every device starts the backing track at the same server instant (the GMT kickstart); a singer who is not ready yet can still **Join the song on stage** afterwards and starts mid-song. |
 | **End meet** | host | Ends the event for everyone (after a confirmation). |
 
@@ -107,9 +112,16 @@ ingest + stream key; the in-house portal), **History**.
 The **show view** (`/publishing/show/:id`) joins the meet as a *publisher* — never on stage, never
 counted as audience, one participant per view — pulls every performer's video (receive-only) and
 draws them huge on one stage, no lyrics, with a self-hiding bar (destinations, Go live / Stop,
-backing track in sync, full screen). It shows the singers from the lobby on (*Up next: …*), the
-countdown as an opener, *Paused by the host*, and carries on across every song of the event: the
-show is independent of the song.
+singers' vocals, backing track in sync, full screen). It shows the singers from the lobby on (*Up
+next: …*), the countdown as an opener, *Paused by the host*, and carries on across every song of
+the event: the show is independent of the song.
+
+**The broadcast sound.** Only Publishing collects the whole song: every singer's vocal (after
+their own FX) travels to the publisher's links — and only there; singers never hear each other,
+so latency never pulls them apart while they sing the same lines — and the show view plays those
+vocals with the backing track, which it runs a quarter second behind the shared clock to meet them.
+Preview tiles monitor silently; one can be heard on request. (The session container that encodes
+this mix to RTMPS/LL-HLS is the next increment; until then the show view's own sound is the mix.)
 
 ## 7 · What is independent of what
 

@@ -26,8 +26,8 @@ export async function loadMeetTrack(meet: Pick<Meet, 'trackId' | 'catalogTrackId
       const entry = await getCatalogTrack(meet.catalogTrackId);
       return { loaded: await fetchCatalogTrack(entry), source: 'catalog' };
     } catch (e) {
-      return { loaded: null, source: 'none', reason: `The host's track could not be fetched from the catalog (${e instanceof Error ? e.message : String(e)})` };
+      return { loaded: null, source: 'none', reason: `This song could not be loaded on this device (${e instanceof Error ? e.message : String(e)})` };
     }
   }
-  return { loaded: null, source: 'none', reason: meet.trackId ? "The host hasn't published this track to the public catalog, so only the host's devices have it." : 'The host has not picked a track yet.' };
+  return { loaded: null, source: 'none', reason: meet.trackId ? 'This song is not reachable from this device: the singer who picked it needs a Google Drive sign-in so it can be shared with the meet.' : 'No song picked yet.' };
 }

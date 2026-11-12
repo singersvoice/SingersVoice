@@ -23,10 +23,11 @@ const out = process.argv[2] ?? 'screenshots';
 import { mkdirSync } from 'node:fs';
 mkdirSync(out, { recursive: true });
 let failed = false;
+const extraPages = {};
 const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) failed = true; };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const secs = (t) => Number(t.split(':')[0]) * 60 + Number(t.split(':')[1]);
-const errors = { alice: [], bob: [], carol: [] };
+const errors = { alice: [], bob: [], carol: [], dave: [] };
 
 async function person(name, viewport, { track = true } = {}) {
   const ctx = await browser.newContext({ viewport, permissions: ['microphone', 'camera'], deviceScaleFactor: 1 });
@@ -67,12 +68,10 @@ try {
   check(true, 'a new meet starts with an empty set list');
   // The host adds the first song from her library (private → "add anyway": her guest holds his own copy).
   const addSong = async (p, who) => {
-    await p.getByRole('button', { name: 'Add a song' }).click();
-    await p.getByRole('button', { name: /^Add CI Sample Song to the set list/ }).click();
-    const anyway = p.getByRole('button', { name: /Add anyway/ });
-    if (await anyway.isVisible().catch(() => false)) await anyway.click();
-    await p.getByText(/is up next|added to the set list/).waitFor({ timeout: 15000 });
-    console.log(`${who} added the song`);
+    await p.getByRole('button', { name: 'Pick a song' }).click();
+    await p.getByRole('button', { name: 'Pick CI Sample Song' }).click();
+    await p.getByText(/is up next|is on the set list/).waitFor({ timeout: 15000 });
+    console.log(`${who} picked the song`);
   };
   await addSong(alice.page, 'alice');
   await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
@@ -105,9 +104,9 @@ try {
   await bob.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
   check(!(await bob.page.getByRole('button', { name: 'Take a stage slot' }).isVisible().catch(() => false)), 'an audience member cannot just take a slot (the stage policy is "ask")');
   await bob.page.getByRole('button', { name: 'Ask to sing' }).click();
-  await bob.page.getByText(/Asked to sing — waiting for/).waitFor({ timeout: 15000 });
+  await bob.page.getByText(/On the wait list — waiting for/).waitFor({ timeout: 15000 });
   await alice.page.locator('.requests').waitFor({ timeout: 15000 });
-  check(/bob/.test(await alice.page.locator('.requests').innerText()), 'the host sees "bob wants to join the stage"');
+  check(/Wait list · 1/.test(await alice.page.locator('.requests').innerText()) && /bob/.test(await alice.page.locator('.requests').innerText()), 'the host sees bob on the wait list');
   await alice.page.screenshot({ path: `${out}/lobby-alice-request.png` });
   await alice.page.getByRole('button', { name: 'Let bob sing' }).click();
   await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
@@ -156,6 +155,7 @@ try {
 
   // Publishing: the show is its own process — carol's show view gets both performers while the song has not started.
   const carol = await person('carol', { width: 1920, height: 1080 }, { track: false });
+  extraPages.carol = carol.page;
   await carol.page.goto(`${base}publishing/show/${meetId}?${control}`, { waitUntil: 'networkidle' });
   await carol.page.locator('.show[data-state="lobby"]').waitFor({ timeout: 30000 });
   const tShowLobby = Date.now();
@@ -206,6 +206,18 @@ try {
   check(a.blend === 'model' && b.blend === 'model' && /^adaptive-/.test(a.mask ?? '') && /^adaptive-/.test(b.mask ?? ''), `the real segmentation model cut both singers out (${a.mask} / ${b.mask})`);
   await alice.page.screenshot({ path: `${out}/duet-alice-live.png` });
   await bob.page.screenshot({ path: `${out}/duet-bob-live.png` });
+  // The running song is the stage singers' own: a newcomer stays in the audience, asks, and waits for the song to end.
+  const daveLog = [];
+  const dave = await person('dave', { width: 412, height: 915 }, { track: false });
+  extraPages.dave = dave.page;
+  dave.page.on('response', (r) => { if (/\/meets\//.test(r.url()) && !/signals|heartbeat/.test(r.url())) daveLog.push(`${new Date().toISOString().slice(14, 23)} ${r.request().method()} ${r.url().replace(servers.controlUrl, '').replace(/meet-[a-z0-9-]+/, 'M')} ${r.status()}`); });
+  await dave.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
+  await dave.page.getByRole('button', { name: 'Ask to sing next' }).waitFor({ timeout: 30000 });
+  check(!(await dave.page.getByRole('button', { name: 'Take a stage slot' }).isVisible().catch(() => false)), 'a newcomer during a song cannot step on stage');
+  await dave.page.getByRole('button', { name: 'Ask to sing next' }).click();
+  await dave.page.getByText(/On the wait list — the host seats singers once the song is over/).waitFor({ timeout: 15000 });
+  await alice.page.locator('.sing .stagebar', { hasText: 'wait list · 1' }).waitFor({ timeout: 15000 });
+  check(true, 'the host sees the wait list on the live stage; nothing interrupts the song');
 
   // Publishing mode: carol's show view (open since the lobby) follows the song — same links, now live.
   await carol.page.locator('.show[data-state="live"]').waitFor({ timeout: 30000 });
@@ -236,6 +248,14 @@ try {
   check(show.left > 2000 && show.right > 2000 && show.top > 0, 'both cut-outs are drawn, filling the frame up to the top');
   check(show.lyrics === 0, 'no lyrics in publish mode');
   check(/2 on stage · 2\/2 video/.test(show.top_text), `show header: ${show.top_text}`);
+  // The broadcast sound: every singer's vocal (after FX) reaches the publisher — and only the publisher.
+  await carol.page.locator('.show-badges [data-vocals="2"]').waitFor({ timeout: 20000 }).catch(() => undefined);
+  await wait(2500);
+  const carolAudio = await carol.page.evaluate(async () => Object.values(await window.__svMesh.stats()).map((r) => r.audioBytesReceived));
+  const singersAudio = await alice.page.evaluate(async () => Object.entries(await window.__svMesh.stats()).map(([id, r]) => `${id.slice(-6)}:${r.audioBytesReceived}`));
+  console.log('vocal bytes at the publisher:', JSON.stringify(carolAudio), '| audio bytes at a singer:', JSON.stringify(singersAudio));
+  check(carolAudio.length === 2 && carolAudio.every((b) => b > 2000), `the show view receives both singers' vocals (${carolAudio.join(' / ')} bytes)`);
+  check(await alice.page.evaluate(async () => Object.values(await window.__svMesh.stats()).every((r) => r.audioBytesReceived === 0)), 'singers never receive each other\'s voice (Solo foldback)');
   await carol.page.screenshot({ path: `${out}/show-carol-live.png` });
   // Go live with the in-house destination (enabled by default): the job is requested for this meet.
   // The chrome hides itself while the show plays; moving the pointer brings it back (like a video player).
@@ -321,6 +341,12 @@ try {
   const meshAfterSong = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   check(meshAfterSong === meshBefore, 'the same video mesh carries on after the song (stage never left)');
   check(/No song picked yet/.test(await alice.page.locator('.setlist').innerText()), 'the set list is empty again after the only song');
+  // Between songs the wait list is served: the host seats dave; he is on stage with his camera at once.
+  console.log('dave requests:', daveLog.join(' | '));
+  console.log('dave page:', (await dave.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300));
+  await alice.page.getByRole('button', { name: 'Let dave sing' }).click();
+  await dave.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
+  check(true, 'the host seats the wait-listed singer once the song is over');
   // Next song: the host adds it again, everyone gets ready, the host starts it — a second act of the same karaoke event.
   await addSong(alice.page, 'alice');
   await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
@@ -335,7 +361,7 @@ try {
   await wait(9500);
   const a3 = await stageInfo(alice.page);
   const b3 = await stageInfo(bob.page);
-  check(a3.performers === '2' && b3.performers === '2' && /1\/1 video linked/.test(a3.text) && /1\/1 video linked/.test(b3.text), `the second song runs on the same stage (${a3.t} / ${b3.t})`);
+  check(a3.performers === '3' && b3.performers === '3' && /2\/2 video linked/.test(a3.text) && /2\/2 video linked/.test(b3.text), `the second song runs on the same stage, now with three singers (${a3.text} / ${b3.text})`);
   check(/Up next|Now singing/.test(await carol.page.locator('.show-top').innerText().catch(() => '')) || (await carol.page.locator('.show[data-state="live"]').isVisible()), 'the show view follows the second song');
   // The set list is at hand on the live stage: the drawer shows what is playing and lets anyone add a song.
   await bob.page.getByRole('button', { name: 'Set list' }).click();
@@ -381,6 +407,7 @@ try {
   console.error('FAIL', e);
   await alice.page.screenshot({ path: `${out}/duet-alice-fail.png` }).catch(() => {});
   await bob.page.screenshot({ path: `${out}/duet-bob-fail.png` }).catch(() => {});
+  for (const [n, p] of Object.entries(extraPages)) await p.screenshot({ path: `${out}/duet-${n}-fail.png` }).catch(() => {});
   console.error('errors', JSON.stringify(errors));
 }
 await browser.close();

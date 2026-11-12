@@ -9,7 +9,7 @@
  */
 import { meetIsOpen, type Meet, type PublishJob } from '@singersvoice/protocol';
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { IcPlay, IcUsers } from '../../components/icons.tsx';
+import { IcMic, IcPlay, IcUsers } from '../../components/icons.tsx';
 import { Empty, Spinner } from '../../components/ui.tsx';
 import { api, ApiError } from '../../lib/api.ts';
 import { href } from '../../lib/nav.ts';
@@ -17,7 +17,7 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { MeetSession } from '../meets/meetSession.ts';
 import { resolveMeet } from './meetLookup.ts';
 import { activeJob } from './ShowView.tsx';
-import { ShowPicture, useCountdown, useShowFeed } from './showStage.tsx';
+import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
 
 const REFRESH_MS = 10_000;
 /** Tiles that connect by themselves; the rest connect on request. */
@@ -185,11 +185,17 @@ function LiveMonitor(props: { meet: Meet; onStatus: (s: { onStage: number; linke
 function MonitorFeed(props: { session: MeetSession; meet: Meet; you: NonNullable<MeetSession['you']['value']>; onStatus: (s: { onStage: number; linked: number }) => void }) {
   const feed = useShowFeed(props.session, props.meet, props.you);
   const countdown = useCountdown(props.meet);
+  const [listen, setListen] = useState(false); // a wall of tiles monitors silently; one can be heard on request
   useEffect(() => props.onStatus({ onStage: feed.onStage, linked: feed.linked }), [feed.onStage, feed.linked]);
   // The picture is exact — status lives in the card, never in the frame.
+  const n = Object.keys(feed.vocals).length;
   return (
-    <div class="monitor" data-state={props.meet.state} data-performers={feed.onStage} data-linked={feed.linked}>
+    <div class="monitor" data-state={props.meet.state} data-performers={feed.onStage} data-linked={feed.linked} data-vocals={n}>
       <ShowPicture meet={props.meet} compositor={feed.compositor} countdown={countdown} />
+      <Vocals vocals={feed.vocals} on={listen} />
+      <button class={`btn icon sm monitor-listen ${listen ? 'on' : ''}`} aria-label={listen ? 'Mute this meet' : 'Hear this meet'} aria-pressed={listen} title={`${n} vocal${n === 1 ? '' : 's'} arriving`} onClick={() => setListen((l) => !l)}>
+        <IcMic size={14} />
+      </button>
     </div>
   );
 }
