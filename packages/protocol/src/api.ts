@@ -136,6 +136,9 @@ export interface Routes {
   'GET /meets': { res: { meets: Meet[] } };
   'POST /meets': { req: CreateMeetRequest; res: { meet: Meet } };
   'GET /meets/:id': { res: MeetSnapshot };
+  /** Host maintenance from the meets list (by account, no participant token): end an open meet; delete one for good. */
+  'POST /meets/:id/end': { res: { meet: Meet } };
+  'DELETE /meets/:id': { res: { ok: true } };
   'GET /meets/code/:code': { res: { meet: Meet } };
   'POST /meets/:id/join': { req: JoinMeetRequest; res: JoinMeetResponse };
   'POST /meets/:id/heartbeat': { req: HeartbeatRequest; res: MeetSnapshot };
@@ -157,7 +160,8 @@ export interface Routes {
   'POST /meets/:id/pause': { req: PlaybackRequest; res: MeetSnapshot };
   'POST /meets/:id/resume': { req: PlaybackRequest; res: MeetSnapshot };
   'POST /meets/:id/restart': { req: PlaybackRequest; res: MeetSnapshot };
-  'POST /meets/:id/signal': { req: SignalRequest; res: { seq: number } };
+  /** `gone`: the addressee left the meet (no error — the sender just forgets the link). */
+  'POST /meets/:id/signal': { req: SignalRequest; res: { seq: number; gone?: boolean } };
   'POST /meets/:id/signals': { req: { resumeToken: string; since: number }; res: { signals: MeetSignal[]; serverEpochMs: number } };
   'GET /ice': { res: { iceServers: IceServer[] } };
   'POST /meets/:id/leave': { req: { resumeToken: string }; res: { ok: true } };

@@ -10,6 +10,8 @@
  * the take in their own Drive (`Performances/Live/<meet>`).
  */
 export const MAX_PERFORMERS = 10;
+/** Open meets (lobby / countdown / live) one account may host at a time. */
+export const MAX_OPEN_MEETS = 3;
 export const MEET_IDLE_EXPIRY_MS = 5 * 60 * 1000;
 export const MEET_HEARTBEAT_MS = 15 * 1000;
 export const MEET_POLL_LOBBY_MS = 1000;

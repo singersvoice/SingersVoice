@@ -13,7 +13,8 @@ import { api } from '../lib/api.ts';
 import { fingerprintOf } from './sdp.ts';
 
 export interface SignalChannel {
-  sendSignal(to: string, type: MeetSignal['type'], data: unknown): Promise<void>;
+  /** false = the addressee is gone (left the meet). */
+  sendSignal(to: string, type: MeetSignal['type'], data: unknown): Promise<boolean | void>;
   pollSignals(): Promise<MeetSignal[]>;
 }
 
@@ -143,7 +144,13 @@ export class PerformerMesh {
 
   /** Send a signal to a peer, in order (an offer before the candidates that follow it). */
   private send(peer: Peer, type: MeetSignal['type'], data: unknown): Promise<void> {
-    peer.sendChain = peer.sendChain.then(() => this.channel.sendSignal(peer.id, type, data)).catch(() => undefined);
+    peer.sendChain = peer.sendChain
+      .then(async () => {
+        const delivered = await this.channel.sendSignal(peer.id, type, data);
+        // They left the meet (a publisher view closed, a singer gone): forget the link.
+        if (delivered === false && this.peers.get(peer.id) === peer) this.drop(peer.id, false);
+      })
+      .catch(() => undefined);
     return peer.sendChain;
   }
 
@@ -244,17 +251,18 @@ export class PerformerMesh {
     }
   }
 
-  private drop(id: string, sayBye: boolean): void {
+  private drop(id: string, sayBye: boolean): Promise<void> {
     const p = this.peers.get(id);
-    if (!p) return;
+    if (!p) return Promise.resolve();
     this.peers.delete(id);
-    if (sayBye) void this.channel.sendSignal(id, 'bye', {}).catch(() => undefined);
+    const bye = sayBye ? Promise.resolve(this.channel.sendSignal(id, 'bye', {})).then(() => undefined, () => undefined) : Promise.resolve();
     p.pc.onnegotiationneeded = null;
     p.pc.onicecandidate = null;
     p.pc.ontrack = null;
     p.pc.onconnectionstatechange = null;
     p.pc.close();
     this.onRemote?.(id, null, 'failed');
+    return bye;
   }
 
   private async handle(sig: MeetSignal): Promise<void> {
@@ -327,10 +335,11 @@ export class PerformerMesh {
     }
   }
 
-  close(): void {
+  /** Says goodbye to every peer; resolves once the goodbyes went out (so a session can leave after them). */
+  close(): Promise<void> {
     this.running = false;
     clearTimeout(this.timer);
-    for (const id of [...this.peers.keys()]) this.drop(id, true);
+    return Promise.all([...this.peers.keys()].map((id) => this.drop(id, true))).then(() => undefined);
   }
 }
 

@@ -5,7 +5,7 @@
  */
 import { computed, signal } from '@preact/signals';
 import { bestClockOffset, clockOffsetMs, type Routes } from '@singersvoice/protocol';
-import { needsReconnect, profile, reconnect, setPrivileged, token } from '../state/session.ts';
+import { needsReconnect, profile, reconnect, setAccountUserId, setPrivileged, token } from '../state/session.ts';
 import { toast } from './toast.ts';
 
 const OVERRIDE_KEY = 'sv.controlUrl';
@@ -162,6 +162,7 @@ export async function refreshAccount(): Promise<void> {
   try {
     const { user } = await api.get('GET /me', '/me');
     setPrivileged(user.privileged);
+    setAccountUserId(user.userId);
   } catch {
     /* offline or not signed in */
   }

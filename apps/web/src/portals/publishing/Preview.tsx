@@ -136,6 +136,9 @@ function MonitorTile(props: { meet: Meet; job: PublishJob | null; connect: boole
       <div class="row between">
         <span class="small muted">{job ? `${job.state} · ${job.destinations.join(' · ')}` : 'not publishing'}</span>
         <div class="row monitor-chips">
+          <a class="btn sm" href={href(`/meet/${encodeURIComponent(meet.meetId)}`)} target="_blank" rel="noopener" title="The meet room (stage, set list, chat) in a new tab">
+            Room
+          </a>
           <a class="btn sm" href={href(`/publishing/show/${encodeURIComponent(meet.meetId)}`)} target="_blank" rel="noopener">
             Show view
           </a>

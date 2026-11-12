@@ -151,8 +151,8 @@ for (const m of matrix) {
       await shot('22-meet-countdown');
       await wait(10000);
       await shot('23-meet-live');
-      // The host's "End song" ends the song for everyone (a singer's button is "Finish": their own take only).
-      await page.getByRole('button', { name: 'End song' }).click();
+      // The host's "Stop song" ends the song for everyone (a singer's button is "Stop": their own take only).
+      await page.getByRole('button', { name: /Stop the song for everyone/ }).click();
       await page.getByText('Your take').waitFor({ timeout: 30000 });
       await wait(1200);
       await shot('24-meet-review');

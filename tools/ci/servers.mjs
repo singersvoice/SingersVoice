@@ -2,6 +2,7 @@
 // process group so nothing survives the test (a leftover server would make the next run talk to
 // a stale SVT DB where somebody else is already the privileged first account).
 import { spawn } from 'node:child_process';
+import { openSync } from 'node:fs';
 import { createServer } from 'node:net';
 import path from 'node:path';
 
@@ -30,21 +31,24 @@ async function waitFor(url, ms = 20000) {
   throw new Error(`${url} did not come up`);
 }
 
-export async function startServers({ base = '/SingersVoice/' } = {}) {
+export async function startServers({ base = '/SingersVoice/', logDir = process.env.SV_SERVER_LOGS } = {}) {
   const controlPort = await freePort();
   const port = await freePort();
   const procs = [];
   const run = (cmd, args, opts) => {
-    const p = spawn(cmd, args, { stdio: 'ignore', detached: process.platform !== 'win32', ...opts });
+    // SV_SERVER_LOGS=<dir> keeps each server's output (control.log, web.log) for a failing run.
+    const stdio = logDir ? ['ignore', openSync(path.join(logDir, `${opts.name}.log`), 'a'), openSync(path.join(logDir, `${opts.name}.log`), 'a')] : 'ignore';
+    const p = spawn(cmd, args, { stdio, detached: process.platform !== 'win32', ...opts });
     procs.push(p);
     return p;
   };
   run('node', ['--no-warnings=ExperimentalWarning', 'src/index.ts'], {
+    name: 'control',
     cwd: path.resolve('services/control'),
     // The first account seen (alice) is privileged by bootstrap; carol is the Publishing-mode tester.
     env: { ...process.env, PORT: String(controlPort), DEV_AUTH: '1', SV_DB: ':memory:', ALLOWED_ORIGINS: `http://localhost:${port}`, PRIVILEGED_EMAILS: 'carol@dev.local' },
   });
-  run('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], { cwd: path.resolve('apps/web'), env: { ...process.env, BASE_PATH: base } });
+  run('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], { name: 'web', cwd: path.resolve('apps/web'), env: { ...process.env, BASE_PATH: base } });
   const stop = () => {
     for (const p of procs) {
       try {

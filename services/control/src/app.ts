@@ -12,6 +12,7 @@ import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
 import {
   DESTINATIONS,
+  MAX_OPEN_MEETS,
   meetIsOpen,
   newId,
   type CatalogPublishRequest,
@@ -81,6 +82,8 @@ function err(c: Context<Env>, status: 400 | 401 | 403 | 404 | 409 | 410, code: s
 
 const userTouch = new Map<string, number>();
 
+const requestLog = typeof process !== 'undefined' && process.env?.SV_REQUEST_LOG === '1';
+
 export function createApp(getDeps: (env: Record<string, unknown>) => Promise<AppDeps> | AppDeps): Hono<Env> {
   const app = new Hono<Env>();
 
@@ -88,7 +91,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const deps = await getDeps(c.env ?? {});
     c.set('deps', deps);
     await deps.store.migrate();
+    // SV_REQUEST_LOG=1 (dev / CI diagnostics): one line per request with its duration.
+    const t0 = requestLog ? Date.now() : 0;
     await next();
+    if (requestLog) console.log(`${new Date().toISOString().slice(11, 23)} ${c.req.method} ${new URL(c.req.url).pathname} ${c.res.status} ${Date.now() - t0}ms`);
   });
 
   app.use(
@@ -240,6 +246,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   app.post('/meets', async (c) => {
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<CreateMeetRequest>;
     const user = c.get('user');
+    // At most MAX_OPEN_MEETS open meets per host: end one (from the meets list) to open another.
+    const mine = await c.get('deps').store.listMeetsForUser(user.userId, 100);
+    const open = mine.filter((m) => m.hostUserId === user.userId && meetIsOpen(m) && Date.parse(m.expiresAt) > Date.now());
+    if (open.length >= MAX_OPEN_MEETS) return err(c, 409, 'too_many_meets', `You already host ${open.length} open meets — end one to create another`);
     const meet = newMeet({
       title: String(body.title ?? ''),
       hostUserId: user.userId,
@@ -251,6 +261,31 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     });
     await c.get('deps').store.createMeet(meet);
     return c.json({ meet }, 201);
+  });
+
+  /** Host maintenance by account (no participant token): end an open meet; delete a meet for good. */
+  app.post('/meets/:id/end', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    if (meet.hostUserId !== c.get('user').userId) return err(c, 403, 'not_host', 'Only the host can end the meet');
+    ensureMeet(meet);
+    tick(meet);
+    if (meetIsOpen(meet)) {
+      stop(meet);
+      await store.saveMeet(meet);
+      await store.clearSignals(meet.meetId).catch(() => undefined);
+    }
+    return c.json({ meet });
+  });
+
+  app.delete('/meets/:id', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    if (meet.hostUserId !== c.get('user').userId) return err(c, 403, 'not_host', 'Only the host can delete the meet');
+    await store.deleteMeet(meet.meetId);
+    return c.json({ ok: true as const });
   });
 
   app.get('/meets/code/:code', async (c) => {
@@ -601,7 +636,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const data = typeof body.data === 'string' ? body.data : JSON.stringify(body.data ?? null);
     if (!to || !type || !['offer', 'answer', 'ice', 'bye'].includes(type)) return err(c, 400, 'bad_signal', 'to, type and data are required');
     if (data.length > 64_000) return err(c, 400, 'bad_signal', 'Signal too large');
-    if (!(await store.getParticipant(meet.meetId, to))) return err(c, 404, 'no_peer', 'That performer is not in the meet');
+    // They left (a publisher view closed, a singer gone): nothing to deliver, nothing to shout about.
+    if (!(await store.getParticipant(meet.meetId, to))) return c.json({ seq: 0, gone: true });
     const sig = await store.addSignal(meet.meetId, { meetId: meet.meetId, from: p.participantId, to, type, data, sentAt: new Date().toISOString() });
     return c.json({ seq: sig.seq });
   });

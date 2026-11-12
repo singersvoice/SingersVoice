@@ -4,8 +4,9 @@
  * Every take on stage is a personal session: recorded locally, kept in the singer's own Drive.
  */
 import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, type Meet, type Participant, type SingerSlot, type SongPick, type StageSlot } from '@singersvoice/protocol';
+import { activeRoomInfo } from './activeRoom.ts';
 import { useRoomStage, type RoomStage } from './roomStage.ts';
-import { SongPicker } from './SongPicker.tsx';
+import { SetListPanel } from './SetListPanel.tsx';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, type AudioEngine } from '../../audio/engine.ts';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
@@ -49,13 +50,19 @@ export function MeetRoom(props: { id: string }) {
     if (!controlConfigured.value) return;
     void session.join('audience').catch(() => undefined);
     return () => {
-      session.stop();
+      // Unmounted = you left the meet (Leave, another meet, sign-out): free the slot right away.
+      void session.leave();
       camera.close();
       void engineRef.current?.close();
       engineRef.current = null;
       void keepAwake(false);
+      activeRoomInfo.value = null;
     };
   }, [props.id]);
+  // What the floating pill shows while this room runs behind another page.
+  useEffect(() => {
+    if (meet && you) activeRoomInfo.value = { meetId: meet.meetId, title: meet.title, state: meet.state, onStage: you.slot !== null, slot: you.slot };
+  }, [meet?.title, meet?.state, you?.slot]);
 
   // Load the current song whenever the set list moves on (every device resolves it: library, then catalog).
   const trackKey = `${meet?.trackId ?? ''}|${meet?.catalogTrackId ?? ''}`;
@@ -190,7 +197,7 @@ function Room(props: {
   if (props.take)
     return <Review take={props.take.take} loaded={props.take.loaded} slot={(you.slot ?? 1) as SingerSlot} mode="live" meetId={meet.meetId} againLabel="Back to the stage" onSaved={(s) => void session.registerRecording(s.performanceId, s.link ?? null, props.take!.take.durationMs).catch(() => undefined)} onAgain={props.onAgain} />;
 
-  if ((live || singing) && onStage && liveLoaded.current && engine) return <LiveStage session={session} meet={meet} you={you} loaded={liveLoaded.current} engine={engine} camera={camera} stage={stage} prepared={props.prepared} onPrepare={props.onPrepare} onTake={props.onTake} onSinging={setSinging} />;
+  if ((live || singing) && onStage && liveLoaded.current && engine) return <LiveStage session={session} meet={meet} you={you} loaded={liveLoaded.current} engine={engine} camera={camera} stage={stage} track={track} prepared={props.prepared} onPrepare={props.onPrepare} onTake={props.onTake} onSinging={setSinging} />;
 
   if (meet.state === 'ended' || meet.state === 'expired') return <Ended session={session} meet={meet} you={you} />;
 
@@ -214,7 +221,6 @@ function Lobby(props: {
   const { session, meet, you, stage } = props;
   const [tab, setTab] = useState<'stage' | 'chat'>('stage');
   const [deciding, setDeciding] = useState<string | null>(null);
-  const [picking, setPicking] = useState(false);
   useEffect(() => {
     stage.compositor.mode = 'show'; // no lyrics over the lobby stage: the performers fill it
   }, []);
@@ -289,17 +295,6 @@ function Lobby(props: {
       toast(errorText(e), 'warn');
     }
   };
-  const addSong = async (song: SongPick, now = false) => {
-    await session.addSong(song, now);
-    toast(now || (!meet.trackId && !meet.catalogTrackId) ? `"${song.trackTitle}" is up next` : `"${song.trackTitle}" added to the set list`, 'ok');
-  };
-  const songAction = async (id: string, action: 'remove' | 'up' | 'now') => {
-    try {
-      await session.songAction(id, action);
-    } catch (e) {
-      toast(errorText(e), 'warn');
-    }
-  };
   const endSong = async () => {
     if (!confirm('End the current song for everyone and move on?')) return;
     try {
@@ -308,7 +303,6 @@ function Lobby(props: {
       toast(errorText(e), 'error');
     }
   };
-  const canPick = host || onStage;
   const hasSong = Boolean(meet.trackId || meet.catalogTrackId);
   const start = async () => {
     try {
@@ -415,56 +409,7 @@ function Lobby(props: {
           <section class="stack">
             {/* The stage is live from the start: whoever steps on appears here at once (own cut-out; other performers' video on stage devices). */}
             <StageStrip stage={stage} meet={meet} onStage={onStage} />
-            <section class="card stack pad-sm setlist" data-songs={meet.setList.length} data-current={hasSong ? '1' : '0'}>
-              <div class="row between">
-                <div class="min0">
-                  <div class="small muted">{hasSong ? (live ? 'Now singing' : `Up next${meet.songCount ? ` · song ${meet.songCount + 1}` : ''}`) : 'No song picked yet'}</div>
-                  <b class="setlist-title">{hasSong ? meet.trackTitle || 'Untitled track' : canPick ? 'Add a song from your library or the public catalog' : 'The singers pick the songs'}</b>
-                </div>
-                <div class="row monitor-chips">
-                  {canPick && !picking && (
-                    <button class="btn sm primary" onClick={() => setPicking(true)}>
-                      <IcPlus size={16} /> Add a song
-                    </button>
-                  )}
-                  {host && hasSong && !live && (
-                    <button class="btn sm" title="Skip this song; the next one on the set list comes up" onClick={() => void endSong()}>
-                      Skip
-                    </button>
-                  )}
-                </div>
-              </div>
-              {hasSong && <TrackStatus track={props.track} host={host} />}
-              {picking && <SongPicker onPick={(song) => addSong(song)} canPlayNow={host && hasSong && !live} onPlayNow={(song) => addSong(song, true)} onClose={() => setPicking(false)} />}
-              {meet.setList.length > 0 && (
-                <ol class="setlist-queue">
-                  {meet.setList.map((e, i) => (
-                    <li key={e.id} class="row between">
-                      <span class="min0">
-                        <b>{e.trackTitle}</b> <span class="small muted">· picked by {e.pickedByName.split(' ')[0]}{e.durationMs ? ` · ${formatMs(e.durationMs)}` : ''}</span>
-                      </span>
-                      <span class="row monitor-chips">
-                        {host && i > 0 && (
-                          <button class="btn icon sm" aria-label={`Move ${e.trackTitle} up`} title="Move up" onClick={() => void songAction(e.id, 'up')}>
-                            ▲
-                          </button>
-                        )}
-                        {host && !live && (
-                          <button class="btn sm" aria-label={`Play ${e.trackTitle} now`} onClick={() => void songAction(e.id, 'now')}>
-                            <IcPlay size={14} /> Now
-                          </button>
-                        )}
-                        {(host || e.pickedBy === you.participantId) && (
-                          <button class="btn icon sm" aria-label={`Remove ${e.trackTitle} from the set list`} title="Remove" onClick={() => void songAction(e.id, 'remove')}>
-                            <IcX size={14} />
-                          </button>
-                        )}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </section>
+            <SetListPanel session={session} meet={meet} you={you} track={props.track} host={host} onStage={onStage} live={live} />
             {host && meet.requests.length > 0 && (
               <div class="card stack pad-sm requests" data-requests={meet.requests.length}>
                 <b>Asking to sing</b>
@@ -560,22 +505,6 @@ function Lobby(props: {
   );
 }
 
-function TrackStatus(props: { track: MeetTrack | null; host: boolean }) {
-  const t = props.track;
-  if (!t) return <div class="small muted">Checking the track on this device…</div>;
-  if (t.loaded) return <div class="small muted">Track ready on this device ({t.source === 'library' ? 'your library' : 'public catalog'}): {t.loaded.track.title} · {formatMs(t.loaded.track.durationMs)}</div>;
-  return (
-    <div class="callout warn">
-      {t.reason}
-      {props.host && (
-        <>
-          {' '}
-          Publish it from <a href={href('/tracks')}>Tracks</a> so everyone can load it.
-        </>
-      )}
-    </div>
-  );
-}
 
 function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; onClaim: () => void; onRemove?: () => void }) {
   const s = props.slot;
@@ -680,6 +609,7 @@ function LiveStage(props: {
   engine: AudioEngine;
   camera: Camera;
   stage: RoomStage;
+  track: MeetTrack | null;
   prepared: boolean;
   onPrepare: () => Promise<void>;
   onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>) => void;
@@ -692,6 +622,8 @@ function LiveStage(props: {
   const [countdown, setCountdown] = useState<number | null>(null);
   const [started, setStarted] = useState(false);
   const [finishing, setFinishing] = useState(false);
+  /** The set list drawer over the stage: see what is next, add a song, (host) end the song. */
+  const [songsOpen, setSongsOpen] = useState(false);
   const mediaRec = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const videoStartCtx = useRef<number | null>(null);
@@ -919,6 +851,17 @@ function LiveStage(props: {
           {!paused && pauseAt !== null && <span class="chip warn">pausing…</span>}
         </section>
         <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} countdown={countdown} showWho={track.singerCount > 1} title={track.title} />
+        {songsOpen && (
+          <div class="drawer" role="dialog" aria-label="Set list">
+            <div class="row between">
+              <b>Set list</b>
+              <button class="btn icon sm" aria-label="Close the set list" onClick={() => setSongsOpen(false)}>
+                <IcX size={16} />
+              </button>
+            </div>
+            <SetListPanel session={session} meet={meet} you={props.you} track={props.track} host={host} onStage live compact />
+          </div>
+        )}
         {app.showCueDeck && track.singerCount > 1 && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} />}
         <section class="controls">
           <PresetChips value={audio} onChange={updateAudio} />
@@ -935,6 +878,9 @@ function LiveStage(props: {
             </button>
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
+            </button>
+            <button class={`btn icon ${songsOpen ? 'on' : ''}`} aria-label="Set list" title="Set list: what's next, add a song" aria-pressed={songsOpen} onClick={() => setSongsOpen((o) => !o)}>
+              <IcMusic />
             </button>
             {!props.prepared ? (
               <button class="btn big primary" onClick={() => void props.onPrepare()}>
@@ -957,8 +903,8 @@ function LiveStage(props: {
                     <IcSkipBack />
                   </button>
                 )}
-                <button class="btn big accent" disabled={finishing} title={host ? 'Ends the song for everyone; the next one on the set list comes up' : 'Finish your take; the song goes on for the others'} onClick={() => void finish()}>
-                  {finishing ? <Spinner /> : <IcStop />} {host ? 'End song' : 'Finish'}
+                <button class="btn big accent" disabled={finishing} aria-label={host ? 'Stop the song for everyone' : 'Stop my take'} title={host ? 'Stops the song for everyone — the next one on the set list comes up' : 'Stops your take (the song goes on for the others)'} onClick={() => void finish()}>
+                  {finishing ? <Spinner /> : <IcStop />} {host ? 'Stop song' : 'Stop'}
                 </button>
               </>
             ) : (

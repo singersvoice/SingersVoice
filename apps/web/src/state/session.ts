@@ -141,6 +141,17 @@ export async function withProvider<T>(fn: (p: StorageProvider) => Promise<T>): P
 
 /** Privileged (Publishing mode) flag from the SVT DB — refreshed by refreshAccount(). */
 export const privileged = signal<boolean>(localStorage.getItem('sv.privileged') === '1');
+/** My account id in the SVT DB (`g-<google sub>` / `dev-<id>`), from /me — what meets and catalog entries carry as owner. */
+export const accountUserId = signal<string>(localStorage.getItem('sv.accountUserId') ?? '');
+export function setAccountUserId(id: string): void {
+  accountUserId.value = id;
+  try {
+    localStorage.setItem('sv.accountUserId', id);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function setPrivileged(v: boolean): void {
   privileged.value = v;
   try {

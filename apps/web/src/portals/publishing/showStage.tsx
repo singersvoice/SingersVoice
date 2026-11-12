@@ -56,8 +56,13 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
       setPeerStates((s) => ({ ...s, [id]: state }));
     };
     void mesh.start();
+    session.onLeave = () => mesh.close(); // goodbyes before the session leaves
+    const w = window as unknown as { __svShowMeshes?: PerformerMesh[] }; // support / e2e hooks
+    (w.__svShowMeshes ??= []).push(mesh);
     return () => {
-      mesh.close();
+      w.__svShowMeshes = (w.__svShowMeshes ?? []).filter((m) => m !== mesh);
+      if (session.onLeave) session.onLeave = null;
+      void mesh.close();
       for (const v of remoteVideos.current.values()) {
         v.srcObject = null;
         v.remove();
@@ -119,8 +124,8 @@ export function ShowPicture(props: { meet: Meet; compositor: StageCompositor; co
         <div class="show-center">
           {meet.state === 'lobby' && !onStage && (
             <>
-              <h2>Waiting for the singers</h2>
-              <p class="muted">The show is on: whoever steps on stage appears here at once.</p>
+              <h2>Nobody is on stage yet</h2>
+              <p class="muted">The show is on: whoever steps on a slot in the meet room appears here at once — the host too.</p>
             </>
           )}
           {meet.state === 'countdown' && props.countdown !== null && (

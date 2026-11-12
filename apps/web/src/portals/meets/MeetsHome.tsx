@@ -3,18 +3,18 @@
  * Rules: anyone signed in can create; anyone with the link/code can join; a meet self-expires after
  * 5 minutes without activity; up to 10 on stage, unlimited audience with chat.
  */
-import { MAX_PERFORMERS, meetIsOpen, type CatalogTrack, type Meet } from '@singersvoice/protocol';
+import { MAX_OPEN_MEETS, MAX_PERFORMERS, meetIsOpen, type CatalogTrack, type Meet } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { BackgroundPicker } from '../../components/BackgroundPicker.tsx';
-import { IcChat, IcPlus, IcUsers } from '../../components/icons.tsx';
+import { IcChat, IcPlus, IcStop, IcTrash, IcUsers } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Sheet, Spinner } from '../../components/ui.tsx';
-import { api, ApiError, checkControl, controlConfigured, controlStatus } from '../../lib/api.ts';
+import { api, ApiError, checkControl, controlConfigured, controlStatus, refreshAccount } from '../../lib/api.ts';
 import { canPublish, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, searchCatalog } from '../../lib/catalog.ts';
 import { go, href } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { isDrive, profile, withProvider } from '../../state/session.ts';
+import { accountUserId, isDrive, profile, withProvider } from '../../state/session.ts';
 import { appSettings, updateApp } from '../../state/settings.ts';
 
 export function MeetsHome() {
@@ -45,6 +45,7 @@ export function MeetsHome() {
     }).catch(() => undefined);
     if (!configured) return;
     void checkControl();
+    void refreshAccount();
     api
       .get('GET /meets', '/meets')
       .then((r) => setMeets(r.meets))
@@ -73,7 +74,7 @@ export function MeetsHome() {
       });
       go(`/meet/${encodeURIComponent(r.meet.meetId)}`);
     } catch (e) {
-      toast(errorText(e), 'error', 7000);
+      toast(e instanceof ApiError && e.code === 'too_many_meets' ? `${e.message}. End one in "My meets" below.` : errorText(e), 'error', 8000);
     } finally {
       setBusy(false);
     }
@@ -90,6 +91,36 @@ export function MeetsHome() {
       toast(e instanceof ApiError && e.status === 404 ? 'No meet with that code' : errorText(e), 'error');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const myUserId = (m: Meet) => m.hostUserId === accountUserId.value || m.hostUserId === myCatalogUserId();
+  const openMine = (meets ?? []).filter((m) => myUserId(m) && meetIsOpen(m));
+  const atLimit = openMine.length >= MAX_OPEN_MEETS;
+  const [working, setWorking] = useState<string | null>(null);
+  const endMeet = async (m: Meet) => {
+    if (!confirm(`End "${m.title}" for everyone?`)) return;
+    setWorking(m.meetId);
+    try {
+      const r = await api.post('POST /meets/:id/end', `/meets/${encodeURIComponent(m.meetId)}/end`);
+      setMeets((l) => (l ?? []).map((x) => (x.meetId === m.meetId ? r.meet : x)));
+    } catch (e) {
+      toast(errorText(e), 'error');
+    } finally {
+      setWorking(null);
+    }
+  };
+  const deleteMeet = async (m: Meet) => {
+    if (!confirm(`Delete "${m.title}"? ${meetIsOpen(m) ? 'It is still open — it ends for everyone and ' : ''}Its room, chat and take list are gone for good (takes stay in each singer's Drive).`)) return;
+    setWorking(m.meetId);
+    try {
+      await api.del('DELETE /meets/:id', `/meets/${encodeURIComponent(m.meetId)}`);
+      setMeets((l) => (l ?? []).filter((x) => x.meetId !== m.meetId));
+      toast('Meet deleted', 'ok');
+    } catch (e) {
+      toast(errorText(e), 'error');
+    } finally {
+      setWorking(null);
     }
   };
 
@@ -170,10 +201,14 @@ export function MeetsHome() {
             <button class="btn" onClick={() => setBgOpen(true)}>
               Stage background
             </button>
-            <button class="btn primary" disabled={!configured || busy} onClick={() => void create()}>
+            <button class="btn primary" disabled={!configured || busy || atLimit} title={atLimit ? `You already host ${MAX_OPEN_MEETS} open meets — end one below` : undefined} onClick={() => void create()}>
               {busy ? <Spinner /> : <IcUsers />} Create meet
             </button>
+            <span class={`chip ${atLimit ? 'warn' : ''}`} data-open-meets={openMine.length}>
+              open meets {openMine.length}/{MAX_OPEN_MEETS}
+            </span>
           </div>
+          {atLimit && <div class="callout warn">You host {openMine.length} open meets — the limit. End one in the list below to create a new one.</div>}
         </section>
 
         <section class="card stack">
@@ -195,21 +230,46 @@ export function MeetsHome() {
             </div>
           )}
           {meets && !meets.length && <Empty title="No meets yet" body="Create one above and share the link." icon={<IcChat size={28} />} />}
+          <p class="muted small">Open a meet here, or in a new tab to run several side by side (each tab is its own place on its own stage). Ended meets stay for their take list until you delete them.</p>
           <div class="list">
-            {meets?.map((m) => (
-              <a class="item" key={m.meetId} href={href(`/meet/${encodeURIComponent(m.meetId)}`)}>
-                <div class="thumb">
-                  <IcUsers size={20} />
-                </div>
-                <div class="meta">
-                  <div class="t">{m.title}</div>
-                  <div class="s">
-                    {m.trackTitle || 'no track'} · host {m.hostName} · {new Date(m.createdAt).toLocaleString()} · code {m.joinCode}
+            {meets?.map((m) => {
+              const mine = myUserId(m);
+              const open = meetIsOpen(m);
+              const link = href(`/meet/${encodeURIComponent(m.meetId)}`);
+              return (
+                <div class={`item meet-item ${open ? 'open' : ''}`} key={m.meetId} data-state={m.state}>
+                  <div class="thumb">
+                    <IcUsers size={20} />
+                  </div>
+                  <div class="meta">
+                    <div class="t">
+                      {m.title} <span class={`chip ${open ? 'ok' : ''}`}>{m.state}</span>
+                    </div>
+                    <div class="s">
+                      {m.trackTitle || 'no song yet'} · host {m.hostName} · {new Date(m.createdAt).toLocaleString()} · code {m.joinCode}
+                    </div>
+                  </div>
+                  <div class="row monitor-chips">
+                    <a class="btn sm primary" href={link}>
+                      Open
+                    </a>
+                    <a class="btn sm" href={link} target="_blank" rel="noopener" title="Open this meet in a new tab">
+                      New tab
+                    </a>
+                    {mine && open && (
+                      <button class="btn sm" disabled={working === m.meetId} aria-label={`End ${m.title}`} title="End this meet for everyone" onClick={() => void endMeet(m)}>
+                        <IcStop size={14} /> End
+                      </button>
+                    )}
+                    {mine && (
+                      <button class="btn icon sm" disabled={working === m.meetId} aria-label={`Delete ${m.title}`} title="Delete this meet for good" onClick={() => void deleteMeet(m)}>
+                        <IcTrash size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
-                <span class={`chip ${meetIsOpen(m) ? 'ok' : ''}`}>{m.state}</span>
-              </a>
-            ))}
+              );
+            })}
           </div>
         </section>
       </div>

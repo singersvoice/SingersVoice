@@ -67,6 +67,18 @@ parallel with the show. The lobby strip draws in `show` layout (no lyrics); the 
 the same compositor to `stage` layout; nothing reconnects at the kickstart. Audience devices draw
 the performers' placeholders (video is private to the stage and the publisher).
 
+## The room follows you
+
+`portals/meets/activeRoom.ts` + `RoomLayer` in `app.tsx`: the room component is mounted once at
+the app root, keyed by meet; `/meet/:id` only points it at a meet. On any other page it is hidden
+(`display: none`) but alive — heartbeat, camera, cut-out, video mesh — with a floating pill to
+return or leave; leaving unmounts it (the session says goodbye to its peers, then leaves the meet,
+freeing the slot at once). The two siblings are keyed, room first: the pill coming and going must
+never re-create the room element. Meets home: at most `MAX_OPEN_MEETS` (3) open meets per host
+(`POST /meets` → 409 `too_many_meets`), `POST /meets/:id/end` and `DELETE /meets/:id` by the host's
+account for list maintenance. A signal to a participant who left answers `{ gone: true }` (no
+error) and the sender forgets the link.
+
 ## The set list
 
 A karaoke event is many songs. The meet's current song is `trackId` / `catalogTrackId` /

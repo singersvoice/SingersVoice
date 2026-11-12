@@ -13,11 +13,18 @@ first moment.
 | **Create a meet** — Title | The event's name (defaults to "<your name>'s meet"). |
 | Track | Optional. Pick one of your tracks or a public one now, or leave **Pick later** and build the set list in the room. A private track shows a *Publish it* button so every singer can load it. |
 | Background | The stage background (from your settings' picker). |
+| *open meets N/3* | You may host **at most 3 open meets** (lobby / countdown / live) at a time; at the limit, Create is off until you end one below. |
 | **Join by code** | 6-letter code → the room. A shared link does the same. |
-| My meets | Meets you host or joined, with their state. |
+| My meets | Meets you host or joined, with their state. Per meet: **Open** (this tab), **New tab** (run several meets side by side), and for meets you host **End** (open ones) and **Delete** (any — the room, chat and take list go for good; takes stay in each singer's Drive). |
 
 The moment you create a meet you are **on stage (S1)** with your camera on. The meet closes itself
 after 5 idle minutes.
+
+**The room follows you.** Leaving the room page for another page in the same tab (Publishing,
+Tracks, …) does not leave the meet: the room keeps running behind the page — heartbeat, camera,
+cut-out, video links — and a floating pill (*On stage · S1 · <meet>*) offers **Return** and
+**Leave**. So the host can open Publishing › Preview and see themselves. A finished meet does not
+follow you around.
 
 ## 2 · The room (`/meet/:id`) — lobby
 
@@ -64,11 +71,12 @@ model loads, a camera on/off button for you.
 ## 3 · The room — live stage (singers)
 
 The same stage, with the lyrics laid over it (your line is highlighted; the cue deck shows who sings
-what in a duet). Controls: camera on/off, hear myself, FX presets, timeline. Host-only transport:
-**Pause** (cued 3 s ahead, everyone freezes at the same position), **Resume**, **Restart** (from the
-top), and **End song** — which ends the song for everyone. A singer's **Finish** ends only their own
-take; the song goes on for the others. The backing track ending on the host's device ends the song
-for everyone too.
+what in a duet). Controls: camera on/off, hear myself, **Set list** (a drawer over the stage: what is
+playing, what is next, add a song — the song picker is at hand while singing too), FX presets,
+timeline. Host-only transport: **Pause** (cued 3 s ahead, everyone freezes at the same position),
+**Resume**, **Restart** (from the top), and **Stop song** — which stops the song for everyone. A
+singer's **Stop** stops only their own take; the song goes on for the others. The backing track
+ending on the host's device ends the song for everyone too.
 
 Every take is a personal session: vocal + camera video, sample-accurate on the track timeline
 across any number of pauses, reviewed on **Your take** (play the mix, align, Keep → your Drive,

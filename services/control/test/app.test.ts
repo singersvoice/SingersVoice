@@ -142,7 +142,7 @@ describe('sv-control API', () => {
     // WebRTC signalling relay between the two performers
     const sent = await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, to: bob.you.participantId, type: 'offer', data: JSON.stringify({ sdp: 'v=0' }) }) });
     expect(sent.status).toBe(200);
-    expect((await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, to: 'nobody', type: 'offer', data: '{}' }) })).status).toBe(404);
+    expect(await json<{ gone?: boolean }>(await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, to: 'nobody', type: 'offer', data: '{}' }) }))).toEqual({ seq: 0, gone: true });
     const inbox = await json<{ signals: { from: string; type: string; data: string; seq: number }[] }>(await app.request(`/meets/${meet.meetId}/signals`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, since: 0 }) }));
     expect(inbox.signals).toHaveLength(1);
     expect(inbox.signals[0]).toMatchObject({ from: host.you.participantId, type: 'offer' });
@@ -198,6 +198,23 @@ describe('sv-control API', () => {
     expect(watch.meet.state).toBe('ended');
     expect(watch.chat).toHaveLength(1);
     expect((await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: '{}' })).status).toBe(410);
+  });
+
+  it('meets list maintenance: at most 3 open meets per host, end from the list, delete for good', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) ids.push((await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('dave'), body: JSON.stringify({ title: `Dave ${i}` }) }))).meet.meetId);
+    const fourth = await app.request('/meets', { method: 'POST', headers: as('dave'), body: JSON.stringify({ title: 'Dave 3' }) });
+    expect(fourth.status).toBe(409);
+    expect((await json<{ code: string }>(fourth)).code).toBe('too_many_meets');
+    expect((await app.request(`/meets/${ids[0]}/end`, { method: 'POST', headers: as('bob') })).status).toBe(403);
+    const ended = await json<{ meet: Meet }>(await app.request(`/meets/${ids[0]}/end`, { method: 'POST', headers: as('dave') }));
+    expect(ended.meet.state).toBe('ended');
+    expect((await app.request('/meets', { method: 'POST', headers: as('dave'), body: JSON.stringify({ title: 'Dave 3' }) })).status).toBe(201); // room again
+    expect((await app.request(`/meets/${ids[1]}`, { method: 'DELETE', headers: as('bob') })).status).toBe(403);
+    expect((await app.request(`/meets/${ids[1]}`, { method: 'DELETE', headers: as('dave') })).status).toBe(200);
+    expect((await app.request(`/meets/${ids[1]}`, { headers: as('dave') })).status).toBe(404);
+    const list = await json<{ meets: Meet[] }>(await app.request('/meets', { headers: as('dave') }));
+    expect(list.meets.map((m) => m.title).sort()).toEqual(['Dave 0', 'Dave 2', 'Dave 3']);
   });
 
   it('publishing: privileged only; keys are sealed and only hinted; jobs need enabled destinations', async () => {

@@ -2,6 +2,7 @@ import { ErrorBoundary, LocationProvider, Route, Router, useLocation } from 'pre
 import { useEffect } from 'preact/hooks';
 import { Toasts } from './components/ui.tsx';
 import { bindRouter, href, relPath } from './lib/nav.ts';
+import { activeMeetId, activeRoomInfo, enterRoom, leaveRoom } from './portals/meets/activeRoom.ts';
 import { MeetRoom } from './portals/meets/MeetRoom.tsx';
 import { MeetsHome } from './portals/meets/MeetsHome.tsx';
 import { PublishingPortal } from './portals/publishing/PublishingPortal.tsx';
@@ -42,6 +43,55 @@ function Bind() {
   return null;
 }
 
+/** The /meet/:id route only points the persistent room at this meet; RoomLayer renders it. */
+function MeetEntry(props: { id: string }) {
+  useEffect(() => {
+    if (props.id) enterRoom(props.id);
+  }, [props.id]);
+  return null;
+}
+
+/**
+ * The room you are in, mounted once for as long as you are in it: shown on /meet/:id, hidden (but
+ * running — heartbeat, camera, video) on every other page, with a pill to return or leave.
+ */
+function RoomLayer() {
+  const loc = useLocation();
+  const id = activeMeetId.value;
+  const info = activeRoomInfo.value;
+  const ok = signedIn.value;
+  const here = Boolean(id) && relPath(loc.path) === `/meet/${id}`;
+  const over = info?.state === 'ended' || info?.state === 'expired';
+  useEffect(() => {
+    if (!ok && id) leaveRoom();
+    else if (id && !here && over) leaveRoom(); // a finished meet does not follow you around
+  }, [ok, id, here, over]);
+  if (!id || !ok) return null;
+  // Keyed, room first: the pill coming and going must never re-create the room's element (a
+  // re-mount would restart the session, the camera and every video link).
+  return (
+    <>
+      <div key="room" class={`roomlayer ${here ? '' : 'hidden'}`} aria-hidden={!here} data-visible={here ? '1' : '0'}>
+        <MeetRoom key={id} id={id} />
+      </div>
+      {!here && info && (
+        <div key="pill" class="roompill" role="status" data-meet={id}>
+          <span class="dot" />
+          <span class="txt">
+            {info.onStage ? `On stage · S${info.slot}` : 'In the meet'} · {info.title}
+          </span>
+          <a class="btn sm primary" href={href(`/meet/${encodeURIComponent(id)}`)}>
+            Return
+          </a>
+          <button class="btn sm" onClick={leaveRoom}>
+            Leave
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 function NotFound() {
   return (
     <div class="empty" style="min-height:60dvh">
@@ -78,7 +128,7 @@ export function App() {
           <Route path={r('/studio/performances')} component={guarded(() => <Performances />)} />
           {/* Live Meets portal */}
           <Route path={r('/meets')} component={guarded(() => <MeetsHome />)} />
-          <Route path={r('/meet/:id')} component={guarded((p) => <MeetRoom id={p.id ?? ''} />)} />
+          <Route path={r('/meet/:id')} component={guarded((p) => <MeetEntry id={p.id ?? ''} />)} />
           {/* Publishing portal + public watch page */}
           <Route path={r('/publishing')} component={guarded(() => <PublishingPortal />)} />
           <Route path={r('/publishing/show/:id')} component={guarded((p) => <ShowView id={p.id ?? ''} />)} />
@@ -86,6 +136,9 @@ export function App() {
           <Route path={r('/settings')} component={guarded(() => <Settings />)} />
           <Route default component={NotFound} />
         </Router>
+      </ErrorBoundary>
+      <ErrorBoundary onError={(e) => console.error(e)}>
+        <RoomLayer />
       </ErrorBoundary>
       <Toasts />
     </LocationProvider>

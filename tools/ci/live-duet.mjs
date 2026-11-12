@@ -33,7 +33,7 @@ async function person(name, viewport, { track = true } = {}) {
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors[name].push(String(e)));
   page.on('console', (m) => m.type() === 'error' && errors[name].push(m.text()));
-  page.on('response', (r) => { if (r.status() >= 400 && !/favicon/.test(r.url())) console.log(`[${name}] HTTP ${r.status()} ${r.request().method()} ${r.url().replace(servers.controlUrl, '')}`); });
+  page.on('response', (r) => { if (r.status() >= 400 && !/favicon/.test(r.url())) console.log(`[${name}] ${new Date().toISOString().slice(11, 23)} HTTP ${r.status()} ${r.request().method()} ${r.url().replace(servers.controlUrl, '')}`); });
   await page.goto(base + '?' + control, { waitUntil: 'networkidle' });
   // device identity for DEV_AUTH: the app sends X-Dev-User from the local profile sub
   await page.evaluate((n) => localStorage.setItem('sv.profile', JSON.stringify({ sub: n, name: n, email: '', picture: '', mode: 'local' })), name);
@@ -77,6 +77,7 @@ try {
   await addSong(alice.page, 'alice');
   await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
   check(/Up next/.test(await alice.page.locator('.setlist').innerText()), 'the first song picked becomes the current song');
+  const inbox = async (p, who) => { const mid = /\/meet\/([^/?#]+)/.exec(meetUrl)[1]; return p.evaluate(async ([m, w, ctl]) => { const key = Object.keys(sessionStorage).find((k) => k.startsWith(`sv.meet.${m}`) && k.endsWith('.rt')); const rt = sessionStorage.getItem(key); const r = await fetch(`${ctl}/meets/${m}/signals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dev-User': w, 'X-Dev-Name': w }, body: JSON.stringify({ resumeToken: rt, since: 0 }) }); const j = await r.json(); return (j.signals || []).map((x) => `${x.seq}:${x.type}<${x.from.slice(-6)}@${x.sentAt.slice(11, 23)}`).join(' '); }, [mid, who, servers.controlUrl]); };
   const remoteFrames = (p) => p.evaluate(async () => { const vs = [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0 && v.readyState >= 2); const t = vs.map((v) => v.currentTime); await new Promise((r) => setTimeout(r, 700)); return vs.filter((v, i) => v.currentTime !== t[i]).length; });
   // The lobby's virtual stage: a performer appears on it the moment they take a slot — long before the song.
   const stripInfo = (p) => p.evaluate(async () => {
@@ -122,6 +123,36 @@ try {
   check(sa2.linked === '1' && sb2.linked === '1' && /1\/1 video linked/.test(sa2.text), `video linked both ways in the lobby (${Math.round((Date.now() - tLobby) / 1000)} s)`);
   check(sa2.left > 100 && sa2.right > 100 && sb2.left > 100 && sb2.right > 100, 'both singers are drawn on both lobby stages');
   await bob.page.screenshot({ path: `${out}/lobby-bob-onstage.png` });
+  await alice.page.evaluate(() => { window.__svMeshId = Math.random(); window.__svMesh.__id = window.__svMeshId; });
+
+  // The room keeps running behind other pages: the host opens Publishing › Preview in the SAME tab and sees herself
+  // (and bob) in the meet's tile; the pill brings her back, still on stage, same video links.
+  // In-app navigation (a link click, not a page load): the room stays mounted behind the Publishing page.
+  const navigate = (p, path) => p.evaluate((u) => { history.pushState({}, '', u); dispatchEvent(new PopStateEvent('popstate')); }, path);
+  const sigLog = [];
+  const sigTap = (who, p) => p.on('response', async (r) => { if (/\/signals$/.test(r.url()) && r.request().method() === 'POST') { try { const body = JSON.parse(r.request().postData() || '{}'); const j = await r.json(); sigLog.push(`${who} ${new Date().toISOString().slice(14, 23)} since=${body.since} tok=${String(body.resumeToken).slice(-4)} → ${j.signals ? j.signals.map((x) => `${x.seq}:${x.type}<${x.from.slice(-4)}`).join(',') || '-' : r.status()}`); } catch { /* ignore */ } } });
+  sigTap('A', alice.page);
+  sigTap('B', bob.page);
+  await navigate(alice.page, `${new URL(base).pathname}publishing?tab=preview`);
+  await alice.page.locator('.roompill').waitFor({ timeout: 15000 });
+  check(/On stage · S1/.test(await alice.page.locator('.roompill').innerText()), 'leaving the room page keeps you on stage (pill: On stage · S1)');
+  await alice.page.locator('.monitor[data-state="lobby"]').waitFor({ timeout: 30000 });
+  const tPrev = Date.now();
+  await alice.page.locator('.monitor[data-linked="2"]').waitFor({ timeout: 30000 }).catch(() => undefined);
+  await wait(1500);
+  const prevCard = await alice.page.locator('.monitor-card').first().innerText();
+  console.log('at', new Date().toISOString().slice(11, 23), 'inbox alice:', await inbox(alice.page, 'alice'), '\ninbox bob:', await inbox(bob.page, 'bob'));
+  const meshFlags = (p) => p.evaluate(() => { const m = window.__svMesh; return m && { me: m.me.slice(-6), running: m.running, polling: m.polling, timer: Boolean(m.timer), lastSeq: m.channel.lastSignalSeq, stopped: m.channel.stopped, closed: m.channel.closed }; });
+  console.log('mesh flags alice:', JSON.stringify(await meshFlags(alice.page)), 'bob:', JSON.stringify(await meshFlags(bob.page)));
+  console.log('signal polls:\n  ' + sigLog.slice(-40).join('\n  '));
+  console.log('host preview meshes:', JSON.stringify(await alice.page.evaluate(() => { const dump = (m) => m ? [...m.peers.entries()].map(([id, x]) => ({ id: id.slice(-6), state: x.state, sig: x.pc.signalingState, ice: x.pc.iceConnectionState, inbound: x.inbound })) : null; return { room: dump(window.__svMesh), tiles: (window.__svShowMeshes || []).map((m) => ({ me: m.me.slice(-6), running: m.running, peers: dump(m) })) }; })));
+  const tilePixels = await alice.page.evaluate(() => { const c = document.querySelector('.monitor canvas.stagecanvas'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 40) n++; return n; });
+  check(/2 on stage · 2\/2 video/.test(prevCard.replace(/\s+/g, ' ')) && tilePixels > 500, `the host sees herself and bob in the Preview tile while her room runs in the background (${Math.round((Date.now() - tPrev) / 1000)} s, ${tilePixels} px)`);
+  await alice.page.screenshot({ path: `${out}/preview-host-background-room.png` });
+  await alice.page.locator('.roompill').getByRole('link', { name: 'Return' }).click();
+  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
+  const meshBack = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
+  check(meshBack !== undefined && meshBack === (await alice.page.evaluate(() => window.__svMeshId)), `back in the room: the same mesh, nothing reconnected (${meshBack})`);
 
   // Publishing: the show is its own process — carol's show view gets both performers while the song has not started.
   const carol = await person('carol', { width: 1920, height: 1080 }, { track: false });
@@ -138,7 +169,7 @@ try {
   await alice.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
   await bob.page.getByRole('button', { name: /I'm ready/ }).click();
   await bob.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
-  const meshBefore = await alice.page.evaluate(() => (window.__svMeshId = window.__svMeshId || Math.random(), window.__svMesh && (window.__svMesh.__id = window.__svMesh.__id || window.__svMeshId)));
+  const meshBefore = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   await alice.page.getByRole('button', { name: /Start the song/ }).click();
   // Both land on the live stage; wait for the kickstart (8 s lead).
   await alice.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
@@ -187,7 +218,6 @@ try {
   console.log(`carol: both peers connected after ${tConn} ms; frames after ${Date.now() - t1} ms; now ${new Date().toISOString()}`);
   console.log('rtp carol:', JSON.stringify(await rtp(carol.page)));
   const peers = (p) => p.evaluate(() => [...window.__svMesh.peers.entries()].map(([id, x]) => ({ id, state: x.state, sig: x.pc.signalingState, ice: x.pc.iceConnectionState, inbound: x.inbound, polite: x.polite, tr: x.pc.getTransceivers().map((t) => `${t.direction}/${t.currentDirection || '-'}`) })));
-  const inbox = async (p, who) => { const mid = /\/meet\/([^/?#]+)/.exec(meetUrl)[1]; return p.evaluate(async ([m, w, ctl]) => { const key = Object.keys(sessionStorage).find((k) => k.startsWith(`sv.meet.${m}`) && k.endsWith('.rt')); const rt = sessionStorage.getItem(key); const r = await fetch(`${ctl}/meets/${m}/signals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dev-User': w, 'X-Dev-Name': w }, body: JSON.stringify({ resumeToken: rt, since: 0 }) }); const j = await r.json(); return (j.signals || []).map((x) => `${x.seq}:${x.type}<${x.from.slice(-6)}@${x.sentAt.slice(11, 23)}`).join(' '); }, [mid, who, servers.controlUrl]); };
   for (const [n, p] of [['alice', alice.page], ['bob', bob.page], ['carol', carol.page]]) console.log(`peers ${n}:`, JSON.stringify(await peers(p)), '\n inbox:', await inbox(p, n));
   check((await remoteFrames(carol.page)) >= 2, `the show view receives both performers' video (${Math.round((Date.now() - t1) / 1000)} s)`);
   await wait(1500);
@@ -307,23 +337,43 @@ try {
   const b3 = await stageInfo(bob.page);
   check(a3.performers === '2' && b3.performers === '2' && /1\/1 video linked/.test(a3.text) && /1\/1 video linked/.test(b3.text), `the second song runs on the same stage (${a3.t} / ${b3.t})`);
   check(/Up next|Now singing/.test(await carol.page.locator('.show-top').innerText().catch(() => '')) || (await carol.page.locator('.show[data-state="live"]').isVisible()), 'the show view follows the second song');
-  // The host ends the song for everyone, then ends the meet.
-  await alice.page.getByRole('button', { name: 'End song' }).click();
-  for (const p of [alice.page, bob.page]) await p.getByText('Your take').waitFor({ timeout: 30000 });
-  check(true, '"End song" on the host device wraps up every take');
+  // The set list is at hand on the live stage: the drawer shows what is playing and lets anyone add a song.
+  await bob.page.getByRole('button', { name: 'Set list' }).click();
+  await bob.page.locator('.sing .drawer .setlist').waitFor({ timeout: 10000 });
+  check(/Now singing/.test(await bob.page.locator('.sing .drawer').innerText()), 'the live stage has a set list drawer (song picker) for the singers');
+  await bob.page.getByRole('button', { name: 'Close the set list' }).click();
+  // A singer stops only their own take; the song goes on for the host.
+  await bob.page.getByRole('button', { name: 'Stop my take' }).click();
+  await bob.page.getByText('Your take').waitFor({ timeout: 30000 });
+  check(await alice.page.locator('.sing .stagebar').isVisible(), "a singer's Stop ends only their take — the host keeps singing");
+  await bob.page.getByRole('button', { name: 'Back to the stage' }).click();
+  // The host stops the song for everyone, then ends the meet.
+  await alice.page.getByRole('button', { name: 'Stop the song for everyone' }).click();
+  await alice.page.getByText('Your take').waitFor({ timeout: 30000 });
+  check(true, '"Stop song" on the host device wraps up the song for everyone');
   await alice.page.getByRole('button', { name: 'Back to the stage' }).click();
   await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
   alice.page.once('dialog', (d) => void d.accept());
   await alice.page.getByRole('button', { name: 'End meet' }).click();
   await alice.page.getByText(/Meet ended/).waitFor({ timeout: 15000 });
   check(true, 'the host ends the meet');
+  // Meets list maintenance: the ended meet is listed with Delete; open meets are counted against the limit of 3.
+  await navigate(alice.page, `${new URL(base).pathname}meets`);
+  await alice.page.locator('.meet-item').first().waitFor({ timeout: 15000 });
+  check(/open meets 0\/3/.test(await alice.page.locator('[data-open-meets]').innerText()), 'the meets home shows the open-meet count against the limit');
+  check(!(await alice.page.locator('.roompill').isVisible().catch(() => false)), 'a finished meet does not follow you around (no pill)');
+  alice.page.once('dialog', (d) => void d.accept());
+  await alice.page.getByRole('button', { name: 'Delete Duet e2e' }).click();
+  await wait(1500);
+  check((await alice.page.locator('.meet-item').count()) === 0, 'the host deleted the meet from the list');
   await carol.page.mouse.move(900, 900);
   await carol.page.mouse.move(930, 950);
   await carol.page.locator('.show[data-idle="0"]').waitFor({ timeout: 5000 });
   await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
   await carol.page.locator('.showbar .jobline', { hasText: 'stopped' }).waitFor({ timeout: 15000 });
   await monitor.close();
-  const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon/.test(e))]));
+  // "Failed to load resource" is the browser noting any non-2xx fetch (a deleted meet's last heartbeat, say); real errors are the rest.
+  const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon|Failed to load resource/.test(e))]));
   check(Object.values(errs).every((v) => !v.length), `no page errors (${JSON.stringify(errs).slice(0, 300)})`);
   console.log('both takes reviewed');
 } catch (e) {

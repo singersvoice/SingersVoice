@@ -140,8 +140,10 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     };
     (window as unknown as { __svMesh?: PerformerMesh; __svFeed?: LocalFeed }).__svMesh = mesh; // support / e2e hooks
     (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed;
+    session.onLeave = () => mesh.close(); // goodbyes before the session leaves
     return () => {
-      mesh.close();
+      session.onLeave = null;
+      void mesh.close();
       for (const v of remoteVideos.current.values()) {
         v.srcObject = null;
         v.remove();
@@ -154,7 +156,7 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     if (!mesh) return;
     if (onStage) void mesh.start();
     else {
-      mesh.close();
+      void mesh.close();
       for (const v of remoteVideos.current.values()) {
         v.srcObject = null;
         v.remove();

@@ -173,9 +173,12 @@ export class MeetSession {
     const m = this.snapshot.value?.meet;
     return this.stopped || Boolean(m && !meetIsOpen(m));
   }
-  async sendSignal(to: string, type: MeetSignalType, data: unknown): Promise<void> {
-    if (!this.resumeToken || this.closed) return;
-    await api.post('POST /meets/:id/signal', `/meets/${encodeURIComponent(this.meetId)}/signal`, { resumeToken: this.resumeToken, to, type, data: typeof data === 'string' ? data : JSON.stringify(data) });
+  /** Resolves false when they already left (the mesh forgets the link); a session that is leaving still says goodbye. */
+  async sendSignal(to: string, type: MeetSignalType, data: unknown): Promise<boolean> {
+    const m = this.snapshot.value?.meet;
+    if (!this.resumeToken || (m && !meetIsOpen(m))) return false;
+    const r = await api.post('POST /meets/:id/signal', `/meets/${encodeURIComponent(this.meetId)}/signal`, { resumeToken: this.resumeToken, to, type, data: typeof data === 'string' ? data : JSON.stringify(data) });
+    return !r.gone;
   }
   /** Signals addressed to me that arrived since the last poll. */
   async pollSignals(): Promise<MeetSignal[]> {
@@ -191,9 +194,17 @@ export class MeetSession {
   async registerRecording(performanceId: string, driveFolderLink: string | null, durationMs: number): Promise<void> {
     await api.post('POST /meets/:id/recordings', `/meets/${encodeURIComponent(this.meetId)}/recordings`, { resumeToken: this.resumeToken, performanceId, driveFolderLink, durationMs });
   }
+  /** Set by whoever runs a video mesh on this session: says goodbye to the peers before the session leaves. */
+  onLeave: (() => Promise<void> | void) | null = null;
   async leave(): Promise<void> {
-    this.stop();
-    if (this.resumeToken) await api.post('POST /meets/:id/leave', `/meets/${encodeURIComponent(this.meetId)}/leave`, { resumeToken: this.resumeToken }).catch(() => undefined);
+    const token = this.resumeToken;
+    try {
+      await Promise.race([Promise.resolve(this.onLeave?.()), new Promise((r) => setTimeout(r, 800))]);
+    } catch {
+      /* goodbyes are best effort */
+    }
+    this.stop(); // no more polling from this session
+    if (token) await api.post('POST /meets/:id/leave', `/meets/${encodeURIComponent(this.meetId)}/leave`, { resumeToken: token }).catch(() => undefined);
   }
 
   stop(): void {

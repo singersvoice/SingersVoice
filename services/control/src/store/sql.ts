@@ -209,6 +209,11 @@ export class SqlStore {
     return rows.map((r) => JSON.parse(r.data) as StoredParticipant);
   }
 
+  /** Delete a meet and everything that hangs off it (the takes themselves live in each singer's Drive). */
+  async deleteMeet(meetId: string): Promise<void> {
+    for (const t of ['recordings', 'signals', 'chat', 'participants', 'meets']) await this.db.run(`DELETE FROM ${t} WHERE meet_id=?`, [meetId]);
+  }
+
   async removeParticipant(meetId: string, participantId: string): Promise<void> {
     await this.db.run('DELETE FROM participants WHERE meet_id=? AND participant_id=?', [meetId, participantId]);
   }
