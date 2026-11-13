@@ -112,6 +112,18 @@ export function storeToken(t: GoogleToken | null): void {
 }
 
 /**
+ * What a refused sign-in means, in words the person (or the app's owner) can act on. Google's own
+ * page said it in the popup; by the time it closes, the app sees only a code.
+ */
+export function signInError(error?: string, description?: string): string {
+  if (error === 'access_denied') {
+    return 'Google blocked the sign-in: this app\u2019s Google setup is still in "Testing" mode, which only lets listed test accounts in. The app\u2019s owner publishes it once (Google Cloud Console \u2192 Google Auth Platform \u2192 Audience \u2192 Publish app) and every Google account can sign in. If you just said No on the consent screen, try again and allow Drive access.';
+  }
+  if (error === 'interaction_required' || error === 'login_required') return 'Please sign in to Google again';
+  return description ?? error ?? 'No token returned';
+}
+
+/**
  * Request an access token. `prompt: 'consent'` on first link (shows the Drive consent),
  * `''` afterwards (silent re-issue while the Google session is alive; still needs a user gesture on iOS).
  */
@@ -123,7 +135,7 @@ export async function requestToken(opts: { prompt: '' | 'consent' | 'select_acco
       client_id: GOOGLE_CLIENT_ID,
       scope: DRIVE_SCOPES.join(' '),
       callback: (r) => {
-        if (!r.access_token) return reject(new Error(r.error_description ?? r.error ?? 'No token returned'));
+        if (!r.access_token) return reject(new Error(signInError(r.error, r.error_description)));
         const granted = (r.scope ?? '').split(' ');
         if (!granted.includes('https://www.googleapis.com/auth/drive.file')) {
           return reject(new Error('Drive access was not granted — tick "See, edit, create and delete only the specific Google Drive files you use with this app"'));

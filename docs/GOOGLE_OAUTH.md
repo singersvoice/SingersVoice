@@ -12,8 +12,13 @@ SingersVoice signs people in with Google and keeps their files in **their** Driv
 3. **APIs & Services → OAuth consent screen** (Google Auth Platform):
    - User type **External**, app name **SingersVoice**, your support email, app logo optional.
    - Scopes: `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile`, `https://www.googleapis.com/auth/drive.file`.
-   - **Publish** the app (status *In production*). While it is *Testing*, only listed test users can sign in and
-     tokens expire after 7 days. `drive.file` is non-sensitive, so no verification review is needed.
+   - **Publish** the app (status *In production*). While it is *Testing*, only listed test users can sign in —
+     everyone else sees Google's *Access blocked: … has not completed the Google verification process*
+     (error 403 access_denied) — and tokens expire after 7 days. `drive.file`, openid, email and profile are
+     all non-sensitive scopes, so publishing needs **no verification review**: the moment the status is
+     *In production*, any Google account signs in. (Console → **Google Auth Platform → Audience →
+     Publish app → Confirm**; if the console lists the project under *APIs & Services → OAuth consent
+     screen*, the button is on that page.) The app itself says this when a sign-in is refused.
 4. **Credentials → Create credentials → OAuth client ID** → *Web application*:
    - Name: `SingersVoice Web`
    - **Authorized JavaScript origins**:
