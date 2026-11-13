@@ -24,8 +24,8 @@ export const VOCAL_LAG_MS = 250;
 /** The mix at its default balance: the track and the voices as they come (the singer's Track / Vocal controls move them). */
 export const VOCAL_IN_MIX = 1;
 export const BACKING_IN_MIX = 1;
-export const MIX_DB_MIN = -18;
-export const MIX_DB_MAX = 12;
+export const MIX_DB_MIN = -30;
+export const MIX_DB_MAX = 30;
 export const dbToGain = (db: number): number => Math.pow(10, Math.max(MIX_DB_MIN, Math.min(MIX_DB_MAX, db)) / 20);
 
 /**
@@ -34,17 +34,19 @@ export const dbToGain = (db: number): number => Math.pow(10, Math.max(MIX_DB_MIN
  */
 export function safetyStage(ctx: BaseAudioContext): { input: AudioNode; output: AudioNode; limiter: DynamicsCompressorNode } {
   const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -6;
+  limiter.threshold.value = -3;
   limiter.knee.value = 0;
   limiter.ratio.value = 20;
   limiter.attack.value = 0.001;
   limiter.release.value = 0.1;
   const clip = ctx.createWaveShaper();
-  const n = 2048;
+  const n = 4096;
   const curve = new Float32Array(n);
+  const knee = 0.7; // straight line up to here (untouched), a smooth bend above, never past ±1
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1;
-    curve[i] = Math.tanh(x * 1.25) / Math.tanh(1.25); // transparent to ±0.7, bends above, never past ±1
+    const a = Math.abs(x);
+    curve[i] = a <= knee ? x : Math.sign(x) * (knee + (1 - knee) * Math.tanh((a - knee) / (1 - knee)));
   }
   clip.curve = curve;
   clip.oversample = '2x';

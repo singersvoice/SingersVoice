@@ -506,7 +506,7 @@ try {
   await bob.page.locator('.sing [data-mix="trackDb"] button[aria-label="Track volume up"]').click();
   await bob.page.locator('.sing [data-mix="vocalDb"] button[aria-label="Vocal volume down"]').click();
   const balance = await bob.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}'));
-  check(balance.trackDb === 2 && balance.vocalDb === -1, `Track / Vocal volume move in 1 dB steps and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
+  check(balance.trackDb === 6 && balance.vocalDb === -3, `Track / Vocal volume move in 3 dB steps (±30 dB) and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
   await bob.page.getByRole('button', { name: 'Close the set list' }).click();
   // A singer stops only their own take; the song goes on for the host — the singer stays on the live stage and may rejoin.
   await bob.page.getByRole('button', { name: 'Stop my take' }).click();
