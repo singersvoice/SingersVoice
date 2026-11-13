@@ -27,6 +27,7 @@ import { loadMeetTrack } from '../meets/trackSource.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { appSettings } from '../../state/settings.ts';
+import { blobLoudness } from '../../audio/loudness.ts';
 import { VOCAL_LAG_MS } from '../../video/showRecorder.ts';
 import { Broadcast } from './broadcast.ts';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
@@ -263,11 +264,16 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     setTrackUrl(null);
     setTrackNote(null);
     if (!meet.trackId && !meet.catalogTrackId) return;
+    broadcast.bus.setBackingLoudness(null);
     void loadMeetTrack(meet).then((t) => {
       if (cancelled) return;
       if (t.loaded) {
         url = URL.createObjectURL(t.loaded.audio);
         setTrackUrl(url);
+        // The track's loudness (measured once per device): the bus moves it to the mix target.
+        void blobLoudness(broadcast.bus.ctx, t.loaded.audio, t.loaded.track.trackId).then((l) => {
+          if (!cancelled) broadcast.bus.setBackingLoudness(l);
+        });
       } else setTrackNote(t.reason);
     });
     return () => {

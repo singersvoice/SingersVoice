@@ -1,14 +1,20 @@
 /**
  * VoxForge vocal chain on Web Audio (the browser twin of the JUCE plugin):
  * trim → pitch/auto-tune (worklet) → HPF → EQ (low · mid · presence · air) → compressor → parallel
- * "punch" compression → de-esser → exciter → saturation → chorus → stereo delay → reverb → rider → out.
+ * "punch" compression → de-esser → exciter → saturation → chorus → stereo delay → reverb → rider →
+ * safety (limiter + soft clip) → out.
  *
- * Everything runs on the audio thread in 128-frame blocks: the chain adds no buffering of its own
- * (under 3 ms at 48 kHz); only the pitch stage holds one grain (~46 ms) while it is correcting.
+ * Everything runs on the audio thread in 128-frame blocks. The dynamics stages are our own
+ * ('sv-dynamics': an honest makeup gain, no hidden lookahead — see dynamics.ts for what the browser's
+ * node does instead), so the chain adds about 7 ms (the safety limiter's 1.5 ms lookahead and the two
+ * oversampled shapers); every parallel path (the dry side of the punch compressor, the de-esser's low
+ * band, the exciter's and saturation's dry paths) is delayed to meet its processed twin exactly, so
+ * nothing comb-filters. Only the pitch stage holds one grain (~46 ms) while it is correcting.
  * The rider is the one stage steered from the main thread — a slow gain that only ever moves a few
  * dB per second, so a late timer costs nothing audible.
  */
 import { totalSemitones, type VoxForgeParams } from '@singersvoice/protocol';
+import { makeCompressor, safetyStage, SHAPER_LATENCY_FRAMES } from './dynamics.ts';
 
 export interface VoxForgeChain {
   input: GainNode;
@@ -18,15 +24,26 @@ export interface VoxForgeChain {
   dispose(): void;
   /** The rider's current gain in dB (for meters / tests). */
   readonly riderDb: number;
+  /** Frames the chain delays the voice by while the pitch stage is neutral. */
+  readonly latencyFrames: number;
 }
 
 const dB = (v: number) => Math.pow(10, v / 20);
+/**
+ * Web Audio's lowpass / highpass take their Q in DECIBELS (a resonance), not as a quality factor:
+ * a Butterworth section (Q 0.7071) is −3.01 dB there. Two in a row make a Linkwitz-Riley split.
+ */
+const BUTTERWORTH_Q_DB = 20 * Math.log10(Math.SQRT1_2);
 /** Where a sung vocal should sit (RMS): the rider steers every phrase toward this. */
 const RIDER_TARGET_DB = -20;
 /** Below this the rider holds still — room noise and breaths are not phrases. */
 const RIDER_GATE_DB = -50;
 const RIDER_MAX_CUT_DB = -6;
 const RIDER_MAX_LIFT_DB = 12;
+/** The parallel compressor's own makeup: the crushed copy lands around the dry vocal's level at full mix. */
+const PUNCH_MAKEUP_DB = 16;
+/** The vocal leaves the chain under this (dBFS): never a clipped sample on its way to the mesh or the recorder. */
+const VOCAL_CEILING_DB = -3;
 
 function saturationCurve(drive: number): Float32Array<ArrayBuffer> {
   const n = 1024;
@@ -62,7 +79,14 @@ function makeImpulse(ctx: BaseAudioContext, decaySeconds: number, size: number):
   return ir;
 }
 
-export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean): VoxForgeChain {
+/** A delay of exactly `frames` (the dry side of a parallel path, matched to its processed twin). */
+function alignment(ctx: BaseAudioContext, frames: number): DelayNode {
+  const d = ctx.createDelay(Math.max(0.01, (frames + 1) / ctx.sampleRate));
+  d.delayTime.value = frames / ctx.sampleRate;
+  return d;
+}
+
+export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boolean): VoxForgeChain {
   const input = ctx.createGain();
   const output = ctx.createGain();
 
@@ -77,7 +101,7 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
 
   const hpf = ctx.createBiquadFilter();
   hpf.type = 'highpass';
-  hpf.Q.value = 0.7;
+  hpf.Q.value = BUTTERWORTH_Q_DB;
   const low = ctx.createBiquadFilter();
   low.type = 'lowshelf';
   low.frequency.value = 120;
@@ -93,28 +117,25 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
   hi.type = 'highshelf';
   hi.frequency.value = 6500;
 
-  const comp = ctx.createDynamicsCompressor();
-  comp.knee.value = 6;
+  const comp = makeCompressor(ctx, workletAvailable);
   const makeup = ctx.createGain();
 
   // Parallel ("New York") compression: the dry vocal plus a crushed copy underneath — soft phrases come
-  // up, loud ones keep their transients, nothing sounds squashed.
+  // up, loud ones keep their transients, nothing sounds squashed. The dry side waits for the compressor.
   const pcIn = ctx.createGain();
+  const pcComp = makeCompressor(ctx, workletAvailable);
+  pcComp.set({ thresholdDb: -36, kneeDb: 10, ratio: 10, attackS: 0.002, releaseS: 0.09, makeupDb: PUNCH_MAKEUP_DB }, 0);
+  const pcDryDelay = alignment(ctx, pcComp.latencyFrames);
   const pcDry = ctx.createGain();
-  const pcComp = ctx.createDynamicsCompressor();
-  pcComp.threshold.value = -36;
-  pcComp.knee.value = 10;
-  pcComp.ratio.value = 10;
-  pcComp.attack.value = 0.002;
-  pcComp.release.value = 0.09;
-  const pcMakeup = ctx.createGain();
-  pcMakeup.gain.value = dB(10);
   const pcWet = ctx.createGain();
   const pcOut = ctx.createGain();
 
   // De-esser: a Linkwitz-Riley split at 5 kHz; the top band goes through a fast compressor of its own,
-  // so an "s" is ducked for the few milliseconds it spikes and the rest of the voice is untouched.
+  // so an "s" is ducked for the few milliseconds it spikes and the rest of the voice is untouched. The
+  // low band (and the bypass) wait for that compressor, so the two halves meet again in time.
   const dsIn = ctx.createGain();
+  const dsComp = makeCompressor(ctx, workletAvailable);
+  const dsBypassDelay = alignment(ctx, dsComp.latencyFrames);
   const dsBypass = ctx.createGain();
   const dsLo1 = ctx.createBiquadFilter();
   const dsLo2 = ctx.createBiquadFilter();
@@ -123,29 +144,27 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
   for (const f of [dsLo1, dsLo2]) {
     f.type = 'lowpass';
     f.frequency.value = 5000;
-    f.Q.value = Math.SQRT1_2;
+    f.Q.value = BUTTERWORTH_Q_DB;
   }
   for (const f of [dsHi1, dsHi2]) {
     f.type = 'highpass';
     f.frequency.value = 5000;
-    f.Q.value = Math.SQRT1_2;
+    f.Q.value = BUTTERWORTH_Q_DB;
   }
+  const dsLoDelay = alignment(ctx, dsComp.latencyFrames);
   const dsLoGain = ctx.createGain();
   const dsHiGain = ctx.createGain();
-  const dsComp = ctx.createDynamicsCompressor();
-  dsComp.knee.value = 4;
-  dsComp.attack.value = 0.001;
-  dsComp.release.value = 0.06;
   const dsOut = ctx.createGain();
 
   // Exciter: harmonics generated from the top of the voice (above 3 kHz) and blended in — the sparkle
-  // and "air" of a studio chain, not a plain treble boost.
+  // and "air" of a studio chain, not a plain treble boost. The oversampled shaper is 128 frames late.
   const exIn = ctx.createGain();
+  const exDryDelay = alignment(ctx, SHAPER_LATENCY_FRAMES['2x']);
   const exDry = ctx.createGain();
   const exHp = ctx.createBiquadFilter();
   exHp.type = 'highpass';
   exHp.frequency.value = 3000;
-  exHp.Q.value = 0.7;
+  exHp.Q.value = BUTTERWORTH_Q_DB;
   const exShaper = ctx.createWaveShaper();
   exShaper.oversample = '2x';
   exShaper.curve = saturationCurve(0.6);
@@ -161,6 +180,7 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
 
   // Saturation (dry/wet)
   const satIn = ctx.createGain();
+  const satDryDelay = alignment(ctx, SHAPER_LATENCY_FRAMES['2x']);
   const satDry = ctx.createGain();
   const satWet = ctx.createGain();
   const shaper = ctx.createWaveShaper();
@@ -201,24 +221,30 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
   conv.normalize = true;
   conv.buffer = makeImpulse(ctx, 2.4, 0.4);
 
+  // The way out: never a sample over the ceiling, whatever the preset and the singer do.
+  const safety = safetyStage(ctx, workletAvailable, VOCAL_CEILING_DB);
+
   // ---- wiring ----
   let last: AudioNode = input;
   if (pitchNode) {
     last.connect(pitchNode);
     last = pitchNode;
   }
-  last.connect(hpf).connect(low).connect(mid).connect(pres).connect(hi).connect(comp).connect(makeup).connect(pcIn);
-  pcIn.connect(pcDry).connect(pcOut);
-  pcIn.connect(pcComp).connect(pcMakeup).connect(pcWet).connect(pcOut);
+  last.connect(hpf).connect(low).connect(mid).connect(pres).connect(hi).connect(comp.input);
+  comp.output.connect(makeup).connect(pcIn);
+  pcIn.connect(pcDryDelay).connect(pcDry).connect(pcOut);
+  pcIn.connect(pcComp.input);
+  pcComp.output.connect(pcWet).connect(pcOut);
   pcOut.connect(dsIn);
-  dsIn.connect(dsBypass).connect(dsOut);
-  dsIn.connect(dsLo1).connect(dsLo2).connect(dsLoGain).connect(dsOut);
-  dsIn.connect(dsHi1).connect(dsHi2).connect(dsComp).connect(dsHiGain).connect(dsOut);
+  dsIn.connect(dsBypassDelay).connect(dsBypass).connect(dsOut);
+  dsIn.connect(dsLo1).connect(dsLo2).connect(dsLoDelay).connect(dsLoGain).connect(dsOut);
+  dsIn.connect(dsHi1).connect(dsHi2).connect(dsComp.input);
+  dsComp.output.connect(dsHiGain).connect(dsOut);
   dsOut.connect(exIn);
-  exIn.connect(exDry).connect(exOut);
+  exIn.connect(exDryDelay).connect(exDry).connect(exOut);
   exIn.connect(exHp).connect(exShaper).connect(exWet).connect(exOut);
   exOut.connect(satIn);
-  satIn.connect(satDry).connect(satOut);
+  satIn.connect(satDryDelay).connect(satDry).connect(satOut);
   satIn.connect(shaper).connect(satWet).connect(satOut);
   satOut.connect(chDry).connect(chOut);
   satOut.connect(chDelay).connect(chWet).connect(chOut);
@@ -231,8 +257,11 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
   dlWet.connect(dlOut);
   dlOut.connect(rvDry).connect(riderIn);
   dlOut.connect(preDelay).connect(conv).connect(rvWet).connect(riderIn);
-  riderIn.connect(rider).connect(output);
+  riderIn.connect(rider).connect(safety.input);
   riderIn.connect(riderMeter);
+  safety.output.connect(output);
+
+  const latencyFrames = comp.latencyFrames + pcComp.latencyFrames + dsComp.latencyFrames + 2 * SHAPER_LATENCY_FRAMES['2x'] + safety.latencyFrames;
 
   let lastIrKey = '';
   let irTimer: ReturnType<typeof setTimeout> | undefined;
@@ -280,10 +309,7 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
     pres.gain.setTargetAtTime(p.eqOn ? p.eqPres : 0, t, ramp);
     hi.gain.setTargetAtTime(p.eqOn ? p.eqHi : 0, t, ramp);
 
-    comp.threshold.setTargetAtTime(p.compOn ? p.cThr : 0, t, ramp);
-    comp.ratio.setTargetAtTime(p.compOn ? p.cRat : 1, t, ramp);
-    comp.attack.setTargetAtTime(p.cAtk / 1000, t, ramp);
-    comp.release.setTargetAtTime(p.cRel / 1000, t, ramp);
+    comp.set({ thresholdDb: p.compOn ? p.cThr : 0, kneeDb: 6, ratio: p.compOn ? p.cRat : 1, attackS: p.cAtk / 1000, releaseS: p.cRel / 1000, makeupDb: 0 }, t);
     makeup.gain.setTargetAtTime(p.compOn ? dB(p.cMk) : 1, t, ramp);
 
     pcWet.gain.setTargetAtTime(p.pcOn ? p.pcMx * 0.8 : 0, t, ramp);
@@ -294,8 +320,7 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
     dsBypass.gain.setTargetAtTime(dsActive ? 0 : 1, t, ramp);
     dsLoGain.gain.setTargetAtTime(dsActive ? 1 : 0, t, ramp);
     dsHiGain.gain.setTargetAtTime(dsActive ? 1 : 0, t, ramp);
-    dsComp.threshold.setTargetAtTime(dsActive ? -22 - p.dsAmt * 16 : 0, t, ramp);
-    dsComp.ratio.setTargetAtTime(dsActive ? 3 + p.dsAmt * 7 : 1, t, ramp);
+    dsComp.set({ thresholdDb: dsActive ? -22 - p.dsAmt * 16 : 0, kneeDb: 4, ratio: dsActive ? 3 + p.dsAmt * 7 : 1, attackS: 0.001, releaseS: 0.06, makeupDb: 0 }, t);
 
     exWet.gain.setTargetAtTime(p.exOn ? p.exAmt * 0.45 : 0, t, ramp);
     exDry.gain.setTargetAtTime(1, t, ramp);
@@ -339,7 +364,8 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
     } catch {
       /* already stopped */
     }
-    for (const n of [input, output, hpf, low, mid, pres, hi, comp, makeup, pcIn, pcDry, pcComp, pcMakeup, pcWet, pcOut, dsIn, dsBypass, dsLo1, dsLo2, dsHi1, dsHi2, dsLoGain, dsHiGain, dsComp, dsOut, exIn, exDry, exHp, exShaper, exWet, exOut, riderIn, rider, riderMeter, satIn, satDry, satWet, shaper, satOut, chDry, chWet, chDelay, chOut, dlDry, dlWet, dlL, dlR, fbL, fbR, panL, panR, dlOut, rvDry, rvWet, preDelay, conv]) n.disconnect();
+    for (const n of [input, output, hpf, low, mid, pres, hi, makeup, pcIn, pcDryDelay, pcDry, pcWet, pcOut, dsIn, dsBypassDelay, dsBypass, dsLo1, dsLo2, dsHi1, dsHi2, dsLoDelay, dsLoGain, dsHiGain, dsOut, exIn, exDryDelay, exDry, exHp, exShaper, exWet, exOut, riderIn, rider, riderMeter, satIn, satDryDelay, satDry, satWet, shaper, satOut, chDry, chWet, chDelay, chOut, dlDry, dlWet, dlL, dlR, fbL, fbR, panL, panR, dlOut, rvDry, rvWet, preDelay, conv, safety.output]) n.disconnect();
+    for (const c of [comp, pcComp, dsComp, safety.limiter]) c.disconnect();
     pitchNode?.disconnect();
   }
 
@@ -349,6 +375,7 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
     pitchNode,
     apply,
     dispose,
+    latencyFrames,
     get riderDb() {
       return riderDb;
     },

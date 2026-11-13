@@ -42,6 +42,19 @@ CI uploads the screenshots as an artifact on every PR.
 - Tempo changes are real-time granular time-stretch on the backing track (key kept); extreme values sound grainy.
 - On iOS the Google sign-in popup must be triggered by a tap (it is), and tokens last 1 h → *Reconnect Drive*.
 
+## The audio lab (`tools/ci/audio-lab.mjs`)
+
+`node tools/ci/audio-lab.mjs` renders the real vocal chain and mix bus offline in Chromium
+(OfflineAudioContext with the AudioWorklets, esbuild-bundled from `apps/web/src/audio/lab.ts`) and
+measures them with synthetic signals — what a listener would hear, in numbers: the chain's impulse
+response has one arrival (every parallel path delay-matched, no comb filter), the de-esser passes a
+quiet 8 kHz at unity and ducks a loud one, a voice 10 dB over full scale leaves under the −3 dB
+ceiling, the Studio preset adds no hidden gain, a −30 LUFS track lands at −19, a −5 dBFS and a
+−33 dBFS voice both ride to −17 within ten seconds and the silence after them stays silent, the mix
+at 0 / 0 sits still, and at +30 / +30 the guard brings it back under the target with no sample over
+the ceiling. Worklet and native-fallback paths both. Run it after any change under `apps/web/src/audio`
+or `apps/web/public/worklets`.
+
 ## Live meet with two performers (`tools/ci/live-duet.mjs`)
 
 Two Chromium contexts with a synthetic-person clip as the fake camera (`tools/ci/fake-person.mjs`,

@@ -117,7 +117,7 @@ export function MeetRoom(props: { id: string }) {
       engine.setMonitor(audio.monitor);
       const player = engine.player!;
       if (loadedKey.current !== trackKey || !player.buffer) {
-        await player.load(track.loaded.audio);
+        await player.load(track.loaded.audio, track.loaded.track.trackId);
         loadedKey.current = trackKey;
       }
       player.setGain(audio.backingGain);
@@ -377,7 +377,7 @@ function Lobby(props: {
       await e.resume(); // the speaker engine's player exists once it runs
       player = e.player;
       if (!player || stopped) return;
-      if (!player.buffer) await player.load(props.track!.loaded!.audio);
+      if (!player.buffer) await player.load(props.track!.loaded!.audio, props.track!.loaded!.track.trackId);
       const localStart = meet.kickstartEpochMs! - clock.value.offsetMs;
       const startIn = (localStart - Date.now()) / 1000;
       const offset = meet.playback?.offsetMs ?? 0;

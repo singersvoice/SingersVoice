@@ -256,7 +256,7 @@ export function Sing(props: { id: string }) {
       engine.applyFx(audio.params);
       engine.setMonitor(audio.monitor);
       const player = engine.player!;
-      if (!player.buffer) await player.load(loaded.audio);
+      if (!player.buffer) await player.load(loaded.audio, loaded.track.trackId);
       player.setGain(audio.backingGain);
       player.setTempo(audio.tempo);
       player.setKeyShift(audio.keyShift);
@@ -520,7 +520,7 @@ export function Sing(props: { id: string }) {
       <Sheet open={fxOpen} onClose={() => setFxOpen(false)} title="VoxForge voice">
         <div class="stack">
           <div class="grid-2">
-            <Field label={`Backing level ${Math.round(audio.backingGain * 100)}%`}>
+            <Field label={`Backing level in your ears ${Math.round(audio.backingGain * 100)}%`}>
               <input type="range" min={0} max={1} step={0.01} value={audio.backingGain} onInput={(e) => updateAudio({ backingGain: Number((e.currentTarget as HTMLInputElement).value) })} />
             </Field>
             <Field label={`Tempo ${audio.tempo.toFixed(2)}× (key kept)`}>

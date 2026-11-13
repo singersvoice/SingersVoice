@@ -200,9 +200,7 @@ a 'show' compositor over the same cut-outs the stage draws — the remote frames
 and shared, `UnpackedFrame`), its own audio bus on the engine's context (backing track + own vocal
 after FX, held back by the same quarter second through a DelayNode — and this device's own cut-out
 through a frame ring, so its picture is in step with its sound — plus every other singer's vocal as
-it arrives — at the device's **Track / Vocal volume** balance, then a brick-wall safety stage: a
-hard-kneed limiter and a tanh soft clipper, so nothing above full scale ever reaches an encoder,
-which is what crackles), one MediaRecorder — **MP4
+it arrives — through the shared **mix bus** (`audio/mixBus.ts`, below), one MediaRecorder — **MP4
 first** (`pickShowMime`: H.264 + AAC where the browser has an AAC encoder — Windows, Mac, iOS —
 else H.264 + Opus in MP4, WebM only where MP4 is not offered, i.e. Firefox; audio at 192 kbps) so
 a saved show plays wherever its Drive link is opened; the Drive file is named *song · meet ·
@@ -241,8 +239,8 @@ link; the first four tiles connect by themselves, the rest on request.
    has arrived for 6 s — the device plays the backing track alone, in sync.
 5. **The show to the audience and to YouTube — from the publisher's browser.** The show view
    (`portals/publishing/broadcast.ts`) runs a `PublisherBus` (the track element and every vocal off
-   the mesh, the saved-show balance, a limiter; two monitor switches that never touch the
-   broadcast), draws the show on a `ShowRecorder` canvas, and `broadcast/liveEncoder.ts` turns it
+   the mesh through the same mix bus; two monitor switches that never touch the broadcast — the
+   monitor has a guard and a safety stage of its own), draws the show on a `ShowRecorder` canvas, and `broadcast/liveEncoder.ts` turns it
    into a stream: `VideoEncoder` (H.264 Annex B, `avc1.4d401f`, 3 Mbps, 30 fps backing off to 15
    when the encoder falls behind, a keyframe every 2 s by time) and `AudioEncoder` (AAC-LC ADTS,
    48 kHz stereo, 128 kbps; absent on Linux Chrome / Firefox → video only), cut at the keyframes
@@ -273,6 +271,53 @@ link; the first four tiles connect by themselves, the rest on request.
 | sv-control (SVT DB) | `services/control` | Hono on Node 22 (node:sqlite) or Cloudflare Workers (one SQLite-backed Durable Object): users (privileged flag), catalog, meets, chat, recordings, publishing destinations/jobs; Google access-token auth |
 | sv-session (V3) | `services/session` (planned) | RTMPS relay for Facebook / Instagram / Twitch: takes the browser's segments, speaks RTMPS (the browser already encodes the show) |
 
+## The mix bus (`audio/mixBus.ts`) — every listener gets the same balance
+
+The saved show, the audience's "Hear the stage" and the broadcast are mixed by one bus, built so
+the result never depends on which file the track came from, which microphone a singer has or how
+they set their effects:
+
+```
+track  ─ normalisation ─ Track offset ─┐
+vocal₁ ─ rider ─┐                      ├─ sum ─ guard ─ limiter ─ soft clip ─ out
+vocal₂ ─ rider ─┴─ Vocal offset ───────┘
+```
+
+- **The track is normalised to −19 LUFS** (`audio/loudness.ts`: ITU-R BS.1770 / EBU R128 —
+  K-weighting re-derived for the device's sample rate, 400 ms blocks, the absolute and relative
+  gates — unit-tested against the standard's 48 kHz table). A singer's device measures the decoded
+  buffer in `BackingPlayer.load`; the show view decodes its blob once; both remember the result per
+  track id (`sv.loudness` in localStorage). The player has two levels on purpose: `out` (normalised —
+  what the recording and the audience take) and `gain` (the singer's **Backing level in your ears**),
+  so turning the music down in your headphones never turns it down in the show — which is what used
+  to make the recorded track "bleak" and the knobs go to +12.
+- **Each vocal has a rider** (the `sv-leveler` worklet): a two-second RMS view of what is *sung*
+  (a 50 ms gate at −45 dBFS stops it the moment the singer stops and keeps the pause out of the
+  average), steered toward **−17 dBFS** at 1 dB/s up, 2 dB/s down, three times faster until within
+  6 dB — a singer's offset, not their phrasing; +18 dB lift at most, −12 dB cut.
+- **Track volume / Vocal volume** (±30 dB, 3 dB steps, kept per device) are offsets on top of that
+  balance: 0 / 0 is already right.
+- **The guard** (another `sv-leveler`, on the sum) only ever turns *down*, toward a −13 dBFS
+  average: push both controls to +30 and the mix comes back to the target in a few seconds instead
+  of living in the limiter.
+- **The safety stage** (`audio/dynamics.ts`): a limiter at **−1.5 dBFS** (the `sv-dynamics`
+  worklet, 2 ms lookahead over a sliding-max detector, 0.3 ms attack, a wall of a ratio) and a tanh
+  soft clipper straight up to −1.4 dB behind it. Nothing above full scale reaches an encoder; a
+  clipped encoder is what crackles.
+
+**What the browser's compressor really does** (measured in `tools/ci/audio-lab.mjs`; the Blink/WebKit
+kernel that Chrome, Edge, Safari and Firefox all run): `DynamicsCompressorNode` adds an **automatic
+makeup gain**, (1 / its gain at 0 dBFS)^0.6 — +6.9 dB on a −20 dB / 3:1 vocal compressor, **+14.5 dB
+on a −30 dB / 6.5:1 de-esser** (the old de-esser *boosted* the top band by 14 dB, which is the
+sizzle and crackle on every "s") — and a fixed **6 ms lookahead delay**, so a dry path summed with
+it lands 6 ms early and comb-filters (the old parallel compressor and de-esser both did). `Q` on a
+lowpass / highpass BiquadFilter is in **decibels**, not a quality factor (a Butterworth section is
+−3.01 dB there; the old 0.7071 was a +0.7 dB resonance, and the Linkwitz-Riley split summed 3.8 dB
+hot at 8 kHz). A WaveShaper with 2x oversampling is 128 frames late. `compressorMakeupDb`
+reproduces the kernel's knee maths exactly (unit-tested against the measured values), so the native
+node can be corrected where the worklets are not available; everywhere else the chain and the buses
+use `sv-dynamics`, with an honest makeup and no hidden delay.
+
 ## Audio chain (VoxForge, web twin of the JUCE plugin)
 
 The microphone is opened **raw** — no browser echo cancellation, noise suppression or automatic
@@ -287,15 +332,22 @@ at a time up to +12 dB — room noise between phrases never does, which is what 
 to the ceiling and the noise floor with it; past −6 dBFS it drops 2 dB at once (floor −6 dB) — slow
 up, fast down, no pumping, never clipped. Then: trim → pitch worklet (granular shifter + NSDF
 auto-tune) → HPF → low shelf 120 Hz / peak 1.2 kHz / **presence peak 3.2 kHz** / high shelf 6.5 kHz
-→ compressor → **parallel compression** (a crushed copy, 10:1 from −36 dB, blended under the dry
-vocal: soft phrases up, transients kept — punch without over-compression) → **de-esser**
-(Linkwitz-Riley split at 5 kHz, the top band through its own 1 ms compressor) → **exciter**
-(harmonics made from the voice above 3 kHz, blended in — air, not a treble boost) → saturation →
-chorus/doubler → ping-pong delay → convolution reverb → **vocal rider** (an RMS meter every 50 ms;
-below −50 dBFS it holds, otherwise it steers toward −20 dBFS: up to +12 dB lift, −6 dB cut, a few
-dB a second at most — every phrase up front) → out. Every stage is a Web Audio node in the
-128-frame graph: no buffering, under 3 ms; the pitch stage alone holds one 46 ms grain while it
-corrects. The chain runs live on the captured voice: what is recorded, sent to the publisher and
+→ compressor → **parallel compression** (a crushed copy, 10:1 from −36 dB with +16 dB of its own
+makeup, blended under the dry vocal: soft phrases up, transients kept — punch without
+over-compression; the dry side is delayed to meet it) → **de-esser** (Linkwitz-Riley split at
+5 kHz, the top band through its own 1 ms compressor; the low band and the bypass wait for it) →
+**exciter** (harmonics made from the voice above 3 kHz, blended in — air, not a treble boost; the
+dry side waits for the oversampled shaper) → saturation (same) → chorus/doubler → ping-pong delay →
+convolution reverb → **vocal rider** (an RMS meter every 50 ms; below −50 dBFS it holds, otherwise
+it steers toward −20 dBFS: up to +12 dB lift, −6 dB cut, a few dB a second at most — every phrase up
+front) → **safety** (limiter at −3 dBFS + soft clip: the voice never clips on its way to the mesh or
+the recorder, whatever the preset and the singer do) → out. Every dynamics stage is our own
+`sv-dynamics` worklet (see the mix bus above for why), every parallel path is delay-matched — the
+audio lab checks the chain's impulse response has one arrival and no echo — and the whole chain is
+**10 ms** (the limiter's 2 ms lookahead and three oversampled shapers; 32 ms on the native fallback);
+the pitch stage alone holds one 46 ms grain while it corrects, and keeps its correction through a
+300 ms unvoiced gap (a consonant, a breath) instead of falling back to the untuned pitch on every
+"t". The chain runs live on the captured voice: what is recorded, sent to the publisher and
 the other singers' recordings, and heard in the monitor is the processed vocal. Parameters and
 presets live in `packages/protocol/src/audio.ts` and round-trip with the plugin's `APVTS` layout;
 **Studio** is the default for a new singer (HPF 95 Hz, presence +2.5 dB, air +2 dB, 3:1

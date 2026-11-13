@@ -21,6 +21,7 @@
     "lint": "npm run lint --workspaces --if-present",
     "budget": "node tools/ci/check-budget.mjs apps/web/dist 400",
     "screenshots": "node tools/ci/screenshots.mjs",
+    "audio-lab": "node tools/ci/audio-lab.mjs",
     "control": "npm run dev -w services/control",
     "control:smoke": "node tools/ci/control-smoke.mjs",
     "control:deploy": "node tools/cf/deploy.mjs"

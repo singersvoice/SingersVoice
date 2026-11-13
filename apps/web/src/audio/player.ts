@@ -1,15 +1,28 @@
+import { bufferLoudnessAsync, cachedLoudness, MIX_TARGETS, normalizationDb, rememberLoudness, type Loudness } from './loudness.ts';
+
 /**
  * Backing-track player anchored to the AudioContext clock. `play(at)` schedules the start at an
  * exact context time (the local "kickstart"), so lyrics, the recorder and — in a meet — every other
  * device can line up on the same timeline. Tempo (0.5–1.5) keeps the key by compensating through
  * the pitch worklet; key shift (±6 st) goes through the same worklet.
+ *
+ * Two levels, on purpose: `out` carries the track normalised to the mix target (every track the same
+ * loudness, whatever file it came from) — that is what the recording and the audience mix take; the
+ * singer's own listening level ("Backing level") sits after it on `gain`, so turning the music down in
+ * your ears never turns it down in the show.
  */
 export class BackingPlayer {
   buffer: AudioBuffer | null = null;
+  /** The loaded track's measured loudness (null until loaded). */
+  loudness: Loudness | null = null;
   private source: AudioBufferSourceNode | null = null;
   /** A cued jump not yet reached (see `cue`). */
   private pending: { src: AudioBufferSourceNode; at: number; offsetMs: number; old: AudioBufferSourceNode | null } | null = null;
+  /** The track at the mix level (normalised): tap this for a recording or a broadcast. */
+  readonly out: GainNode;
+  /** The singer's listening level — after `out`, to the speakers only. */
   readonly gain: GainNode;
+  private readonly norm: GainNode;
   private pitch: AudioWorkletNode | null = null;
   private startAt = 0; // ctx time when source.start fired
   private startOffsetMs = 0; // track position at startAt
@@ -23,29 +36,47 @@ export class BackingPlayer {
     destination: AudioNode,
     workletAvailable: boolean,
   ) {
+    this.norm = ctx.createGain();
+    this.out = ctx.createGain();
     this.gain = ctx.createGain();
     if (workletAvailable) {
       try {
         this.pitch = new AudioWorkletNode(ctx, 'sv-pitch-shifter', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
-        this.pitch.connect(this.gain);
+        this.pitch.connect(this.norm);
       } catch {
         this.pitch = null;
       }
     }
-    this.gain.connect(destination);
+    this.norm.connect(this.out).connect(this.gain).connect(destination);
   }
 
   get durationMs(): number {
     return this.buffer ? this.buffer.duration * 1000 : 0;
   }
 
-  async load(blob: Blob): Promise<AudioBuffer> {
+  /**
+   * Decode the track and measure its loudness (remembered per track id, so a track is measured once per
+   * device); `out` is then set to bring it to the mix target.
+   */
+  async load(blob: Blob, trackId?: string): Promise<AudioBuffer> {
     const data = await blob.arrayBuffer();
     this.buffer = await new Promise<AudioBuffer>((resolve, reject) => {
       const p = this.ctx.decodeAudioData(data, resolve, (e) => reject(e ?? new Error('Could not decode this audio file')));
       if (p && typeof (p as Promise<AudioBuffer>).then === 'function') (p as Promise<AudioBuffer>).then(resolve, reject);
     });
+    let loud = trackId ? cachedLoudness(trackId) : null;
+    if (!loud) {
+      loud = await bufferLoudnessAsync(this.buffer); // in a worker: the stage keeps drawing meanwhile
+      if (trackId) rememberLoudness(trackId, loud);
+    }
+    this.loudness = loud;
+    this.norm.gain.value = Math.pow(10, normalizationDb(loud.lufs, MIX_TARGETS.trackLufs) / 20);
     return this.buffer;
+  }
+
+  /** How far the loaded track is moved to sit at the mix target (dB). */
+  get normalizationDb(): number {
+    return this.loudness ? normalizationDb(this.loudness.lufs, MIX_TARGETS.trackLufs) : 0;
   }
 
   setGain(v: number): void {
@@ -82,7 +113,7 @@ export class BackingPlayer {
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;
     src.playbackRate.value = this.tempo;
-    src.connect(this.pitch ?? this.gain);
+    src.connect(this.pitch ?? this.norm);
     const when = Math.max(this.ctx.currentTime, atCtxTime);
     src.start(when, Math.max(0, offsetMs) / 1000);
     src.onended = () => {
@@ -118,7 +149,7 @@ export class BackingPlayer {
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;
     src.playbackRate.value = this.tempo;
-    src.connect(this.pitch ?? this.gain);
+    src.connect(this.pitch ?? this.norm);
     src.start(at, offset / 1000);
     src.onended = () => {
       if (this.source === src) {
@@ -217,6 +248,8 @@ export class BackingPlayer {
   dispose(): void {
     this.stop();
     this.pitch?.disconnect();
+    this.norm.disconnect();
+    this.out.disconnect();
     this.gain.disconnect();
     this.buffer = null;
   }

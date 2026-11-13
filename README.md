@@ -50,7 +50,7 @@ packages/protocol/     shared types + pure helpers (track v2, lyrics window, LRC
 services/control/      sv-control = the SVT DB API (Hono): catalog, meets, chat, kickstart clock, publishing — Node 22 or Cloudflare Workers (Durable Object)
 tools/brand/           make_brand.py (icons from the logo render), export_logo_blender.py (render SV.blend)
 tools/backgrounds/     convert.sh (jpg/mp4 → web sizes + index.json)
-tools/ci/              check-budget.mjs, screenshots.mjs (viewport matrix + solo and live-meet e2e), control-smoke.mjs
+tools/ci/              check-budget.mjs, screenshots.mjs (viewport matrix + solo and live-meet e2e), live-duet.mjs, audio-lab.mjs (the vocal chain and mix bus, measured), control-smoke.mjs
 tools/cf/              deploy.mjs — sv-control to Cloudflare Workers in one run; control-url.mjs — finds the service URL for Deploy web
 docs/                  GOOGLE_OAUTH.md, RESTORE_POINTS.md, ARCHITECTURE.md, TESTING.md
 ```
@@ -66,6 +66,7 @@ npm run typecheck
 npm run build            # apps/web/dist (+404.html, .nojekyll, version.json)
 npm run budget           # first-load gzip budget
 npm run screenshots      # Playwright walk at 320/360/390/412/820/1280 px (needs playwright)
+npm run audio-lab        # the vocal chain and mix bus rendered offline in Chromium and measured
 npm run control          # sv-control on :8787
 ```
 

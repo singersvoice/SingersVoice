@@ -30,7 +30,8 @@ export function MicStatus(props: { engine: AudioEngine | null; onChange?: () => 
   const audio = audioSettings.value;
   const ctx = props.engine?.ctx;
   const tuning = audio.params.pitchOn && (audio.params.autoStr > 0 || audio.params.octave !== 0 || audio.params.pitchSt !== 0 || audio.params.pitchCt !== 0);
-  const monitorMs = ctx ? Math.round(((ctx.baseLatency || 0.01) + ((ctx as AudioContext & { outputLatency?: number }).outputLatency || 0.02) + 0.02) * 1000) + (tuning ? 46 : 0) : 0;
+  const chainMs = ctx ? ((props.engine?.chain?.latencyFrames ?? 0) / ctx.sampleRate) * 1000 : 0;
+  const monitorMs = ctx ? Math.round(((ctx.baseLatency || 0.01) + ((ctx as AudioContext & { outputLatency?: number }).outputLatency || 0.02) + 0.02) * 1000 + chainMs) + (tuning ? 46 : 0) : 0;
   const usbMic = /usb|quadcast|yeti|wave|snowball|at2020|nt-usb|audio interface|scarlett|focusrite/i.test(info.label || '');
   return (
     <div class={`micstatus ${info.narrowband ? 'warn' : ''}`} data-mic-rate={info.sampleRate ?? ''}>

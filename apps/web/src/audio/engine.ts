@@ -22,6 +22,9 @@ export function noteName(midi: number): string {
   return `${NOTE_NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
 }
 
+/** Every AudioWorklet module the engine's context runs (the mix buses load the same files on theirs). */
+export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'dynamics.js', 'leveler.js'] as const;
+
 /** The leveller: a raw peak under this is room noise, not singing — never lifted; a gained peak under QUIET is lifted, over HOT pulled down. */
 const LEVEL_SINGING = 0.02; // −34 dBFS
 const LEVEL_QUIET = 0.125; // −18 dBFS
@@ -73,7 +76,7 @@ export class AudioEngine {
     if (!this.workletAvailable) return;
     const base = import.meta.env.BASE_URL;
     try {
-      await Promise.all([this.ctx.audioWorklet.addModule(`${base}worklets/pitch-shifter.js`), this.ctx.audioWorklet.addModule(`${base}worklets/recorder.js`), this.ctx.audioWorklet.addModule(`${base}worklets/mix-tap.js`)]);
+      await Promise.all(WORKLET_MODULES.map((m) => this.ctx.audioWorklet.addModule(`${base}worklets/${m}`)));
     } catch (e) {
       console.warn('AudioWorklet modules failed to load; falling back to plain chain', e);
       (this as { workletAvailable: boolean }).workletAvailable = false;
@@ -162,9 +165,10 @@ export class AudioEngine {
 
   /**
    * The leveller: the raw mic (no browser AGC — that chops a singing voice) is watched 10× a second;
-   * when the loudest moment of the last two seconds sits under −18 dBFS the trim rises 1 dB at a
-   * time (to +18 dB), when it goes past −3 dBFS it drops 3 dB at once (to −6 dB). Slow up, fast down:
-   * a voice is brought up to a healthy level and never clipped, with no pumping.
+   * when the loudest moment of the last two seconds is singing (over −34 dBFS raw) yet sits under
+   * −18 dBFS the trim rises 1 dB every third reading (to +12 dB); when it goes past −6 dBFS it drops
+   * 2 dB at once (to −6 dB). Slow up, fast down: a voice is brought up to a healthy level and never
+   * clipped, with no pumping — and room noise between phrases is never lifted.
    */
   private startLeveller(): void {
     this.stopLeveller();

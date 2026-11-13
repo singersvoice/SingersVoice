@@ -130,7 +130,10 @@ recording, the publisher and the other singers' recordings get is the treated vo
 **Restart, Track volume, Vocal volume.** Every singer on stage has **Restart** (the song starts over
 for everyone, cued — a fluffed first line is nobody's problem) beside Pause and Stop; the host alone
 ends the song. Under the transport, **Track volume** and **Vocal volume** move in 3 dB steps
-(−30…+30; the safety stage at the end of the bus keeps even +30 from clipping): the balance *this
+(−30…+30) on top of a mix that is already balanced — the track normalised to one loudness whatever
+file it came from, a rider on every voice — and a guard turns the sum back down when both are
+pushed, so even +30 / +30 never lives in the limiter; **Backing level in your ears** (Settings) is
+only what you hear, never what is recorded: the balance *this
 device mixes at* — what it records, what the host's device relays to
 the audience, and (in the show view) what goes out to YouTube and the portal. They are kept on the
 device until changed. *Hear myself* is a different thing — the singer's own monitor — and comes back

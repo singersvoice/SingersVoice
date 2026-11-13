@@ -44,6 +44,9 @@ class SvPitchShifterProcessor extends AudioWorkletProcessor {
     this.nsdf = new Float32Array(this.maxLag + 1);
     this.correction = 0; // semitones, smoothed
     this.targetCorrection = 0;
+    this.heldCorrection = 0; // the last voiced correction, kept through a short unvoiced gap
+    this.holdFrames = 0;
+    this.holdLength = Math.round(0.3 * sampleRate); // a consonant or a breath, not a pause
     this.voiced = false;
     this.lastHz = 0;
     this.reportCounter = 0;
@@ -170,13 +173,25 @@ class SvPitchShifterProcessor extends AudioWorkletProcessor {
 
     if (strength > 0) {
       this._track(input[0], frames);
+      // The correction stays through a short unvoiced gap (a "t", a breath): the voice does not fall
+      // back to its untuned pitch on every consonant and jump back on the next vowel.
+      if (this.voiced) {
+        this.heldCorrection = this.targetCorrection;
+        this.holdFrames = this.holdLength;
+      } else if (this.holdFrames > 0) {
+        this.holdFrames -= frames;
+      } else {
+        this.heldCorrection = 0;
+      }
       // One-pole glide toward the target correction; speed 1 = instant.
-      const target = this.voiced ? this.targetCorrection * strength : 0;
+      const target = this.heldCorrection * strength;
       const tc = 0.004 + (1 - speed) * 0.25; // seconds
       const alpha = speed >= 0.999 ? 1 : 1 - Math.exp(-frames / (tc * sampleRate));
       this.correction += (target - this.correction) * alpha;
     } else {
       this.correction = 0;
+      this.heldCorrection = 0;
+      this.holdFrames = 0;
     }
 
     const semitones = manual + this.correction;
@@ -196,6 +211,18 @@ class SvPitchShifterProcessor extends AudioWorkletProcessor {
       let w = this.writeIndex[ch];
       let phase = this.phase[ch];
       let wet = this.wet;
+
+      if (wet === 0 && targetWet === 0) {
+        // Neutral: the voice passes straight through; the ring still fills so a correction can start at once.
+        for (let i = 0; i < frames; i++) {
+          const dry = source[i];
+          data[w] = dry;
+          dest[i] = dry;
+          w = (w + 1) % win;
+        }
+        this.writeIndex[ch] = w;
+        continue;
+      }
 
       for (let i = 0; i < frames; i++) {
         const dry = source[i];

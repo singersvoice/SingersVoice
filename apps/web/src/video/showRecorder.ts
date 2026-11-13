@@ -14,45 +14,17 @@
 import type { BackgroundItem, MixBatch } from '@singersvoice/protocol';
 import type { AudioEngine } from '../audio/engine.ts';
 import { MixBroadcaster } from '../audio/mixBroadcast.ts';
+import { MixBus } from '../audio/mixBus.ts';
 import { StageCompositor, type StagePerformer } from './stage.ts';
+
+export { dbToGain, MIX_DB_MAX, MIX_DB_MIN } from '../audio/gain.ts';
+export { safetyStage } from '../audio/dynamics.ts';
 
 export const SHOW_WIDTH = 1280;
 export const SHOW_HEIGHT = 720;
 export const SHOW_FPS = 24;
 /** How far behind the shared clock the other singers' video and vocals arrive: the local sources are held back to meet them. */
 export const VOCAL_LAG_MS = 250;
-/** The mix at its default balance: the track and the voices as they come (the singer's Track / Vocal controls move them). */
-export const VOCAL_IN_MIX = 1;
-export const BACKING_IN_MIX = 1;
-export const MIX_DB_MIN = -30;
-export const MIX_DB_MAX = 30;
-export const dbToGain = (db: number): number => Math.pow(10, Math.max(MIX_DB_MIN, Math.min(MIX_DB_MAX, db)) / 20);
-
-/**
- * The end of every mix bus: a brick-wall stage — a hard-kneed limiter and a soft clipper behind it —
- * so nothing above full scale ever reaches an encoder (a clipped encoder crackles).
- */
-export function safetyStage(ctx: BaseAudioContext): { input: AudioNode; output: AudioNode; limiter: DynamicsCompressorNode } {
-  const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -3;
-  limiter.knee.value = 0;
-  limiter.ratio.value = 20;
-  limiter.attack.value = 0.001;
-  limiter.release.value = 0.1;
-  const clip = ctx.createWaveShaper();
-  const n = 4096;
-  const curve = new Float32Array(n);
-  const knee = 0.7; // straight line up to here (untouched), a smooth bend above, never past ±1
-  for (let i = 0; i < n; i++) {
-    const x = (i / (n - 1)) * 2 - 1;
-    const a = Math.abs(x);
-    curve[i] = a <= knee ? x : Math.sign(x) * (knee + (1 - knee) * Math.tanh((a - knee) / (1 - knee)));
-  }
-  clip.curve = curve;
-  clip.oversample = '2x';
-  limiter.connect(clip);
-  return { input: limiter, output: clip, limiter };
-}
 
 export interface ShowRecording {
   video: Blob;
@@ -134,8 +106,8 @@ export class ShowRecorder {
   private bgImage: HTMLImageElement | null = null;
   private bgVideo: HTMLVideoElement | null = null;
   /** Remote vocals: each one feeds the mix (and a muted element, which some browsers need before a remote stream flows into WebAudio). */
-  private vocals = new Map<string, { stream: MediaStream; el: HTMLAudioElement; node: MediaStreamAudioSourceNode | null; level?: GainNode }>();
-  private audio: { ctx: AudioContext; dest: MediaStreamAudioDestinationNode; local: DelayNode; bus: GainNode; taps: AudioNode[]; backingLevel: GainNode; vocalLevel: GainNode; limiter: DynamicsCompressorNode } | null = null;
+  private vocals = new Map<string, { stream: MediaStream; el: HTMLAudioElement; node: MediaStreamAudioSourceNode | null }>();
+  private audio: { ctx: AudioContext; dest: MediaStreamAudioDestinationNode; bus: MixBus; localTrack: DelayNode; localVocal: DelayNode; taps: { node: AudioNode; to: AudioNode }[] } | null = null;
   /** The host's device: the mix goes out to the audience in one-second batches through this (null elsewhere). */
   broadcast: ((batch: MixBatch) => Promise<void>) | null = null;
   private broadcaster: MixBroadcaster | null = null;
@@ -222,6 +194,7 @@ export class ShowRecorder {
     const had = this.vocals.get(id);
     if (had && had.stream === stream) return;
     if (had) {
+      this.audio?.bus.removeVocal(id);
       had.node?.disconnect();
       had.el.srcObject = null;
       had.el.remove();
@@ -237,17 +210,14 @@ export class ShowRecorder {
     void el.play().catch(() => undefined);
     const entry = { stream, el, node: null as MediaStreamAudioSourceNode | null };
     this.vocals.set(id, entry);
-    if (this.audio) this.plugVocal(entry);
+    if (this.audio) this.plugVocal(id, entry);
   }
 
-  private plugVocal(v: { stream: MediaStream; node: MediaStreamAudioSourceNode | null; level?: GainNode }): void {
+  private plugVocal(id: string, v: { stream: MediaStream; node: MediaStreamAudioSourceNode | null }): void {
     if (!this.audio || v.node) return;
     try {
       v.node = this.audio.ctx.createMediaStreamSource(v.stream);
-      const level = this.audio.ctx.createGain();
-      level.gain.value = VOCAL_IN_MIX * dbToGain(this.balance.vocalDb);
-      v.node.connect(level).connect(this.audio.bus);
-      v.level = level;
+      this.audio.bus.addVocal(id, v.node);
     } catch {
       v.node = null;
     }
@@ -358,17 +328,12 @@ export class ShowRecorder {
     this.compositor.stop();
   }
 
-  // ---- the mix: backing track + own vocal (held back by the lag) + every other singer's vocal, through a limiter ----
+  // ---- the mix: backing track + own vocal (held back by the lag) + every other singer's vocal, through the shared bus ----
 
   /** The balance this device mixes at (dB) — the singer's Track / Vocal controls; applied live. */
   setBalance(trackDb: number, vocalDb: number): void {
     this.balance = { trackDb, vocalDb };
-    const a = this.audio;
-    if (!a) return;
-    const t = a.ctx.currentTime;
-    a.backingLevel.gain.setTargetAtTime(BACKING_IN_MIX * dbToGain(trackDb), t, 0.03);
-    a.vocalLevel.gain.setTargetAtTime(VOCAL_IN_MIX * dbToGain(vocalDb), t, 0.03);
-    for (const v of this.vocals.values()) v.level?.gain.setTargetAtTime(VOCAL_IN_MIX * dbToGain(vocalDb), t, 0.03);
+    this.audio?.bus.setBalance(trackDb, vocalDb);
   }
   private balance = { trackDb: 0, vocalDb: 0 };
 
@@ -376,41 +341,35 @@ export class ShowRecorder {
     if (this.audio) return;
     const ctx = engine.ctx;
     const dest = ctx.createMediaStreamDestination();
-    const safety = safetyStage(ctx);
-    const limiter = safety.limiter;
-    const bus = ctx.createGain();
-    bus.gain.value = 0.85; // headroom: several vocals plus the track sum before the limiter
-    bus.connect(safety.input);
-    safety.output.connect(dest);
-    const local = ctx.createDelay(1);
-    local.delayTime.value = this.lagMs / 1000;
-    local.connect(bus);
-    const taps: AudioNode[] = [];
-    // The voice sits on top of the track: the backing a little under, every vocal a little up.
-    const backingLevel = ctx.createGain();
-    backingLevel.gain.value = BACKING_IN_MIX * dbToGain(this.balance.trackDb);
-    backingLevel.connect(local);
-    const vocalLevel = ctx.createGain();
-    vocalLevel.gain.value = VOCAL_IN_MIX * dbToGain(this.balance.vocalDb);
-    vocalLevel.connect(local);
+    const bus = new MixBus(ctx, engine.workletAvailable);
+    bus.setBalance(this.balance.trackDb, this.balance.vocalDb);
+    bus.output.connect(dest);
+    const lagS = this.lagMs / 1000;
+    // This device's own sources wait for the others; the track also waits for the vocal chain's own latency.
+    const localTrack = ctx.createDelay(1);
+    localTrack.delayTime.value = lagS + (engine.chain?.latencyFrames ?? 0) / ctx.sampleRate;
+    localTrack.connect(bus.backingIn);
+    const localVocal = ctx.createDelay(1);
+    localVocal.delayTime.value = lagS;
+    const taps: { node: AudioNode; to: AudioNode }[] = [];
     const player = engine.player;
     if (player) {
-      player.gain.connect(backingLevel);
-      taps.push(player.gain);
+      player.out.connect(localTrack); // the track at its mix level — never the singer's listening level
+      taps.push({ node: player.out, to: localTrack });
     }
     const vocal = engine.recorder?.node ?? engine.chain?.output ?? null;
     if (vocal) {
-      vocal.connect(vocalLevel);
-      taps.push(vocal);
+      vocal.connect(localVocal);
+      taps.push({ node: vocal, to: localVocal });
+      bus.addVocal('me', localVocal);
     }
-    this.audio = { ctx, dest, local, bus, taps, backingLevel, vocalLevel, limiter };
-    for (const v of this.vocals.values()) this.plugVocal(v);
+    this.audio = { ctx, dest, bus, localTrack, localVocal, taps };
+    for (const [id, v] of this.vocals) this.plugVocal(id, v);
     // The audience hears this very mix: the host's device sends it out a second at a time (WebCodecs/Opus).
     if (this.broadcast) {
       const send = this.broadcast;
-      const lagS = this.lagMs / 1000;
       this.broadcaster = new MixBroadcaster(ctx, send, (t) => engine.player?.positionAt(t - lagS) ?? 0);
-      this.broadcaster.start(safety.output);
+      this.broadcaster.start(bus.output);
     }
   }
 
@@ -420,22 +379,19 @@ export class ShowRecorder {
     const a = this.audio;
     if (!a) return;
     for (const t of a.taps) {
-      for (const target of [a.backingLevel, a.vocalLevel]) {
-        try {
-          t.disconnect(target);
-        } catch {
-          /* not connected there */
-        }
+      try {
+        t.node.disconnect(t.to);
+      } catch {
+        /* not connected there */
       }
     }
-    a.backingLevel.disconnect();
-    a.vocalLevel.disconnect();
     for (const v of this.vocals.values()) {
       v.node?.disconnect();
       v.node = null;
     }
-    a.local.disconnect();
-    a.bus.disconnect();
+    a.localTrack.disconnect();
+    a.localVocal.disconnect();
+    a.bus.dispose();
     this.audio = null;
   }
 
