@@ -8,6 +8,7 @@ import {
   MAX_PERFORMERS,
   meetIsOpen,
   newJoinCode,
+  localStamp,
   performanceFolderName,
   performanceVideoName,
   tempExpiry,
@@ -47,15 +48,22 @@ describe('performance helpers', () => {
     const from = new Date('2026-01-01T00:00:00Z');
     expect(tempExpiry(from)).toBe('2026-01-08T00:00:00.000Z');
   });
-  it('folder name is sortable and human readable', () => {
-    expect(performanceFolderName({ createdAt: '2026-01-02T03:04:05.000Z', trackTitle: 'AA', performanceId: 'perf-abc123' })).toBe(
-      '2026-01-02 0304 AA (abc123)',
+  it('folder name is sortable, in local time, and names the meet by title and id', () => {
+    const at = '2026-01-02T03:04:05.000Z';
+    const stamp = localStamp(at);
+    expect(stamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{4}$/);
+    expect(performanceFolderName({ createdAt: at, trackTitle: 'AA', performanceId: 'perf-abc123' })).toBe(`${stamp} AA (abc123)`);
+    expect(performanceFolderName({ createdAt: at, trackTitle: 'Ammo', performanceId: 'perf-abc123', meetId: 'meet-mwe8q644-onrv6m', meetTitle: 'Friday Meet' })).toBe(
+      `${stamp} Ammo · Friday Meet [mwe8q644-onrv6m] (abc123)`,
     );
+    expect(localStamp('not a date')).toBe('not a date');
   });
-  it('the saved show is named for the people a link reaches: song, meet, date', () => {
-    expect(performanceVideoName({ createdAt: '2026-11-12T03:04:05.000Z', trackTitle: 'Ammo', meetTitle: 'Friday Meet' }, 'mp4')).toBe('Ammo · Friday Meet · 2026-11-12.mp4');
-    expect(performanceVideoName({ createdAt: '2026-11-12T03:04:05.000Z', trackTitle: 'A/B: "C"?', meetTitle: null }, 'webm')).toBe('A B C · 2026-11-12.webm');
-    expect(performanceVideoName({ createdAt: '2026-11-12T03:04:05.000Z', trackTitle: '   ' }, 'mp4')).toBe('Performance · 2026-11-12.mp4');
+  it('the saved show is named for the people a link reaches: song, meet (with id), moment', () => {
+    const at = '2026-11-12T03:04:05.000Z';
+    const stamp = localStamp(at);
+    expect(performanceVideoName({ createdAt: at, trackTitle: 'Ammo', meetId: 'meet-mwe8q644-onrv6m', meetTitle: 'Friday Meet' }, 'mp4')).toBe(`Ammo · Friday Meet [mwe8q644-onrv6m] · ${stamp}.mp4`);
+    expect(performanceVideoName({ createdAt: at, trackTitle: 'A/B: "C"?', meetTitle: null }, 'webm')).toBe(`A B C · ${stamp}.webm`);
+    expect(performanceVideoName({ createdAt: at, trackTitle: '   ' }, 'mp4')).toBe(`Performance · ${stamp}.mp4`);
   });
 });
 

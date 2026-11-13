@@ -84,6 +84,75 @@ export function PublishingPortal() {
 
 // ---------------- Destinations ----------------
 
+/** An ingest URL the server hands out as a hint only (Instagram's has a "…" in it) is not a URL yet. */
+const usableIngest = (u: string): string => (u && !u.includes('…') ? u : '');
+const looksLikeIngest = (u: string): boolean => /^rtmps?:\/\/\S+/i.test(u.trim());
+
+/** Save a platform's ingest URL / stream key (an empty key keeps the saved one) and its enabled flag. */
+async function saveDestination(kind: DestinationKind, patch: { enabled: boolean; ingestUrl: string; streamKey?: string }): Promise<Destination> {
+  const r = await api.put('PUT /publishing/destinations/:kind', `/publishing/destinations/${kind}`, {
+    enabled: patch.enabled,
+    ingestUrl: patch.ingestUrl.trim(),
+    ...(patch.streamKey?.trim() ? { streamKey: patch.streamKey.trim() } : {}),
+  });
+  return r.destination;
+}
+
+/**
+ * The stream key setup of one platform, inline: ingest URL (the platform's default filled in) and the
+ * key (never shown again once saved — only its last 4 characters). Save enables the platform.
+ */
+function DestinationSetup(props: { dest: Destination; onSaved: (d: Destination) => void; onCancel?: () => void }) {
+  const def = DESTINATIONS.find((x) => x.kind === props.dest.kind)!;
+  const [ingestUrl, setIngestUrl] = useState(() => usableIngest(props.dest.ingestUrl) || usableIngest(def.ingestHint));
+  const [streamKey, setStreamKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const canSave = looksLikeIngest(ingestUrl) && (streamKey.trim().length > 0 || Boolean(props.dest.keyHint));
+  const save = async () => {
+    if (!looksLikeIngest(ingestUrl)) return toast('The ingest URL must start with rtmps:// (or rtmp://)', 'warn');
+    if (!streamKey.trim() && !props.dest.keyHint) return toast(`Paste the ${def.label} stream key first`, 'warn');
+    setBusy(true);
+    try {
+      const d = await saveDestination(props.dest.kind, { enabled: true, ingestUrl, streamKey });
+      toast(`${def.label} is set up — key ends with ${d.keyHint}`, 'ok');
+      props.onSaved(d);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : errorText(e), 'error', 7000);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div class="stack" data-dest-setup={props.dest.kind} style="padding:8px 0 4px 0">
+      <Field label="Ingest URL (RTMPS)">
+        <input class="input mono" value={ingestUrl} placeholder={def.ingestHint} aria-label={`${def.label} ingest URL`} autocomplete="off" spellcheck={false} onInput={(ev) => setIngestUrl((ev.currentTarget as HTMLInputElement).value)} />
+      </Field>
+      <Field label={def.keyLabel} hint={props.dest.keyHint ? `Saved key ends with ${props.dest.keyHint} — leave empty to keep it` : 'Stored encrypted on the service; never shown again'}>
+        <input
+          class="input mono"
+          type="password"
+          autocomplete="off"
+          value={streamKey}
+          placeholder={props.dest.keyHint ? 'Leave empty to keep the saved key' : 'Paste the stream key'}
+          aria-label={`${def.label} stream key`}
+          onInput={(ev) => setStreamKey((ev.currentTarget as HTMLInputElement).value)}
+          onKeyDown={(ev) => ev.key === 'Enter' && canSave && void save()}
+        />
+      </Field>
+      <div class="row">
+        <button class="btn accent" disabled={busy || !canSave} onClick={() => void save()}>
+          {busy ? <Spinner /> : <IcCheck />} {props.dest.enabled ? 'Save' : 'Save & enable'}
+        </button>
+        {props.onCancel && (
+          <button class="btn ghost" disabled={busy} onClick={props.onCancel}>
+            Cancel
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Destinations() {
   const [list, setList] = useState<Destination[] | null>(null);
   const [edit, setEdit] = useState<Record<string, { ingestUrl: string; streamKey: string }>>({});
@@ -102,15 +171,13 @@ function Destinations() {
   const save = async (d: Destination, enabled: boolean) => {
     setBusy(d.kind);
     try {
-      const e = edit[d.kind] ?? { ingestUrl: d.ingestUrl, streamKey: '' };
-      const r = await api.put('PUT /publishing/destinations/:kind', `/publishing/destinations/${d.kind}`, {
-        enabled,
-        ingestUrl: e.ingestUrl,
-        ...(e.streamKey ? { streamKey: e.streamKey } : {}),
-      });
-      setList((l) => (l ?? []).map((x) => (x.kind === d.kind ? r.destination : x)));
-      setEdit((m) => ({ ...m, [d.kind]: { ingestUrl: r.destination.ingestUrl, streamKey: '' } }));
-      toast(`${d.label} ${enabled ? 'enabled' : 'saved'}`, 'ok');
+      const e = edit[d.kind] ?? { ingestUrl: usableIngest(d.ingestUrl), streamKey: '' };
+      const def = DESTINATIONS.find((x) => x.kind === d.kind)!;
+      if (def.needsKey && enabled && !looksLikeIngest(e.ingestUrl)) throw new ApiError(400, 'bad_ingest', 'The ingest URL must start with rtmps:// (or rtmp://)');
+      const destination = await saveDestination(d.kind, { enabled, ingestUrl: e.ingestUrl, streamKey: e.streamKey });
+      setList((l) => (l ?? []).map((x) => (x.kind === d.kind ? destination : x)));
+      setEdit((m) => ({ ...m, [d.kind]: { ingestUrl: destination.ingestUrl, streamKey: '' } }));
+      toast(enabled !== d.enabled ? `${d.label} ${enabled ? 'enabled' : 'disabled'}` : `${d.label} saved`, 'ok');
     } catch (e) {
       toast(e instanceof ApiError ? e.message : errorText(e), 'error', 7000);
     } finally {
@@ -129,9 +196,9 @@ function Destinations() {
       <p class="muted small">Stream keys are stored encrypted on the service and never shown again (only the last 4 characters). Each meet can go to any enabled destinations at once.</p>
       {list.map((d) => {
         const def = DESTINATIONS.find((x) => x.kind === d.kind)!;
-        const e = edit[d.kind] ?? { ingestUrl: d.ingestUrl, streamKey: '' };
+        const e = edit[d.kind] ?? { ingestUrl: usableIngest(d.ingestUrl), streamKey: '' };
         return (
-          <section class="card stack" key={d.kind}>
+          <section class="card stack" key={d.kind} data-destination={d.kind}>
             <div class="row between">
               <h3>{d.label}</h3>
               <span class={`chip ${d.enabled ? 'ok' : ''}`}>{d.enabled ? 'enabled' : 'off'}</span>
@@ -139,10 +206,10 @@ function Destinations() {
             {def.needsKey ? (
               <>
                 <Field label="Ingest URL (RTMPS)">
-                  <input class="input mono" value={e.ingestUrl} onInput={(ev) => setEdit((m) => ({ ...m, [d.kind]: { ...e, ingestUrl: (ev.currentTarget as HTMLInputElement).value } }))} placeholder={def.ingestHint} />
+                  <input class="input mono" value={e.ingestUrl} aria-label={`${d.label} ingest URL`} autocomplete="off" spellcheck={false} onInput={(ev) => setEdit((m) => ({ ...m, [d.kind]: { ...e, ingestUrl: (ev.currentTarget as HTMLInputElement).value } }))} placeholder={def.ingestHint} />
                 </Field>
                 <Field label={def.keyLabel} hint={d.keyHint ? `Saved key ends with ${d.keyHint}` : 'No key saved yet'}>
-                  <input class="input mono" type="password" autocomplete="off" value={e.streamKey} onInput={(ev) => setEdit((m) => ({ ...m, [d.kind]: { ...e, streamKey: (ev.currentTarget as HTMLInputElement).value } }))} placeholder={d.keyHint ? 'Leave empty to keep the saved key' : 'Paste the stream key'} />
+                  <input class="input mono" type="password" autocomplete="off" value={e.streamKey} aria-label={`${d.label} stream key`} onInput={(ev) => setEdit((m) => ({ ...m, [d.kind]: { ...e, streamKey: (ev.currentTarget as HTMLInputElement).value } }))} placeholder={d.keyHint ? 'Leave empty to keep the saved key' : 'Paste the stream key'} />
                 </Field>
               </>
             ) : (
@@ -172,6 +239,8 @@ function Publish(props: { onDone: () => void }) {
   const [link, setLink] = useState('');
   const [resolving, setResolving] = useState(false);
   const [picked, setPicked] = useState<DestinationKind[] | null>(null);
+  /** The platform whose stream key is being set up inline (switched on without a key yet). */
+  const [setup, setSetup] = useState<DestinationKind | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
@@ -207,7 +276,6 @@ function Publish(props: { onDone: () => void }) {
     }
   };
 
-  const enabled = (dests ?? []).filter((d) => d.enabled).map((d) => d.kind);
   const selected = meets?.find((m) => m.meetId === meetId) ?? null;
   const chosen = picked ?? [];
   const showUrl = (id: string, job?: PublishJob) => `/publishing/show/${encodeURIComponent(id)}?dest=${encodeURIComponent(chosen.join(','))}${job ? `&job=${encodeURIComponent(job.jobId)}` : ''}`;
@@ -256,19 +324,51 @@ function Publish(props: { onDone: () => void }) {
       </section>
       <section class="card stack">
         <h3>2 · Where</h3>
+        <p class="muted small">Switch on every place this meet should go. A platform that has no stream key yet asks for it right here (once — it stays set for the next meets).</p>
         {dests === null ? (
           <Spinner />
         ) : (
-          DESTINATIONS.map((d) => (
-            <Switch
-              key={d.kind}
-              checked={chosen.includes(d.kind)}
-              disabled={!enabled.includes(d.kind)}
-              onChange={(v) => setPicked((p) => (v ? [...(p ?? []), d.kind] : (p ?? []).filter((k) => k !== d.kind)))}
-              label={d.label}
-              hint={enabled.includes(d.kind) ? undefined : 'Enable it under Destinations first'}
-            />
-          ))
+          DESTINATIONS.map((def) => {
+            const d = dests.find((x) => x.kind === def.kind) ?? { kind: def.kind, label: def.label, enabled: !def.needsKey, ingestUrl: '', keyHint: '', updatedAt: '' };
+            const ready = !def.needsKey || d.enabled;
+            const on = chosen.includes(def.kind);
+            const open = setup === def.kind;
+            return (
+              <div class="stack" key={def.kind} data-publish-dest={def.kind} data-ready={ready ? '1' : '0'} style="gap:2px">
+                <div class="row between">
+                  <Switch
+                    checked={on || open}
+                    onChange={(v) => {
+                      if (v && !ready) {
+                        setSetup(def.kind); // no key yet: set it up on the spot; the switch comes on when it is saved
+                        return;
+                      }
+                      setPicked((p) => (v ? [...(p ?? []).filter((k) => k !== def.kind), def.kind] : (p ?? []).filter((k) => k !== def.kind)));
+                      if (!v && open) setSetup(null);
+                    }}
+                    label={def.label}
+                    hint={!def.needsKey ? undefined : ready ? `Stream key ends with ${d.keyHint || '…'}` : 'Needs its stream key — switch it on to set it up'}
+                  />
+                  {def.needsKey && ready && !open && (
+                    <button class="btn ghost sm" onClick={() => setSetup(def.kind)}>
+                      Change key
+                    </button>
+                  )}
+                </div>
+                {open && (
+                  <DestinationSetup
+                    dest={d}
+                    onSaved={(saved) => {
+                      setDests((l) => (l ?? []).map((x) => (x.kind === saved.kind ? saved : x)));
+                      setPicked((p) => [...(p ?? []).filter((k) => k !== saved.kind), saved.kind]);
+                      setSetup(null);
+                    }}
+                    onCancel={() => setSetup(null)}
+                  />
+                )}
+              </div>
+            );
+          })
         )}
       </section>
       <section class="card stack">

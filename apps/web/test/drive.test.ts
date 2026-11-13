@@ -17,6 +17,7 @@ interface FakeFile {
   bytes: Uint8Array | null;
   trashed: boolean;
   modifiedTime: string;
+  createdTime: string;
   permissions: { id: string; type: string; role: string }[];
 }
 
@@ -34,6 +35,7 @@ class FakeDrive {
       appProperties: f.appProperties,
       trashed: this.isTrashed(f),
       modifiedTime: f.modifiedTime,
+      createdTime: f.createdTime,
       size: f.bytes ? String(f.bytes.length) : undefined,
       md5Checksum: f.bytes ? md5Hex(f.bytes) : undefined,
       webViewLink: `https://drive.google.com/file/d/${f.id}/view`,
@@ -50,10 +52,16 @@ class FakeDrive {
       bytes,
       trashed: false,
       modifiedTime: new Date().toISOString(),
+      createdTime: new Date(1_700_000_000_000 + this.seq * 1000).toISOString(), // creation order is the age order
       permissions: [],
     };
     this.files.set(f.id, f);
     return f;
+  }
+
+  /** A folder made outside the provider (another device, an older build) — for the duplicate-folder tests. */
+  addFolder(name: string, parentId: string | null): FakeFile {
+    return this.create({ name, mimeType: 'application/vnd.google-apps.folder', parents: parentId ? [parentId] : [], appProperties: {} }, null);
   }
 
   /** Drive reports a file as trashed when any ancestor folder is. */
@@ -147,6 +155,11 @@ class FakeDrive {
         const body = JSON.parse(String(init.body)) as Partial<FakeFile>;
         if (body.name) f.name = body.name;
         if (body.appProperties) f.appProperties = body.appProperties;
+        if (typeof body.trashed === 'boolean') f.trashed = body.trashed;
+        const add = url.searchParams.get('addParents');
+        const remove = url.searchParams.get('removeParents');
+        if (remove) f.parents = f.parents.filter((x) => x !== remove);
+        if (add && !f.parents.includes(add)) f.parents.push(add);
         return this.json(this.meta(f));
       }
       if (method === 'DELETE') {
@@ -252,5 +265,65 @@ describe('DriveProvider (fake Drive v3)', () => {
     expect(await p.listTracks()).toEqual([]);
     expect(await p.getTrack('trk-test-1')).toBeNull();
     expect(await p.quota()).toEqual({ used: 123, total: 1000 });
+  });
+
+  const folders = (name: string) => [...drive.files.values()].filter((f) => f.mimeType === 'application/vnd.google-apps.folder' && f.name === name && !f.trashed);
+
+  it('many callers asking for the tree at once make every folder exactly once', async () => {
+    const p = new DriveProvider(() => token, 'sub1');
+    await Promise.all([p.ready(), p.ready(), p.listTracks(), p.ready()]);
+    for (const name of ['SingersVoice', 'Tracks', 'Performances', 'Live', 'Offline', 'Temp']) expect(folders(name)).toHaveLength(1);
+    expect(drive.calls.filter((c) => c.startsWith('POST /drive/v3/files')).length).toBe(9); // root + 8 folders, no repeats
+  });
+
+  it('folds duplicate folders (made before the guard, or by another device) into the oldest, files and all', async () => {
+    // Drive as the user found it: one root, one Performances, three "Live" folders each holding a take.
+    const root = drive.addFolder('SingersVoice', null);
+    const perfs = drive.addFolder('Performances', root.id);
+    const live = [drive.addFolder('Live', perfs.id), drive.addFolder('Live', perfs.id), drive.addFolder('Live', perfs.id)];
+    const takes = live.map((l, i) => drive.addFolder(`2026-11-12 20${i} Song (abc${i})`, l.id));
+    // This device had cached the newest duplicate as its Live folder (and had not tidied yet).
+    store.set('sv.drive.tree.sub1', JSON.stringify({ root: root.id, performances: perfs.id, performancesLive: live[2]!.id }));
+
+    const p = new DriveProvider(() => token, 'sub1');
+    await p.ready();
+    expect(folders('Live')).toHaveLength(1);
+    expect(folders('Live')[0]!.id).toBe(live[0]!.id); // the oldest stays
+    for (const t of takes) expect(drive.files.get(t.id)!.parents).toEqual([live[0]!.id]); // every take moved into it
+    expect(live.slice(1).every((l) => drive.files.get(l.id)!.trashed)).toBe(true); // the emptied duplicates are in the trash
+    const tree = JSON.parse(store.get('sv.drive.tree.sub1')!) as Record<string, string>;
+    expect(tree.performancesLive).toBe(live[0]!.id); // the cache now points at the kept folder
+    expect(store.get('sv.drive.tree.sub1.tidy')).toBe('1');
+
+    // A second start trusts the cache (one metadata call, no listing) and changes nothing.
+    const before = drive.calls.length;
+    const q = new DriveProvider(() => token, 'sub1');
+    await q.ready();
+    expect(drive.calls.slice(before)).toEqual([`GET /drive/v3/files/${root.id}?fields=id,trashed`]);
+  });
+
+  it('names a meet take\'s folder and show file with the meet id and the moment', async () => {
+    const p = new DriveProvider(() => token, 'sub1');
+    const manifest = {
+      performanceId: 'perf-xyz123',
+      trackId: 'trk-test-1',
+      trackTitle: 'Ammo',
+      state: 'kept',
+      mode: 'live',
+      kind: 'show',
+      meetId: 'meet-mwe8q644-onrv6m',
+      meetTitle: 'Friday Meet',
+      singers: [],
+      durationMs: 1000,
+      createdAt: '2026-11-12T03:04:05.000Z',
+      expiresAt: null,
+      files: [{ name: 'vocal.wav', mimeType: 'audio/wav', size: 1, sha256: '' }, { name: 'video.mp4', mimeType: 'video/mp4', size: 1, sha256: '' }],
+    } as never;
+    const saved = await p.savePerformance(manifest, { vocal: new Blob([new Uint8Array([1])], { type: 'audio/wav' }), video: new Blob([new Uint8Array([2])], { type: 'video/mp4' }) });
+    const folder = drive.files.get(saved.ref)!;
+    expect(folder.name).toMatch(/^\d{4}-\d{2}-\d{2} \d{4} Ammo · Friday Meet \[mwe8q644-onrv6m\] \(xyz123\)$/);
+    expect(folder.parents[0]).toBe(folders('Live')[0]!.id);
+    const video = [...drive.files.values()].find((f) => f.appProperties.svType === 'performanceVideo')!;
+    expect(video.name).toMatch(/^Ammo · Friday Meet \[mwe8q644-onrv6m\] · \d{4}-\d{2}-\d{2} \d{4}\.mp4$/);
   });
 });

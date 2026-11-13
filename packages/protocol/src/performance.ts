@@ -77,18 +77,32 @@ export function tempExpiry(from = new Date()): string {
   return new Date(from.getTime() + TEMP_RETENTION_DAYS * 86400000).toISOString();
 }
 
-export function performanceFolderName(m: Pick<PerformanceManifest, 'createdAt' | 'trackTitle' | 'performanceId'>): string {
-  const d = m.createdAt.slice(0, 10);
-  const t = m.createdAt.slice(11, 16).replace(':', '');
-  return `${d} ${t} ${m.trackTitle} (${m.performanceId.slice(-6)})`;
+const cleanName = (s: string): string => s.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim();
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/** "2026-11-12 2047" — the moment in the saving device's own time zone (the manifest keeps the ISO instant). */
+export function localStamp(iso: string, now = new Date(iso)): string {
+  if (Number.isNaN(now.getTime())) return iso.slice(0, 16).replace('T', ' ').replace(':', '');
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}${pad2(now.getMinutes())}`;
+}
+
+/**
+ * A take's folder in Drive, sortable by time and readable in a file list:
+ * "2026-11-12 2047 Ammo · Friday Meet [mwe8q644-onrv6m] (abc123)" for a meet song (the meet's title and
+ * id, so every take of that meet is found together), "2026-11-12 2047 Ammo (abc123)" for a Studio take.
+ */
+export function performanceFolderName(m: Pick<PerformanceManifest, 'createdAt' | 'trackTitle' | 'performanceId'> & { meetId?: string | null; meetTitle?: string | null }): string {
+  const meet = m.meetId ? ` · ${cleanName(m.meetTitle || 'meet')} [${m.meetId.replace(/^meet-/, '')}]` : '';
+  return `${localStamp(m.createdAt)} ${cleanName(m.trackTitle) || 'Performance'}${meet} (${m.performanceId.slice(-6)})`;
 }
 
 /**
  * The saved show's file name as the people a Drive link reaches will see it: the song, the meet
- * (when it was one) and the date — "Ammo · Friday Meet · 2026-11-12.mp4" rather than "video.mp4".
+ * (with its id, when it was one) and the moment — "Ammo · Friday Meet [mwe8q644-onrv6m] · 2026-11-12 2047.mp4"
+ * rather than "video.mp4".
  */
-export function performanceVideoName(m: Pick<PerformanceManifest, 'createdAt' | 'trackTitle'> & { meetTitle?: string | null }, ext: string): string {
-  const clean = (s: string) => s.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const parts = [clean(m.trackTitle) || 'Performance', m.meetTitle ? clean(m.meetTitle) : '', m.createdAt.slice(0, 10)].filter(Boolean);
+export function performanceVideoName(m: Pick<PerformanceManifest, 'createdAt' | 'trackTitle'> & { meetId?: string | null; meetTitle?: string | null }, ext: string): string {
+  const meet = m.meetId ? `${cleanName(m.meetTitle || 'meet')} [${m.meetId.replace(/^meet-/, '')}]` : m.meetTitle ? cleanName(m.meetTitle) : '';
+  const parts = [cleanName(m.trackTitle) || 'Performance', meet, localStamp(m.createdAt)].filter(Boolean);
   return `${parts.join(' · ')}.${ext}`;
 }

@@ -147,11 +147,18 @@ Everything you ever sang, by date and name:
 | **Your takes** | Your own takes: every take of a meet song (kept by itself) and Studio takes (Temp for 7 days unless kept). Open one to play it, keep it, download it (vocal WAV, show video, manifest), **Share link** (shares the Drive folder anyone-with-the-link and copies the video's link), or delete it. |
 | **Saving now** | Whatever the background saver is still on (with Retry when something is stuck). |
 
-In Drive: `SingersVoice/Performances/Live/<date time song (id)>/manifest.json + vocal.wav +
-<song · meet · date>.mp4` (the show — **MP4** with H.264 and AAC on Windows, Mac and iOS, H.264 and
-Opus on Linux Chrome, WebM only on Firefox; the sound at 192 kbps; named so the people a link
-reaches see the song and the meet, and Drive's own player opens it for anyone with the link),
-`Performances/Offline/…` for Studio takes, `Temp/…` until kept. The Studio's own lists (*Sing a
+In Drive: `SingersVoice/Performances/Live/<date time song · meet [meet id] (id)>/manifest.json +
+vocal.wav + <song · meet [meet id] · date time>.mp4` — e.g. `2026-11-12 2047 Ammo · Friday Meet
+[mwe8q644-onrv6m] (abc123)/Ammo · Friday Meet [mwe8q644-onrv6m] · 2026-11-12 2047.mp4` (local
+time; the meet's title and id so every take of a meet is found together; the show is **MP4** with
+H.264 and AAC on Windows, Mac and iOS, H.264 and Opus on Linux Chrome, WebM only on Firefox; the
+sound at 192 kbps; Drive's own player opens it for anyone with the link), `Performances/Offline/…`
+for Studio takes (`<date time song (id)>`), `Temp/…` until kept. There is exactly one `Live`, one
+`Offline`, one of each app folder: the folder tree is built once per device, every caller waiting
+for the same build, and the first start after an update walks the tree once more and folds any
+doubled folders (made by older builds racing, or by two devices at once) into the oldest — files
+moved over, the emptied duplicates trashed. **Share** on a performance puts the bare link on the
+clipboard on a computer (nothing appended); on a phone it opens the share sheet with the link alone. The Studio's own lists (*Sing a
 track*, *Latest takes*) carry a delete button on every row; Tracks has one in each track's manage
 panel; Performances deletes an opened take. A meet's
 performance is also shared, from the host's Drive, with each singer's Google account (it shows up in
@@ -159,10 +166,13 @@ their Drive's *Shared with me*).
 
 ## 6 · Publishing (privileged accounts) — its own process
 
-`/publishing`: **Publish a meet** (pick a meet you host or joined, or any by link/code; choose
-destinations; **Publish** → the show view), **Preview** (every open eligible meet as a 16:9 monitor
-tile with the exact broadcast picture), **Destinations** (YouTube, Facebook, Instagram, Twitch
-ingest + stream key; the in-house portal), **History**.
+`/publishing`: **Publish a meet** (pick a meet you host or joined, or any by link/code; switch on
+the destinations — a platform that has no stream key yet opens its setup right there: ingest URL
+filled in, paste the key, **Save & enable**, and the switch comes on; *Change key* later; the
+in-house portal needs nothing; **Publish** → the show view), **Preview** (every open eligible meet
+as a 16:9 monitor tile with the exact broadcast picture), **Destinations** (the same keys, managed
+in one place: YouTube, Facebook, Instagram, Twitch ingest + stream key, Enable / Disable; keys are
+stored encrypted on the service and only their last 4 characters ever shown again), **History**.
 
 The **show view** (`/publishing/show/:id`) joins the meet as a *publisher* — never on stage, never
 counted as audience, one participant per view — pulls every performer's video (receive-only) and

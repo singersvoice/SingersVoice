@@ -180,6 +180,29 @@ for (const m of matrix) {
       await page.getByRole('radio', { name: 'Publish a meet' }).click();
       await wait(600);
       await shot('27-publishing-publish');
+      // A platform without a stream key is set up right on the Publish tab: switch it on → paste the key → Save & enable.
+      const yt = page.locator('[data-publish-dest="youtube"]');
+      const fresh = (await yt.getAttribute('data-ready')) === '0'; // the control server is shared across the matrix: a later viewport finds the key saved
+      if (fresh) await yt.getByRole('checkbox').click();
+      else await yt.getByRole('button', { name: 'Change key' }).click();
+      await yt.locator('[data-dest-setup="youtube"]').waitFor({ timeout: 5000 });
+      await shot('28-publishing-setup');
+      await yt.getByLabel('YouTube Live stream key').fill('abcd-efgh-ijkl-1234');
+      await yt.getByRole('button', { name: fresh ? 'Save & enable' : 'Save' }).click();
+      await yt.getByText(/ends with …1234/).waitFor({ timeout: 15000 });
+      if ((await yt.getAttribute('data-ready')) !== '1') throw new Error('YouTube should be ready once its key is saved');
+      if (!(await yt.getByRole('checkbox').isChecked())) throw new Error('YouTube should be switched on once its key is saved');
+      await shot('29-publishing-ready');
+      // The Destinations tab shows the same key hint and lets it be changed.
+      await page.getByRole('radio', { name: 'Destinations' }).click();
+      const ytDest = page.locator('[data-destination="youtube"]');
+      await ytDest.waitFor({ timeout: 10000 });
+      if (!/ends with …1234/.test(await ytDest.innerText())) throw new Error('Destinations tab should show the saved key hint');
+      await ytDest.getByLabel('YouTube Live stream key').fill('zzzz-9999');
+      await ytDest.getByRole('button', { name: 'Save' }).click();
+      await page.getByText(/YouTube Live saved/).waitFor({ timeout: 10000 });
+      await ytDest.getByText(/ends with …9999/).waitFor({ timeout: 10000 });
+      await shot('30-publishing-destinations');
     }
   } catch (e) {
     failures++;

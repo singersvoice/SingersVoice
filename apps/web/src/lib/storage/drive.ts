@@ -3,7 +3,7 @@
  *
  *   SingersVoice/
  *     Tracks/<title>/track.json + backing.<ext>
- *     Performances/Live|Offline/<date time title (id)>/manifest.json + vocal.wav + video.*
+ *     Performances/Live|Offline/<date time song · meet [meet id] (id)>/manifest.json + vocal.wav + <song · meet · date time>.mp4
  *     Temp/<same as above, deleted after 7 days unless kept>
  *     Config/audio_plugin_settings.json, app_settings.json
  *     Backgrounds/, Exports/
@@ -34,7 +34,7 @@ const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const CHUNK = 8 * 1024 * 1024; // multiple of 256 KiB
-const FILE_FIELDS = 'id,name,mimeType,size,md5Checksum,modifiedTime,parents,appProperties,webViewLink,trashed';
+const FILE_FIELDS = 'id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,parents,appProperties,webViewLink,trashed';
 
 interface DriveFile {
   id: string;
@@ -43,6 +43,7 @@ interface DriveFile {
   size?: string;
   md5Checksum?: string;
   modifiedTime?: string;
+  createdTime?: string;
   parents?: string[];
   appProperties?: Record<string, string>;
   webViewLink?: string;
@@ -50,11 +51,15 @@ interface DriveFile {
 }
 
 type Tree = Record<DriveFolderKey, string>;
+/** Bump to make every device walk (and tidy) its Drive folder tree once more. */
+const TIDY_VERSION = '1';
 
 export class DriveProvider implements StorageProvider {
   readonly kind = 'drive' as const;
   readonly label = 'Google Drive';
   private tree: Tree | null = null;
+  /** The folder tree being looked up / built right now: every caller waits for the same one (no second "Live" folder from a race). */
+  private treeReady: Promise<void> | null = null;
   private treeKey: string;
 
   constructor(
@@ -124,14 +129,39 @@ export class DriveProvider implements StorageProvider {
     });
   }
 
-  private async findFolder(name: string, parentId: string | null): Promise<DriveFile | null> {
+  /** Every folder of that name under the parent, oldest first (Drive allows several; the oldest is the one we keep). */
+  private async findFolders(name: string, parentId: string | null): Promise<DriveFile[]> {
     const parent = parentId ? `'${parentId}' in parents` : `'root' in parents`;
-    const files = await this.list(`name='${esc(name)}' and mimeType='${FOLDER_MIME}' and ${parent} and trashed=false`, 5);
-    return files[0] ?? null;
+    const files = await this.list(`name='${esc(name)}' and mimeType='${FOLDER_MIME}' and ${parent} and trashed=false`, 20);
+    return files.sort((a, b) => (a.createdTime ?? '').localeCompare(b.createdTime ?? '') || a.id.localeCompare(b.id));
   }
 
+  private async findFolder(name: string, parentId: string | null): Promise<DriveFile | null> {
+    return (await this.findFolders(name, parentId))[0] ?? null;
+  }
+
+  /**
+   * Find the folder or make it — and when Drive holds several of the same name (two devices, or two
+   * first runs, made one each before this guard existed) fold the newer ones into the oldest: their
+   * files and folders move over, the emptied duplicates go to the trash. Safe to repeat; a failure
+   * here never blocks the app (the oldest folder is used either way).
+   */
   private async ensureFolder(name: string, parentId: string | null, props: Record<string, string>): Promise<DriveFile> {
-    return (await this.findFolder(name, parentId)) ?? (await this.createFolder(name, parentId, props));
+    const found = await this.findFolders(name, parentId);
+    if (!found.length) return this.createFolder(name, parentId, props);
+    const keep = found[0]!;
+    if (found.length > 1) await this.foldDuplicates(keep, found.slice(1)).catch((e) => console.warn('Drive: duplicate folders not merged', e));
+    return keep;
+  }
+
+  private async foldDuplicates(keep: DriveFile, dupes: DriveFile[]): Promise<void> {
+    for (const d of dupes) {
+      const children = await this.list(`'${d.id}' in parents and trashed=false`);
+      for (const c of children) {
+        await this.req(`${API}/files/${c.id}?addParents=${keep.id}&removeParents=${d.id}&fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      }
+      await this.req(`${API}/files/${d.id}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
+    }
   }
 
   private async uploadMultipart(meta: Record<string, unknown>, blob: Blob): Promise<DriveFile> {
@@ -254,8 +284,20 @@ export class DriveProvider implements StorageProvider {
 
   async ready(): Promise<void> {
     if (this.tree) return;
+    if (!this.treeReady) {
+      this.treeReady = this.buildTree().finally(() => {
+        this.treeReady = null;
+      });
+    }
+    return this.treeReady;
+  }
+
+  private async buildTree(): Promise<void> {
     const cached = readJson<Tree>(localStorage.getItem(this.treeKey));
-    if (cached) {
+    // Once per device (per tidy version) the tree is walked again instead of trusted from the cache,
+    // so folders that were doubled before the build guard existed are folded into one.
+    const tidied = localStorage.getItem(`${this.treeKey}.tidy`) === TIDY_VERSION;
+    if (cached && tidied) {
       try {
         const root = await this.req<DriveFile>(`${API}/files/${cached.root}?fields=id,trashed`);
         if (!root.trashed) {
@@ -287,6 +329,7 @@ export class DriveProvider implements StorageProvider {
     }
     this.tree = tree;
     localStorage.setItem(this.treeKey, JSON.stringify(tree));
+    localStorage.setItem(`${this.treeKey}.tidy`, TIDY_VERSION);
   }
 
   private folder(key: DriveFolderKey): string {
