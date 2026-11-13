@@ -16,7 +16,7 @@ import { getEngine, type AudioEngine } from '../../audio/engine.ts';
 import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
-import { PresetChips } from '../../components/FxPanel.tsx';
+import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcMusic, IcPause, IcPlay, IcPlus, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
@@ -709,6 +709,7 @@ function LiveStage(props: {
   const [finishing, setFinishing] = useState(false);
   /** The set list drawer over the stage: see what is next, add a song, (host) end the song. */
   const [songsOpen, setSongsOpen] = useState(false);
+  const [fxOpen, setFxOpen] = useState(false);
   /** Who was on stage during this take (the manifest and the meet's performance name them). */
   const singersRef = useRef<{ slot: number; displayName: string; userId?: string }[]>([]);
   /** While paused: the track position the vocal recording's end corresponds to (a resume elsewhere jumps the take there). */
@@ -908,7 +909,7 @@ function LiveStage(props: {
           durationMs,
           vocalOffsetMs: Math.round(vocalOffsetMs),
           videoOffsetMs: videoOffsetMs === null ? null : Math.round(videoOffsetMs),
-          latencyCompMs: Math.round(engine.outputLatencyMs * 2),
+          latencyCompMs: Math.round(engine.roundTripMs),
           sampleRate,
           startedAtEpochMs: meet.kickstartEpochMs ?? Date.now(),
         },
@@ -980,8 +981,24 @@ function LiveStage(props: {
           </div>
         )}
         {app.showCueDeck && track.singerCount > 1 && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} />}
+        {fxOpen && (
+          <div class="drawer" role="dialog" aria-label="Voice FX">
+            <div class="row between">
+              <b>Voice FX — every control, live on your voice</b>
+              <button class="btn icon sm" aria-label="Close the voice FX" onClick={() => setFxOpen(false)}>
+                <IcX size={16} />
+              </button>
+            </div>
+            <FxPanel value={audio} onChange={updateAudio} compact />
+          </div>
+        )}
         <section class="controls">
-          <PresetChips value={audio} onChange={updateAudio} />
+          <div class="row" style="align-items:flex-start;gap:8px">
+            <PresetChips value={audio} onChange={updateAudio} />
+            <button class={`btn sm ${fxOpen ? 'accent' : ''}`} aria-pressed={fxOpen} aria-label="Tweak the voice FX" title="Every control of the vocal chain — EQ, compression, de-esser, air, tune, space — live on your voice" onClick={() => setFxOpen((o) => !o)}>
+              Tweak
+            </button>
+          </div>
           <MicStatus engine={engine} onChange={() => void reopenMic(engine)} />
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={started && props.prepared ? (ms) => void seek(ms) : undefined} pending={seekTarget} disabled={countdown !== null} />
           <div class="main">

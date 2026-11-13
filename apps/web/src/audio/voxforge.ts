@@ -1,6 +1,6 @@
 /**
  * VoxForge vocal chain on Web Audio (the browser twin of the JUCE plugin):
- * trim → pitch/auto-tune (worklet) → HPF → EQ (low · mid · presence · air) → compressor → parallel
+ * trim → pitch/auto-tune (worklet) → HPF → EQ (low · body · mid · presence · air) → compressor → parallel
  * "punch" compression → de-esser → exciter → saturation → chorus → stereo delay → reverb → rider →
  * safety (limiter + soft clip) → out.
  *
@@ -105,17 +105,21 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
   const low = ctx.createBiquadFilter();
   low.type = 'lowshelf';
   low.frequency.value = 120;
+  const lm = ctx.createBiquadFilter(); // body: the 300 Hz region that makes a close mic boxy
+  lm.type = 'peaking';
+  lm.frequency.value = 300;
+  lm.Q.value = 1.1;
   const mid = ctx.createBiquadFilter();
   mid.type = 'peaking';
   mid.frequency.value = 1200;
   mid.Q.value = 1;
-  const pres = ctx.createBiquadFilter();
+  const pres = ctx.createBiquadFilter(); // presence: where a voice cuts through a track (2–5 kHz, the singer's choice)
   pres.type = 'peaking';
   pres.frequency.value = 3200;
   pres.Q.value = 1.1;
-  const hi = ctx.createBiquadFilter();
+  const hi = ctx.createBiquadFilter(); // air
   hi.type = 'highshelf';
-  hi.frequency.value = 6500;
+  hi.frequency.value = 8000;
 
   const comp = makeCompressor(ctx, workletAvailable);
   const makeup = ctx.createGain();
@@ -130,9 +134,10 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
   const pcWet = ctx.createGain();
   const pcOut = ctx.createGain();
 
-  // De-esser: a Linkwitz-Riley split at 5 kHz; the top band goes through a fast compressor of its own,
-  // so an "s" is ducked for the few milliseconds it spikes and the rest of the voice is untouched. The
-  // low band (and the bypass) wait for that compressor, so the two halves meet again in time.
+  // De-esser: a Linkwitz-Riley split where the sibilance starts (4–9 kHz, the singer's choice; 6 kHz
+  // by default so the presence region stays whole); the top band goes through a fast compressor of
+  // its own, so an "s" is ducked for the few milliseconds it spikes and the rest of the voice is
+  // untouched. The low band (and the bypass) wait for that compressor, so the two halves meet in time.
   const dsIn = ctx.createGain();
   const dsComp = makeCompressor(ctx, workletAvailable);
   const dsBypassDelay = alignment(ctx, dsComp.latencyFrames);
@@ -143,12 +148,12 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
   const dsHi2 = ctx.createBiquadFilter();
   for (const f of [dsLo1, dsLo2]) {
     f.type = 'lowpass';
-    f.frequency.value = 5000;
+    f.frequency.value = 6000;
     f.Q.value = BUTTERWORTH_Q_DB;
   }
   for (const f of [dsHi1, dsHi2]) {
     f.type = 'highpass';
-    f.frequency.value = 5000;
+    f.frequency.value = 6000;
     f.Q.value = BUTTERWORTH_Q_DB;
   }
   const dsLoDelay = alignment(ctx, dsComp.latencyFrames);
@@ -230,7 +235,7 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
     last.connect(pitchNode);
     last = pitchNode;
   }
-  last.connect(hpf).connect(low).connect(mid).connect(pres).connect(hi).connect(comp.input);
+  last.connect(hpf).connect(low).connect(lm).connect(mid).connect(pres).connect(hi).connect(comp.input);
   comp.output.connect(makeup).connect(pcIn);
   pcIn.connect(pcDryDelay).connect(pcDry).connect(pcOut);
   pcIn.connect(pcComp.input);
@@ -305,7 +310,9 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
 
     hpf.frequency.setTargetAtTime(p.eqOn ? p.hpfHz : 20, t, ramp);
     low.gain.setTargetAtTime(p.eqOn ? p.eqLow : 0, t, ramp);
+    lm.gain.setTargetAtTime(p.eqOn ? p.eqLm : 0, t, ramp);
     mid.gain.setTargetAtTime(p.eqOn ? p.eqMid : 0, t, ramp);
+    pres.frequency.setTargetAtTime(p.presHz, t, ramp);
     pres.gain.setTargetAtTime(p.eqOn ? p.eqPres : 0, t, ramp);
     hi.gain.setTargetAtTime(p.eqOn ? p.eqHi : 0, t, ramp);
 
@@ -315,12 +322,14 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
     pcWet.gain.setTargetAtTime(p.pcOn ? p.pcMx * 0.8 : 0, t, ramp);
     pcDry.gain.setTargetAtTime(p.pcOn ? 1 - p.pcMx * 0.25 : 1, t, ramp);
 
-    // De-ess amount: how early the top band is caught and how hard.
+    // De-ess: where the band starts, how early it is caught and how hard — only the spikes (an "s"
+    // sits well above a vowel's top in this band), never the air of the voice itself.
     const dsActive = p.dsOn && p.dsAmt > 0;
+    for (const f of [dsLo1, dsLo2, dsHi1, dsHi2]) f.frequency.setTargetAtTime(p.dsHz, t, ramp);
     dsBypass.gain.setTargetAtTime(dsActive ? 0 : 1, t, ramp);
     dsLoGain.gain.setTargetAtTime(dsActive ? 1 : 0, t, ramp);
     dsHiGain.gain.setTargetAtTime(dsActive ? 1 : 0, t, ramp);
-    dsComp.set({ thresholdDb: dsActive ? -22 - p.dsAmt * 16 : 0, kneeDb: 4, ratio: dsActive ? 3 + p.dsAmt * 7 : 1, attackS: 0.001, releaseS: 0.06, makeupDb: 0 }, t);
+    dsComp.set({ thresholdDb: dsActive ? -18 - p.dsAmt * 12 : 0, kneeDb: 4, ratio: dsActive ? 2.5 + p.dsAmt * 4.5 : 1, attackS: 0.0005, releaseS: 0.04, makeupDb: 0 }, t);
 
     exWet.gain.setTargetAtTime(p.exOn ? p.exAmt * 0.45 : 0, t, ramp);
     exDry.gain.setTargetAtTime(1, t, ramp);
@@ -364,7 +373,7 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
     } catch {
       /* already stopped */
     }
-    for (const n of [input, output, hpf, low, mid, pres, hi, makeup, pcIn, pcDryDelay, pcDry, pcWet, pcOut, dsIn, dsBypassDelay, dsBypass, dsLo1, dsLo2, dsHi1, dsHi2, dsLoDelay, dsLoGain, dsHiGain, dsOut, exIn, exDryDelay, exDry, exHp, exShaper, exWet, exOut, riderIn, rider, riderMeter, satIn, satDryDelay, satDry, satWet, shaper, satOut, chDry, chWet, chDelay, chOut, dlDry, dlWet, dlL, dlR, fbL, fbR, panL, panR, dlOut, rvDry, rvWet, preDelay, conv, safety.output]) n.disconnect();
+    for (const n of [input, output, hpf, low, lm, mid, pres, hi, makeup, pcIn, pcDryDelay, pcDry, pcWet, pcOut, dsIn, dsBypassDelay, dsBypass, dsLo1, dsLo2, dsHi1, dsHi2, dsLoDelay, dsLoGain, dsHiGain, dsOut, exIn, exDryDelay, exDry, exHp, exShaper, exWet, exOut, riderIn, rider, riderMeter, satIn, satDryDelay, satDry, satWet, shaper, satOut, chDry, chWet, chDelay, chOut, dlDry, dlWet, dlL, dlR, fbL, fbR, panL, panR, dlOut, rvDry, rvWet, preDelay, conv, safety.output]) n.disconnect();
     for (const c of [comp, pcComp, dsComp, safety.limiter]) c.disconnect();
     pitchNode?.disconnect();
   }

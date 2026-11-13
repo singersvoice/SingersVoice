@@ -91,7 +91,8 @@ bigger. Controls: camera on/off, **framing** (next to the camera button: **Chest
 head to chest from wherever you sit — Wide, Mid, Close, and Auto, a little closer while you sing),
 hear myself, **Set
 list** (a drawer over the stage: what is playing, what is next, add a song — the song picker is at
-hand while singing too), FX presets, and the **timeline — drag it (or use the arrow keys on it) to
+hand while singing too), FX presets with **Tweak** beside them (every control of the vocal chain in a
+drawer, live on your voice), and the **timeline — drag it (or use the arrow keys on it) to
 move back or forth in the song**. Transport belongs to the stage: every singer on stage may
 **Pause** (cued 3 s ahead, everyone freezes at the same position), **Resume**, and **seek** — a
 jump is cued too (*jumping to 1:23…*), so the song keeps playing and every device jumps at the

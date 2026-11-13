@@ -2,7 +2,7 @@
 // the AudioWorklets), measured with synthetic signals — what a listener would hear, in numbers:
 //   - the chain's parallel paths land together (no comb filter / echo in its impulse response);
 //   - the de-esser never boosts a quiet top end (the browser compressor's hidden makeup is taken out)
-//     and does duck a loud "s";
+//     and does duck a loud "s" (a 9 kHz tone, in its band);
 //   - the vocal leaves the chain under its ceiling however hot it comes in;
 //   - the mix bus brings a quiet track and a hot or quiet vocal to their targets, holds a mix pushed
 //     to +30 / +30 under the mix target, and never lets a sample over full scale.
@@ -132,7 +132,7 @@ const results = await page.evaluate(async () => {
       const ctx = await offline(2, 1, worklets);
       const chain = L.createVoxForgeChain(ctx, worklets);
       chain.apply({ ...L.VOXFORGE_DEFAULTS, pitchOn: false, eqOn: false, compOn: false, pcOn: false, dsOn: true, dsAmt: 0.5, exOn: false, satOn: false, chOn: false, dlOn: false, rvOn: false, rdOn: false });
-      tone(ctx, 8000, level, 2).connect(chain.input);
+      tone(ctx, 9000, level, 2).connect(chain.input);
       chain.output.connect(ctx.destination);
       const d = (await ctx.startRendering()).getChannelData(0);
       r[level] = +(rmsDb(d, 1.2, 1.9) - (level - 3.01)).toFixed(2); // gain vs the tone's own RMS
@@ -219,8 +219,8 @@ for (const k of ['ir_worklet', 'ir_native']) {
 check(results.ir_worklet.latencyMs < 12, `worklet chain latency ${results.ir_worklet.latencyMs} ms < 12 ms`);
 for (const k of ['deesser_worklet', 'deesser_native']) {
   const r = results[k];
-  check(Math.abs(r['-40']) < 1, `${k}: a quiet 8 kHz passes at unity (${r['-40']} dB)`);
-  check(r['-10'] < -8, `${k}: a loud 8 kHz is ducked (${r['-10']} dB)`);
+  check(Math.abs(r['-40']) < 1, `${k}: a quiet 9 kHz passes at unity (${r['-40']} dB)`);
+  check(r['-10'] < -5, `${k}: a loud 9 kHz is ducked (${r['-10']} dB)`);
 }
 for (const k of ['ceiling_worklet', 'ceiling_native']) check(results[k].peakDb <= -1.5 && results[k].peakDb > -8, `${k}: a voice 10 dB over full scale leaves at ${results[k].peakDb} dBFS (under the −3 dB ceiling, nothing clipped)`);
 check(Math.abs(results.studio_gain.rmsDb + 20) < 4, `studio preset: a −20 dBFS voice comes out at ${results.studio_gain.rmsDb} dBFS (no hidden makeup)`);

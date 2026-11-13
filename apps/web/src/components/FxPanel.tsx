@@ -7,10 +7,10 @@ type OnKey = 'pitchOn' | 'eqOn' | 'compOn' | 'pcOn' | 'dsOn' | 'exOn' | 'rdOn' |
 const SECTIONS: { title: string; on: OnKey | null; keys: NumKey[] }[] = [
   { title: 'Gain', on: null, keys: ['inGain', 'outGain'] },
   { title: 'Pitch & Auto-tune', on: 'pitchOn', keys: ['octave', 'pitchSt', 'pitchCt', 'autoStr', 'autoSpeed'] },
-  { title: 'EQ', on: 'eqOn', keys: ['hpfHz', 'eqLow', 'eqMid', 'eqPres', 'eqHi'] },
+  { title: 'EQ', on: 'eqOn', keys: ['hpfHz', 'eqLow', 'eqLm', 'eqMid', 'presHz', 'eqPres', 'eqHi'] },
   { title: 'Compressor', on: 'compOn', keys: ['cThr', 'cRat', 'cAtk', 'cRel', 'cMk'] },
   { title: 'Punch (parallel compression)', on: 'pcOn', keys: ['pcMx'] },
-  { title: 'De-esser', on: 'dsOn', keys: ['dsAmt'] },
+  { title: 'De-esser', on: 'dsOn', keys: ['dsHz', 'dsAmt'] },
   { title: 'Air (exciter)', on: 'exOn', keys: ['exAmt'] },
   { title: 'Vocal rider', on: 'rdOn', keys: ['rdAmt'] },
   { title: 'Saturation', on: 'satOn', keys: ['satDr', 'satMx'] },

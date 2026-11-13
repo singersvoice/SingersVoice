@@ -345,9 +345,10 @@ export class ShowRecorder {
     bus.setBalance(this.balance.trackDb, this.balance.vocalDb);
     bus.output.connect(dest);
     const lagS = this.lagMs / 1000;
-    // This device's own sources wait for the others; the track also waits for the vocal chain's own latency.
+    // This device's own sources wait for the others; the track also waits the round trip the singer
+    // sings against (speakers out, microphone in, the chain), so the voice lands on the beat it was sung to.
     const localTrack = ctx.createDelay(1);
-    localTrack.delayTime.value = lagS + (engine.chain?.latencyFrames ?? 0) / ctx.sampleRate;
+    localTrack.delayTime.value = lagS + engine.roundTripMs / 1000;
     localTrack.connect(bus.backingIn);
     const localVocal = ctx.createDelay(1);
     localVocal.delayTime.value = lagS;

@@ -18,8 +18,8 @@ import { dbToGain } from './gain.ts';
 import { safetyStage, type SafetyStage } from './dynamics.ts';
 import { MIX_TARGETS } from './loudness.ts';
 
-/** The buses' ceiling (dBFS): what YouTube and every encoder take without overshoot. */
-export const MIX_CEILING_DB = -1.5;
+/** The buses' ceiling (dBFS): an AAC encoder overshoots a dense mix by about a dB; this keeps the decoded file under full scale. */
+export const MIX_CEILING_DB = -2;
 
 export interface LevelerConfig {
   target: number;

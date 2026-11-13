@@ -390,7 +390,7 @@ export function Sing(props: { id: string }) {
       const videoOffsetMs = rec ? (rec.startCtxTime - origin) * 1000 - rec.lagMs : null;
       engine.closeMic();
       await keepAwake(false);
-      const latencyCompMs = Math.round(engine.outputLatencyMs * 2);
+      const latencyCompMs = Math.round(engine.roundTripMs);
       setTake({ vocal, video, durationMs, vocalOffsetMs: Math.round(vocalOffsetMs), videoOffsetMs: videoOffsetMs === null ? null : Math.round(videoOffsetMs), latencyCompMs, sampleRate, startedAtEpochMs: startedEpoch.current });
       setPhase('review');
     } catch (e) {

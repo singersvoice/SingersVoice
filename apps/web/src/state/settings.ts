@@ -4,7 +4,7 @@
  * `SingersVoice/Config/*.json` in the active provider (Drive or device).
  */
 import { effect, signal } from '@preact/signals';
-import { AUDIO_SETTINGS_DEFAULTS, CONFIG_FILES, clampParams, type AudioPluginSettings } from '@singersvoice/protocol';
+import { applyPreset, AUDIO_SETTINGS_DEFAULTS, CONFIG_FILES, clampParams, VOXFORGE_PRESETS, type AudioPluginSettings } from '@singersvoice/protocol';
 import { provider } from './session.ts';
 
 export interface AppSettings {
@@ -89,10 +89,13 @@ export const appSettings = signal<AppSettings>(migrateApp(read(APP_KEY, APP_DEFA
 export const audioSettings = signal<AudioPluginSettings>(sanitizeAudio(read(AUDIO_KEY, AUDIO_SETTINGS_DEFAULTS)));
 
 function sanitizeAudio(a: AudioPluginSettings): AudioPluginSettings {
+  // A factory preset means its current values (presets improve; a tweak switches to "custom", which keeps the tweak).
+  const factory = VOXFORGE_PRESETS.find((p) => p.id === a.activePresetId);
+  const params = clampParams(a.params ?? {});
   return {
     ...AUDIO_SETTINGS_DEFAULTS,
     ...a,
-    params: clampParams(a.params ?? {}),
+    params: factory ? applyPreset(params, factory) : params,
     tempo: Math.min(1.5, Math.max(0.5, Number(a.tempo) || 1)),
     keyShift: Math.min(6, Math.max(-6, Math.round(Number(a.keyShift) || 0))),
     backingGain: Math.min(1, Math.max(0, Number(a.backingGain) ?? 0.85)),

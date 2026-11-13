@@ -3,9 +3,9 @@
  * so presets round-trip between the web chain, the native plugin and the session mixer.
  *
  * Chain: input trim → pitch (octave/semitone/cents + chromatic auto-tune) → HPF → EQ (120 Hz shelf ·
- *        1.2 kHz peak · 3.2 kHz presence peak · 6.5 kHz shelf) → compressor → parallel "punch"
- *        compression → de-esser → exciter (air) → saturation → chorus/doubler → stereo delay → reverb
- *        → vocal rider → output gain.
+ *        300 Hz low-mid peak · 1.2 kHz peak · presence peak at a chosen 2–5 kHz · 8 kHz air shelf) →
+ *        compressor → parallel "punch" compression → de-esser (its band from a chosen 4–9 kHz) →
+ *        exciter (air) → saturation → chorus/doubler → stereo delay → reverb → vocal rider → output gain.
  *
  * The stages after the compressor are what turns a clean capture into a finished vocal: the parallel
  * compressor lifts every soft phrase without squashing the loud ones (punch without over-compression),
@@ -24,9 +24,11 @@ export interface VoxForgeParams {
   eqOn: boolean;
   hpfHz: number; // 20..400
   eqLow: number; // dB -12..12 @120 Hz shelf
+  eqLm: number; // dB -12..12 @300 Hz peak (body; cut it and a boxy, muddy vocal clears up)
   eqMid: number; // dB -12..12 @1.2 kHz peak
-  eqHi: number; // dB -12..12 @6.5 kHz shelf
-  eqPres: number; // dB -12..12 @3.2 kHz presence peak (the band that cuts through a track)
+  eqHi: number; // dB -12..12 @8 kHz shelf (air)
+  eqPres: number; // dB -12..12 presence peak (the band that cuts through a track)
+  presHz: number; // 2000..5000 where the presence peak sits
   compOn: boolean;
   cThr: number; // dB -60..0
   cRat: number; // 1..20
@@ -35,8 +37,9 @@ export interface VoxForgeParams {
   cMk: number; // dB 0..18
   pcOn: boolean; // parallel ("New York") compression: a crushed copy blended under the dry vocal
   pcMx: number; // 0..1 how much of the crushed copy
-  dsOn: boolean; // de-esser (5–9 kHz band ducked when it spikes)
+  dsOn: boolean; // de-esser: the band above dsHz ducked when it spikes
   dsAmt: number; // 0..1
+  dsHz: number; // 4000..9000 where the sibilance band starts
   exOn: boolean; // exciter: harmonics added above 3 kHz (air, sparkle)
   exAmt: number; // 0..1
   rdOn: boolean; // vocal rider: slow automatic level, every phrase up front
@@ -77,15 +80,18 @@ export const VOXFORGE_RANGES: Record<Exclude<keyof VoxForgeParams, `${string}On`
   autoSpeed: { min: 0, max: 1, step: 0.01, unit: '', label: 'Retune speed' },
   hpfHz: { min: 20, max: 400, step: 1, unit: 'Hz', label: 'High-pass' },
   eqLow: { min: -12, max: 12, step: 0.5, unit: 'dB', label: 'Low 120 Hz' },
+  eqLm: { min: -12, max: 12, step: 0.5, unit: 'dB', label: 'Body 300 Hz' },
   eqMid: { min: -12, max: 12, step: 0.5, unit: 'dB', label: 'Mid 1.2 kHz' },
-  eqHi: { min: -12, max: 12, step: 0.5, unit: 'dB', label: 'Air 6.5 kHz' },
-  eqPres: { min: -12, max: 12, step: 0.5, unit: 'dB', label: 'Presence 3.2 kHz' },
+  presHz: { min: 2000, max: 5000, step: 50, unit: 'Hz', label: 'Presence at' },
+  eqPres: { min: -12, max: 12, step: 0.5, unit: 'dB', label: 'Presence' },
+  eqHi: { min: -12, max: 12, step: 0.5, unit: 'dB', label: 'Air 8 kHz' },
   cThr: { min: -60, max: 0, step: 0.5, unit: 'dB', label: 'Threshold' },
   cRat: { min: 1, max: 20, step: 0.1, unit: ':1', label: 'Ratio' },
   cAtk: { min: 1, max: 200, step: 1, unit: 'ms', label: 'Attack' },
   cRel: { min: 20, max: 1000, step: 1, unit: 'ms', label: 'Release' },
   cMk: { min: 0, max: 18, step: 0.5, unit: 'dB', label: 'Makeup' },
   pcMx: { min: 0, max: 1, step: 0.01, unit: '', label: 'Punch (parallel comp)' },
+  dsHz: { min: 4000, max: 9000, step: 100, unit: 'Hz', label: 'De-ess from' },
   dsAmt: { min: 0, max: 1, step: 0.01, unit: '', label: 'De-ess' },
   exAmt: { min: 0, max: 1, step: 0.01, unit: '', label: 'Air (exciter)' },
   rdAmt: { min: 0, max: 1, step: 0.01, unit: '', label: 'Rider' },
@@ -115,9 +121,11 @@ export const VOXFORGE_DEFAULTS: VoxForgeParams = {
   eqOn: true,
   hpfHz: 90,
   eqLow: 0,
+  eqLm: -1,
   eqMid: 1,
   eqHi: 2.5,
-  eqPres: 1.5,
+  eqPres: 2,
+  presHz: 3200,
   compOn: true,
   cThr: -20,
   cRat: 3.5,
@@ -128,6 +136,7 @@ export const VOXFORGE_DEFAULTS: VoxForgeParams = {
   pcMx: 0.3,
   dsOn: true,
   dsAmt: 0.4,
+  dsHz: 6000,
   exOn: false,
   exAmt: 0.3,
   rdOn: false,
@@ -167,8 +176,8 @@ export const VOXFORGE_PRESETS: VoxForgePreset[] = [
   {
     id: 'studio',
     name: 'Studio',
-    blurb: 'Studio quality: clean low end, presence, de-essed, a touch of air, held at one level.',
-    params: { hpfHz: 95, eqLow: -1, eqMid: 1, eqPres: 2.5, eqHi: 2, cThr: -20, cRat: 3, cMk: 5, pcOn: true, pcMx: 0.25, dsOn: true, dsAmt: 0.5, exOn: true, exAmt: 0.25, rdOn: true, rdAmt: 0.6, rvSz: 0.35, rvDc: 1.8, rvMx: 0.16, rvPd: 0.025 },
+    blurb: 'Studio quality: clean low end, no mud, sharp presence, de-essed, air on top, held at one level.',
+    params: { hpfHz: 95, eqLow: -1, eqLm: -2, eqMid: 1, presHz: 3400, eqPres: 3.5, eqHi: 3, cThr: -20, cRat: 3, cMk: 5, pcOn: true, pcMx: 0.25, dsOn: true, dsAmt: 0.45, dsHz: 6000, exOn: true, exAmt: 0.35, rdOn: true, rdAmt: 0.6, rvSz: 0.35, rvDc: 1.8, rvMx: 0.16, rvPd: 0.025 },
   },
   {
     id: 'tune',

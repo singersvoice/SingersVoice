@@ -95,6 +95,24 @@ export class AudioEngine {
     return ((c.outputLatency ?? 0) || c.baseLatency || 0) * 1000;
   }
 
+  /** How late the microphone's sound reaches the graph (ms): the track's own figure where the browser gives one, else the context's base latency. */
+  get inputLatencyMs(): number {
+    const st = this.micStream?.getAudioTracks()[0]?.getSettings?.() as { latency?: number } | undefined;
+    const fromTrack = typeof st?.latency === 'number' && st.latency > 0 && st.latency < 0.5 ? st.latency : 0;
+    return (fromTrack || this.ctx.baseLatency || 0.01) * 1000;
+  }
+
+  /**
+   * The whole round trip a singer sings against (ms): the track reaches their ears `outputLatencyMs`
+   * late, their voice reaches the graph `inputLatencyMs` late and leaves the chain `chain latency`
+   * later still — the voice lands this far behind the track in the graph, so a recording holds the
+   * track back by this much to put them together.
+   */
+  get roundTripMs(): number {
+    const chain = this.chain ? (this.chain.latencyFrames / this.ctx.sampleRate) * 1000 : 0;
+    return this.outputLatencyMs + this.inputLatencyMs + chain;
+  }
+
   /**
    * Open the microphone. With `video` constraints the audio and video are requested in ONE
    * getUserMedia call (iOS Safari drops an earlier capture when a second one starts); the video

@@ -304,13 +304,19 @@ vocal₂ ─ rider ─┴─ Vocal offset ───────┘
   6 dB — a singer's offset, not their phrasing; +18 dB lift at most, −12 dB cut.
 - **Track volume / Vocal volume** (±30 dB, 3 dB steps, kept per device) are offsets on top of that
   balance: 0 / 0 is already right.
-- **The guard** (another `sv-leveler`, on the sum) only ever turns *down*, toward a −13 dBFS
-  average: push both controls to +30 and the mix comes back to the target in a few seconds instead
-  of living in the limiter.
-- **The safety stage** (`audio/dynamics.ts`): a limiter at **−1.5 dBFS** (the `sv-dynamics`
+- **The guard** (another `sv-leveler`, on the sum) only ever turns *down*, toward a −15 dBFS
+  average (about −13 LUFS for a bright mix): push both controls to +30 and the mix comes back to the
+  target in a few seconds instead of living in the limiter.
+- **The safety stage** (`audio/dynamics.ts`): a limiter at **−2 dBFS** (the `sv-dynamics`
   worklet, 2 ms lookahead over a sliding-max detector, 0.3 ms attack, a wall of a ratio) and a tanh
-  soft clipper straight up to −1.4 dB behind it. Nothing above full scale reaches an encoder; a
-  clipped encoder is what crackles.
+  soft clipper straight up to −1.4 dB behind it. Nothing above full scale reaches an encoder — an
+  AAC encoder overshoots a dense mix by about a dB, which the ceiling leaves room for; a clipped
+  encoder is what crackles.
+- **In time**: a singer's own vocal lands in the graph a round trip behind the track they sang to
+  (the track out to their ears, their voice in through the microphone, the chain) — `engine.roundTripMs`,
+  from the context's output latency, the microphone track's own latency figure and the chain — so the
+  recording holds the track back by that much (on top of the lag) and a Studio take carries it as
+  `latencyCompMs`.
 
 **What the browser's compressor really does** (measured in `tools/ci/audio-lab.mjs`; the Blink/WebKit
 kernel that Chrome, Edge, Safari and Firefox all run): `DynamicsCompressorNode` adds an **automatic
@@ -327,6 +333,15 @@ use `sv-dynamics`, with an honest makeup and no hidden delay.
 
 ## Audio chain (VoxForge, web twin of the JUCE plugin)
 
+The EQ has five bands: a 120 Hz shelf, **body** (a 300 Hz peak — cut it and a close, boxy mic
+clears up), a 1.2 kHz peak, **presence** (a peak the singer places anywhere from 2 to 5 kHz — the
+band that cuts through a track) and an 8 kHz **air** shelf. The Studio preset (the default) is cut
+at 300 Hz, +3.5 dB of presence at 3.4 kHz, +3 dB of air and a third of the exciter: a sharp,
+finished vocal. Every control of the chain is live on the stage itself — **Tweak**, next to the
+preset chips, opens the full panel (presets, gain, tune, EQ, compressor, punch, de-esser, air, rider,
+saturation, chorus, delay, reverb) over the stage while you sing; a tweak makes the preset "custom",
+and a factory preset chosen by name always means its current values.
+
 The microphone is opened **raw** — no browser echo cancellation, noise suppression or automatic
 gain (all three chop and thin a singing voice; AGC pumps, AEC ducks the voice whenever it
 correlates with the music) — mono, at the device's own rate. Echo cancellation is on only when the
@@ -341,8 +356,10 @@ up, fast down, no pumping, never clipped. Then: trim → pitch worklet (granular
 auto-tune) → HPF → low shelf 120 Hz / peak 1.2 kHz / **presence peak 3.2 kHz** / high shelf 6.5 kHz
 → compressor → **parallel compression** (a crushed copy, 10:1 from −36 dB with +16 dB of its own
 makeup, blended under the dry vocal: soft phrases up, transients kept — punch without
-over-compression; the dry side is delayed to meet it) → **de-esser** (Linkwitz-Riley split at
-5 kHz, the top band through its own 1 ms compressor; the low band and the bypass wait for it) →
+over-compression; the dry side is delayed to meet it) → **de-esser** (Linkwitz-Riley split where
+the sibilance starts — 4–9 kHz, 6 kHz by default so the presence region stays whole — the top band
+through its own 0.5 ms compressor set to catch only the spikes, never the air; the low band and the
+bypass wait for it) →
 **exciter** (harmonics made from the voice above 3 kHz, blended in — air, not a treble boost; the
 dry side waits for the oversampled shaper) → saturation (same) → chorus/doubler → ping-pong delay →
 convolution reverb → **vocal rider** (an RMS meter every 50 ms; below −50 dBFS it holds, otherwise

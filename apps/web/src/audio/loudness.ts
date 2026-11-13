@@ -12,8 +12,8 @@ export const MIX_TARGETS = {
   trackLufs: -19,
   /** Each vocal's level in the mix, as a short-term RMS the rider steers toward (dBFS). */
   vocalDb: -17,
-  /** The whole mix must not run hotter than this on average (RMS, dBFS): the guard turns down, never up. */
-  mixDb: -13,
+  /** The whole mix must not run hotter than this on average (RMS, dBFS; about −13 LUFS for a bright mix): the guard turns down, never up. */
+  mixDb: -15,
   /** The furthest a track may be lifted or lowered to reach its target (dB). */
   trackRangeDb: 18,
 } as const;
