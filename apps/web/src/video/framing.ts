@@ -3,9 +3,9 @@
  * whole frame; the default), mid and close (cropped in around the face) — and a vocal-driven auto
  * zoom that eases from the chosen level towards "close" while this singer sings and back when they
  * are silent, so whoever takes the vocal is the one who comes closer — on every device, since the
- * sender frames its own stream. How big a singer stands on the stage is the stage's own business:
- * the compositor (`stage.ts`) finds the person in the frame and fills their slot with them, so the
- * frame sent is always the crop at full resolution, never a person standing small in it.
+ * sender frames its own stream. This framing IS the picture of the singer: every stage (`stage.ts`)
+ * draws the frame whole, exactly as cropped here, the live stage small under the lyrics and the
+ * show big — nothing downstream finds a person and zooms in on its own.
  */
 export type ZoomPreset = 'wide' | 'mid' | 'close';
 

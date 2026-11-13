@@ -85,8 +85,10 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 
 **Performer mode is for singing**: the lyrics are the picture (big, your line highlighted; the cue
 deck shows who sings what in a duet) and the singers are small — each one's frame as their own
-camera framed it, in the lower part under the lyrics, no zoom of any kind. (The zoom that fills the
-picture with the singers is Publisher mode's, below.) Controls: camera on/off, hear myself, **Set
+camera framed it, in the lower part under the lyrics, no zoom of any kind. That frame is the
+picture of you everywhere: the show and the audience get exactly what you see of yourself here, only
+bigger. Controls: camera on/off, **framing** (Wide / Mid / Close and Auto — how your camera frames
+you, next to the camera button), hear myself, **Set
 list** (a drawer over the stage: what is playing, what is next, add a song — the song picker is at
 hand while singing too), FX presets, and the **timeline — drag it (or use the arrow keys on it) to
 move back or forth in the song**. Transport belongs to the stage: every singer on stage may
@@ -207,8 +209,9 @@ stored encrypted on the service and only their last 4 characters ever shown agai
 
 The **show view** (`/publishing/show/:id`) joins the meet as a *publisher* — never on stage, never
 counted as audience, one participant per view — pulls every performer's video (receive-only) and
-draws them huge on one stage (the same framing as the room's stage: each singer fills their slot
-top to bottom, ten in one even row), no lyrics, with a self-hiding bar (destinations, Go live / Stop,
+draws them huge on one stage (each singer exactly as their own camera frames them — the picture
+they see of themselves on the live stage, only bigger — ten in one even row), no lyrics, with a
+self-hiding bar (destinations, Go live / Stop,
 singers' vocals, backing track in sync, full screen). It shows the singers from the lobby on (*Up
 next: …*), the countdown as an opener, *Paused by the host*, and carries on across every song of
 the event: the show is independent of the song.

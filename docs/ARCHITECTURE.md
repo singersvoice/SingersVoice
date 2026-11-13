@@ -127,21 +127,23 @@ brightness with opaque alpha depending on the browser/GPU path, so — as in the
 app — `alphaFromMaskPixels` uses whichever channel varies, normalises and feathers it, and falls back
 to a soft head-and-shoulders silhouette when the mask is unusable (never a rectangle). `video/stage.ts` draws every
 performer, left to right by stage slot, evenly spaced over the stage background — one shared stage
-whether there is 1 singer or 10, on every device — and **frames each of them itself**: a small probe
-reads the cut-out's alpha a few times a second, finds the person (top to bottom of the opaque
-pixels; across, the width most rows have, so a stretched arm never shrinks anyone) and scales them to
-fill their slot — head near the top, the camera's cut edge on the picture's bottom edge, feet on the
-floor line when the camera sees them. The box is moved only when it really changed and eased, so
-nothing breathes with mask noise. Across a row, heads are levelled: whoever's head stands clearly
-above the median head line (a camera that sees them whole) is scaled down, feet staying put, so
-nobody towers over the bust shots beside them. That is **Publisher mode** ('show': Publishing, the
-lobby stage, the saved performance). **Performer mode** ('stage': the live stage, Studio) is for
-singing: the lyrics are the picture, big, and each singer's frame is drawn small in the lower ~45 %
-as their own camera framed it — no zoom. Framing
-(`video/framing.ts`) is therefore only the crop: wide (the whole frame; the default), mid, close
-(around the face), and a vocal-driven auto zoom that eases towards "close" while a singer sings and
-back out when they fall silent. The sender crops its own stream at full resolution, so whoever takes
-the vocal comes closer on everyone's screen.
+whether there is 1 singer or 10, on every device — under **one rule: a singer is drawn exactly as
+their own camera frames them.** The frame a device sends (the cut-out with the singer's own framing)
+is drawn whole, the same crop and proportions, on every stage: what a singer sees of themselves in
+Performer mode is what the audience gets, only bigger. The stage never finds a person and zooms in
+on its own (an earlier version did — it filled the slot with whatever the mask found, and a singer
+close to the camera went out to YouTube as a head three times the size of the stage). The two modes
+differ in the slots alone: **Publisher mode** ('show': Publishing, the lobby stage, the saved
+performance) — slots as tall as the picture, the frame's bottom edge (the camera's cut) on the
+picture's bottom edge like a TV shot, ten in one even row; **Performer mode** ('stage': the live
+stage, Studio) — the lyrics are the picture, big, and each frame sits small in the lower ~45 %.
+A frame that arrived small (a weak link) is never blown up past 2.5× its pixels. Framing
+(`video/framing.ts`) is the singer's choice, on the live stage next to the camera button (and in
+Studio / Settings): wide (the whole frame; the default), mid, close (around the face), and a
+vocal-driven auto zoom that eases towards "close" while a singer sings and back out when they fall
+silent. The sender crops its own stream at full resolution, so whoever takes the vocal comes closer
+on everyone's screen — and a singer who stands small in a wide frame stands small on every stage
+until they pick Mid or Close.
 
 Other performers' video arrives over a WebRTC mesh (`video/peers.ts`, video only — singers never hear
 each other, by design): each device sends its cut-out **alpha-packed** (left half colour, right half

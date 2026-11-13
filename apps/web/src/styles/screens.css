@@ -462,6 +462,13 @@
 .controls .main > .chip {
   margin-left: auto;
 }
+.controls .main .framing {
+  gap: 6px;
+}
+.controls .main .framing .seg button {
+  padding: 4px 9px;
+  font-size: 0.8em;
+}
 .controls .btn.icon {
   background: rgba(255, 255, 255, 0.1);
 }

@@ -988,6 +988,24 @@ function LiveStage(props: {
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
               {app.cameraOn ? <IcCamera /> : <IcCameraOff />}
             </button>
+            {app.cameraOn && (
+              // How your camera frames you is how every stage shows you — the audience included. Your choice, right here.
+              <span class="row framing" data-framing={app.zoomPreset} data-autozoom={app.autoZoom ? '1' : '0'} title="How your camera frames you: this exact picture goes to the stage, the show and the audience">
+                <Seg<'wide' | 'mid' | 'close'>
+                  value={app.zoomPreset}
+                  ariaLabel="Stage framing"
+                  onChange={(v) => updateApp({ zoomPreset: v })}
+                  options={[
+                    { v: 'wide', label: 'Wide' },
+                    { v: 'mid', label: 'Mid' },
+                    { v: 'close', label: 'Close' },
+                  ]}
+                />
+                <button class={`btn sm ${app.autoZoom ? 'accent' : ''}`} aria-pressed={app.autoZoom} aria-label="Auto zoom while singing" title="Eases closer while you sing and back out when you're silent" onClick={() => updateApp({ autoZoom: !app.autoZoom })}>
+                  Auto
+                </button>
+              </span>
+            )}
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
             </button>
