@@ -74,9 +74,16 @@ const MAX_WIDTH = 1600;
 /** The person may fill this much of the slot's width (room for an arm, and for the tag). */
 const FILL_W = 0.94;
 /** Headroom above the head, as a fraction of the slot height. */
-const HEADROOM = 0.035;
+const HEADROOM = 0.045;
 /** Show mode may stand a singer this much taller than the slot (a close-up, cut at the bottom edge); 1 = never. */
 const SHOW_CLOSE_UP = 1;
+/**
+ * A cut-out is never blown up past this many times its own pixels (at a 720-tall picture; scaled
+ * with the picture): a frame that arrived small (a weak link) stays a sharp figure with stage
+ * around it rather than a blur filling the frame. Computers send their cut-out at 720×960, so a
+ * full-height singer in a 720p show is drawn near 1:1.
+ */
+const MAX_UPSCALE = 2.5;
 /** A cut-out reaching this far down the frame is cut by the camera, not standing in it. */
 const CUT_EDGE = 0.985;
 /** The person probe: the cut-out's alpha at this size, this often; opaque means alpha above this. */
@@ -106,7 +113,8 @@ export function layoutStage(width: number, height: number, count: number, mode: 
   let h: number;
   let w: number;
   if (mode === 'show') {
-    h = height * 0.96;
+    // One or two singers get a little stage around them; a fuller row stands as tall as the frame allows.
+    h = height * (n <= 2 ? 0.93 : 0.96);
     w = Math.min(slotW * FILL_W, h * 0.9);
   } else {
     const hFrac = n === 1 ? 0.44 : n === 2 ? 0.42 : n <= 4 ? 0.4 : n <= 6 ? 0.36 : 0.32;
@@ -133,7 +141,7 @@ export function fitPerson(t: StageTile, srcW: number, srcH: number, box: PersonB
   const floor = cut ? Math.max(canvasH, t.y + t.h) : t.y + t.h;
   const top = t.y + t.h * HEADROOM;
   const room = Math.max(1, floor - top);
-  const scale = Math.min((t.w * FILL_W) / bw, (room * (mode === 'show' ? SHOW_CLOSE_UP : 1)) / bh);
+  const scale = Math.min((t.w * FILL_W) / bw, (room * (mode === 'show' ? SHOW_CLOSE_UP : 1)) / bh, mode === 'show' ? MAX_UPSCALE * Math.max(0.5, canvasH / 720) : Infinity);
   const w = bw * scale;
   const h = bh * scale;
   const cropped = h > room + 0.5;

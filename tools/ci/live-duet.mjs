@@ -23,6 +23,18 @@ const base = servers.appUrl;
 const control = `control=${servers.controlUrl}`;
 // A synthetic person as the fake camera, so the real segmentation model has something to cut out.
 const clip = path.join(tmpdir(), 'sv-fake-person.y4m');
+// The song: the 20 s sample looped to 150 s, so the broadcast checks and the transport checks happen inside one song
+// on a slow test machine; a forward seek near the end lets the song finish on its own afterwards.
+const SONG_S = 150;
+const longSong = path.join(tmpdir(), 'sv-e2e-song.mp3');
+const longTrack = path.join(tmpdir(), 'sv-e2e-song.track.json');
+execFileSync('ffmpeg', ['-v', 'error', '-y', '-stream_loop', '8', '-i', 'apps/web/test/fixtures/sample.mp3', '-t', String(SONG_S), '-c:a', 'libmp3lame', '-b:a', '128k', longSong]);
+{
+  const { readFileSync, writeFileSync } = await import('node:fs');
+  const t = JSON.parse(readFileSync('apps/web/test/fixtures/sample.track.json', 'utf8'));
+  t.durationMs = SONG_S * 1000;
+  writeFileSync(longTrack, JSON.stringify(t));
+}
 execFileSync('node', [new URL('./fake-person.mjs', import.meta.url).pathname, clip], { stdio: 'inherit' });
 const browser = await pw.chromium.launch({ args: ['--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${clip}`, '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
 let failed = false;
@@ -45,8 +57,8 @@ async function person(name, viewport, { track = true } = {}) {
   if (!track) return { ctx, page, trackId: null };
   await page.goto(base + 'tracks?' + control, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: 'Import' }).first().click();
-  await page.locator('input[type=file][accept*=".json"]').setInputFiles('apps/web/test/fixtures/sample.track.json');
-  await page.locator('input[type=file][accept*="audio"]').setInputFiles('apps/web/test/fixtures/sample.mp3');
+  await page.locator('input[type=file][accept*=".json"]').setInputFiles(longTrack);
+  await page.locator('input[type=file][accept*="audio"]').setInputFiles(longSong);
   await page.getByRole('button', { name: /^Import$/ }).last().click();
   await page.getByText(/^Imported/).waitFor({ timeout: 30000 });
   await wait(500);
@@ -72,6 +84,15 @@ try {
   // The host adds the first song from her library (private → "add anyway": her guest holds his own copy).
   const addSong = async (p, who) => {
     await p.getByRole('button', { name: 'Pick your selection of song' }).click();
+    // Search as you type: a partial word, in the wrong case, finds the song in the library at once, marked where it matched.
+    await p.getByLabel('Search songs').fill('sAMPLE');
+    await p.locator('.songpicker .item[data-from="mine"]').waitFor({ timeout: 10000 });
+    const marked = await p.locator('.songpicker .item .t mark').first().innerText().catch(() => '');
+    const counts = (await p.locator('[data-picker-counts]').innerText()).replace(/\s+/g, ' ');
+    check(/sample/i.test(marked) && /1 match in your library/.test(counts), `${who}'s library is searched as she types: "${marked}" marked, ${counts}`);
+    await p.getByLabel('Search songs').fill('sAMPLE zzz');
+    await p.locator('[data-picker-empty]').waitFor({ timeout: 10000 });
+    await p.getByLabel('Search songs').fill('sample');
     await p.getByRole('button', { name: 'Pick CI Sample Song' }).click();
     await p.getByText(/is up next|is on the set list/).waitFor({ timeout: 15000 });
     console.log(`${who} picked the song`);
@@ -295,6 +316,8 @@ try {
   const jobline = (await carol.page.locator('.showbar .jobline').innerText()).replace(/\s+/g, ' ');
   console.log('broadcast:', jobline, '| segments', liveSegments, 'in', Math.round((Date.now() - tLive) / 1000), 's');
   check(/LIVE/.test(jobline) && liveSegments >= 3, `the show view is on air: ${liveSegments} segments encoded and delivered from the browser (${jobline})`);
+  check((await carol.page.locator('.showpic[data-mirror="1"] video').count()) === 1, 'the publisher watches the broadcast itself (the encoder canvas mirrored) while on air');
+  check((await carol.page.locator('.showbar [data-mix="trackDb"]').count()) === 1 && (await carol.page.locator('.showbar [data-mix="vocalDb"]').count()) === 1, 'the show view has Track volume and Vocal volume controls for the broadcast');
   check((await carol.page.locator('.showbar .jobline').getAttribute('data-live-youtube')) === 'ok' && /YouTube is receiving the show/.test(jobline), 'YouTube accepted the segments and the playlist');
   const ytFiles = readdirSync(fakeYoutubeDir);
   const ytSegs = ytFiles.filter((f) => f.endsWith('.ts')).sort();
@@ -377,11 +400,16 @@ try {
   check(showStill === 2, `the show view keeps both links while the Preview tile watches too (${showStill})`);
   await monitor.screenshot({ path: `${out}/preview-carol.png` });
 
-  // Host restarts the song from the top (cued 5 s ahead) so the 20 s sample has room for the pause/resume checks.
-  await alice.page.getByRole('button', { name: /Restart the song for everyone/ }).click();
+  // The song restarts from the top (cued) so the pause/resume checks have room before it ends.
+  // Any singer on stage may start the song over for everyone (not only the host): bob does.
+  const posOf = async (p) => p.evaluate(() => ({ ...(window.__svPos ?? {}), ended: window.__svEnded ?? null, finish: window.__svFinish ?? null, now: Date.now() }));
+  console.log('before restart:', JSON.stringify({ alice: await posOf(alice.page), bob: await posOf(bob.page) }));
+  await bob.page.getByRole('button', { name: /Restart the song for everyone/ }).click();
   await wait(7000);
+  console.log('after restart:', JSON.stringify({ alice: await posOf(alice.page), bob: await posOf(bob.page) }));
   const tr = await alice.page.locator('.timeline .mono').first().innerText();
-  check(secs(tr) < 6, `restart took everyone back to the top (${tr})`);
+  const trB = await bob.page.locator('.timeline .mono').first().innerText();
+  check(secs(tr) < 10 && Math.abs(secs(tr) - secs(trB)) <= 1, `restart took everyone back to the top, together (${tr} / ${trB})`);
   // Any singer on stage may move the song: the guest jumps it back to 0:02 — cued, so both devices jump at the same
   // instant (the song keeps playing until then), and every take follows on the track timeline.
   await bob.page.locator('.sing .timeline.seekable input[type="range"]').fill('2000');
@@ -413,11 +441,24 @@ try {
   const tb3 = await bob.page.locator('.timeline .mono').first().innerText();
   console.log('resumed:', { alice: ta3, bob: tb3 });
   check(secs(ta3) > secs(ta1) && secs(tb3) > secs(tb1) && Math.abs(secs(ta3) - secs(tb3)) <= 1, 'both devices resumed together from the paused position');
-  // The 20 s sample ends on the host's device → the song is over for everyone: both singers are straight back on the
+  // A forward jump by the host to 12 s before the end: the song then ends on its own — nothing else touches the transport,
+  // so this also proves a song that simply runs out finishes (saves, moves the meet on) without anyone pausing or seeking.
+  await alice.page.locator('.sing .timeline.seekable input[type="range"]').fill(String(SONG_S * 1000 - 12000));
+  await wait(4000);
+  // The song ends on the host's device → the song is over for everyone: both singers are straight back on the
   // lobby stage (no review, no approval); each take saves itself in the background — the host's as the meet's performance.
-  for (const p of [alice.page, bob.page]) await p.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 40000 });
+  for (const p of [alice.page, bob.page]) await p.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 70000 });
+  const endedA = await alice.page.evaluate(() => window.__svFinish ?? null);
+  console.log('song end on the host:', JSON.stringify(endedA));
   check(true, 'the song ending on the host device ends it for everyone — both singers stay on stage, no review screen');
-  for (const p of [alice.page, bob.page]) await p.locator('[data-save="done"]').first().waitFor({ timeout: 60000 });
+  for (const p of [alice.page, bob.page]) {
+    await p.locator('[data-save="done"]').first().waitFor({ timeout: 90000 }).catch(async (e) => {
+      // Diagnostics for a save that never came: what the save status shows and what the page says.
+      const chips = await p.locator('[data-save]').evaluateAll((els) => els.map((el) => `${el.dataset.save}:${el.textContent.replace(/\s+/g, ' ').trim()}`)).catch(() => []);
+      console.log('save status chips:', JSON.stringify(chips), '| page:', (await p.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 400));
+      throw e;
+    });
+  }
   const saveA = (await alice.page.locator('[data-save="done"]').first().innerText()).replace(/\s+/g, ' ');
   const saveB = (await bob.page.locator('[data-save="done"]').first().innerText()).replace(/\s+/g, ' ');
   console.log('saved:', { alice: saveA, bob: saveB });
@@ -459,6 +500,13 @@ try {
   await bob.page.getByRole('button', { name: 'Set list' }).click();
   await bob.page.locator('.sing .drawer .setlist').waitFor({ timeout: 10000 });
   check(/Now singing/.test(await bob.page.locator('.sing .drawer').innerText()), 'the live stage has a set list drawer (song picker) for the singers');
+  // Every singer has the stage's own controls: Restart, and the Track / Vocal volume of their mix.
+  check((await bob.page.getByRole('button', { name: /Restart the song for everyone/ }).count()) === 1, 'a singer (not the host) has the Restart button');
+  await bob.page.locator('.sing [data-mix="trackDb"] button[aria-label="Track volume up"]').click();
+  await bob.page.locator('.sing [data-mix="trackDb"] button[aria-label="Track volume up"]').click();
+  await bob.page.locator('.sing [data-mix="vocalDb"] button[aria-label="Vocal volume down"]').click();
+  const balance = await bob.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}'));
+  check(balance.trackDb === 2 && balance.vocalDb === -1, `Track / Vocal volume move in 1 dB steps and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
   await bob.page.getByRole('button', { name: 'Close the set list' }).click();
   // A singer stops only their own take; the song goes on for the host — the singer stays on the live stage and may rejoin.
   await bob.page.getByRole('button', { name: 'Stop my take' }).click();

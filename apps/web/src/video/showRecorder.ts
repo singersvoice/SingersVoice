@@ -21,9 +21,36 @@ export const SHOW_HEIGHT = 720;
 export const SHOW_FPS = 24;
 /** How far behind the shared clock the other singers' video and vocals arrive: the local sources are held back to meet them. */
 export const VOCAL_LAG_MS = 250;
-/** The mix: every vocal a little up, the backing track a little under — the voice on top, as a karaoke performance should sound. */
-export const VOCAL_IN_MIX = 1.41; // +3 dB
-export const BACKING_IN_MIX = 0.79; // −2 dB
+/** The mix at its default balance: the track and the voices as they come (the singer's Track / Vocal controls move them). */
+export const VOCAL_IN_MIX = 1;
+export const BACKING_IN_MIX = 1;
+export const MIX_DB_MIN = -18;
+export const MIX_DB_MAX = 12;
+export const dbToGain = (db: number): number => Math.pow(10, Math.max(MIX_DB_MIN, Math.min(MIX_DB_MAX, db)) / 20);
+
+/**
+ * The end of every mix bus: a brick-wall stage — a hard-kneed limiter and a soft clipper behind it —
+ * so nothing above full scale ever reaches an encoder (a clipped encoder crackles).
+ */
+export function safetyStage(ctx: BaseAudioContext): { input: AudioNode; output: AudioNode; limiter: DynamicsCompressorNode } {
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -6;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.001;
+  limiter.release.value = 0.1;
+  const clip = ctx.createWaveShaper();
+  const n = 2048;
+  const curve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    curve[i] = Math.tanh(x * 1.25) / Math.tanh(1.25); // transparent to ±0.7, bends above, never past ±1
+  }
+  clip.curve = curve;
+  clip.oversample = '2x';
+  limiter.connect(clip);
+  return { input: limiter, output: clip, limiter };
+}
 
 export interface ShowRecording {
   video: Blob;
@@ -105,7 +132,7 @@ export class ShowRecorder {
   private bgImage: HTMLImageElement | null = null;
   private bgVideo: HTMLVideoElement | null = null;
   /** Remote vocals: each one feeds the mix (and a muted element, which some browsers need before a remote stream flows into WebAudio). */
-  private vocals = new Map<string, { stream: MediaStream; el: HTMLAudioElement; node: MediaStreamAudioSourceNode | null }>();
+  private vocals = new Map<string, { stream: MediaStream; el: HTMLAudioElement; node: MediaStreamAudioSourceNode | null; level?: GainNode }>();
   private audio: { ctx: AudioContext; dest: MediaStreamAudioDestinationNode; local: DelayNode; bus: GainNode; taps: AudioNode[]; backingLevel: GainNode; vocalLevel: GainNode; limiter: DynamicsCompressorNode } | null = null;
   /** The host's device: the mix goes out to the audience in one-second batches through this (null elsewhere). */
   broadcast: ((batch: MixBatch) => Promise<void>) | null = null;
@@ -211,13 +238,14 @@ export class ShowRecorder {
     if (this.audio) this.plugVocal(entry);
   }
 
-  private plugVocal(v: { stream: MediaStream; node: MediaStreamAudioSourceNode | null }): void {
+  private plugVocal(v: { stream: MediaStream; node: MediaStreamAudioSourceNode | null; level?: GainNode }): void {
     if (!this.audio || v.node) return;
     try {
       v.node = this.audio.ctx.createMediaStreamSource(v.stream);
       const level = this.audio.ctx.createGain();
-      level.gain.value = VOCAL_IN_MIX;
+      level.gain.value = VOCAL_IN_MIX * dbToGain(this.balance.vocalDb);
       v.node.connect(level).connect(this.audio.bus);
+      v.level = level;
     } catch {
       v.node = null;
     }
@@ -330,29 +358,38 @@ export class ShowRecorder {
 
   // ---- the mix: backing track + own vocal (held back by the lag) + every other singer's vocal, through a limiter ----
 
+  /** The balance this device mixes at (dB) — the singer's Track / Vocal controls; applied live. */
+  setBalance(trackDb: number, vocalDb: number): void {
+    this.balance = { trackDb, vocalDb };
+    const a = this.audio;
+    if (!a) return;
+    const t = a.ctx.currentTime;
+    a.backingLevel.gain.setTargetAtTime(BACKING_IN_MIX * dbToGain(trackDb), t, 0.03);
+    a.vocalLevel.gain.setTargetAtTime(VOCAL_IN_MIX * dbToGain(vocalDb), t, 0.03);
+    for (const v of this.vocals.values()) v.level?.gain.setTargetAtTime(VOCAL_IN_MIX * dbToGain(vocalDb), t, 0.03);
+  }
+  private balance = { trackDb: 0, vocalDb: 0 };
+
   private buildAudio(engine: AudioEngine): void {
     if (this.audio) return;
     const ctx = engine.ctx;
     const dest = ctx.createMediaStreamDestination();
-    const limiter = ctx.createDynamicsCompressor();
-    limiter.threshold.value = -8;
-    limiter.knee.value = 6;
-    limiter.ratio.value = 6;
-    limiter.attack.value = 0.003;
-    limiter.release.value = 0.12;
+    const safety = safetyStage(ctx);
+    const limiter = safety.limiter;
     const bus = ctx.createGain();
     bus.gain.value = 0.85; // headroom: several vocals plus the track sum before the limiter
-    bus.connect(limiter).connect(dest);
+    bus.connect(safety.input);
+    safety.output.connect(dest);
     const local = ctx.createDelay(1);
     local.delayTime.value = this.lagMs / 1000;
     local.connect(bus);
     const taps: AudioNode[] = [];
     // The voice sits on top of the track: the backing a little under, every vocal a little up.
     const backingLevel = ctx.createGain();
-    backingLevel.gain.value = BACKING_IN_MIX;
+    backingLevel.gain.value = BACKING_IN_MIX * dbToGain(this.balance.trackDb);
     backingLevel.connect(local);
     const vocalLevel = ctx.createGain();
-    vocalLevel.gain.value = VOCAL_IN_MIX;
+    vocalLevel.gain.value = VOCAL_IN_MIX * dbToGain(this.balance.vocalDb);
     vocalLevel.connect(local);
     const player = engine.player;
     if (player) {
@@ -371,7 +408,7 @@ export class ShowRecorder {
       const send = this.broadcast;
       const lagS = this.lagMs / 1000;
       this.broadcaster = new MixBroadcaster(ctx, send, (t) => engine.player?.positionAt(t - lagS) ?? 0);
-      this.broadcaster.start(limiter);
+      this.broadcaster.start(safety.output);
     }
   }
 

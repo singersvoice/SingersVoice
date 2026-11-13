@@ -1,13 +1,16 @@
 /**
  * Pick a song for the meet: one of my saved tracks (my Drive library) or a track another singer
- * shares. Built for a big library: one search box over both — every word you type must match
- * (title, artist, genre, language or the singer who shared it, in any order), my songs filtered
- * right here, the shared ones searched in the catalog (SVT DB) page by page, counts shown, Enter
- * picks the top match. Picking is all a singer does — the song then loads on every device in the
- * meet so all the singers sing the same lines at the same time. A track of mine that other devices
- * cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission
- * and a public catalog entry, through lib/catalog.ts — the same thing the Tracks portal does);
- * nobody is asked about it here.
+ * shares. Built for a big library and for searching as you type: one search box over both — every
+ * word you type must match (title, artist, genre, language or the singer who shared it, in any
+ * order). My library answers on every keystroke (the device remembers the list, so it is there the
+ * instant the picker opens; the fresh listing replaces it when Drive answers), the matched words are
+ * marked in the results, and the shared songs are searched in the catalog (SVT DB) a page at a time
+ * a quarter second after the typing pauses; a result line says what was found where; Enter picks
+ * the top match. Picking is all a singer does — the song then loads on every device in the meet so
+ * all the singers sing the same lines at the same time. A track of mine that other devices cannot
+ * reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission and a
+ * public catalog entry, through lib/catalog.ts — the same thing the Tracks portal does); nobody is
+ * asked about it here.
  */
 import { formatMs, type CatalogTrack, type SongPick } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -16,23 +19,32 @@ import { Progress, Spinner } from '../../components/ui.tsx';
 import { canPublish, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, searchCatalog } from '../../lib/catalog.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { withProvider } from '../../state/session.ts';
+import { listTracksFresh, readTrackCache } from '../../lib/trackCache.ts';
 
 const PAGE = 30;
 const MINE_PAGE = 40;
 
+const words = (q: string): string[] => q.toLowerCase().split(/\s+/).filter(Boolean);
+
 /** Every word must appear somewhere in the text, in any order. */
 export function matchesWords(text: string, q: string): boolean {
   const hay = text.toLowerCase();
-  return q
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((w) => hay.includes(w));
+  return words(q).every((w) => hay.includes(w));
+}
+
+/** The text with every matched word marked, so a result shows why it is one. */
+export function Highlight(props: { text: string; q: string }) {
+  const ws = words(props.q);
+  if (!ws.length) return <>{props.text}</>;
+  const re = new RegExp(`(${ws.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'ig');
+  const parts = props.text.split(re);
+  return <>{parts.map((part, i) => (i % 2 === 1 ? <mark key={i}>{part}</mark> : part))}</>;
 }
 
 export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; onClose: () => void; canPlayNow?: boolean; onPlayNow?: (song: SongPick) => Promise<void> }) {
-  const [tracks, setTracks] = useState<TrackSummary[] | null>(null);
+  // The library as the device remembers it, at once; the fresh listing takes its place when Drive answers.
+  const [tracks, setTracks] = useState<TrackSummary[] | null>(() => readTrackCache());
+  const [fresh, setFresh] = useState(false);
   const [published, setPublished] = useState<Set<string>>(new Set());
   const [catalog, setCatalog] = useState<{ items: CatalogTrack[]; total: number; nextCursor: string | null; q: string } | null>(null);
   const [searching, setSearching] = useState(false);
@@ -43,10 +55,15 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    void withProvider(async (p) => {
-      await p.ready();
-      setTracks(await p.listTracks());
-    }).catch(() => setTracks([]));
+    void listTracksFresh()
+      .then((list) => {
+        setTracks(list);
+        setFresh(true);
+      })
+      .catch(() => {
+        setTracks((t) => t ?? []);
+        setFresh(true);
+      });
     void myPublishedIds().then(setPublished).catch(() => undefined);
     inputRef.current?.focus();
   }, []);
@@ -130,15 +147,19 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
     else if (others[0]) void pickShared(others[0], false);
   };
 
-  type Row = { key: string; title: string; sub: string; from: string; pick: (now: boolean) => Promise<void> };
+  type Row = { key: string; title: string; artist: string; sub: string; from: string; pick: (now: boolean) => Promise<void> };
   // One list: my songs first, then the shared ones (never the same song twice), each saying where it comes from.
   const rows: Row[] = [
-    ...mine.map((t) => ({ key: t.trackId, title: t.title, sub: `${t.artist || 'Unknown artist'} · ${formatMs(t.durationMs)} · ${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`, from: 'Your library', pick: (now: boolean) => pickMine(t, now) })),
-    ...others.map((c) => ({ key: c.trackId, title: c.title, sub: `${c.artist || 'Unknown artist'} · ${formatMs(c.durationMs)}`, from: `Shared by ${c.ownerName}`, pick: (now: boolean) => pickShared(c, now) })),
+    ...mine.map((t) => ({ key: t.trackId, title: t.title, artist: t.artist || 'Unknown artist', sub: `${formatMs(t.durationMs)} · ${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`, from: 'Your library', pick: (now: boolean) => pickMine(t, now) })),
+    ...others.map((c) => ({ key: c.trackId, title: c.title, artist: c.artist || 'Unknown artist', sub: formatMs(c.durationMs), from: `Shared by ${c.ownerName}`, pick: (now: boolean) => pickShared(c, now) })),
   ];
   const total = catalog?.total ?? 0;
-  const loading = tracks === null || (catalog === null && searching);
-  const counts = [tracks ? `${mineAll.length} of your ${tracks.length}` : null, catalog ? `${others.length}${total > items.length ? ` of ${total.toLocaleString()}` : ''} shared` : null].filter(Boolean).join(' · ');
+  const loading = tracks === null && !fresh;
+  const sharedSearching = searching || catalog === null || catalog.q !== q;
+  // What the search found, as it happens: my library answers at once, the shared songs a moment later.
+  const found = needle
+    ? `${mineAll.length === 1 ? '1 match' : `${mineAll.length} matches`} in your library${tracks && !fresh ? ' (so far)' : ''} · ${sharedSearching ? 'searching the shared songs…' : `${others.length}${total > items.length ? ` of ${total.toLocaleString()}` : ''} shared`}`
+    : [tracks ? `${tracks.length} in your library` : null, catalog ? `${others.length}${total > items.length ? ` of ${total.toLocaleString()}` : ''} shared` : null].filter(Boolean).join(' · ');
   return (
     <div class="card stack songpicker" role="dialog" aria-label="Pick a song">
       <div class="row between">
@@ -161,38 +182,51 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
         onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), pickTop())}
       />
       <div class="row between">
-        <div class="small faint">Any words, in any order — Enter picks the top match.</div>
-        <div class="small muted" data-picker-counts>
-          {counts} {searching && <Spinner />}
+        <div class="small faint">Any words, in any order — results as you type; Enter picks the top match.</div>
+        <div class="small muted" data-picker-counts data-picker-mine={mineAll.length} data-picker-shared-searching={sharedSearching ? '1' : '0'}>
+          {found} {(searching || (tracks && !fresh)) && <Spinner />}
         </div>
       </div>
       {sharing && <Progress fraction={sharing.fraction} label={sharing.label} />}
       {loading ? (
         <div class="row">
-          <Spinner /> Loading songs…
+          <Spinner /> Loading your songs…
         </div>
       ) : !rows.length ? (
         <div class="small muted" data-picker-empty>
-          {needle ? `No song matches “${needle}” — in your library or among the shared songs.` : tracks?.length ? 'Nothing shared by other singers yet — your own songs are listed above.' : 'No songs yet: make one in the Studio (Track Maker), or wait for another singer to share one.'}
+          {needle
+            ? sharedSearching
+              ? `Nothing in your library matches “${needle}” — searching the shared songs…`
+              : `No song matches “${needle}” — in your library or among the shared songs.`
+            : tracks?.length
+              ? 'Nothing shared by other singers yet — your own songs are listed above.'
+              : 'No songs yet: make one in the Studio (Track Maker), or wait for another singer to share one.'}
         </div>
       ) : (
         <div class="list">
           {rows.map((r) => (
             <div class="item" key={r.key} data-from={r.from === 'Your library' ? 'mine' : 'shared'}>
+              <div class="thumb" aria-hidden="true">
+                {r.title.trim().charAt(0).toUpperCase() || '♪'}
+              </div>
               <div class="meta">
-                <div class="t">{r.title}</div>
+                <div class="t">
+                  <Highlight text={r.title} q={needle} />
+                </div>
                 <div class="s">
-                  {r.sub} · <span class="chip">{r.from}</span>
+                  <Highlight text={r.artist} q={needle} /> · {r.sub} · <span class="from">{r.from}</span>
                 </div>
               </div>
-              <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${r.title}`} onClick={() => void r.pick(false)}>
-                {busy === r.key ? <Spinner /> : <IcMusic size={16} />} Pick
-              </button>
-              {props.canPlayNow && (
-                <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${r.title} now`} onClick={() => void r.pick(true)}>
-                  Now
+              <div class="row" style="gap:6px">
+                <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${r.title}`} onClick={() => void r.pick(false)}>
+                  {busy === r.key ? <Spinner /> : <IcMusic size={16} />} Pick
                 </button>
-              )}
+                {props.canPlayNow && (
+                  <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${r.title} now`} onClick={() => void r.pick(true)}>
+                    Now
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>

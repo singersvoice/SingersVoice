@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'preact/hooks';
 import type { AudioEngine } from '../audio/engine.ts';
-import { appSettings, updateApp } from '../state/settings.ts';
+import { appSettings, audioSettings, updateApp, updateAudio } from '../state/settings.ts';
 
 export function MicStatus(props: { engine: AudioEngine | null; onChange?: () => void }) {
   const info = props.engine?.inputInfo.value ?? null;
@@ -26,6 +26,12 @@ export function MicStatus(props: { engine: AudioEngine | null; onChange?: () => 
   }, [info?.label]);
   if (!info) return null;
   const khz = info.sampleRate ? `${Math.round(info.sampleRate / 1000)} kHz` : '';
+  // "Hear myself" through the browser arrives this late: the audio path in and out, plus the pitch stage when it corrects.
+  const audio = audioSettings.value;
+  const ctx = props.engine?.ctx;
+  const tuning = audio.params.pitchOn && (audio.params.autoStr > 0 || audio.params.octave !== 0 || audio.params.pitchSt !== 0 || audio.params.pitchCt !== 0);
+  const monitorMs = ctx ? Math.round(((ctx.baseLatency || 0.01) + ((ctx as AudioContext & { outputLatency?: number }).outputLatency || 0.02) + 0.02) * 1000) + (tuning ? 46 : 0) : 0;
+  const usbMic = /usb|quadcast|yeti|wave|snowball|at2020|nt-usb|audio interface|scarlett|focusrite/i.test(info.label || '');
   return (
     <div class={`micstatus ${info.narrowband ? 'warn' : ''}`} data-mic-rate={info.sampleRate ?? ''}>
       <div class="row between">
@@ -50,6 +56,15 @@ export function MicStatus(props: { engine: AudioEngine | null; onChange?: () => 
       {info.narrowband && (
         <div class="small">
           This microphone is a phone-call line (a Bluetooth headset's mic): the voice comes in thin and muffled. Keep listening on the headset if you like, but sing into another microphone:
+        </div>
+      )}
+      {audio.monitor && (
+        <div class="small" data-mic-monitor-hint>
+          Hear myself comes back about {monitorMs} ms late through the browser — you hear yourself twice.{' '}
+          {usbMic ? 'This microphone has its own headphone jack: listen there (no delay) and ' : 'For a clean monitor use your mic or interface\'s own headphone output and '}
+          <button class="btn ghost sm" onClick={() => updateAudio({ monitor: false })}>
+            switch Hear myself off
+          </button>
         </div>
       )}
       {speakersOut && !app.echoCancellation && (

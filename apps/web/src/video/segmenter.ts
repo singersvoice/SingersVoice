@@ -119,7 +119,9 @@ function acquireModel(): Promise<SelfieSegmentationLike> {
     const base = await loadRuntime();
     const Ctor = (window as unknown as { SelfieSegmentation: SegCtor }).SelfieSegmentation;
     const seg = new Ctor({ locateFile: (f) => `${base}/${f}` });
-    seg.setOptions({ modelSelection: 1, selfieMode: false });
+    // The general model (256×256) draws a cleaner edge than the landscape one (256×144) and costs about twice the
+    // CPU: computers get it, phones keep the lighter one.
+    seg.setOptions({ modelSelection: (navigator.hardwareConcurrency ?? 2) >= 4 && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ? 0 : 1, selfieMode: false });
     if (seg.initialize) await withTimeout(seg.initialize(), LOAD_TIMEOUT_MS);
     sharedSeg = seg;
     return seg;
@@ -264,6 +266,7 @@ export class PersonSegmenter {
     c.clearRect(0, 0, width, height);
     c.drawImage(r.image, 0, 0, width, height);
     c.globalCompositeOperation = 'destination-in';
+    c.filter = 'blur(1.2px)'; // the mask's staircase (it is a fraction of the picture's size) becomes a soft edge
     c.drawImage(mask, 0, 0, width, height);
     c.restore();
     this.updateMaskFromAlpha(mask);

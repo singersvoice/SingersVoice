@@ -871,6 +871,15 @@
 }
 
 /* ---------- Publishing: the show view ---------- */
+/* The broadcast as it goes out, mirrored on the publisher's screen while the encoder runs. */
+.showpic .showmirror {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
 /* The broadcast picture: performers huge on one stage, no lyrics; chrome fades out while the show plays. */
 .show {
   position: fixed;
@@ -1174,6 +1183,16 @@
 .songpicker .list {
   max-height: 40dvh;
   overflow: auto;
+}
+.songpicker mark {
+  background: rgba(255, 180, 84, 0.3);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.songpicker .item .from {
+  color: var(--brand);
+  font-weight: 650;
 }
 
 /* Drawer over the live stage (set list) */

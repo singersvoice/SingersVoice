@@ -22,6 +22,13 @@ export function noteName(midi: number): string {
   return `${NOTE_NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`;
 }
 
+/** The leveller: a raw peak under this is room noise, not singing — never lifted; a gained peak under QUIET is lifted, over HOT pulled down. */
+const LEVEL_SINGING = 0.02; // −34 dBFS
+const LEVEL_QUIET = 0.125; // −18 dBFS
+const LEVEL_HOT = 0.5; // −6 dBFS
+const LEVEL_MAX_DB = 12;
+const LEVEL_MIN_DB = -6;
+
 export class AudioEngine {
   readonly ctx: AudioContext;
   readonly master: GainNode;
@@ -168,6 +175,7 @@ export class AudioEngine {
     this.levelAnalyser = an;
     this.levelPeaks = [];
     let db = this.inputTrimDb.value;
+    let low = 0;
     this.levelTimer = setInterval(() => {
       if (!this.autoLevel || !this.levelAnalyser) return;
       this.levelAnalyser.getFloatTimeDomainData(this.levelBuf);
@@ -181,8 +189,16 @@ export class AudioEngine {
       const recent = Math.max(...this.levelPeaks);
       const gained = recent * Math.pow(10, db / 20);
       let next = db;
-      if (gained > 0.7) next = Math.max(-6, db - 3);
-      else if (recent > 0.004 && gained < 0.125 && this.levelPeaks.length >= 10) next = Math.min(18, db + 1);
+      if (gained > LEVEL_HOT) {
+        next = Math.max(LEVEL_MIN_DB, db - 2);
+        low = 0;
+      } else if (recent > LEVEL_SINGING && gained < LEVEL_QUIET && this.levelPeaks.length >= 20) {
+        // Quiet singing (not room noise between phrases — that stays where it is): up a dB every few readings.
+        if (++low >= 3) {
+          next = Math.min(LEVEL_MAX_DB, db + 1);
+          low = 0;
+        }
+      } else low = 0;
       if (next !== db) {
         db = next;
         this.trim.gain.setTargetAtTime(Math.pow(10, db / 20), this.ctx.currentTime, 0.1);

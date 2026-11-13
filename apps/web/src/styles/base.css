@@ -770,6 +770,23 @@ input[type='range'] {
   background: rgba(255, 170, 60, 0.12);
   outline: 1px solid rgba(255, 170, 60, 0.4);
 }
+.mixbalance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+}
+.mixctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mixctl .btn.icon.sm {
+  width: 28px;
+  height: 28px;
+  font-size: 1.1em;
+  line-height: 1;
+}
 .micstatus .chip {
   margin-left: 6px;
 }

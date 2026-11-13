@@ -16,6 +16,7 @@ import { GOOGLE_API_KEY, pickFromDrive } from '../../lib/google.ts';
 import { go, href } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
+import { writeTrackCache } from '../../lib/trackCache.ts';
 import { driveProvider, isDrive, token, withProvider } from '../../state/session.ts';
 
 type Tab = 'mine' | 'catalog';
@@ -32,7 +33,9 @@ export function TracksPortal() {
   const reload = async () => {
     await withProvider(async (p) => {
       await p.ready();
-      setTracks(await p.listTracks());
+      const list = await p.listTracks();
+      writeTrackCache(list);
+      setTracks(list);
     }).catch((e) => {
       setTracks([]);
       toast(errorText(e), 'error');

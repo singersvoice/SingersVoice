@@ -119,8 +119,10 @@ describe('sv-control API', () => {
     expect(started.meet.state).toBe('countdown');
     expect(started.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(4000);
 
-    // transport: the host and any singer on stage pause / resume / seek (the song belongs to the stage); restart is the host's
-    expect((await app.request(`/meets/${meet.meetId}/restart`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, fromMs: 0 }) })).status).toBe(403);
+    // transport: the host and any singer on stage pause / resume / seek / restart (the song belongs to the stage); the audience cannot
+    const erin = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('erin'), body: JSON.stringify({ role: 'audience' }) }));
+    expect((await app.request(`/meets/${meet.meetId}/restart`, { method: 'POST', headers: as('erin'), body: JSON.stringify({ resumeToken: erin.resumeToken, fromMs: 0 }) })).status).toBe(403);
+    await app.request(`/meets/${meet.meetId}/leave`, { method: 'POST', headers: as('erin'), body: JSON.stringify({ resumeToken: erin.resumeToken }) });
     const paused = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/pause`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, leadMs: 0 }) }));
     // Pausing during the countdown is cued at the kickstart itself: everyone stops at position 0.
     expect(paused.meet.playback).toMatchObject({ state: 'playing', pauseAtEpochMs: started.meet.kickstartEpochMs, pausedAtMs: 0 });
@@ -128,7 +130,8 @@ describe('sv-control API', () => {
     const resumed = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/resume`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 2000 }) }));
     expect(resumed.meet.playback).toMatchObject({ state: 'playing', epoch: 2 });
     expect(resumed.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(1000);
-    const restarted = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/restart`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 2000, fromMs: 0 }) }));
+    // A singer on stage restarts from the top for everyone (not only the host).
+    const restarted = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/restart`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, leadMs: 2000, fromMs: 0 }) }));
     expect(restarted.meet.playback).toMatchObject({ state: 'playing', offsetMs: 0, epoch: 3 });
     // A seek while playing is cued like a kickstart (everyone jumps at the same instant); by a singer on stage too.
     const sought = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/seek`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, leadMs: 2000, toMs: 45000 }) }));

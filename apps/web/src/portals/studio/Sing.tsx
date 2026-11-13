@@ -273,7 +273,7 @@ export function Sing(props: { id: string }) {
 
       // The show (my cut-out on the stage, with the mix) records from the kickstart.
       show.start(engine, t0);
-      player.onEnded = () => void finish();
+      player.onEnded = () => void finishRef.current(); // the latest finish, whatever render set it
       setPhase(app.countIn ? 'countdown' : 'playing');
       const tick = () => {
         const ctxNow = engine.ctx.currentTime;
@@ -343,7 +343,7 @@ export function Sing(props: { id: string }) {
     const delta = from - recPos.current; // a seek made while paused
     if (Math.abs(delta) > 30) engine.recorder?.seek(t0, delta / audio.tempo);
     show.resume();
-    player.onEnded = () => void finish();
+    player.onEnded = () => void finishRef.current();
     setPhase('playing');
   };
 
@@ -360,6 +360,7 @@ export function Sing(props: { id: string }) {
     await start();
   };
 
+  const finishRef = useRef<() => Promise<void>>(async () => undefined);
   const finish = async () => {
     const engine = engineRef.current;
     if (!engine || !loaded) return;
@@ -397,6 +398,7 @@ export function Sing(props: { id: string }) {
       setPhase('ready');
     }
   };
+  finishRef.current = finish;
 
   if (phase === 'loading' || !track)
     return (

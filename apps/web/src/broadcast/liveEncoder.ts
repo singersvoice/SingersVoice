@@ -16,7 +16,7 @@ import { splitAdts, TsMuxer, type MediaPacket } from './tsMuxer.ts';
 export const LIVE_WIDTH = 1280;
 export const LIVE_HEIGHT = 720;
 export const LIVE_FPS = 30;
-export const LIVE_VIDEO_BPS = 3_000_000;
+export const LIVE_VIDEO_BPS = 3_500_000;
 export const LIVE_AUDIO_BPS = 128_000;
 const AUDIO_RATE = 48000;
 /** ADTS frames per audio PES. */

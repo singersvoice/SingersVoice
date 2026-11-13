@@ -5,13 +5,12 @@
  * top — into one bus the broadcast encoder taps. What the publisher hears on their own speakers is
  * the same mix, with its two monitor switches (vocals, music) that never touch the broadcast.
  */
-import { BACKING_IN_MIX, VOCAL_IN_MIX } from '../video/showRecorder.ts';
+import { BACKING_IN_MIX, dbToGain, safetyStage, VOCAL_IN_MIX } from '../video/showRecorder.ts';
 
 export class PublisherBus {
   readonly ctx: AudioContext;
-  /** The broadcast mix (after the limiter): tap this.
-   */
-  readonly output: DynamicsCompressorNode;
+  /** The broadcast mix, after the safety stage (limiter + clipper): tap this. */
+  readonly output: AudioNode;
   private readonly vocalSum: GainNode;
   private readonly backingLevel: GainNode;
   private readonly bus: GainNode;
@@ -19,32 +18,39 @@ export class PublisherBus {
   private readonly monitorMusic: GainNode;
   private backingEl: HTMLAudioElement | null = null;
   private backingSrc: MediaElementAudioSourceNode | null = null;
-  private vocals = new Map<string, { stream: MediaStream; node: MediaStreamAudioSourceNode; level: GainNode }>();
+  private vocals = new Map<string, { stream: MediaStream; node: MediaStreamAudioSourceNode; level: GainNode; monitor: GainNode }>();
   private workletReady: Promise<void> | null = null;
+  /** Participants whose vocal stays out of the monitor (the publisher's own, when they are also on stage — they hear it on stage). */
+  private monitorMuted = new Set<string>();
 
   constructor() {
     this.ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
     const ctx = this.ctx;
     this.bus = ctx.createGain();
     this.bus.gain.value = 0.85;
-    this.output = ctx.createDynamicsCompressor();
-    this.output.threshold.value = -8;
-    this.output.knee.value = 6;
-    this.output.ratio.value = 6;
-    this.output.attack.value = 0.003;
-    this.output.release.value = 0.12;
-    this.bus.connect(this.output);
+    const safety = safetyStage(ctx);
+    this.bus.connect(safety.input);
+    this.output = safety.output;
     this.vocalSum = ctx.createGain();
     this.vocalSum.gain.value = VOCAL_IN_MIX;
     this.vocalSum.connect(this.bus);
     this.backingLevel = ctx.createGain();
     this.backingLevel.gain.value = BACKING_IN_MIX;
     this.backingLevel.connect(this.bus);
-    // The monitor: the same two sources, each behind its own switch, to the speakers.
+    // The monitor: the same sources, each behind its own switch, through the same safety stage, to the speakers.
+    const monitorSafety = safetyStage(ctx);
     this.monitorVocals = ctx.createGain();
     this.monitorMusic = ctx.createGain();
-    this.vocalSum.connect(this.monitorVocals).connect(ctx.destination);
-    this.backingLevel.connect(this.monitorMusic).connect(ctx.destination);
+    this.monitorVocals.connect(monitorSafety.input);
+    this.backingLevel.connect(this.monitorMusic).connect(monitorSafety.input);
+    monitorSafety.output.connect(ctx.destination);
+  }
+
+  /** The broadcast balance (dB): the track and the voices, applied live. */
+  setBalance(trackDb: number, vocalDb: number): void {
+    const t = this.ctx.currentTime;
+    this.backingLevel.gain.setTargetAtTime(BACKING_IN_MIX * dbToGain(trackDb), t, 0.03);
+    this.vocalSum.gain.setTargetAtTime(VOCAL_IN_MIX * dbToGain(vocalDb), t, 0.03);
   }
 
   /** The tap worklet, loaded once (the same module the singers' devices use for the audience mix). */
@@ -79,6 +85,7 @@ export class PublisherBus {
       if (vocals[id] !== v.stream) {
         v.node.disconnect();
         v.level.disconnect();
+        v.monitor.disconnect();
         this.vocals.delete(id);
       }
     }
@@ -87,12 +94,22 @@ export class PublisherBus {
       try {
         const node = this.ctx.createMediaStreamSource(stream);
         const level = this.ctx.createGain();
-        node.connect(level).connect(this.vocalSum);
-        this.vocals.set(id, { stream, node, level });
+        node.connect(level).connect(this.vocalSum); // the broadcast: every voice, always
+        const monitor = this.ctx.createGain();
+        monitor.gain.value = this.monitorMuted.has(id) ? 0 : 1;
+        level.connect(monitor).connect(this.monitorVocals); // the publisher's own ears
+        this.vocals.set(id, { stream, node, level, monitor });
       } catch (e) {
         console.warn('vocal source', e);
       }
     }
+  }
+
+  /** Vocals left out of the monitor (never out of the broadcast). */
+  setMonitorMuted(ids: Iterable<string>): void {
+    this.monitorMuted = new Set(ids);
+    const t = this.ctx.currentTime;
+    for (const [id, v] of this.vocals) v.monitor.gain.setTargetAtTime(this.monitorMuted.has(id) ? 0 : 1, t, 0.02);
   }
 
   setMonitor(on: { vocals: boolean; music: boolean }): void {
@@ -105,6 +122,7 @@ export class PublisherBus {
     for (const v of this.vocals.values()) {
       v.node.disconnect();
       v.level.disconnect();
+      v.monitor.disconnect();
     }
     this.vocals.clear();
     this.backingSrc?.disconnect();

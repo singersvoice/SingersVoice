@@ -51,7 +51,10 @@ interface Peer {
 
 const POLL_CONNECTING_MS = 900;
 const POLL_STEADY_MS = 2500;
-const TOTAL_UPLINK_BPS = 1_600_000;
+/** A singer's whole video uplink, shared by their links to the other singers (a publisher's link gets its own, generous cap). */
+const TOTAL_UPLINK_BPS = 2_400_000;
+/** A publisher's link carries what goes out to the world: up to this, always. */
+const PUBLISHER_BPS = 2_000_000;
 /** A vocal over the mesh: Opus at 96 kbps (the browser's phone-call default is ~32 kbps and thins a singing voice). */
 const VOCAL_BPS = 96_000;
 /** An offer unanswered this long (a lost signal, a peer that reloaded) is made again from a fresh connection. */
@@ -271,8 +274,10 @@ export class PerformerMesh {
   }
 
   private applyCaps(peer: Peer): void {
-    const n = Math.max(1, this.peers.size);
-    const maxBitrate = Math.max(150_000, Math.min(600_000, Math.round(TOTAL_UPLINK_BPS / n)));
+    // Links to other singers share the uplink; a link to a publisher (someone we did not ask for — the show view) is the broadcast's source and gets the full picture.
+    const singers = Math.max(1, [...this.peers.keys()].filter((id) => this.wanted.has(id)).length);
+    const publisher = !this.wanted.has(peer.id);
+    const maxBitrate = publisher ? PUBLISHER_BPS : Math.max(300_000, Math.min(1_200_000, Math.round(TOTAL_UPLINK_BPS / singers)));
     for (const s of peer.pc.getSenders()) {
       if (!s.track) continue;
       const params = s.getParameters();
@@ -282,9 +287,9 @@ export class PerformerMesh {
         params.encodings[0]!.maxBitrate = VOCAL_BPS;
       } else {
         params.encodings[0]!.maxBitrate = maxBitrate;
-        params.encodings[0]!.maxFramerate = 15;
-        params.encodings[0]!.scaleResolutionDownBy = n > 4 ? 1.5 : 1;
-        params.degradationPreference = 'maintain-framerate';
+        params.encodings[0]!.maxFramerate = publisher ? 24 : 15;
+        params.encodings[0]!.scaleResolutionDownBy = !publisher && singers > 6 ? 1.5 : 1;
+        params.degradationPreference = publisher ? 'maintain-resolution' : 'maintain-framerate';
       }
       void s.setParameters(params).catch(() => undefined);
     }

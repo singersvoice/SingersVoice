@@ -29,6 +29,9 @@ export interface AppSettings {
   echoCancellation: boolean;
   highContrastLyrics: boolean;
   onboarded: boolean;
+  /** The mix balance on this device (dB): the backing track and the vocals in what is recorded, relayed and broadcast from here. */
+  trackDb: number;
+  vocalDb: number;
 }
 
 export const APP_DEFAULTS: AppSettings = {
@@ -49,6 +52,8 @@ export const APP_DEFAULTS: AppSettings = {
   echoCancellation: false,
   highContrastLyrics: false,
   onboarded: false,
+  trackDb: 0,
+  vocalDb: 0,
 };
 
 const APP_KEY = 'sv.settings.app';

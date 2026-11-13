@@ -171,17 +171,30 @@ export function useCountdown(meet: Meet): number | null {
   return countdown;
 }
 
-/** The picture itself — what goes out. Fills its positioned parent. */
-export function ShowPicture(props: { meet: Meet; compositor: StageCompositor; countdown: number | null; children?: preact.ComponentChildren }) {
+/**
+ * The picture itself — what goes out. Fills its positioned parent. While the broadcast runs, `mirror`
+ * is the encoder's own canvas as a stream: the publisher then watches exactly what is being sent, and
+ * the screen's own compositor rests (one drawing of the show, not two).
+ */
+export function ShowPicture(props: { meet: Meet; compositor: StageCompositor; countdown: number | null; mirror?: MediaStream | null; children?: preact.ComponentChildren }) {
   const { meet } = props;
   const live = meet.state === 'live';
   const over = meet.state === 'ended' || meet.state === 'expired';
   const paused = meet.playback?.state === 'paused';
   const onStage = meet.stage.filter((s) => s.participantId).length;
+  const mirrorRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const v = mirrorRef.current;
+    if (!v) return;
+    if (v.srcObject !== (props.mirror ?? null)) {
+      v.srcObject = props.mirror ?? null;
+      if (props.mirror) void v.play().catch(() => undefined);
+    }
+  }, [props.mirror]);
   return (
-    <div class="showpic" data-state={meet.state}>
+    <div class="showpic" data-state={meet.state} data-mirror={props.mirror ? '1' : '0'}>
       <StageBackground id={meet.backgroundId} />
-      <VirtualStage compositor={props.compositor} />
+      {props.mirror ? <video ref={mirrorRef} class="showmirror" muted playsInline autoPlay /> : <VirtualStage compositor={props.compositor} />}
       {meet.state === 'lobby' && onStage > 0 && <div class="show-note">{meet.trackTitle ? `Up next: ${meet.trackTitle}` : 'On stage — picking the next song'}</div>}
       {!live && (
         <div class="show-center">

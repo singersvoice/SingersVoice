@@ -22,6 +22,8 @@ export class Broadcast {
   private unsubscribe: (() => void) | null = null;
   /** The job being broadcast (null when nothing goes out). */
   job: PublishJob | null = null;
+  /** The encoder's canvas as a stream, for the publisher's own screen while the broadcast runs. */
+  readonly mirror = signal<MediaStream | null>(null);
 
   constructor() {
     void liveSupport().then((s) => {
@@ -48,6 +50,11 @@ export class Broadcast {
     await this.bus.ready();
     await this.bus.resume();
     this.picture.startDrawing(30);
+    try {
+      this.mirror.value = this.picture.canvas.captureStream(30);
+    } catch {
+      this.mirror.value = null;
+    }
     const sender = new LiveSender(job.jobId);
     sender.start();
     this.sender = sender;
@@ -81,7 +88,14 @@ export class Broadcast {
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.picture.stopDrawing();
+    this.mirror.value?.getTracks().forEach((t) => t.stop());
+    this.mirror.value = null;
     this.job = null;
+  }
+
+  /** The broadcast balance (dB), from the device's Track / Vocal controls. */
+  setBalance(trackDb: number, vocalDb: number): void {
+    this.bus.setBalance(trackDb, vocalDb);
   }
 
   dispose(): void {

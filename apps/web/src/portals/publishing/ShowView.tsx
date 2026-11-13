@@ -25,6 +25,8 @@ import { privileged } from '../../state/session.ts';
 import { MeetSession } from '../meets/meetSession.ts';
 import { loadMeetTrack } from '../meets/trackSource.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
+import { MixBalance } from '../../components/MixBalance.tsx';
+import { appSettings } from '../../state/settings.ts';
 import { VOCAL_LAG_MS } from '../../video/showRecorder.ts';
 import { Broadcast } from './broadcast.ts';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
@@ -143,6 +145,13 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   useEffect(() => {
     broadcast.bus.setMonitor({ vocals: vocalsOn, music });
   }, [vocalsOn, music]);
+  const app = appSettings.value;
+  useEffect(() => broadcast.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
+  // The publisher who is also singing on stage (same account): their own vocal stays out of this monitor —
+  // they hear themselves on stage; hearing it again here, a few hundred ms late, is the "echo" nobody wants.
+  const ownOnStage = (session.snapshot.value?.participants ?? []).filter((p) => p.userId === props.you.userId && p.participantId !== props.you.participantId && meet.stage.some((s) => s.participantId === p.participantId)).map((p) => p.participantId);
+  const ownKey = ownOnStage.join(',');
+  useEffect(() => broadcast.bus.setMonitorMuted(ownOnStage), [ownKey]);
   // The broadcast's own canvas draws the same background and performers the picture shows.
   const bgItems = backgrounds.value;
   useEffect(() => {
@@ -355,7 +364,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
 
   return (
     <div class="show" data-state={meet.state} data-performers={feed.compositor.tiles.length} data-linked={feed.linked} data-idle={hideChrome ? '1' : '0'} onPointerMove={wake} onPointerDown={wake}>
-      <ShowPicture meet={meet} compositor={feed.compositor} countdown={countdown}>
+      <ShowPicture meet={meet} compositor={feed.compositor} countdown={countdown} mirror={broadcast.mirror.value}>
         <button class="btn" onClick={exit}>
           Back to Publishing
         </button>
@@ -409,7 +418,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
               {busy ? <Spinner /> : <IcStop />} Stop publishing
             </button>
           )}
-          <button class={`btn icon ${vocalsOn ? 'on' : ''}`} aria-label={vocalsOn ? 'Mute the singers' : 'Hear the singers'} aria-pressed={vocalsOn} title={`The singers' vocals (${Object.keys(feed.vocals).length} arriving)`} onClick={() => setVocalsOn((v) => !v)}>
+          <button class={`btn icon ${vocalsOn ? 'on' : ''}`} aria-label={vocalsOn ? 'Mute the singers in your monitor' : 'Hear the singers in your monitor'} aria-pressed={vocalsOn} title={`Your monitor: the singers' vocals (${Object.keys(feed.vocals).length} arriving)${ownOnStage.length ? ' — your own voice is left out, you hear it on stage' : ''}. The broadcast always carries every voice.`} onClick={() => setVocalsOn((v) => !v)}>
             <IcMic />
           </button>
           <button class={`btn icon ${music ? 'on' : ''}`} aria-label={music ? 'Mute the backing track' : 'Play the backing track here'} aria-pressed={music} disabled={!trackUrl} title={trackNote ?? (trackUrl ? 'Backing track, in sync with the singers (M)' : 'Loading the track…')} onClick={() => setMusic((m) => !m)}>
@@ -423,6 +432,10 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
           <button class="btn icon" aria-label="Leave the show view" title="Back to Publishing" onClick={exit}>
             <IcX />
           </button>
+        </div>
+        <div class="row between" style="gap:12px;flex-wrap:wrap">
+          <MixBalance compact />
+          <span class="small faint">{ownOnStage.length ? 'Your own voice stays out of this monitor (you hear it on stage); the broadcast carries it.' : 'The monitor buttons change what you hear here, never the broadcast.'}</span>
         </div>
         {job && (
           <div class="jobline small" data-live-state={sending?.state ?? ''} data-live-segments={sending?.segments ?? 0} data-live-youtube={sending?.youtube ?? ''}>

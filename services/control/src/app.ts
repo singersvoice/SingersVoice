@@ -679,7 +679,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   /**
    * Transport — pause freezes the shared position at a cued instant; resume / seek / restart cue a new
    * kickstart, so every device moves together whoever asked. The host and any singer on stage may
-   * pause, resume and seek; restart (from the top) is the host's.
+   * pause, resume, seek and restart (from the top) — a singer who fluffed the first line starts over for the stage.
    */
   for (const action of ['pause', 'resume', 'restart', 'seek'] as const) {
     app.post(`/meets/:id/${action}`, async (c) => {
@@ -689,7 +689,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
       const p = await participantFromBody(c, meet.meetId, body.resumeToken);
       if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
-      if (action === 'restart' ? !isHost(meet, p) : !canTransport(meet, p)) return err(c, 403, 'not_host', action === 'restart' ? 'Only the host restarts the song' : 'Only the singers on stage control the song');
+      if (!canTransport(meet, p)) return err(c, 403, 'not_host', 'Only the singers on stage control the song');
       ensureMeet(meet);
       tick(meet);
       const r =

@@ -20,6 +20,7 @@ import { PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcMusic, IcPause, IcPlay, IcPlus, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
+import { MixBalance } from '../../components/MixBalance.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Progress, Seg, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, serverNow } from '../../lib/api.ts';
@@ -796,7 +797,12 @@ function LiveStage(props: {
       show.resume();
     }
     setSeekTarget(null);
-    player.onEnded = () => void finish();
+    // The song's natural end calls the *latest* finish (through a ref): the one in this closure was made before
+    // `started` became true and would return at once — a song nobody paused or seeked would never finish.
+    player.onEnded = () => {
+      (window as unknown as { __svEnded?: unknown }).__svEnded = Date.now(); // support / e2e
+      void finishRef.current();
+    };
     cancelAnimationFrame(raf.current);
     const tick = () => {
       const nowCtx = engine.ctx.currentTime;
@@ -805,6 +811,7 @@ function LiveStage(props: {
         setCountdown(null);
         setTMs(Math.max(0, player.positionMs() - engine.outputLatencyMs));
       }
+      (window as unknown as { __svPos?: unknown }).__svPos = { posMs: Math.round(player.positionMs()), epoch: pb.epoch, state: pb.state, offsetMs: pb.offsetMs, ks: meet.kickstartEpochMs, playing: player.playing }; // support / e2e
       raf.current = requestAnimationFrame(tick);
     };
     raf.current = requestAnimationFrame(tick);
@@ -864,7 +871,9 @@ function LiveStage(props: {
     if (started && (meet.state === 'lobby' || meet.state === 'ended' || meet.state === 'expired')) void finish();
   }, [meet.state]);
 
+  const finishRef = useRef<() => Promise<void>>(async () => undefined);
   const finish = async () => {
+    (window as unknown as { __svFinish?: unknown }).__svFinish = { at: Date.now(), finishing, started, step: 'called' }; // support / e2e
     if (finishing || !started) return;
     setFinishing(true);
     cancelAnimationFrame(raf.current);
@@ -889,6 +898,7 @@ function LiveStage(props: {
       const videoOffsetMs = rec ? (rec.startCtxTime - origin) * 1000 - rec.lagMs : null;
       engine.closeMic();
       await keepAwake(false);
+      (window as unknown as { __svFinish?: unknown }).__svFinish = { at: Date.now(), step: 'stopped', host, state: meet.state };
       // The host's take ending ends the song for everyone: the meet goes back to the lobby, next song up.
       if (host && (meet.state === 'live' || meet.state === 'countdown')) void session.nextSong().catch(() => undefined);
       props.onTake(
@@ -912,6 +922,7 @@ function LiveStage(props: {
     }
   };
 
+  finishRef.current = finish;
   const transport = async (what: 'pause' | 'resume' | 'restart') => {
     try {
       if (what === 'pause') await session.pause(3000);
@@ -998,11 +1009,9 @@ function LiveStage(props: {
                     <IcPause /> {pauseAt !== null ? 'Pausing…' : 'Pause'}
                   </button>
                 )}
-                {host && (
-                  <button class="btn icon" aria-label="Restart the song for everyone" title="Restart from the top" onClick={() => void transport('restart')}>
-                    <IcSkipBack />
-                  </button>
-                )}
+                <button class="btn" aria-label="Restart the song for everyone" title="Restart from the top — for everyone on stage" onClick={() => void transport('restart')}>
+                  <IcSkipBack /> Restart
+                </button>
                 <button class="btn big accent" disabled={finishing} aria-label={host ? 'Stop the song for everyone' : 'Stop my take'} title={host ? 'Stops the song for everyone — the next one on the set list comes up' : 'Stops your take (the song goes on for the others)'} onClick={() => void finish()}>
                   {finishing ? <Spinner /> : <IcStop />} {host ? 'Stop song' : 'Stop'}
                 </button>
@@ -1017,6 +1026,7 @@ function LiveStage(props: {
             </span>
             <span class="chip" style={{ borderColor: SLOT_COLORS[mySlot] }}>S{mySlot}</span>
           </div>
+          <MixBalance />
         </section>
       </div>
     </Page>

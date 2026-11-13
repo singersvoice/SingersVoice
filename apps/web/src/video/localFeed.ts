@@ -9,8 +9,10 @@ import { frameRect, presetLevel, SILENCE_HOLD_MS, SING_LEVEL, ZOOM_EASE, type Zo
 import { PersonSegmenter, type SegmenterMode } from './segmenter.ts';
 import type { PerformerSource } from './stage.ts';
 
-const W = 480;
-const H = 640;
+/** The cut-out's own size: computers work at 720×960 so a singer standing full-height in a 720p show is drawn near 1:1; phones at 480×640. */
+const COMPUTER = typeof navigator !== 'undefined' && (navigator.hardwareConcurrency ?? 2) >= 4 && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const W = COMPUTER ? 720 : 480;
+const H = COMPUTER ? 960 : 640;
 
 export class LocalFeed {
   readonly video: HTMLVideoElement;

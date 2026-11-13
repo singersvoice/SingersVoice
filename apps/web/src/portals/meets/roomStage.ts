@@ -197,6 +197,8 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     show.setBackground(item ?? null, backgroundSrc(item));
   }, [meet.backgroundId, bgItems.length]);
   show.youLabel = you.displayName.split(' ')[0] || 'You';
+  // The mix balance this device records and relays at: the singer's Track / Vocal controls.
+  useEffect(() => show.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
   // The host's device sends the mix to the audience (nobody on stage ever hears it).
   show.broadcast = you.userId === meet.hostUserId ? (b) => session.sendMix(b) : null;
 

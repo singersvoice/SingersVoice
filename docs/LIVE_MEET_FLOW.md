@@ -127,6 +127,17 @@ Warm, Bright, Warm Ballad, Stadium, Telephone, Doubler, Robot, Octave Down. The 
 singer's own, kept on their device (and in their Drive config) until they change it; what the
 recording, the publisher and the other singers' recordings get is the treated voice.
 
+**Restart, Track volume, Vocal volume.** Every singer on stage has **Restart** (the song starts over
+for everyone, cued — a fluffed first line is nobody's problem) beside Pause and Stop; the host alone
+ends the song. Under the transport, **Track volume** and **Vocal volume** move in 1 dB steps
+(−18…+12): the balance *this device mixes at* — what it records, what the host's device relays to
+the audience, and (in the show view) what goes out to YouTube and the portal. They are kept on the
+device until changed. *Hear myself* is a different thing — the singer's own monitor — and comes back
+through the browser some 40–100 ms late (more while pitch correction runs), so a singer hears
+themselves twice; the Mic line says so and points to the microphone's or interface's own headphone
+jack, which is instant. A song that runs out on its own now finishes like one that is stopped: the
+takes save, the meet moves on (a stale callback used to leave it hanging unless someone had paused).
+
 ## 4 · The room — audience
 
 Audience see the stage (performers' placeholders — video is private to the stage and the
@@ -206,6 +217,14 @@ never pulls them apart while they sing the same lines — and the show view play
 the backing track, which it runs a quarter second behind the shared clock to meet them. The same
 blend reaches the audience in the room through *Hear the stage* (section 4).
 Preview tiles monitor silently; one can be heard on request.
+
+**What the publisher hears.** The show view's two buttons (vocals, music) are its *monitor* — the
+publisher's own ears — and never touch the broadcast, which always carries every voice and the
+track. A publisher who is also singing on stage (the same account) does not hear their own voice
+in the show view: it would come back a few hundred milliseconds late through the mesh, the
+"repeated voice" that feels like the show view listening to the mic — it does not; the show view
+never opens a microphone or camera. While the broadcast runs the show view displays the encoder's
+own canvas, so what the publisher watches is exactly what goes out.
 
 **Go live — the show view is the encoder.** Nothing sits between the publisher and the platforms:
 the show view's own browser encodes the picture (its 1280×720 show canvas through WebCodecs,
