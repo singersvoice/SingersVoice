@@ -184,7 +184,14 @@ show only**: a vocal that arrives on a singer's device goes to the recording's m
 else, so singers still never hear each other (Solo foldback) and latency never pulls them apart.
 Every vocal sender is capped at 96 kbps (`RTCRtpSender.setParameters`, re-applied when the link
 connects and when the track is attached) — music quality rather than WebRTC's ~32 kbps phone-call
-default. The show view plays the vocals (hidden audio elements) and the backing track a quarter
+default. Video: a link to another singer shares the uplink (2.4 Mbps over the singer links, 300 kbps
+to 1.2 Mbps each, 15 fps, scaled down only past six singers); a link to a *publisher* — a peer the
+singer did not ask for, i.e. a show view or Preview tile — is the broadcast's source and gets its
+own 2 Mbps at 24 fps, resolution kept. The cut-out itself is 720×960 on computers (480×640 on
+phones; the packed frame twice as wide), so a singer standing full-height in a 720p show is drawn
+near 1:1; the general selfie model (256×256) replaces the landscape one (256×144) on computers and
+the mask is drawn with a 1.2 px blur — a soft edge instead of a staircase. The show layout never
+blows a cut-out up past 2.5× its own pixels, and gives one or two singers a little stage around them. The show view plays the vocals (hidden audio elements) and the backing track a quarter
 second behind the shared clock to meet them; Preview tiles are muted unless asked to listen.
 
 **The saved performance (`video/showRecorder.ts`).** Every singer's device records the show while
@@ -193,7 +200,9 @@ a 'show' compositor over the same cut-outs the stage draws — the remote frames
 and shared, `UnpackedFrame`), its own audio bus on the engine's context (backing track + own vocal
 after FX, held back by the same quarter second through a DelayNode — and this device's own cut-out
 through a frame ring, so its picture is in step with its sound — plus every other singer's vocal as
-it arrives, through a limiter — the vocals +3 dB, the track −2 dB), one MediaRecorder — **MP4
+it arrives — at the device's **Track / Vocal volume** balance, then a brick-wall safety stage: a
+hard-kneed limiter and a tanh soft clipper, so nothing above full scale ever reaches an encoder,
+which is what crackles), one MediaRecorder — **MP4
 first** (`pickShowMime`: H.264 + AAC where the browser has an AAC encoder — Windows, Mac, iOS —
 else H.264 + Opus in MP4, WebM only where MP4 is not offered, i.e. Firefox; audio at 192 kbps) so
 a saved show plays wherever its Drive link is opened; the Drive file is named *song · meet ·
@@ -272,9 +281,11 @@ correlates with the music) — mono, at the device's own rate. Echo cancellation
 singer says *I'm on speakers* (the track would otherwise leak into the mic). `AudioEngine.inputInfo`
 reports the device, its sample rate and channels; a rate under 32 kHz is a phone-call line (a
 Bluetooth headset's HFP mic) and the `MicStatus` component says so and offers another mic. The
-**leveller** (`startLeveller`) replaces AGC: the raw peaks are watched 10× a second; under
-−18 dBFS the trim rises 1 dB at a time (to +18 dB), past −3 dBFS it drops 3 dB at once (to −6 dB) —
-slow up, fast down, no pumping, never clipped. Then: trim → pitch worklet (granular shifter + NSDF
+**leveller** (`startLeveller`) replaces AGC: the raw peaks are watched 10× a second; quiet
+*singing* (a raw peak above −34 dBFS, gained below −18 dBFS, for three readings) lifts the trim 1 dB
+at a time up to +12 dB — room noise between phrases never does, which is what used to drive the gain
+to the ceiling and the noise floor with it; past −6 dBFS it drops 2 dB at once (floor −6 dB) — slow
+up, fast down, no pumping, never clipped. Then: trim → pitch worklet (granular shifter + NSDF
 auto-tune) → HPF → low shelf 120 Hz / peak 1.2 kHz / **presence peak 3.2 kHz** / high shelf 6.5 kHz
 → compressor → **parallel compression** (a crushed copy, 10:1 from −36 dB, blended under the dry
 vocal: soft phrases up, transients kept — punch without over-compression) → **de-esser**
