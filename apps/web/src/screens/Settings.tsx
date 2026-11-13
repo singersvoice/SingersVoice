@@ -198,18 +198,19 @@ export function Settings() {
               ))}
             </select>
           </Field>
-          <Field label="Framing">
-            <Seg<'wide' | 'mid' | 'close'>
+          <Field label="Framing" hint="Chest keeps you head-to-chest from wherever you sit (the default); Wide is the whole camera frame; Mid and Close crop in around the face. This exact picture is you on every stage.">
+            <Seg<'chest' | 'wide' | 'mid' | 'close'>
               value={app.zoomPreset}
               onChange={(v) => updateApp({ zoomPreset: v })}
               options={[
+                { v: 'chest', label: 'Chest' },
                 { v: 'wide', label: 'Wide' },
                 { v: 'mid', label: 'Mid' },
                 { v: 'close', label: 'Close' },
               ]}
             />
           </Field>
-          <Switch checked={app.autoZoom} onChange={(v) => updateApp({ autoZoom: v })} label="AutoZoom during the intro" />
+          <Switch checked={app.autoZoom} onChange={(v) => updateApp({ autoZoom: v })} label="Auto zoom while singing" hint="Eases a little closer while you sing and back out when you're silent — on everyone's screen." />
           <Switch checked={app.cutout} onChange={(v) => updateApp({ cutout: v })} label="Person cut-out" hint="Segmentation model, loaded on demand." />
         </section>
 

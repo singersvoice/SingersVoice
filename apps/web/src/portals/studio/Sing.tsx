@@ -546,12 +546,13 @@ export function Sing(props: { id: string }) {
               ))}
             </div>
           </Field>
-          <Field label="Stage framing (wide = whole frame, standing small on stage)">
+          <Field label="Stage framing (Chest follows you head-to-chest; Wide is the whole camera frame)">
             <div class="row">
               <Seg<ZoomPreset>
                 value={app.zoomPreset}
                 onChange={(v) => updateApp({ zoomPreset: v })}
                 options={[
+                  { v: 'chest', label: 'Chest' },
                   { v: 'wide', label: 'Wide' },
                   { v: 'mid', label: 'Mid' },
                   { v: 'close', label: 'Close' },

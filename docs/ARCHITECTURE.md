@@ -139,11 +139,16 @@ picture's bottom edge like a TV shot, ten in one even row; **Performer mode** ('
 stage, Studio) — the lyrics are the picture, big, and each frame sits small in the lower ~45 %.
 A frame that arrived small (a weak link) is never blown up past 2.5× its pixels. Framing
 (`video/framing.ts`) is the singer's choice, on the live stage next to the camera button (and in
-Studio / Settings): wide (the whole frame; the default), mid, close (around the face), and a
-vocal-driven auto zoom that eases towards "close" while a singer sings and back out when they fall
+Studio / Settings). The default, **Chest**, frames the singer from the person: the feed reads its
+own mask a few times a second (a 96×128 probe; the body width is the width most rows have, so a
+stretched arm never widens it), and crops 1.35 bodies wide in the frame's own proportions with the
+top of the head a tenth of the way down — head to chest, like a news anchor, from wherever the
+singer sits; never past the camera frame (a singer already close gets the whole frame), never
+tighter than 0.3 of it (a far singer is brought up, not into a blur); deadbanded and eased so it
+never breathes. Wide (the whole frame), Mid and Close (fixed crops around the face) remain, and a
+vocal-driven auto zoom eases a little closer while a singer sings and back out when they fall
 silent. The sender crops its own stream at full resolution, so whoever takes the vocal comes closer
-on everyone's screen — and a singer who stands small in a wide frame stands small on every stage
-until they pick Mid or Close.
+on everyone's screen.
 
 Other performers' video arrives over a WebRTC mesh (`video/peers.ts`, video only — singers never hear
 each other, by design): each device sends its cut-out **alpha-packed** (left half colour, right half

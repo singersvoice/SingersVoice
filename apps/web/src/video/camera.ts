@@ -6,8 +6,8 @@
  */
 import { signal } from '@preact/signals';
 
-export type ZoomPreset = 'wide' | 'mid' | 'close';
-export const ZOOM_LEVELS: Record<ZoomPreset, number> = { wide: 1, mid: 1.25, close: 1.5 };
+export type ZoomPreset = 'chest' | 'wide' | 'mid' | 'close';
+export const ZOOM_LEVELS: Record<ZoomPreset, number> = { chest: 1, wide: 1, mid: 1.25, close: 1.5 };
 
 interface FaceDetectorLike {
   detect(source: HTMLVideoElement): Promise<{ boundingBox: { x: number; y: number; width: number; height: number } }[]>;

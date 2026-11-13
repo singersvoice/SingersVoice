@@ -14,14 +14,15 @@ export interface AppSettings {
   cameraOn: boolean;
   cameraFacing: 'user' | 'environment';
   cameraDeviceId: string;
-  /** Base framing on the virtual stage: wide (default) shows the whole camera frame, scaled down on stage. */
-  zoomPreset: 'wide' | 'mid' | 'close';
+  /** Base framing on the virtual stage: chest (default) frames the singer head to chest from wherever they sit; wide / mid / close are fixed crops. */
+  zoomPreset: 'chest' | 'wide' | 'mid' | 'close';
   /** Vocal-driven auto zoom: ease closer while this singer sings, back to the preset when silent. */
   autoZoom: boolean;
   /** Kept for older saves; the stage always blends the singer (the model is the only mode). */
   cutout: boolean;
-  /** One-time migration marker for the virtual-stage defaults. */
+  /** One-time migration markers for the virtual-stage defaults. */
   stageV3: boolean;
+  stageV4: boolean;
   singerSlot: number;
   countIn: boolean;
   showCueDeck: boolean;
@@ -41,10 +42,11 @@ export const APP_DEFAULTS: AppSettings = {
   cameraOn: true,
   cameraFacing: 'user',
   cameraDeviceId: '',
-  zoomPreset: 'wide',
+  zoomPreset: 'chest',
   autoZoom: true,
   cutout: true,
   stageV3: true,
+  stageV4: true,
   singerSlot: 1,
   countIn: true,
   showCueDeck: true,
@@ -77,8 +79,10 @@ function migrateApp(v: AppSettings): AppSettings {
   } catch {
     /* fresh */
   }
-  if (stored.stageV3 === true) return v;
-  return { ...v, zoomPreset: 'wide', autoZoom: true, cutout: true, stageV3: true };
+  if (stored.stageV3 !== true) v = { ...v, zoomPreset: 'wide', autoZoom: true, cutout: true, stageV3: true };
+  // The chest framing (head to chest, from the person) became the default: every device starts there once.
+  if (stored.stageV4 !== true) v = { ...v, zoomPreset: 'chest', stageV4: true };
+  return v;
 }
 
 export const appSettings = signal<AppSettings>(migrateApp(read(APP_KEY, APP_DEFAULTS)));

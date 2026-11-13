@@ -87,8 +87,9 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 deck shows who sings what in a duet) and the singers are small — each one's frame as their own
 camera framed it, in the lower part under the lyrics, no zoom of any kind. That frame is the
 picture of you everywhere: the show and the audience get exactly what you see of yourself here, only
-bigger. Controls: camera on/off, **framing** (Wide / Mid / Close and Auto — how your camera frames
-you, next to the camera button), hear myself, **Set
+bigger. Controls: camera on/off, **framing** (next to the camera button: **Chest** — the default,
+head to chest from wherever you sit — Wide, Mid, Close, and Auto, a little closer while you sing),
+hear myself, **Set
 list** (a drawer over the stage: what is playing, what is next, add a song — the song picker is at
 hand while singing too), FX presets, and the **timeline — drag it (or use the arrow keys on it) to
 move back or forth in the song**. Transport belongs to the stage: every singer on stage may

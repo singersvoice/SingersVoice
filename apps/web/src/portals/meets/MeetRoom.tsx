@@ -990,12 +990,13 @@ function LiveStage(props: {
             </button>
             {app.cameraOn && (
               // How your camera frames you is how every stage shows you — the audience included. Your choice, right here.
-              <span class="row framing" data-framing={app.zoomPreset} data-autozoom={app.autoZoom ? '1' : '0'} title="How your camera frames you: this exact picture goes to the stage, the show and the audience">
-                <Seg<'wide' | 'mid' | 'close'>
+              <span class="row framing" data-framing={app.zoomPreset} data-autozoom={app.autoZoom ? '1' : '0'} title="How your camera frames you — Chest keeps you head-to-chest from wherever you sit; this exact picture goes to the stage, the show and the audience">
+                <Seg<'chest' | 'wide' | 'mid' | 'close'>
                   value={app.zoomPreset}
                   ariaLabel="Stage framing"
                   onChange={(v) => updateApp({ zoomPreset: v })}
                   options={[
+                    { v: 'chest', label: 'Chest' },
                     { v: 'wide', label: 'Wide' },
                     { v: 'mid', label: 'Mid' },
                     { v: 'close', label: 'Close' },
