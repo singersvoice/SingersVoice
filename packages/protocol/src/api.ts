@@ -1,6 +1,7 @@
 /** sv-control HTTP API shapes shared by the client and the server. All routes are JSON. */
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
 import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
+import type { MixBatch } from './mix.ts';
 import type { Destination, DestinationKind, DestinationUpdate, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 
 export interface ApiError {
@@ -167,6 +168,10 @@ export interface Routes {
   'POST /meets/:id/resume': { req: PlaybackRequest; res: MeetSnapshot };
   'POST /meets/:id/restart': { req: PlaybackRequest; res: MeetSnapshot };
   'POST /meets/:id/seek': { req: PlaybackRequest; res: MeetSnapshot };
+  /** The host posts a second of the stage mix; everyone else in the meet (and the watch page) fetches what came after `since`. */
+  'POST /meets/:id/mix': { req: MixBatch & { resumeToken?: string }; res: { ok: true; seq: number } };
+  'GET /meets/:id/mix': { res: { batches: MixBatch[]; latest: number; serverEpochMs: number } };
+  'GET /watch/:id/mix': { res: { batches: MixBatch[]; latest: number; serverEpochMs: number } };
   /** `gone`: the addressee left the meet (no error — the sender just forgets the link). */
   'POST /meets/:id/signal': { req: SignalRequest; res: { seq: number; gone?: boolean } };
   'POST /meets/:id/signals': { req: { resumeToken: string; since: number }; res: { signals: MeetSignal[]; serverEpochMs: number } };

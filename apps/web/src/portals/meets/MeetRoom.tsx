@@ -13,6 +13,7 @@ import { useRoomStage, type RoomStage } from './roomStage.ts';
 import { SetListPanel } from './SetListPanel.tsx';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, type AudioEngine } from '../../audio/engine.ts';
+import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { PresetChips } from '../../components/FxPanel.tsx';
@@ -29,6 +30,7 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { privileged } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
+import { MicStatus } from '../../components/MicStatus.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { saveLiveTake } from './liveTake.ts';
@@ -207,6 +209,19 @@ function Room(props: {
 
 // ---------------- Lobby + audience ----------------
 
+/** Re-open the microphone with the settings just changed (another mic, speakers vs headphones) — the chain and the take carry on. */
+async function reopenMic(engine: AudioEngine | null): Promise<void> {
+  if (!engine?.micOpen.value) return;
+  const app = appSettings.peek();
+  try {
+    await engine.openMic({ deviceId: app.audioInputId || undefined, echoCancellation: app.echoCancellation });
+    engine.applyFx(audioSettings.peek().params);
+    engine.setMonitor(audioSettings.peek().monitor);
+  } catch (e) {
+    toast(errorText(e), 'error');
+  }
+}
+
 function Lobby(props: {
   session: MeetSession;
   meet: Meet;
@@ -321,24 +336,58 @@ function Lobby(props: {
     }
   };
 
-  // Audience: listen to the backing track locally, in sync with the shared transport (no voices until the stream exists).
+  // Audience: hear the stage — the host's device sends the blend (track + every vocal, after FX) a second at a
+  // time; it plays here a couple of seconds behind, the lyrics following the sound. When no mix arrives (the
+  // host's browser cannot send one), the backing track plays here instead, in sync with the shared transport.
   const pbState = meet.playback?.state ?? 'idle';
   const pbEpoch = meet.playback?.epoch ?? 0;
+  const mixRef = useRef<MixPlayer | null>(null);
+  const [mixState, setMixState] = useState<{ hearing: boolean; silent: boolean; seq: number; behindS: number }>({ hearing: false, silent: false, seq: 0, behindS: 0 });
   useEffect(() => {
-    const e = props.engine;
-    if (!listen || !e?.player || !props.track?.loaded || meet.kickstartEpochMs === null || pbState !== 'playing') return;
-    const player = e.player;
+    if (!listen || onStage) return;
+    const e = props.engine ?? getEngine(); // the audience has no mic open: the engine is only the speaker here
+    void e.resume();
+    if (!mixPlaySupported()) {
+      setMixState({ hearing: false, silent: true, seq: 0, behindS: 0 });
+      return;
+    }
+    const mp = new MixPlayer(e.ctx, e.master, (since) => session.fetchMix(since));
+    mixRef.current = mp;
+    mp.start();
+    const t = setInterval(() => setMixState({ ...mp.state.value }), 500);
+    return () => {
+      clearInterval(t);
+      mp.stop();
+      mixRef.current = null;
+    };
+  }, [listen, props.engine, onStage]);
+  const fallbackTrack = listen && mixState.silent;
+  useEffect(() => {
+    const e = fallbackTrack ? (props.engine ?? getEngine()) : null;
+    if (!fallbackTrack || !e || !props.track?.loaded || meet.kickstartEpochMs === null || pbState !== 'playing') return;
+    let player = e.player;
+    let stopped = false;
     const run = async () => {
+      await e.resume(); // the speaker engine's player exists once it runs
+      player = e.player;
+      if (!player || stopped) return;
       if (!player.buffer) await player.load(props.track!.loaded!.audio);
       const localStart = meet.kickstartEpochMs! - clock.value.offsetMs;
       const startIn = (localStart - Date.now()) / 1000;
       const offset = meet.playback?.offsetMs ?? 0;
+      if (stopped) return;
       if (startIn >= 0) player.play(e.ctx.currentTime + startIn, offset);
       else player.play(e.ctx.currentTime, offset - startIn * 1000);
     };
     void run();
-    return () => player.stop();
-  }, [listen, meet.kickstartEpochMs, pbState, pbEpoch]);
+    return () => {
+      stopped = true;
+      player?.stop();
+    };
+  }, [fallbackTrack, meet.kickstartEpochMs, pbState, pbEpoch]);
+  // What the audience reads follows what it hears.
+  const heardMs = mixState.hearing ? (mixRef.current?.positionMs() ?? null) : null;
+  const audienceTMs = heardMs ?? tMs;
 
   return (
     <Page title={meet.title} right={<span class={`chip ${live ? 'ok' : ''}`}>{meet.state}</span>}>
@@ -379,18 +428,27 @@ function Lobby(props: {
             ) : (
               <>
                 {props.track?.loaded ? (
-                  <>
-                    <div style="height:220px;position:relative;border-radius:12px;overflow:hidden">
-                      <StageBackground id={meet.backgroundId} />
-                      <LyricsPanel lines={props.track.loaded.track.lyrics} tMs={Math.max(0, tMs)} mySlot={0} countdown={countingDown ? Math.max(1, Math.ceil(-(serverNow() - meet.kickstartEpochMs!) / 1000)) : null} showWho={props.track.loaded.track.singerCount > 1} />
-                    </div>
-                    <label class="switch">
-                      <input type="checkbox" checked={listen} onChange={(e) => setListen((e.currentTarget as HTMLInputElement).checked)} />
-                      <span>Play the backing track here, in sync (voices arrive with the published stream)</span>
-                    </label>
-                  </>
+                  <div style="height:220px;position:relative;border-radius:12px;overflow:hidden">
+                    <StageBackground id={meet.backgroundId} />
+                    <LyricsPanel lines={props.track.loaded.track.lyrics} tMs={Math.max(0, audienceTMs)} mySlot={0} countdown={countingDown && !mixState.hearing ? Math.max(1, Math.ceil(-(serverNow() - meet.kickstartEpochMs!) / 1000)) : null} showWho={props.track.loaded.track.singerCount > 1} />
+                  </div>
                 ) : (
-                  <div class="muted small">Lyrics follow along here when the host's track is in the public catalog.</div>
+                  <div class="muted small">Lyrics follow along here when the song can be loaded on this device (the singer who picked it needs a Drive sign-in so it can be shared).</div>
+                )}
+                <label class="switch">
+                  <input type="checkbox" checked={listen} onChange={(e) => setListen((e.currentTarget as HTMLInputElement).checked)} />
+                  <span>Hear the stage — the singers and the track, blended</span>
+                </label>
+                {listen && (
+                  <div class="small muted" data-mix-hearing={mixState.hearing ? '1' : '0'} data-mix-seq={mixState.seq}>
+                    {mixState.hearing
+                      ? `Hearing the stage · ${mixState.behindS.toFixed(1)} s behind${props.track?.loaded ? ' — the lyrics follow the sound' : ''}`
+                      : mixState.silent
+                        ? mixPlaySupported()
+                          ? `No sound from the stage yet (the host's device sends it once a song runs)${props.track?.loaded ? ' — playing the backing track here meanwhile' : ''}`
+                          : `This browser cannot play the stage mix${props.track?.loaded ? ' — playing the backing track here instead' : ''}`
+                        : 'Tuning in…'}
+                  </div>
                 )}
                 {meet.streamUrl && <div class="callout">Live stream: {meet.streamUrl}</div>}
               </>
@@ -457,6 +515,7 @@ function Lobby(props: {
                   <button class="btn" onClick={() => void claim(null)}>
                     Leave stage
                   </button>
+                  {props.prepared && <MicStatus engine={props.engine} onChange={() => void reopenMic(props.engine)} />}
                 </>
               ) : host || openStage ? (
                 live ? (
@@ -898,6 +957,7 @@ function LiveStage(props: {
         {app.showCueDeck && track.singerCount > 1 && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} />}
         <section class="controls">
           <PresetChips value={audio} onChange={updateAudio} />
+          <MicStatus engine={engine} onChange={() => void reopenMic(engine)} />
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={started && props.prepared ? (ms) => void seek(ms) : undefined} pending={seekTarget} disabled={countdown !== null} />
           <div class="main">
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })}>

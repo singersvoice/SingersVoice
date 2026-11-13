@@ -217,6 +217,15 @@ try {
   check(!(await dave.page.getByRole('button', { name: 'Take a stage slot' }).isVisible().catch(() => false)), 'a newcomer during a song cannot step on stage');
   await dave.page.getByRole('button', { name: 'Ask to sing next' }).click();
   await dave.page.getByText(/On the wait list — the host seats singers once the song is over/).waitFor({ timeout: 15000 });
+  // The audience hears the stage: the host's device sends the blend (track + every vocal) a second at a time.
+  await dave.page.getByText(/Hear the stage — the singers and the track, blended/).click();
+  await dave.page.locator('[data-mix-hearing="1"]').waitFor({ timeout: 20000 });
+  const mixSeq = Number(await dave.page.locator('[data-mix-hearing]').getAttribute('data-mix-seq'));
+  const mixText = (await dave.page.locator('[data-mix-hearing]').innerText()).replace(/\s+/g, ' ');
+  console.log('audience mix:', { mixSeq, mixText });
+  check(mixSeq > 0 && /Hearing the stage/.test(mixText), `the audience hears the stage mix relayed from the host's device (batch ${mixSeq}, ${mixText})`);
+  // (dave has no copy of the song here — local storage, nothing shared through Drive — so the lyrics note tells him why; the sound still plays)
+  check(/Hearing the stage/.test(mixText) && Number(mixSeq) >= 3, 'the mix keeps arriving a second at a time (the audience is a few seconds behind the stage)');
   await alice.page.locator('.sing .stagebar', { hasText: 'wait list · 1' }).waitFor({ timeout: 15000 });
   check(true, 'the host sees the wait list on the live stage; nothing interrupts the song');
 

@@ -3,7 +3,7 @@
  * is forming or counting down (the kickstart instant is absolute, so 2 s is plenty), 5 s otherwise.
  */
 import { signal } from '@preact/signals';
-import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type Participant, type RegisterPerformanceRequest, type SongPick, type StagePolicy } from '@singersvoice/protocol';
+import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type MixBatch, type Participant, type RegisterPerformanceRequest, type SongPick, type StagePolicy } from '@singersvoice/protocol';
 import { api, ApiError, clock, serverNow, syncClock } from '../../lib/api.ts';
 
 const POLL_FORMING_MS = 2000;
@@ -168,6 +168,14 @@ export class MeetSession {
   /** Jump the song for everyone (cued while playing, so every device jumps at the same instant). */
   seek(toMs: number, leadMs = 3000): Promise<void> {
     return this.act('seek', { leadMs, toMs });
+  }
+  /** The host's device sends a second of the stage mix for the audience. */
+  async sendMix(batch: MixBatch): Promise<void> {
+    await api.post('POST /meets/:id/mix', `/meets/${encodeURIComponent(this.meetId)}/mix`, { ...batch, resumeToken: this.resumeToken });
+  }
+  /** The audience fetches what came after `since`. */
+  fetchMix(since: number): Promise<{ batches: MixBatch[]; latest: number }> {
+    return api.get('GET /meets/:id/mix', `/meets/${encodeURIComponent(this.meetId)}/mix?since=${since}`);
   }
 
   // ---- WebRTC signalling relay (performer ↔ performer) ----

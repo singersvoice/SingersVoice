@@ -67,7 +67,7 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 
 | Option | Who | What it does |
 | --- | --- | --- |
-| **Pick your selection of song** | host, singers | Opens the picker: one search box over *My songs* (your Drive library) and *Songs from other singers* (the catalog — built for thousands: every word you type must match, in any order, in the title, artist, genre, language or the singer who shared it; results come a page at a time with counts; Enter picks the top match). Picking is all you do: the song loads on every device in the meet, so all the singers sing the same lines at the same time. A song of yours that other devices cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission — needs a Google sign-in; otherwise only your own devices can play it, and the others say so) — and every singer on stage gets a copy of it in their own Drive library, in the background. The first song picked becomes the current one; later picks queue up. |
+| **Pick your selection of song** | host, singers | Opens the picker: **one list** — your own songs first (tagged *Your library*), then the songs other singers share (tagged *Shared by …*), never the same song twice — under one search box built for thousands: every word you type must match, in any order, in the title, artist, genre, language or the singer who shared it; your library is filtered on the spot, the shared ones are searched in the catalog a page at a time; the counts say *3 of your 120 · 14 of 9,800 shared*; Enter picks the top match. One answer when nothing fits: *No song matches "…" — in your library or among the shared songs* (a song of yours that matches is never "no match"). Picking is all you do: the song loads on every device in the meet, so all the singers sing the same lines at the same time. A song of yours that other devices cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission — needs a Google sign-in; otherwise only your own devices can play it, and the others say so) — and every singer on stage gets a copy of it in their own Drive library, in the background. The first song picked becomes the current one; later picks queue up. |
 | **Now** (in the picker / on a queued song) | host | Makes that song the current one (the previous current goes back to the top of the queue). Only between songs. |
 | ▲ / × on a queued song | host (× also the one who added it) | Move up / remove. |
 | **Skip** | host | Drops the current song; the next one comes up. |
@@ -77,7 +77,7 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 
 | Option | Who | What it does |
 | --- | --- | --- |
-| **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS), decodes the current song, marks you *ready*. Shown once there is a song; ready resets whenever the set list moves on. |
+| **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS), decodes the current song, marks you *ready*. Shown once there is a song; ready resets whenever the set list moves on. Under it the **Mic** line says what the microphone really gives: its name, its sample rate, the automatic level — and warns in red when it is a *phone-call quality* line (a Bluetooth headset's mic: 8–16 kHz, thin and muffled), with a menu to sing into another microphone; **I'm on speakers** turns echo cancellation on (only needed when the track plays out of speakers; with headphones it stays off for the cleanest voice — a hint appears when the sound is going out through speakers). |
 | **Start the song (8 s count-in)** | host | Needs a song and at least one singer. Every device starts the backing track at the same server instant (the GMT kickstart); a singer who is not ready yet can still **Join the song on stage** afterwards and starts mid-song. |
 | **End meet** | host | Ends the event for everyone (after a confirmation). |
 
@@ -118,8 +118,15 @@ the singers drop off.
 ## 4 · The room — audience
 
 Audience see the stage (performers' placeholders — video is private to the stage and the
-publisher), the set list, who is on stage, **Ask to sing**, chat, and while a song runs: the lyrics
-in sync and *Play the backing track here, in sync* (voices arrive with the published stream).
+publisher), the set list, who is on stage, **Ask to sing**, chat, and **Hear the stage — the singers
+and the track, blended**: the very mix the host's device builds for the saved show (the backing
+track with every singer's vocal, after their FX, in sync) is sent out by the host's device a second
+at a time (WebCodecs/Opus, 64 kbps, through `/meets/:id/mix` on the relay — no media server) and
+played here a couple of seconds behind the stage; the lyrics follow what is being heard, not the
+clock. The status line says *Hearing the stage · 2.1 s behind*. When nothing arrives (the host's
+browser has no WebCodecs — Chrome, Edge, Safari 16.4+ and Firefox 130+ do — or the host is not
+singing yet) the device plays the backing track alone, in sync, as before. The singers on stage
+never hear this (or each other): Solo foldback, so latency never pulls them apart.
 
 ## 5 · Between songs and the end
 
@@ -141,7 +148,12 @@ Everything you ever sang, by date and name:
 | **Saving now** | Whatever the background saver is still on (with Retry when something is stuck). |
 
 In Drive: `SingersVoice/Performances/Live/<date time song (id)>/manifest.json + vocal.wav +
-video.webm` (the show), `Performances/Offline/…` for Studio takes, `Temp/…` until kept. A meet's
+<song · meet · date>.mp4` (the show — **MP4** with H.264 and AAC on Windows, Mac and iOS, H.264 and
+Opus on Linux Chrome, WebM only on Firefox; the sound at 192 kbps; named so the people a link
+reaches see the song and the meet, and Drive's own player opens it for anyone with the link),
+`Performances/Offline/…` for Studio takes, `Temp/…` until kept. The Studio's own lists (*Sing a
+track*, *Latest takes*) carry a delete button on every row; Tracks has one in each track's manage
+panel; Performances deletes an opened take. A meet's
 performance is also shared, from the host's Drive, with each singer's Google account (it shows up in
 their Drive's *Shared with me*).
 
@@ -160,10 +172,13 @@ singers' vocals, backing track in sync, full screen). It shows the singers from 
 next: …*), the countdown as an opener, *Paused by the host*, and carries on across every song of
 the event: the show is independent of the song.
 
-**The broadcast sound.** Only Publishing collects the whole song: every singer's vocal (after
-their own FX) travels to the publisher's links — and only there; singers never hear each other,
-so latency never pulls them apart while they sing the same lines — and the show view plays those
-vocals with the backing track, which it runs a quarter second behind the shared clock to meet them.
+**The broadcast sound.** Publishing collects the whole song: every singer's vocal (after their
+own FX — the presets a singer picks are theirs, kept on their device until they change them)
+travels to the publisher's links at 96 kbps Opus (music quality, not the phone-call default), and
+to the other singers' links for their recordings only; singers never hear each other, so latency
+never pulls them apart while they sing the same lines — and the show view plays those vocals with
+the backing track, which it runs a quarter second behind the shared clock to meet them. The same
+blend reaches the audience in the room through *Hear the stage* (section 4).
 Preview tiles monitor silently; one can be heard on request. (The session container that encodes
 this mix to RTMPS/LL-HLS is the next increment; until then the show view's own sound is the mix.)
 
@@ -174,7 +189,7 @@ this mix to RTMPS/LL-HLS is the next increment; until then the show view's own s
 | Stage (room) | cameras, cut-outs, performer video mesh | the meet's slot list only |
 | Set list | which song is current / queued | `lib/catalog.ts` + your Drive to resolve a song |
 | Song transport | kickstart, pause/resume/restart, takes | the current song being loadable on each device |
-| Audience | lyrics, listen, chat, asking to sing | the meet snapshot |
+| Audience | lyrics, hearing the stage, chat, asking to sing | the meet snapshot; the host's mix batches (falls back to the backing track alone) |
 | Publishing show / Preview | the broadcast picture, jobs | the meet's slot list + the performers' video |
 
 Each of these can fail or change without the others noticing: a song that one device cannot load

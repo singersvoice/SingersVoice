@@ -9,6 +9,7 @@ import {
   meetIsOpen,
   newJoinCode,
   performanceFolderName,
+  performanceVideoName,
   tempExpiry,
   totalSemitones,
   VOXFORGE_DEFAULTS,
@@ -50,6 +51,11 @@ describe('performance helpers', () => {
     expect(performanceFolderName({ createdAt: '2026-01-02T03:04:05.000Z', trackTitle: 'AA', performanceId: 'perf-abc123' })).toBe(
       '2026-01-02 0304 AA (abc123)',
     );
+  });
+  it('the saved show is named for the people a link reaches: song, meet, date', () => {
+    expect(performanceVideoName({ createdAt: '2026-11-12T03:04:05.000Z', trackTitle: 'Ammo', meetTitle: 'Friday Meet' }, 'mp4')).toBe('Ammo · Friday Meet · 2026-11-12.mp4');
+    expect(performanceVideoName({ createdAt: '2026-11-12T03:04:05.000Z', trackTitle: 'A/B: "C"?', meetTitle: null }, 'webm')).toBe('A B C · 2026-11-12.webm');
+    expect(performanceVideoName({ createdAt: '2026-11-12T03:04:05.000Z', trackTitle: '   ' }, 'mp4')).toBe('Performance · 2026-11-12.mp4');
   });
 });
 

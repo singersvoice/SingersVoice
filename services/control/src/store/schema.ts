@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS performances (
 );
 CREATE INDEX IF NOT EXISTS idx_performances_meet ON performances(meet_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_performances_host ON performances(host_user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS mix (
+  meet_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  data TEXT NOT NULL,
+  PRIMARY KEY (meet_id, seq)
+);
 CREATE TABLE IF NOT EXISTS destinations (
   owner_user_id TEXT NOT NULL,
   kind TEXT NOT NULL,

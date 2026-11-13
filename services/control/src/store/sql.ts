@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import type { CatalogTrack, ChatMessage, Destination, Meet, MeetPerformance, MeetRecording, MeetSignal, Participant, PublishJob, UserRecord } from '@singersvoice/protocol';
+import { MIX_KEEP, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type MeetSignal, type MixBatch, type Participant, type PublishJob, type UserRecord } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { SCHEMA_SQL } from './schema.ts';
 
@@ -212,7 +212,20 @@ export class SqlStore {
 
   /** Delete a meet and everything that hangs off it (the takes and shows themselves live in the singers' Drives). */
   async deleteMeet(meetId: string): Promise<void> {
-    for (const t of ['performances', 'meet_members', 'recordings', 'signals', 'chat', 'participants', 'meets']) await this.db.run(`DELETE FROM ${t} WHERE meet_id=?`, [meetId]);
+    for (const t of ['mix', 'performances', 'meet_members', 'recordings', 'signals', 'chat', 'participants', 'meets']) await this.db.run(`DELETE FROM ${t} WHERE meet_id=?`, [meetId]);
+  }
+
+  // ---------- the stage mix for the audience: a rolling window of one-second Opus batches per meet ----------
+
+  async addMix(meetId: string, batch: MixBatch): Promise<void> {
+    await this.db.run('INSERT INTO mix (meet_id, seq, created_at, data) VALUES (?,?,?,?) ON CONFLICT(meet_id, seq) DO UPDATE SET data=excluded.data', [meetId, batch.seq, new Date().toISOString(), JSON.stringify(batch)]);
+    await this.db.run('DELETE FROM mix WHERE meet_id=? AND seq <= ?', [meetId, batch.seq - MIX_KEEP]);
+  }
+
+  async listMix(meetId: string, since: number, limit = 8): Promise<{ batches: MixBatch[]; latest: number }> {
+    const latest = (await this.db.get<{ m: number | null }>('SELECT MAX(seq) AS m FROM mix WHERE meet_id=?', [meetId]))?.m ?? 0;
+    const rows = await this.db.all<{ data: string }>('SELECT data FROM mix WHERE meet_id=? AND seq > ? ORDER BY seq ASC LIMIT ?', [meetId, since, limit]);
+    return { batches: rows.map((r) => JSON.parse(r.data) as MixBatch), latest };
   }
 
   // ---------- members: every account that was ever in a meet (participants come and go; the shows are shared with all of them) ----------

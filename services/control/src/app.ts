@@ -32,6 +32,7 @@ import {
   type PublishJobRequest,
   type ReadyRequest,
   type MeetPerformance,
+  type MixBatch,
   type RegisterPerformanceRequest,
   type RegisterRecordingRequest,
   type SignalRequest,
@@ -128,6 +129,15 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const chat = await store.chatTail(meet.meetId, 50);
     const { meetId, title, hostName, trackTitle, catalogTrackId, state, backgroundId, stage, audienceCount, kickstartEpochMs, streamUrl, expiresAt } = meet;
     return c.json({ meet: { meetId, title, hostName, trackTitle, catalogTrackId, state, backgroundId, stage, audienceCount, kickstartEpochMs, streamUrl, expiresAt }, chat, serverEpochMs: Date.now() });
+  });
+  // The stage mix, for the public watch page too (the host shares that link on purpose).
+  app.get('/watch/:id/mix', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const since = Math.max(0, Number(c.req.query('since')) || 0);
+    const r = await store.listMix(meet.meetId, since);
+    return c.json({ ...r, serverEpochMs: Date.now() });
   });
 
   // ---------- auth ----------
@@ -739,6 +749,37 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const members = await store.listMembers(meet.meetId);
     const shareWith = members.filter((m) => m.userId !== user.userId && m.email && !m.email.endsWith('.local')).map((m) => m.email);
     return c.json({ performance, shareWith }, 201);
+  });
+
+  // The stage mix for the audience: the host's device posts a second at a time; everyone else fetches what is new.
+  app.post('/meets/:id/mix', async (c) => {
+    const { store } = c.get('deps');
+    const user = c.get('user');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    if (user.userId !== meet.hostUserId) return err(c, 403, 'not_host', "Only the host's device sends the stage mix");
+    const body = ((await c.req.json().catch(() => null)) ?? null) as (Partial<MixBatch> & { resumeToken?: string }) | null;
+    if (!body || typeof body.seq !== 'number' || !Array.isArray(body.packets)) return err(c, 400, 'bad_request', 'A mix batch needs seq and packets');
+    if (body.packets.length > 120 || JSON.stringify(body.packets).length > 200_000) return err(c, 400, 'too_big', 'A mix batch is a second of audio, not more');
+    const batch: MixBatch = {
+      seq: Math.max(0, Math.floor(body.seq)),
+      atMs: Math.max(0, Number(body.atMs) || 0),
+      codec: 'opus',
+      sampleRate: Number(body.sampleRate) || 48000,
+      channels: Math.max(1, Math.min(2, Number(body.channels) || 1)),
+      packets: body.packets.map((p) => ({ ts: Number(p?.ts) || 0, b64: String(p?.b64 ?? '') })),
+      serverEpochMs: Date.now(),
+    };
+    await store.addMix(meet.meetId, batch);
+    return c.json({ ok: true as const, seq: batch.seq });
+  });
+  app.get('/meets/:id/mix', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const since = Math.max(0, Number(c.req.query('since')) || 0);
+    const r = await store.listMix(meet.meetId, since);
+    return c.json({ ...r, serverEpochMs: Date.now() });
   });
 
   app.get('/performances', async (c) => {

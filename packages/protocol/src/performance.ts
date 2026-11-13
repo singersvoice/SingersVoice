@@ -82,3 +82,13 @@ export function performanceFolderName(m: Pick<PerformanceManifest, 'createdAt' |
   const t = m.createdAt.slice(11, 16).replace(':', '');
   return `${d} ${t} ${m.trackTitle} (${m.performanceId.slice(-6)})`;
 }
+
+/**
+ * The saved show's file name as the people a Drive link reaches will see it: the song, the meet
+ * (when it was one) and the date — "Ammo · Friday Meet · 2026-11-12.mp4" rather than "video.mp4".
+ */
+export function performanceVideoName(m: Pick<PerformanceManifest, 'createdAt' | 'trackTitle'> & { meetTitle?: string | null }, ext: string): string {
+  const clean = (s: string) => s.replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const parts = [clean(m.trackTitle) || 'Performance', m.meetTitle ? clean(m.meetTitle) : '', m.createdAt.slice(0, 10)].filter(Boolean);
+  return `${parts.join(' · ')}.${ext}`;
+}

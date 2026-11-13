@@ -757,3 +757,23 @@ input[type='range'] {
     white-space: normal;
   }
 }
+
+/* The microphone line on the stage (device, rate, auto level) with its two quick fixes. */
+.micstatus {
+  display: grid;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.micstatus.warn {
+  background: rgba(255, 170, 60, 0.12);
+  outline: 1px solid rgba(255, 170, 60, 0.4);
+}
+.micstatus .chip {
+  margin-left: 6px;
+}
+.sing .micstatus {
+  font-size: 0.85em;
+  padding: 4px 8px;
+}

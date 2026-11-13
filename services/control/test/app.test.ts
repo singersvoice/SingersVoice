@@ -141,6 +141,19 @@ describe('sv-control API', () => {
     expect([200, 409]).toContain(pausedSeekRes.status);
     if (pausedSeekRes.status === 200) expect((await json<MeetSnapshot>(pausedSeekRes)).meet.playback.pausedAtMs).toBe(30000);
     else expect((await json<{ code: string }>(pausedSeekRes)).code).toBe('pausing');
+    // The stage mix for the audience: the host's device posts a second at a time; anyone in the meet fetches what is new.
+    const batch = { seq: 1, atMs: 12000, codec: 'opus', sampleRate: 48000, channels: 1, packets: [{ ts: 0, b64: 'AAEC' }, { ts: 20000, b64: 'AwQF' }] };
+    expect((await app.request(`/meets/${meet.meetId}/mix`, { method: 'POST', headers: as('bob'), body: JSON.stringify(batch) })).status).toBe(403); // not the host
+    expect((await app.request(`/meets/${meet.meetId}/mix`, { method: 'POST', headers: as('alice'), body: JSON.stringify(batch) })).status).toBe(200);
+    expect((await app.request(`/meets/${meet.meetId}/mix`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...batch, seq: 2, atMs: 13000 }) })).status).toBe(200);
+    const mix = await json<{ batches: { seq: number; atMs: number; packets: unknown[] }[]; latest: number }>(await app.request(`/meets/${meet.meetId}/mix?since=1`, { headers: as('bob') }));
+    expect(mix.latest).toBe(2);
+    expect(mix.batches.map((b) => b.seq)).toEqual([2]);
+    expect(mix.batches[0]!.atMs).toBe(13000);
+    expect(mix.batches[0]!.packets).toHaveLength(2);
+    const publicMix = await json<{ batches: { seq: number }[] }>(await app.request(`/watch/${meet.meetId}/mix?since=0`));
+    expect(publicMix.batches.map((b) => b.seq)).toEqual([1, 2]); // the public watch page hears it too
+
     // Song over (host): back to the lobby with the next song up; the stage stays as it was.
     expect((await app.request(`/meets/${meet.meetId}/songs/next`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken }) })).status).toBe(403);
     const over = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/songs/next`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken }) }));

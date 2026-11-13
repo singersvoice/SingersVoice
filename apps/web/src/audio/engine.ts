@@ -36,6 +36,17 @@ export class AudioEngine {
   readonly pitch = signal<PitchReading | null>(null);
   readonly micOpen = signal(false);
   readonly inputLabel = signal('');
+  /** What the microphone really delivers: a Bluetooth headset's mic is phone-call quality (8–16 kHz) — the usual "bad audio". */
+  readonly inputInfo = signal<{ label: string; sampleRate: number | null; channels: number | null; narrowband: boolean; echoCancellation: boolean } | null>(null);
+  /** The automatic input level (dB) the leveller is applying right now. */
+  readonly inputTrimDb = signal(0);
+  /** Pre-chain trim ridden by the leveller: a quiet or distant voice is brought up, a hot one held back — musically, never pumping. */
+  private trim: GainNode;
+  private levelAnalyser: AnalyserNode | null = null;
+  private levelTimer: ReturnType<typeof setInterval> | undefined;
+  private levelBuf = new Float32Array(2048);
+  private levelPeaks: number[] = [];
+  autoLevel = true;
   private ready: Promise<void>;
 
   constructor() {
@@ -46,6 +57,7 @@ export class AudioEngine {
     this.monitor = this.ctx.createGain();
     this.monitor.gain.value = 0;
     this.monitor.connect(this.master);
+    this.trim = this.ctx.createGain();
     this.workletAvailable = hasAudioWorklet();
     this.ready = this.loadWorklets();
   }
@@ -54,7 +66,7 @@ export class AudioEngine {
     if (!this.workletAvailable) return;
     const base = import.meta.env.BASE_URL;
     try {
-      await Promise.all([this.ctx.audioWorklet.addModule(`${base}worklets/pitch-shifter.js`), this.ctx.audioWorklet.addModule(`${base}worklets/recorder.js`)]);
+      await Promise.all([this.ctx.audioWorklet.addModule(`${base}worklets/pitch-shifter.js`), this.ctx.audioWorklet.addModule(`${base}worklets/recorder.js`), this.ctx.audioWorklet.addModule(`${base}worklets/mix-tap.js`)]);
     } catch (e) {
       console.warn('AudioWorklet modules failed to load; falling back to plain chain', e);
       (this as { workletAvailable: boolean }).workletAvailable = false;
@@ -102,7 +114,11 @@ export class AudioEngine {
     const videoTracks = stream.getVideoTracks();
     const videoStream = videoTracks.length ? new MediaStream(videoTracks) : null;
     this.micStream = new MediaStream(stream.getAudioTracks());
-    this.inputLabel.value = stream.getAudioTracks()[0]?.label ?? 'Microphone';
+    const audioTrack = stream.getAudioTracks()[0];
+    this.inputLabel.value = audioTrack?.label ?? 'Microphone';
+    const st = audioTrack?.getSettings?.() ?? {};
+    const sr = typeof st.sampleRate === 'number' ? st.sampleRate : null;
+    this.inputInfo.value = { label: this.inputLabel.value, sampleRate: sr, channels: typeof st.channelCount === 'number' ? st.channelCount : null, narrowband: sr !== null && sr < 32000, echoCancellation: Boolean(st.echoCancellation) };
     this.micSource = this.ctx.createMediaStreamSource(stream);
     if (!this.chain) {
       this.chain = createVoxForgeChain(this.ctx, this.workletAvailable);
@@ -119,18 +135,67 @@ export class AudioEngine {
         this.chain.output.connect(this.monitor);
       }
     }
-    this.micSource.connect(this.chain.input);
+    this.micSource.connect(this.trim).connect(this.chain.input);
+    this.startLeveller();
     this.micOpen.value = true;
     return videoStream;
   }
 
   closeMic(): void {
+    this.stopLeveller();
     this.micSource?.disconnect();
     this.micSource = null;
+    this.trim.disconnect();
     this.micStream?.getTracks().forEach((t) => t.stop());
     this.micStream = null;
     this.micOpen.value = false;
+    this.inputInfo.value = null;
     this.pitch.value = null;
+  }
+
+  /**
+   * The leveller: the raw mic (no browser AGC — that chops a singing voice) is watched 10× a second;
+   * when the loudest moment of the last two seconds sits under −18 dBFS the trim rises 1 dB at a
+   * time (to +18 dB), when it goes past −3 dBFS it drops 3 dB at once (to −6 dB). Slow up, fast down:
+   * a voice is brought up to a healthy level and never clipped, with no pumping.
+   */
+  private startLeveller(): void {
+    this.stopLeveller();
+    if (!this.micSource) return;
+    const an = this.ctx.createAnalyser();
+    an.fftSize = 2048;
+    this.micSource.connect(an);
+    this.levelAnalyser = an;
+    this.levelPeaks = [];
+    let db = this.inputTrimDb.value;
+    this.levelTimer = setInterval(() => {
+      if (!this.autoLevel || !this.levelAnalyser) return;
+      this.levelAnalyser.getFloatTimeDomainData(this.levelBuf);
+      let peak = 0;
+      for (let i = 0; i < this.levelBuf.length; i++) {
+        const v = Math.abs(this.levelBuf[i]!);
+        if (v > peak) peak = v;
+      }
+      this.levelPeaks.push(peak);
+      if (this.levelPeaks.length > 20) this.levelPeaks.shift();
+      const recent = Math.max(...this.levelPeaks);
+      const gained = recent * Math.pow(10, db / 20);
+      let next = db;
+      if (gained > 0.7) next = Math.max(-6, db - 3);
+      else if (recent > 0.004 && gained < 0.125 && this.levelPeaks.length >= 10) next = Math.min(18, db + 1);
+      if (next !== db) {
+        db = next;
+        this.trim.gain.setTargetAtTime(Math.pow(10, db / 20), this.ctx.currentTime, 0.1);
+        this.inputTrimDb.value = db;
+      }
+    }, 100);
+  }
+
+  private stopLeveller(): void {
+    clearInterval(this.levelTimer);
+    this.levelTimer = undefined;
+    this.levelAnalyser?.disconnect();
+    this.levelAnalyser = null;
   }
 
   applyFx(p: VoxForgeParams): void {

@@ -94,7 +94,12 @@ for (const m of matrix) {
       await page.getByText(/^Imported/).waitFor({ timeout: 30000 });
       await wait(800);
       await shot('10-library-imported');
-      await page.locator('.item').first().getByRole('link', { name: 'Sing' }).click();
+      // The Studio lists the same track with Sing and a delete button of its own.
+      await page.goto(url('/studio'), { waitUntil: 'networkidle' });
+      await page.locator('.item[data-track]').first().waitFor({ timeout: 15000 });
+      if (!(await page.locator('.item[data-track] button[aria-label^="Delete"]').count())) throw new Error('the Studio track list has no delete button');
+      await shot('10b-studio-track');
+      await page.locator('.item[data-track]').first().getByRole('link', { name: 'Sing' }).click();
       await page.waitForURL(/\/sing\//);
       await wait(1200);
       await shot('11-sing-ready');

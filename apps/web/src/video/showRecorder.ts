@@ -11,8 +11,9 @@
  * show view does the same with its backing track — and the recording's own timeline is simply
  * "the others' time". Nothing is ever played out loud: the vocals go to the recording only.
  */
-import type { BackgroundItem } from '@singersvoice/protocol';
+import type { BackgroundItem, MixBatch } from '@singersvoice/protocol';
 import type { AudioEngine } from '../audio/engine.ts';
+import { MixBroadcaster } from '../audio/mixBroadcast.ts';
 import { StageCompositor, type StagePerformer } from './stage.ts';
 
 export const SHOW_WIDTH = 1280;
@@ -20,6 +21,9 @@ export const SHOW_HEIGHT = 720;
 export const SHOW_FPS = 24;
 /** How far behind the shared clock the other singers' video and vocals arrive: the local sources are held back to meet them. */
 export const VOCAL_LAG_MS = 250;
+/** The mix: every vocal a little up, the backing track a little under — the voice on top, as a karaoke performance should sound. */
+export const VOCAL_IN_MIX = 1.41; // +3 dB
+export const BACKING_IN_MIX = 0.79; // −2 dB
 
 export interface ShowRecording {
   video: Blob;
@@ -30,10 +34,25 @@ export interface ShowRecording {
   lagMs: number;
 }
 
-/** The best MediaRecorder container for the show on this browser ('' = none). */
+/**
+ * The best MediaRecorder container for the show on this browser ('' = none): MP4 first — H.264 +
+ * AAC where the browser has it (Windows / Mac / iOS), else H.264 + Opus — so a saved performance
+ * plays anywhere a Drive link is opened; WebM only where MP4 is not on offer (Firefox).
+ */
 export function pickShowMime(): string {
   if (typeof MediaRecorder === 'undefined') return '';
-  const candidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4'];
+  const candidates = [
+    'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+    'video/mp4;codecs="avc1.4D401F,mp4a.40.2"',
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4;codecs="avc1.42E01E,opus"',
+    'video/mp4;codecs=avc1,opus',
+    'video/mp4',
+    'video/webm;codecs=h264,opus',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ];
   return candidates.find((c) => MediaRecorder.isTypeSupported(c)) ?? '';
 }
 
@@ -87,7 +106,14 @@ export class ShowRecorder {
   private bgVideo: HTMLVideoElement | null = null;
   /** Remote vocals: each one feeds the mix (and a muted element, which some browsers need before a remote stream flows into WebAudio). */
   private vocals = new Map<string, { stream: MediaStream; el: HTMLAudioElement; node: MediaStreamAudioSourceNode | null }>();
-  private audio: { ctx: AudioContext; dest: MediaStreamAudioDestinationNode; local: DelayNode; bus: GainNode; taps: AudioNode[] } | null = null;
+  private audio: { ctx: AudioContext; dest: MediaStreamAudioDestinationNode; local: DelayNode; bus: GainNode; taps: AudioNode[]; backingLevel: GainNode; vocalLevel: GainNode; limiter: DynamicsCompressorNode } | null = null;
+  /** The host's device: the mix goes out to the audience in one-second batches through this (null elsewhere). */
+  broadcast: ((batch: MixBatch) => Promise<void>) | null = null;
+  private broadcaster: MixBroadcaster | null = null;
+  /** Batches sent to the audience so far in this song. */
+  get broadcastSent(): number {
+    return this.broadcaster?.sent ?? 0;
+  }
   private mr: MediaRecorder | null = null;
   private chunks: Blob[] = [];
   private startCtx: number | null = null;
@@ -189,7 +215,9 @@ export class ShowRecorder {
     if (!this.audio || v.node) return;
     try {
       v.node = this.audio.ctx.createMediaStreamSource(v.stream);
-      v.node.connect(this.audio.bus);
+      const level = this.audio.ctx.createGain();
+      level.gain.value = VOCAL_IN_MIX;
+      v.node.connect(level).connect(this.audio.bus);
     } catch {
       v.node = null;
     }
@@ -214,7 +242,7 @@ export class ShowRecorder {
     const stream = new MediaStream([...this.canvas.captureStream(SHOW_FPS).getVideoTracks(), ...this.audio.dest.stream.getAudioTracks()]);
     let mr: MediaRecorder;
     try {
-      mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2_500_000, audioBitsPerSecond: 128_000 });
+      mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2_500_000, audioBitsPerSecond: 192_000 });
     } catch {
       return;
     }
@@ -303,30 +331,50 @@ export class ShowRecorder {
     local.delayTime.value = this.lagMs / 1000;
     local.connect(bus);
     const taps: AudioNode[] = [];
+    // The voice sits on top of the track: the backing a little under, every vocal a little up.
+    const backingLevel = ctx.createGain();
+    backingLevel.gain.value = BACKING_IN_MIX;
+    backingLevel.connect(local);
+    const vocalLevel = ctx.createGain();
+    vocalLevel.gain.value = VOCAL_IN_MIX;
+    vocalLevel.connect(local);
     const player = engine.player;
     if (player) {
-      player.gain.connect(local);
+      player.gain.connect(backingLevel);
       taps.push(player.gain);
     }
     const vocal = engine.recorder?.node ?? engine.chain?.output ?? null;
     if (vocal) {
-      vocal.connect(local);
+      vocal.connect(vocalLevel);
       taps.push(vocal);
     }
-    this.audio = { ctx, dest, local, bus, taps };
+    this.audio = { ctx, dest, local, bus, taps, backingLevel, vocalLevel, limiter };
     for (const v of this.vocals.values()) this.plugVocal(v);
+    // The audience hears this very mix: the host's device sends it out a second at a time (WebCodecs/Opus).
+    if (this.broadcast) {
+      const send = this.broadcast;
+      const lagS = this.lagMs / 1000;
+      this.broadcaster = new MixBroadcaster(ctx, send, (t) => engine.player?.positionAt(t - lagS) ?? 0);
+      this.broadcaster.start(limiter);
+    }
   }
 
   private tearDownAudio(): void {
+    this.broadcaster?.stop();
+    this.broadcaster = null;
     const a = this.audio;
     if (!a) return;
     for (const t of a.taps) {
-      try {
-        t.disconnect(a.local);
-      } catch {
-        /* already gone */
+      for (const target of [a.backingLevel, a.vocalLevel]) {
+        try {
+          t.disconnect(target);
+        } catch {
+          /* not connected there */
+        }
       }
     }
+    a.backingLevel.disconnect();
+    a.vocalLevel.disconnect();
     for (const v of this.vocals.values()) {
       v.node?.disconnect();
       v.node = null;

@@ -46,6 +46,7 @@ export function extFromMime(mime: string, fallback = 'bin'): string {
   if (m.includes('wav')) return 'wav';
   if (m.includes('ogg')) return 'ogg';
   if (m.includes('webm')) return 'webm';
+  if (m.startsWith('video/mp4')) return 'mp4';
   if (m.includes('mp4') || m.includes('m4a') || m.includes('aac')) return 'm4a';
   if (m.includes('flac')) return 'flac';
   if (m.includes('json')) return 'json';

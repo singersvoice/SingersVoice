@@ -52,6 +52,8 @@ interface Peer {
 const POLL_CONNECTING_MS = 900;
 const POLL_STEADY_MS = 2500;
 const TOTAL_UPLINK_BPS = 1_600_000;
+/** A vocal over the mesh: Opus at 96 kbps (the browser's phone-call default is ~32 kbps and thins a singing voice). */
+const VOCAL_BPS = 96_000;
 /** An offer unanswered this long (a lost signal, a peer that reloaded) is made again from a fresh connection. */
 const OFFER_TIMEOUT_MS = 9000;
 /** A link that failed its ICE restarts is re-made after this long. */
@@ -125,7 +127,10 @@ export class PerformerMesh {
   private attachAudio(peer: Peer): void {
     const t = peer.pc.getTransceivers().find((x) => x.receiver.track?.kind === 'audio' || x.sender.track?.kind === 'audio');
     if (!t) return;
-    void t.sender.replaceTrack(this.localAudio).catch(() => undefined);
+    void t.sender
+      .replaceTrack(this.localAudio)
+      .then(() => this.applyCaps(peer))
+      .catch(() => undefined);
   }
 
   /** Reconcile the mesh with the performers currently on stage (excluding me); inbound peers stay. */
@@ -253,6 +258,7 @@ export class PerformerMesh {
       if (s === 'connected') {
         peer.state = 'connected';
         peer.restarts = 0;
+        this.applyCaps(peer); // negotiated now: the bitrate caps stick
       } else if (s === 'failed') {
         peer.state = 'failed';
         if (peer.restarts++ < 3) pc.restartIce();
@@ -268,13 +274,18 @@ export class PerformerMesh {
     const n = Math.max(1, this.peers.size);
     const maxBitrate = Math.max(150_000, Math.min(600_000, Math.round(TOTAL_UPLINK_BPS / n)));
     for (const s of peer.pc.getSenders()) {
-      if (!s.track || s.track.kind !== 'video') continue;
+      if (!s.track) continue;
       const params = s.getParameters();
       if (!params.encodings?.length) params.encodings = [{}];
-      params.encodings[0]!.maxBitrate = maxBitrate;
-      params.encodings[0]!.maxFramerate = 15;
-      params.encodings[0]!.scaleResolutionDownBy = n > 4 ? 1.5 : 1;
-      params.degradationPreference = 'maintain-framerate';
+      if (s.track.kind === 'audio') {
+        // The vocal goes out at music quality: a fixed, generous Opus bitrate, whatever the mesh size.
+        params.encodings[0]!.maxBitrate = VOCAL_BPS;
+      } else {
+        params.encodings[0]!.maxBitrate = maxBitrate;
+        params.encodings[0]!.maxFramerate = 15;
+        params.encodings[0]!.scaleResolutionDownBy = n > 4 ? 1.5 : 1;
+        params.degradationPreference = 'maintain-framerate';
+      }
       void s.setParameters(params).catch(() => undefined);
     }
   }
@@ -343,7 +354,11 @@ export class PerformerMesh {
           if (audioT && !this.receiveOnly) {
             peer.wantsAudio = true;
             audioT.direction = this.wantAudio ? 'sendrecv' : 'sendonly';
-            if (this.localAudio) void audioT.sender.replaceTrack(this.localAudio).catch(() => undefined);
+            if (this.localAudio)
+              void audioT.sender
+                .replaceTrack(this.localAudio)
+                .then(() => this.applyCaps(peer!))
+                .catch(() => undefined);
           }
           await pc.setLocalDescription();
           await this.send(peer, 'answer', pc.localDescription);

@@ -130,24 +130,15 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
     else if (others[0]) void pickShared(others[0], false);
   };
 
-  const row = (key: string, title: string, sub: string, pick: (now: boolean) => Promise<void>) => (
-    <div class="item" key={key}>
-      <div class="meta">
-        <div class="t">{title}</div>
-        <div class="s">{sub}</div>
-      </div>
-      <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${title}`} onClick={() => void pick(false)}>
-        {busy === key ? <Spinner /> : <IcMusic size={16} />} Pick
-      </button>
-      {props.canPlayNow && (
-        <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${title} now`} onClick={() => void pick(true)}>
-          Now
-        </button>
-      )}
-    </div>
-  );
-
+  type Row = { key: string; title: string; sub: string; from: string; pick: (now: boolean) => Promise<void> };
+  // One list: my songs first, then the shared ones (never the same song twice), each saying where it comes from.
+  const rows: Row[] = [
+    ...mine.map((t) => ({ key: t.trackId, title: t.title, sub: `${t.artist || 'Unknown artist'} · ${formatMs(t.durationMs)} · ${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`, from: 'Your library', pick: (now: boolean) => pickMine(t, now) })),
+    ...others.map((c) => ({ key: c.trackId, title: c.title, sub: `${c.artist || 'Unknown artist'} · ${formatMs(c.durationMs)}`, from: `Shared by ${c.ownerName}`, pick: (now: boolean) => pickShared(c, now) })),
+  ];
   const total = catalog?.total ?? 0;
+  const loading = tracks === null || (catalog === null && searching);
+  const counts = [tracks ? `${mineAll.length} of your ${tracks.length}` : null, catalog ? `${others.length}${total > items.length ? ` of ${total.toLocaleString()}` : ''} shared` : null].filter(Boolean).join(' · ');
   return (
     <div class="card stack songpicker" role="dialog" aria-label="Pick a song">
       <div class="row between">
@@ -169,29 +160,48 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
         onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)}
         onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), pickTop())}
       />
-      <div class="small faint">Type any words, in any order — Enter picks the top match.</div>
-      {sharing && <Progress fraction={sharing.fraction} label={sharing.label} />}
       <div class="row between">
-        <div class="small muted">My songs {tracks ? `· ${mineAll.length}${needle ? ` of ${tracks.length}` : ''}` : ''}</div>
+        <div class="small faint">Any words, in any order — Enter picks the top match.</div>
+        <div class="small muted" data-picker-counts>
+          {counts} {searching && <Spinner />}
+        </div>
       </div>
-      {tracks === null ? (
-        <Spinner />
-      ) : !mine.length ? (
-        <div class="small muted">{tracks.length ? 'No match among your songs.' : 'No saved songs yet — make one in the Studio.'}</div>
+      {sharing && <Progress fraction={sharing.fraction} label={sharing.label} />}
+      {loading ? (
+        <div class="row">
+          <Spinner /> Loading songs…
+        </div>
+      ) : !rows.length ? (
+        <div class="small muted" data-picker-empty>
+          {needle ? `No song matches “${needle}” — in your library or among the shared songs.` : tracks?.length ? 'Nothing shared by other singers yet — your own songs are listed above.' : 'No songs yet: make one in the Studio (Track Maker), or wait for another singer to share one.'}
+        </div>
       ) : (
-        <div class="list">{mine.map((t) => row(t.trackId, t.title, `${t.artist || 'Unknown artist'} · ${formatMs(t.durationMs)} · ${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`, (now) => pickMine(t, now)))}</div>
+        <div class="list">
+          {rows.map((r) => (
+            <div class="item" key={r.key} data-from={r.from === 'Your library' ? 'mine' : 'shared'}>
+              <div class="meta">
+                <div class="t">{r.title}</div>
+                <div class="s">
+                  {r.sub} · <span class="chip">{r.from}</span>
+                </div>
+              </div>
+              <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${r.title}`} onClick={() => void r.pick(false)}>
+                {busy === r.key ? <Spinner /> : <IcMusic size={16} />} Pick
+              </button>
+              {props.canPlayNow && (
+                <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${r.title} now`} onClick={() => void r.pick(true)}>
+                  Now
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       )}
       {mineAll.length > mine.length && (
         <button class="btn sm" onClick={() => setMineShown((n) => n + MINE_PAGE)}>
-          Show more of my songs ({mineAll.length - mine.length} more)
+          Show more of your songs ({mineAll.length - mine.length} more)
         </button>
       )}
-      <div class="row between">
-        <div class="small muted">
-          Songs from other singers {catalog ? `· ${others.length}${total > items.length ? ` of ${total.toLocaleString()}` : ''}` : ''} {searching && <Spinner />}
-        </div>
-      </div>
-      {!others.length ? <div class="small muted">{searching ? 'Searching…' : needle ? 'No match among the shared songs.' : 'None shared yet.'}</div> : <div class="list">{others.map((c) => row(c.trackId, c.title, `${c.artist || 'Unknown artist'} · ${formatMs(c.durationMs)} · ${c.ownerName}`, (now) => pickShared(c, now)))}</div>}
       {catalog?.nextCursor && (
         <button class="btn sm" disabled={searching} onClick={() => void more()}>
           More shared songs

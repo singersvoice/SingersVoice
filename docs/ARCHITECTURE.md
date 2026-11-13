@@ -182,8 +182,10 @@ answers it `sendonly` and feeds it their vocal after the VoxForge chain
 Singer-to-singer links carry each other's vocal too (`wantAudio`: `sendrecv`) — **for the saved
 show only**: a vocal that arrives on a singer's device goes to the recording's mix and nowhere
 else, so singers still never hear each other (Solo foldback) and latency never pulls them apart.
-The show view plays the vocals (hidden audio elements) and the backing track a quarter second
-behind the shared clock to meet them; Preview tiles are muted unless asked to listen.
+Every vocal sender is capped at 96 kbps (`RTCRtpSender.setParameters`, re-applied when the link
+connects and when the track is attached) — music quality rather than WebRTC's ~32 kbps phone-call
+default. The show view plays the vocals (hidden audio elements) and the backing track a quarter
+second behind the shared clock to meet them; Preview tiles are muted unless asked to listen.
 
 **The saved performance (`video/showRecorder.ts`).** Every singer's device records the show while
 a song runs: its own 1280×720 canvas (the meet's background drawn as the show view shows it, then
@@ -191,8 +193,12 @@ a 'show' compositor over the same cut-outs the stage draws — the remote frames
 and shared, `UnpackedFrame`), its own audio bus on the engine's context (backing track + own vocal
 after FX, held back by the same quarter second through a DelayNode — and this device's own cut-out
 through a frame ring, so its picture is in step with its sound — plus every other singer's vocal as
-it arrives, through a limiter), one MediaRecorder (VP9/Opus WebM, or MP4 where that is what the
-browser has) from the kickstart to the end of the song, paused with the transport. The take's video
+it arrives, through a limiter — the vocals +3 dB, the track −2 dB), one MediaRecorder — **MP4
+first** (`pickShowMime`: H.264 + AAC where the browser has an AAC encoder — Windows, Mac, iOS —
+else H.264 + Opus in MP4, WebM only where MP4 is not offered, i.e. Firefox; audio at 192 kbps) so
+a saved show plays wherever its Drive link is opened; the Drive file is named *song · meet ·
+date.mp4* (`performanceVideoName`), found again by its app property — from the kickstart to the
+end of the song, paused with the transport. The take's video
 is that recording (`videoOffsetMs` = its first frame's place on the track timeline, lag included).
 A live take never waits for a review: the stage hands it to the **background saver**
 (`lib/saveQueue.ts`, one job at a time, each stage memoised so a retry never uploads twice, three
@@ -213,9 +219,18 @@ performers linked) in the card and never in the frame, with *Show view* and *Pub
 Every publisher view — the show view, each tile — is its own participant resumed only by its own
 token, so monitoring a meet and running its show view at the same time never fight over one video
 link; the first four tiles connect by themselves, the rest on request.
-4. Performers hear only themselves + the track (Solo foldback). The composed mix for the audience comes from
-   the session container (next increment); until then the watch page shows lyrics in sync and chat, and the
-   saved show (recorded on the singers' devices) carries the whole mix.
+4. Performers hear only themselves + the track (Solo foldback). **The audience hears the mix**
+   (`audio/mixBroadcast.ts` → `/meets/:id/mix` → `audio/mixPlayer.ts`): on the host's device an
+   AudioWorklet (`sv-mix-tap`) taps the show recorder's limiter output in 20 ms blocks, a WebCodecs
+   `AudioEncoder` (Opus, 48 kHz mono, 64 kbps) encodes them, and one batch a second is POSTed to the
+   relay (host by account; each batch tagged with the track position of its first frame, a rolling
+   window of 40 batches per meet in the `mix` table). Audience devices in the room (and the public
+   watch page, `/watch/:id/mix`) poll it every second, decode with `AudioDecoder` and schedule the
+   packets back to back on the audio clock 1.6 s behind the newest batch (a jitter buffer), so the
+   sound runs ~2–3 s behind the stage; the position of what is being heard drives the lyrics. Needs
+   WebCodecs on both ends (Chrome, Edge, Safari 16.4+, Firefox 130+); otherwise — or when no batch
+   has arrived for 6 s — the device plays the backing track alone, in sync. A session container
+   (video to the audience, RTMPS out) remains the next increment.
 5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.
 
 ## Components
@@ -229,9 +244,23 @@ link; the first four tiles connect by themselves, the rest on request.
 
 ## Audio chain (VoxForge, web twin of the JUCE plugin)
 
-trim → pitch worklet (granular shifter + NSDF auto-tune) → HPF → low shelf 120 Hz / peak 1.2 kHz / high shelf
-6.5 kHz → compressor → saturation → chorus/doubler → ping-pong delay → convolution reverb → out. Parameters and
-presets live in `packages/protocol/src/audio.ts` and round-trip with the plugin's `APVTS` layout.
+The microphone is opened **raw** — no browser echo cancellation, noise suppression or automatic
+gain (all three chop and thin a singing voice; AGC pumps, AEC ducks the voice whenever it
+correlates with the music) — mono, at the device's own rate. Echo cancellation is on only when the
+singer says *I'm on speakers* (the track would otherwise leak into the mic). `AudioEngine.inputInfo`
+reports the device, its sample rate and channels; a rate under 32 kHz is a phone-call line (a
+Bluetooth headset's HFP mic) and the `MicStatus` component says so and offers another mic. The
+**leveller** (`startLeveller`) replaces AGC: the raw peaks are watched 10× a second; under
+−18 dBFS the trim rises 1 dB at a time (to +18 dB), past −3 dBFS it drops 3 dB at once (to −6 dB) —
+slow up, fast down, no pumping, never clipped. Then: trim → pitch worklet (granular shifter + NSDF
+auto-tune) → HPF → low shelf 120 Hz / peak 1.2 kHz / high shelf 6.5 kHz → compressor → saturation →
+chorus/doubler → ping-pong delay → convolution reverb → out. The chain runs live on the captured
+voice: what is recorded, sent to the publisher and the other singers' recordings, and heard in the
+monitor is the processed vocal. Parameters and presets live in `packages/protocol/src/audio.ts`
+and round-trip with the plugin's `APVTS` layout; the *Natural* default is a clean, present vocal
+(HPF 90 Hz, +1 dB mid, +2.5 dB air, gentle 3.5:1 compression). A singer's preset choice is kept on
+their device (`audio_plugin_settings`, localStorage, mirrored to `SingersVoice/Config/` in Drive)
+until they change it.
 
 ## Data formats
 

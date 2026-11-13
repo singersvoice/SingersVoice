@@ -93,16 +93,16 @@ export const VOXFORGE_DEFAULTS: VoxForgeParams = {
   autoStr: 0,
   autoSpeed: 0.5,
   eqOn: true,
-  hpfHz: 80,
+  hpfHz: 90,
   eqLow: 0,
-  eqMid: 0,
-  eqHi: 0,
+  eqMid: 1,
+  eqHi: 2.5,
   compOn: true,
-  cThr: -18,
-  cRat: 3,
+  cThr: -20,
+  cRat: 3.5,
   cAtk: 5,
   cRel: 120,
-  cMk: 3,
+  cMk: 5,
   satOn: false,
   satDr: 0.25,
   satMx: 0.35,
@@ -130,7 +130,7 @@ export interface VoxForgePreset {
 
 /** Factory "signature voice" presets (the web counterparts of VoxForge's templates). */
 export const VOXFORGE_PRESETS: VoxForgePreset[] = [
-  { id: 'natural', name: 'Natural', blurb: 'Clean vocal, light room.', params: {} },
+  { id: 'natural', name: 'Natural', blurb: 'Clean, present vocal, light room.', params: {} },
   {
     id: 'popstar',
     name: 'Pop Star',

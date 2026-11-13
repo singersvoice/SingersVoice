@@ -1,12 +1,15 @@
 /**
- * In-house watch portal (/watch/:id) — public, no sign-in: the composed stream when a session
- * container publishes it (LL-HLS), the stage line-up, lyrics in sync when the track is public,
- * and the chat (read-only here; sign in and join the meet to talk).
+ * In-house watch portal (/watch/:id) — public, no sign-in: the stage mix (the singers and the
+ * track, blended, a couple of seconds behind — the lyrics follow the sound), the composed stream
+ * when a session container publishes it (LL-HLS), the stage line-up, and the chat (read-only here;
+ * sign in and join the meet to talk).
  */
 import { formatMs, SLOT_COLORS, type SingerSlot, type WatchResponse } from '@singersvoice/protocol';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { getEngine } from '../../audio/engine.ts';
+import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
-import { IcUsers } from '../../components/icons.tsx';
+import { IcHeadphones, IcUsers } from '../../components/icons.tsx';
 import { LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { Logo } from '../../components/Shell.tsx';
 import { Spinner } from '../../components/ui.tsx';
@@ -47,11 +50,31 @@ export function Watch(props: { id: string }) {
     void loadMeetTrack({ trackId: null, catalogTrackId: data.meet.catalogTrackId }).then((t) => t.loaded && setTrack(t.loaded));
   }, [data?.meet.catalogTrackId]);
 
+  // Hear the stage: the host's mix, fetched a second at a time (a tap starts the sound — browsers want a gesture).
+  const [listen, setListen] = useState(false);
+  const mixRef = useRef<MixPlayer | null>(null);
+  const [mix, setMix] = useState<{ hearing: boolean; silent: boolean; behindS: number; seq: number }>({ hearing: false, silent: false, behindS: 0, seq: 0 });
+  useEffect(() => {
+    if (!listen || !mixPlaySupported()) return;
+    const e = getEngine();
+    void e.resume();
+    const mp = new MixPlayer(e.ctx, e.master, async (since) => api.get('GET /watch/:id/mix', `/watch/${encodeURIComponent(props.id)}/mix?since=${since}`));
+    mixRef.current = mp;
+    mp.start();
+    const t = setInterval(() => setMix({ ...mp.state.value }), 500);
+    return () => {
+      clearInterval(t);
+      mp.stop();
+      mixRef.current = null;
+    };
+  }, [listen, props.id]);
+
   useEffect(() => {
     let raf = 0;
     const tick = () => {
+      const heard = mixRef.current?.positionMs() ?? null;
       const ks = data?.meet.kickstartEpochMs ?? null;
-      setTMs(ks === null ? 0 : serverNow() - ks);
+      setTMs(heard ?? (ks === null ? 0 : serverNow() - ks)); // what you read follows what you hear
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -112,8 +135,15 @@ export function Watch(props: { id: string }) {
                 </span>
               </div>
             </div>
-            <div class="small muted">
-              Host {m.hostName} · {m.trackTitle || 'no track'} {m.kickstartEpochMs !== null && m.state === 'live' ? `· ${formatMs(Math.max(0, tMs))}` : ''}
+            <div class="row between">
+              <div class="small muted">
+                Host {m.hostName} · {m.trackTitle || 'no track'} {m.kickstartEpochMs !== null && m.state === 'live' ? `· ${formatMs(Math.max(0, tMs))}` : ''}
+              </div>
+              {mixPlaySupported() && (
+                <button class={`btn sm ${listen ? 'on' : 'primary'}`} aria-pressed={listen} data-mix-hearing={mix.hearing ? '1' : '0'} data-mix-seq={mix.seq} onClick={() => setListen((l) => !l)}>
+                  <IcHeadphones size={14} /> {listen ? (mix.hearing ? `Hearing the stage · ${mix.behindS.toFixed(1)} s behind` : mix.silent ? 'No sound from the stage yet' : 'Tuning in…') : 'Hear the stage'}
+                </button>
+              )}
             </div>
             <section class="card stack">
               <h3>Chat</h3>

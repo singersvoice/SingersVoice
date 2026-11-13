@@ -1,10 +1,11 @@
 /** Studio portal — offline work: build tracks, sing solo, review takes. Needs no live service. */
 import { formatMs } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
-import { IcMic, IcMusic, IcSparkle } from '../../components/icons.tsx';
+import { IcMic, IcMusic, IcSparkle, IcTrash } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { href } from '../../lib/nav.ts';
 import type { PerformanceSummary, TrackSummary } from '../../lib/storage/types.ts';
+import { errorText, toast } from '../../lib/toast.ts';
 import { isDrive, withProvider } from '../../state/session.ts';
 
 export function StudioHome() {
@@ -21,6 +22,33 @@ export function StudioHome() {
     });
   }, []);
   const temp = perfs?.filter((p) => p.state === 'temp').length ?? 0;
+  const [busy, setBusy] = useState<string | null>(null);
+  const deleteTrack = async (t: TrackSummary) => {
+    if (!confirm(`Delete "${t.title}"? ${isDrive.value ? 'It moves to Drive trash.' : 'This cannot be undone.'}`)) return;
+    setBusy(t.trackId);
+    try {
+      await withProvider((p) => p.deleteTrack(t.trackId));
+      setTracks((l) => (l ?? []).filter((x) => x.trackId !== t.trackId));
+      toast(`Deleted "${t.title}"`, 'ok');
+    } catch (e) {
+      toast(errorText(e), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+  const deleteTake = async (p: PerformanceSummary) => {
+    if (!confirm(`Delete this take of "${p.trackTitle}"? ${isDrive.value ? 'It moves to Drive trash.' : 'This cannot be undone.'}`)) return;
+    setBusy(p.performanceId);
+    try {
+      await withProvider((pr) => pr.deletePerformance(p.performanceId));
+      setPerfs((l) => (l ?? []).filter((x) => x.performanceId !== p.performanceId));
+      toast('Take deleted', 'ok');
+    } catch (e) {
+      toast(errorText(e), 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
   return (
     <Page title="Studio">
       <div class="stack" style="gap:18px">
@@ -56,7 +84,7 @@ export function StudioHome() {
           )}
           <div class="list">
             {tracks?.map((t) => (
-              <a class="item" key={t.trackId} href={href(`/studio/sing/${encodeURIComponent(t.trackId)}`)}>
+              <div class="item" key={t.trackId} data-track={t.trackId}>
                 <div class="thumb">{t.title.charAt(0).toUpperCase()}</div>
                 <div class="meta">
                   <div class="t">{t.title}</div>
@@ -64,8 +92,15 @@ export function StudioHome() {
                     {t.artist || 'Unknown artist'} · {formatMs(t.durationMs)} · {t.singerCount} singer{t.singerCount > 1 ? 's' : ''}
                   </div>
                 </div>
-                <span class="btn sm primary">Sing</span>
-              </a>
+                <div class="row" style="gap:6px">
+                  <a class="btn sm primary" href={href(`/studio/sing/${encodeURIComponent(t.trackId)}`)}>
+                    Sing
+                  </a>
+                  <button class="btn icon sm" aria-label={`Delete ${t.title}`} title="Delete this track" disabled={busy !== null} onClick={() => void deleteTrack(t)}>
+                    <IcTrash size={16} />
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         </section>
@@ -74,7 +109,7 @@ export function StudioHome() {
             <h2>Latest takes</h2>
             <div class="list">
               {perfs.map((p) => (
-                <a class="item" key={p.performanceId} href={href('/studio/performances')}>
+                <div class="item" key={p.performanceId} data-take={p.performanceId}>
                   <div class="thumb">
                     <IcMusic size={20} />
                   </div>
@@ -84,8 +119,16 @@ export function StudioHome() {
                       {new Date(p.createdAt).toLocaleString()} · {formatMs(p.durationMs)} · {p.mode}
                     </div>
                   </div>
-                  <span class={`chip ${p.state === 'temp' ? 'warn' : 'ok'}`}>{p.state}</span>
-                </a>
+                  <div class="row" style="gap:6px">
+                    <span class={`chip ${p.state === 'temp' ? 'warn' : 'ok'}`}>{p.state}</span>
+                    <a class="btn sm" href={href('/studio/performances')}>
+                      Open
+                    </a>
+                    <button class="btn icon sm" aria-label={`Delete this take of ${p.trackTitle}`} title="Delete this take" disabled={busy !== null} onClick={() => void deleteTake(p)}>
+                      <IcTrash size={16} />
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
           </section>

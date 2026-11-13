@@ -18,6 +18,7 @@ import {
   DRIVE_ROOT,
   normalizeTrack,
   performanceFolderName,
+  performanceVideoName,
   safeName,
   type DriveFolderKey,
   type PerformanceManifest,
@@ -581,7 +582,8 @@ export class DriveProvider implements StorageProvider {
     let videoFile: DriveFile | null = null;
     if (files.video) {
       const ext = extFromMime(files.video.type, 'webm');
-      videoFile = await this.upload(`video.${ext}`, files.video, folder.id, { ...common, [APP_PROPS.type]: 'performanceVideo' }, (f) =>
+      // Named for the people a Drive link reaches ("Song · Meet · date.mp4"); found again by its app property, not its name.
+      videoFile = await this.upload(performanceVideoName(manifest, ext), files.video, folder.id, { ...common, [APP_PROPS.type]: 'performanceVideo' }, (f) =>
         onProgress?.({ label: 'Uploading video', fraction: 0.5 + f * 0.4 }),
       );
     }

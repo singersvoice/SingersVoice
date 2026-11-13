@@ -197,6 +197,8 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     show.setBackground(item ?? null, backgroundSrc(item));
   }, [meet.backgroundId, bgItems.length]);
   show.youLabel = you.displayName.split(' ')[0] || 'You';
+  // The host's device sends the mix to the audience (nobody on stage ever hears it).
+  show.broadcast = you.userId === meet.hostUserId ? (b) => session.sendMix(b) : null;
 
   // My vocal (after FX) goes to publisher links only, from the moment my mic is open (I'm ready / singing).
   const micOpen = opts.engine?.micOpen.value ?? false;

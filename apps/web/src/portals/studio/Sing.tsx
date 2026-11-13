@@ -6,6 +6,7 @@ import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
+import { MicStatus } from '../../components/MicStatus.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
@@ -440,6 +441,21 @@ export function Sing(props: { id: string }) {
         {app.showCueDeck && track.singerCount > 1 && phase === 'playing' && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} />}
         <section class="controls">
           <PresetChips value={audio} onChange={updateAudio} />
+          <MicStatus
+            engine={engineRef.current}
+            onChange={() => {
+              const engine = engineRef.current;
+              if (!engine?.micOpen.value) return;
+              const a = appSettings.peek();
+              void engine
+                .openMic({ deviceId: a.audioInputId || undefined, echoCancellation: a.echoCancellation })
+                .then(() => {
+                  engine.applyFx(audioSettings.peek().params);
+                  engine.setMonitor(audioSettings.peek().monitor);
+                })
+                .catch((e) => toast(errorText(e), 'error'));
+            }}
+          />
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={phase === 'playing' || phase === 'paused' ? seek : undefined} />
           <div class="main">
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })} disabled={busy}>
