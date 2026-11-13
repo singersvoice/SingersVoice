@@ -9,8 +9,12 @@ import type { MixBatch } from '@singersvoice/protocol';
 
 export const mixPlaySupported = (): boolean => typeof AudioDecoder !== 'undefined';
 
-/** How far behind the newest batch playback runs: room for a late second. */
-const JITTER_S = 1.6;
+/**
+ * How far behind the newest batch playback runs: room for a batch that comes a poll late — the edge
+ * cache in front of the relay may hold an answer for a second, so a batch can take two polls to arrive
+ * (and then two come at once).
+ */
+const JITTER_S = 2.0;
 const POLL_MS = 1000;
 /** No batch for this long → the host is not sending (never was, or stopped). */
 const SILENT_MS = 6000;

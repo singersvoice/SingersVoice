@@ -462,12 +462,21 @@
 .controls .main > .chip {
   margin-left: auto;
 }
-.controls .main .framing {
+.framing {
   gap: 6px;
 }
-.controls .main .framing .seg button {
+.framing .seg button {
   padding: 4px 9px;
   font-size: 0.8em;
+}
+.framing.compact .seg button,
+.framing.compact > .btn.sm {
+  padding: 3px 7px;
+  font-size: 0.75em;
+  min-height: 0;
+}
+.stagebar .framing {
+  margin-left: auto;
 }
 .controls .btn.icon {
   background: rgba(255, 255, 255, 0.1);

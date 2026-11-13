@@ -30,14 +30,16 @@ const servers = await startServers({ base });
 const { port, controlPort } = servers;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** SV_SHOT_ONLY=ipad,desktop walks only the viewports whose name starts with one of these. */
+const only = (process.env.SV_SHOT_ONLY ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 const matrix = [
   { name: 'iphone-se-320x568', viewport: { width: 320, height: 568 }, mobile: true },
   { name: 'android-360x640', viewport: { width: 360, height: 640 }, mobile: true },
   { name: 'iphone-390x844', viewport: { width: 390, height: 844 }, mobile: true, ua: devices['iPhone 13'].userAgent, e2e: true },
   { name: 'pixel-412x915', viewport: { width: 412, height: 915 }, mobile: true, ua: devices['Pixel 5'].userAgent },
-  { name: 'ipad-820x1180', viewport: { width: 820, height: 1180 }, mobile: true },
+  { name: 'ipad-820x1180', viewport: { width: 820, height: 1180 }, mobile: true, e2e: true },
   { name: 'desktop-1280x800', viewport: { width: 1280, height: 800 }, mobile: false, e2e: true },
-];
+].filter((m) => !only.length || only.some((o) => m.name.startsWith(o)));
 
 const browser = await chromium.launch({
   args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'],

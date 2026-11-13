@@ -61,6 +61,12 @@ export interface PersonFit {
 }
 
 const FPS = 24;
+/**
+ * A stage with nobody's picture on it (the audience's view: no video reaches them; a lobby before the
+ * cameras are on) is a still: it is redrawn only now and then, to catch a change — a frame arriving, an
+ * avatar loaded, a feed gone quiet — so a hundred phones in the room spend nothing on it.
+ */
+const IDLE_FPS = 2;
 const MAX_WIDTH = 1600;
 /** The frame may fill this much of the slot's width (room for the tag). */
 const FILL_W = 0.94;
@@ -133,6 +139,8 @@ export class StageCompositor {
   private raf = 0;
   private lastDraw = 0;
   private running = false;
+  /** Whether the last draw put anybody's live picture on the stage (else the stage is a still). */
+  live = false;
   private cssW = 0;
   private cssH = 0;
   private dpr = 1;
@@ -183,7 +191,7 @@ export class StageCompositor {
     this.running = true;
     const loop = (t: number) => {
       if (!this.running) return;
-      if (t - this.lastDraw >= 1000 / FPS) {
+      if (t - this.lastDraw >= 1000 / (this.live ? FPS : IDLE_FPS)) {
         this.lastDraw = t;
         try {
           this.draw();
@@ -207,6 +215,7 @@ export class StageCompositor {
     if (!W || !H) return;
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.clearRect(0, 0, W, H);
+    this.live = false;
     if (!this.performers.length) {
       this.tiles = []; // an empty stage: just the background
       return;
@@ -218,6 +227,7 @@ export class StageCompositor {
       const p = t.performer;
       const src = this.sourceCanvas(p);
       if (src) {
+        this.live = true;
         t.fit = fitPerson(t, src.width, src.height, this.mode, H);
         this.drawPerson(c, src, p, t.fit, t);
       } else {

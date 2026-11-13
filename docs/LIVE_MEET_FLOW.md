@@ -155,13 +155,20 @@ their voices blended (section 6), played a few seconds behind behind a *Watch th
 otherwise the stage background with who is on it, plus **Hear the stage — the singers and the
 track, blended**: the very mix the host's device builds for the saved show (the backing track with
 every singer's vocal, after their FX, in sync) is sent out by the host's device a second at a time
-(WebCodecs/Opus, 64 kbps, through `/meets/:id/mix` on the relay — no media server) and played a
-couple of seconds behind the stage. The status line says *Hearing the stage · 2.1 s behind*. When
+(WebCodecs/Opus, 64 kbps, through the relay — no media server; listeners read it from the public
+`/watch/:id/mix` route, which the edge caches, so a hundred listeners cost the relay one answer
+per second) and played a couple of seconds behind the stage. The status line says *Hearing the stage · 2.1 s behind*. When
 nothing arrives (the host's browser has no WebCodecs — Chrome, Edge, Safari 16.4+ and Firefox 130+
 do — or the host is not singing yet) the device plays the backing track alone, in sync. While the
 show plays with its own sound the mix stays off. **No lyrics for the audience, ever** — lyrics are
 Performer mode's, for the singers on stage. The singers on stage never hear any of this (or each
 other): Solo foldback, so latency never pulls them apart.
+
+A big audience costs nobody anything: an audience device polls the room every 5 s and the mix every
+second (through the edge cache), draws a still stage twice a second, runs no camera, no cut-out and
+no mesh; the room names the first dozen of the audience and counts the rest (*Audience (120): Ann,
+Ben … and 108 more*), so what every poll carries stays small; the singers' and the publisher's work
+never grows with the audience (docs/ARCHITECTURE.md, "A hundred in a meet").
 
 ## 5 · Between songs and the end
 

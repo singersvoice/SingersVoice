@@ -243,10 +243,12 @@ link; the first four tiles connect by themselves, the rest on request.
    AudioWorklet (`sv-mix-tap`) taps the show recorder's limiter output in 20 ms blocks, a WebCodecs
    `AudioEncoder` (Opus, 48 kHz mono, 64 kbps) encodes them, and one batch a second is POSTed to the
    relay (host by account; each batch tagged with the track position of its first frame, a rolling
-   window of 40 batches per meet in the `mix` table). Audience devices in the room (and the public
-   watch page, `/watch/:id/mix`) poll it every second, decode with `AudioDecoder` and schedule the
-   packets back to back on the audio clock 1.6 s behind the newest batch (a jitter buffer), so the
-   sound runs ~2–3 s behind the stage; the position of what is being heard drives the lyrics. Needs
+   window of 40 batches per meet in the `mix` table). Audience devices in the room and the public
+   watch page poll it every second through the public `/watch/:id/mix` route (cached at the edge for
+   a second — a hundred listeners cost the relay one answer), decode with `AudioDecoder` and schedule
+   the packets back to back on the audio clock 2 s behind the newest batch (a jitter buffer with room
+   for a batch that comes a poll late), so the sound runs ~2–3 s behind the stage; the position of
+   what is being heard drives the lyrics. Needs
    WebCodecs on both ends (Chrome, Edge, Safari 16.4+, Firefox 130+); otherwise — or when no batch
    has arrived for 6 s — the device plays the backing track alone, in sync.
 5. **The show to the audience and to YouTube — from the publisher's browser.** The show view
@@ -273,6 +275,33 @@ link; the first four tiles connect by themselves, the rest on request.
    the show view, ffprobes a segment the fake received and watches the show on both pages. RTMP
    platforms (Facebook, Instagram, Twitch) remain the session container's job.
 5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.
+
+## A hundred in a meet — what each one costs
+
+A meet is light by construction, and light in a different way for each kind of participant:
+
+- **A singer on stage** (up to ten) carries the heavy part on their own device: their cut-out,
+  their vocal chain, the mesh links to the other singers and the publisher (video only, capped
+  and scaled with the mesh size), and their own stage. Nothing of that grows with the audience.
+- **The publisher** (one device) receives the ten and makes the one picture and the one mix
+  everyone else gets. Nothing of that grows with the audience either.
+- **The audience** (any number) receives no video and no mesh: the stage with placeholders, the
+  chat, the set list, the show as HLS when the publisher is on air, and the stage mix a second at
+  a time. All of that is read-only, carries no sign-in and is the same for everyone — so the Worker
+  answers it from **the edge cache** (`services/control/src/worker.ts`, `EDGE_CACHE`): a show
+  segment (immutable) for two minutes, the playlist, the live status, the mix batches and the
+  public meet page for a second or two. A hundred viewers in a city cost the single Durable Object
+  one request per segment, not a hundred — the DO's own load stays what ten singers and a
+  publisher make of it (their polls, every 1.5–5 s, are per user and small). The public watch
+  routes answer every origin (`*`), which is what makes one cached answer serve everyone.
+- **What every participant's poll carries is independent of the crowd**: a snapshot names the
+  stage, the host, the publishers, the wait list and the first dozen of the audience
+  (`visibleParticipants`), the rest is `meet.audienceCount` — so a heartbeat answer is a few
+  kilobytes whether three or three hundred are in the room; a heartbeat writes the participant's
+  row and rewrites the meet row only when something changed (a performer's clock) or the idle-expiry
+  extension is due (`TOUCH_COALESCE_MS`, 2 s), not for every heartbeat of every listener.
+- **An audience phone draws nothing it does not have to**: the stage compositor redraws a still
+  stage (placeholders — no video reaches the audience) twice a second instead of 24 times.
 
 ## Components
 

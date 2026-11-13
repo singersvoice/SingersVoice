@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, playbackPositionMs, type Participant } from '@singersvoice/protocol';
-import { addSong, claimSlot, decideRequest, ensureMeet, ensurePlayback, newMeet, nextSong, pause, reconcile, requestStage, resume, setStagePolicy, songAction, start, stop, tick, touch, withdrawRequest } from '../src/meets.ts';
+import { addSong, claimSlot, decideRequest, ensureMeet, ensurePlayback, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setStagePolicy, SNAPSHOT_AUDIENCE_NAMES, songAction, start, stop, tick, TOUCH_COALESCE_MS, touch, touchForHeartbeat, visibleParticipants, withdrawRequest } from '../src/meets.ts';
 
 const T0 = Date.parse('2026-11-11T10:00:00Z');
 const person = (id: string, userId = `u-${id}`): Participant => ({
@@ -31,6 +31,38 @@ describe('meet rules', () => {
     expect(tick(m, T0 + MEET_IDLE_EXPIRY_MS + 1000)).toBe(false); // extended by the touch
     expect(tick(m, T0 + 9 * 60 * 1000 + 1)).toBe(true);
     expect(m.state).toBe('expired');
+  });
+
+  it('a hundred in the room cost a poll the same as three: a dozen audience names, the rest a count; heartbeats rewrite the meet only when due', () => {
+    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: null, trackTitle: '', catalogTrackId: null, backgroundId: 'bg' }, T0); // the host decides who sings
+    const host = { ...person('host', 'u-host'), role: 'host' as const };
+    claimSlot(m, host, 1);
+    const singer = person('singer');
+    expect(decideRequest(m, singer, true, 2).ok).toBe(true);
+    const crowd = Array.from({ length: 100 }, (_, i) => ({ ...person(`a${i}`), joinedAt: new Date(T0 + i * 1000).toISOString() }));
+    expect(requestStage(m, crowd[70]!, T0).ok).toBe(true);
+    const publisher = { ...person('pub'), role: 'publisher' as const };
+    const everyone = [...crowd].reverse().concat(host, singer, publisher);
+    const { active } = reconcile(m, everyone, T0 + 5000);
+    expect(m.audienceCount).toBe(100); // the one asking and the publisher's view aside: the publisher is not audience, the asker still is
+    const shown = visibleParticipants(m, active);
+    const ids = shown.map((p) => p.participantId);
+    expect(ids).toContain('host');
+    expect(ids).toContain('singer');
+    expect(ids).toContain('pub');
+    expect(ids).toContain('a70'); // on the wait list, so the host sees them by name
+    expect(shown.filter((p) => p.participantId.startsWith('a') && p.participantId !== 'a70').map((p) => p.participantId)).toEqual(crowd.slice(0, SNAPSHOT_AUDIENCE_NAMES).map((p) => p.participantId)); // the first dozen to arrive, in order
+    expect(shown.length).toBe(SNAPSHOT_AUDIENCE_NAMES + 4);
+
+    // The idle expiry is extended by every heartbeat, written once per window.
+    expect(touchForHeartbeat(m, T0 + 10_000)).toBe(true);
+    expect(touchForHeartbeat(m, T0 + 10_000 + TOUCH_COALESCE_MS - 1)).toBe(false);
+    expect(Date.parse(m.expiresAt)).toBe(T0 + 10_000 + MEET_IDLE_EXPIRY_MS); // the extension waits for the window (two seconds against five minutes)
+    expect(touchForHeartbeat(m, T0 + 10_000 + TOUCH_COALESCE_MS)).toBe(true);
+    // A clock report changes the meet only when it says something new; the audience's never does.
+    expect(reportClock(m, singer, 3, 40)).toBe(true);
+    expect(reportClock(m, singer, 3, 40)).toBe(false);
+    expect(reportClock(m, crowd[0]!, 3, 40)).toBe(false);
   });
 
   it('seats at most 10 performers, refuses taken slots, frees slots of silent participants', () => {

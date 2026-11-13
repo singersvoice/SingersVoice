@@ -31,7 +31,9 @@ Live build: **https://singersvoice.github.io/SingersVoice/**
 ## Viewport matrix (automated)
 
 `node tools/ci/screenshots.mjs` walks the app at 320×568, 360×640, 390×844, 412×915, 820×1180 and 1280×800, and
-on two of them imports a track, sings 9 s with a fake microphone, finishes, keeps the take and opens Track Maker.
+on three of them (phone, tablet, desktop) imports a track, sings 9 s with a fake microphone, finishes, keeps the
+take, opens Track Maker, runs a meet and the publishing setup — every control a singer has (framing, Track / Vocal
+volume, Voice FX) is in those pictures on every size. `SV_SHOT_ONLY=ipad,desktop` walks only the viewports named.
 CI uploads the screenshots as an artifact on every PR.
 
 ## Known limits of this increment

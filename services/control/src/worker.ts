@@ -67,10 +67,61 @@ function main(env: Env) {
   return env.SVT_DB.get(env.SVT_DB.idFromName('main'));
 }
 
+/**
+ * What every viewer of a meet asks for, again and again — the show's HLS playlist and segments,
+ * the live status, the audience mix batches, the public meet page — is answered from the edge
+ * cache, so a hundred viewers cost the one Durable Object a handful of requests per second
+ * instead of a hundred (a segment is immutable; the rest is fresh enough for a second or two).
+ * These paths carry no sign-in and answer every origin alike.
+ */
+export const EDGE_CACHE: { test: RegExp; ttlS: number; browser?: boolean }[] = [
+  { test: /^\/watch\/[^/]+\/live\/[A-Za-z0-9_-]{1,80}\.ts$/, ttlS: 120, browser: true },
+  { test: /^\/watch\/[^/]+\/live\.m3u8$/, ttlS: 1 },
+  { test: /^\/watch\/[^/]+\/live$/, ttlS: 2 },
+  { test: /^\/watch\/[^/]+\/mix$/, ttlS: 1 },
+  { test: /^\/watch\/[^/]+$/, ttlS: 2 },
+];
+
+/** The cache TTL (seconds) for a request, or 0 when it is not one to cache. */
+export function edgeCacheTtl(method: string, pathname: string): number {
+  if (method !== 'GET') return 0;
+  return EDGE_CACHE.find((r) => r.test.test(pathname))?.ttlS ?? 0;
+}
+
+/**
+ * The Cache-Control the edge and the browser get: the edge keeps the answer for its TTL
+ * (`s-maxage`); the browser keeps only what never changes (a segment) — a poll must reach the edge.
+ */
+export function edgeCacheControl(pathname: string, ttlS: number): string {
+  const browser = EDGE_CACHE.find((r) => r.test.test(pathname))?.browser ?? false;
+  return `public, max-age=${browser ? ttlS : 0}, s-maxage=${ttlS}`;
+}
+
+interface ExecutionContextLike {
+  waitUntil(p: Promise<unknown>): void;
+}
+
+async function cachedFetch(req: Request, env: Env, ctx: ExecutionContextLike, ttlS: number): Promise<Response> {
+  const cache = (caches as unknown as { default: Cache }).default;
+  const key = new Request(req.url, { method: 'GET' });
+  const hit = await cache.match(key).catch(() => undefined);
+  if (hit) return hit;
+  const res = await main(env).fetch(req);
+  if (!res.ok || !res.body) return res;
+  const headers = new Headers(res.headers);
+  headers.set('Cache-Control', edgeCacheControl(new URL(req.url).pathname, ttlS));
+  headers.delete('vary'); // one answer for every origin (the route allows them all)
+  const out = new Response(res.body, { status: res.status, headers });
+  ctx.waitUntil(cache.put(key, out.clone()).catch(() => undefined));
+  return out;
+}
+
 export default {
-  fetch(req: Request, env: Env): Promise<Response> {
+  fetch(req: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname === SWEEP_PATH) return Promise.resolve(new Response('not found', { status: 404 }));
+    const ttl = edgeCacheTtl(req.method, url.pathname);
+    if (ttl > 0) return cachedFetch(req, env, ctx, ttl);
     return main(env).fetch(req);
   },
   async scheduled(_event: unknown, env: Env): Promise<void> {

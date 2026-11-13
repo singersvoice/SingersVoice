@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { CatalogListResponse, JoinMeetResponse, Meet, MeetSnapshot } from '@singersvoice/protocol';
 import { createApp, type AppDeps } from '../src/app.ts';
+import { edgeCacheControl, edgeCacheTtl } from '../src/worker.ts';
 import { createAuthenticator } from '../src/auth.ts';
 import { SecretBox } from '../src/crypto.ts';
 import { nodeSqliteDriver } from '../src/store/driver.ts';
@@ -28,6 +29,23 @@ const as = (user: string) => ({ 'X-Dev-User': user, 'X-Dev-Name': user, 'Content
 const json = async <T>(r: Response): Promise<T> => (await r.json()) as T;
 
 describe('sv-control API', () => {
+  it("the public watch portal answers every origin and is what the edge caches; everything signed-in is not", async () => {
+    const r = await app.request('/watch/nope/live', { headers: { Origin: 'https://some.viewer.example' } });
+    expect(r.headers.get('access-control-allow-origin')).toBe('*');
+    const me = await app.request('/me', { headers: { ...as('alice'), Origin: 'https://some.viewer.example' } });
+    expect(me.headers.get('access-control-allow-origin')).not.toBe('*');
+    expect(edgeCacheTtl('GET', '/watch/m1/live/svabc-12.ts')).toBe(120); // a segment never changes
+    expect(edgeCacheTtl('GET', '/watch/m1/live.m3u8')).toBe(1);
+    expect(edgeCacheTtl('GET', '/watch/m1/live')).toBe(2);
+    expect(edgeCacheTtl('GET', '/watch/m1/mix')).toBe(1);
+    expect(edgeCacheTtl('GET', '/watch/m1')).toBe(2);
+    expect(edgeCacheTtl('GET', '/meets/m1')).toBe(0); // signed-in, per user
+    expect(edgeCacheTtl('PUT', '/watch/m1/live/sv-1.ts')).toBe(0);
+    expect(edgeCacheTtl('GET', '/time')).toBe(0); // the clock is never stale
+    expect(edgeCacheControl('/watch/m1/live/svabc-12.ts', 120)).toBe('public, max-age=120, s-maxage=120'); // the browser may keep a segment
+    expect(edgeCacheControl('/watch/m1/mix', 1)).toBe('public, max-age=0, s-maxage=1'); // a poll always reaches the edge
+  });
+
   it('health and time are public; everything else needs sign-in', async () => {
     expect((await app.request('/health')).status).toBe(200);
     expect((await app.request('/me')).status).toBe(401);
@@ -260,6 +278,17 @@ describe('sv-control API', () => {
     expect(watch.meet.state).toBe('ended');
     expect(watch.chat).toHaveLength(1);
     expect((await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: '{}' })).status).toBe(410);
+  });
+
+  it('meets: a crowd of forty costs a poll a dozen names and a count', async () => {
+    const created = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('carol'), body: JSON.stringify({ title: 'Big night' }) }));
+    const host = await json<JoinMeetResponse>(await app.request(`/meets/${created.meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ role: 'audience' }) }));
+    for (let i = 0; i < 40; i++) expect((await app.request(`/meets/${created.meet.meetId}/join`, { method: 'POST', headers: as(`fan${i}`), body: JSON.stringify({ role: 'audience' }) })).status).toBe(200);
+    const snap = await json<MeetSnapshot>(await app.request(`/meets/${created.meet.meetId}/heartbeat`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ resumeToken: host.resumeToken, chatSince: 0 }) }));
+    expect(snap.meet.audienceCount).toBe(40);
+    expect(snap.participants.filter((p) => p.slot === null)).toHaveLength(12);
+    expect(snap.participants.some((p) => p.participantId === host.you.participantId)).toBe(true);
+    expect(JSON.stringify(snap).length).toBeLessThan(12_000);
   });
 
   it('meets list maintenance: at most 3 open meets per host, end from the list, delete for good', async () => {

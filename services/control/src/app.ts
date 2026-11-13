@@ -49,7 +49,7 @@ import {
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
-import { addSong, claimSlot, decideRequest, ensureMeet, isHost, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, withdrawRequest, seek, canTransport } from './meets.ts';
+import { addSong, claimSlot, decideRequest, ensureMeet, isHost, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
@@ -119,6 +119,9 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     '*',
     cors({
       origin: (origin, c) => {
+        // The public watch portal is read-only and carries no sign-in: any origin, so the Worker can
+        // cache its answers at the edge for every viewer alike (see worker.ts).
+        if (c.req.path.startsWith('/watch/')) return '*';
         const allowed = [...DEFAULT_ORIGINS, ...(c.get('deps')?.allowedOrigins ?? [])];
         return allowed.includes(origin) ? origin : allowed[0]!;
       },
@@ -326,7 +329,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const rec = reconcile(meet, stored);
     changed = changed || rec.changed;
     if (changed) await store.saveMeet(meet);
-    const participants: Participant[] = (rec.active as StoredParticipant[]).map(({ resumeToken: _t, meetId: _m, ...p }) => p);
+    const participants: Participant[] = (visibleParticipants(meet, rec.active) as StoredParticipant[]).map(({ resumeToken: _t, meetId: _m, ...p }) => p);
     const chat = chatSince !== undefined ? await store.chatSince(meetId, chatSince) : await store.chatTail(meetId, 50);
     const [recordings, performances] = await Promise.all([store.listRecordings(meetId), store.listPerformancesForMeet(meetId)]);
     const youPublic: Participant | undefined = you ? (({ resumeToken: _t, meetId: _m, ...p }: StoredParticipant) => p)(you) : undefined;
@@ -465,10 +468,12 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const p = await participantFromBody(c, meet.meetId, body.resumeToken);
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
     p.lastSeenAt = new Date().toISOString();
-    if (body.driftMs !== undefined || body.rttMs !== undefined) reportClock(meet, p, body.driftMs ?? null, body.rttMs ?? null);
-    touch(meet);
+    // The participant row is what keeps them in the room; the meet row is rewritten only when the
+    // heartbeat changed something worth it (a performer's clock, or an expiry extension that is due).
+    const clockChanged = body.driftMs !== undefined || body.rttMs !== undefined ? reportClock(meet, p, body.driftMs ?? null, body.rttMs ?? null) : false;
+    const touchDue = touchForHeartbeat(meet);
     await store.saveParticipant(p);
-    await store.saveMeet(meet);
+    if (clockChanged || touchDue) await store.saveMeet(meet);
     return c.json((await snapshot(c, meet.meetId, p, body.chatSince))!);
   });
 

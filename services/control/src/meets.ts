@@ -5,6 +5,19 @@ import { emptyStage, idlePlayback, MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_E
 /** Participants unseen for this long are dropped from the stage/audience counts. */
 export const PARTICIPANT_TIMEOUT_MS = 60 * 1000;
 
+/**
+ * How many of the audience a snapshot names. The rest is `meet.audienceCount`: what every poll
+ * carries stays a few kilobytes whether three people are in the room or three hundred.
+ */
+export const SNAPSHOT_AUDIENCE_NAMES = 12;
+
+/**
+ * A heartbeat extends the idle expiry (five minutes); rewriting the meet row for every heartbeat
+ * of a large audience would be most of the database's work, so the extension is written only when
+ * the last one is older than this (an expiry a couple of seconds stale costs nothing).
+ */
+export const TOUCH_COALESCE_MS = 2000;
+
 export function newMeet(input: { title: string; hostUserId: string; hostName: string; trackId: string | null; trackTitle: string; catalogTrackId: string | null; backgroundId: string }, now = Date.now()): Meet {
   const iso = new Date(now).toISOString();
   return {
@@ -157,6 +170,31 @@ export function touch(m: Meet, now = Date.now()): void {
   m.expiresAt = new Date(now + MEET_IDLE_EXPIRY_MS).toISOString();
 }
 
+/**
+ * Touch the meet for a heartbeat when the extension is due (see TOUCH_COALESCE_MS), and say whether it
+ * was — that is when the row is worth writing. A closed meet has nothing to extend.
+ */
+export function touchForHeartbeat(m: Meet, now = Date.now()): boolean {
+  if (!meetIsOpen(m) || now - Date.parse(m.lastActivityAt) < TOUCH_COALESCE_MS) return false;
+  touch(m, now);
+  return true;
+}
+
+/**
+ * The participants a snapshot carries: everyone on stage, the host, the publishers, the wait list,
+ * and the first dozen of the audience (by arrival) — the people the room shows by name. The size of
+ * the audience is `meet.audienceCount`.
+ */
+export function visibleParticipants(m: Meet, active: Participant[], names = SNAPSHOT_AUDIENCE_NAMES): Participant[] {
+  const onStage = new Set(m.stage.map((s) => s.participantId).filter(Boolean));
+  const asking = new Set((m.requests ?? []).map((r) => r.participantId));
+  const named: Participant[] = [];
+  const audience: Participant[] = [];
+  for (const p of active) (onStage.has(p.participantId) || asking.has(p.participantId) || p.role === 'host' || p.role === 'publisher' ? named : audience).push(p);
+  audience.sort((a, b) => a.joinedAt.localeCompare(b.joinedAt));
+  return [...named, ...audience.slice(0, names)];
+}
+
 /** Advance time-driven state: countdown → live at the kickstart, live → ended after the cap, open → expired when idle. */
 export function tick(m: Meet, now = Date.now()): boolean {
   let changed = false;
@@ -300,12 +338,13 @@ export function setReady(m: Meet, p: Participant, ready: boolean): void {
   if (s) s.ready = ready;
 }
 
-export function reportClock(m: Meet, p: Participant, driftMs: number | null, rttMs: number | null): void {
+/** A performer's clock report lands on their stage slot; true when it changed what the slot says. */
+export function reportClock(m: Meet, p: Participant, driftMs: number | null, rttMs: number | null): boolean {
   const s = m.stage.find((x) => x.participantId === p.participantId);
-  if (s) {
-    s.driftMs = driftMs;
-    s.rttMs = rttMs;
-  }
+  if (!s || (s.driftMs === driftMs && s.rttMs === rttMs)) return false;
+  s.driftMs = driftMs;
+  s.rttMs = rttMs;
+  return true;
 }
 
 export function start(m: Meet, leadMs: number, now = Date.now()): { ok: boolean; reason?: string } {

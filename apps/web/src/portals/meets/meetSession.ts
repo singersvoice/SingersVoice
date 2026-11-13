@@ -173,9 +173,9 @@ export class MeetSession {
   async sendMix(batch: MixBatch): Promise<void> {
     await api.post('POST /meets/:id/mix', `/meets/${encodeURIComponent(this.meetId)}/mix`, { ...batch, resumeToken: this.resumeToken });
   }
-  /** The audience fetches what came after `since`. */
+  /** The audience fetches what came after `since` — through the public watch route, which the edge caches: a hundred listeners at the live edge ask the same question and the service answers it once. */
   fetchMix(since: number): Promise<{ batches: MixBatch[]; latest: number }> {
-    return api.get('GET /meets/:id/mix', `/meets/${encodeURIComponent(this.meetId)}/mix?since=${since}`);
+    return api.get('GET /watch/:id/mix', `/watch/${encodeURIComponent(this.meetId)}/mix?since=${since}`);
   }
 
   // ---- WebRTC signalling relay (performer ↔ performer) ----

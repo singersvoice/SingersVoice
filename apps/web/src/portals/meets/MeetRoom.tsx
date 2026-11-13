@@ -17,10 +17,12 @@ import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
+import { Framing } from '../../components/Framing.tsx';
 import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcMusic, IcPause, IcPlay, IcPlus, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
+import { audienceLine } from './audience.ts';
 import { Page } from '../../components/Shell.tsx';
 import { Progress, Seg, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, serverNow } from '../../lib/api.ts';
@@ -573,7 +575,7 @@ function Lobby(props: {
             </div>
             {host && <Switch checked={openStage} onChange={(v) => void setPolicy(v)} label="Open stage: anyone may take a free slot" hint={openStage ? 'Switch off to be asked first' : 'Off: the audience asks, you decide who sings'} />}
             <div class="small muted">
-              Audience ({props.participants.filter((p) => p.slot === null && p.role !== 'publisher').length}): {props.participants.filter((p) => p.slot === null && p.role !== 'publisher').map((p) => p.displayName).join(', ') || 'nobody yet'}
+              Audience ({meet.audienceCount}): {audienceLine(meet.audienceCount, props.participants)}
               {!host && !onStage && !openStage && ' · ask to sing and the host lets you on stage between songs'}
             </div>
             {meet.stage.some((s) => s.participantId && s.rttMs !== null) && (
@@ -641,6 +643,7 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
             {app.cameraOn ? <IcCameraOff size={16} /> : <IcCamera size={16} />}
           </button>
         )}
+        {props.onStage && app.cameraOn && stage.camOn && <Framing compact />}
       </div>
     </div>
   );
@@ -1005,25 +1008,7 @@ function LiveStage(props: {
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
               {app.cameraOn ? <IcCamera /> : <IcCameraOff />}
             </button>
-            {app.cameraOn && (
-              // How your camera frames you is how every stage shows you — the audience included. Your choice, right here.
-              <span class="row framing" data-framing={app.zoomPreset} data-autozoom={app.autoZoom ? '1' : '0'} title="How your camera frames you — Chest keeps you head-to-chest from wherever you sit; this exact picture goes to the stage, the show and the audience">
-                <Seg<'chest' | 'wide' | 'mid' | 'close'>
-                  value={app.zoomPreset}
-                  ariaLabel="Stage framing"
-                  onChange={(v) => updateApp({ zoomPreset: v })}
-                  options={[
-                    { v: 'chest', label: 'Chest' },
-                    { v: 'wide', label: 'Wide' },
-                    { v: 'mid', label: 'Mid' },
-                    { v: 'close', label: 'Close' },
-                  ]}
-                />
-                <button class={`btn sm ${app.autoZoom ? 'accent' : ''}`} aria-pressed={app.autoZoom} aria-label="Auto zoom while singing" title="Eases closer while you sing and back out when you're silent" onClick={() => updateApp({ autoZoom: !app.autoZoom })}>
-                  Auto
-                </button>
-              </span>
-            )}
+            {app.cameraOn && <Framing />}
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
             </button>

@@ -56,6 +56,11 @@ export interface HeartbeatRequest {
 
 export interface MeetSnapshot {
   meet: Meet;
+  /**
+   * The people the room shows by name: everyone on stage, the host, the publishers, the wait list and
+   * the first dozen of the audience. The size of the audience is `meet.audienceCount` — a poll stays
+   * small however large the audience.
+   */
   participants: Participant[];
   chat: ChatMessage[];
   recordings: MeetRecording[];

@@ -4,9 +4,11 @@ import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
+import { Framing } from '../../components/Framing.tsx';
 import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { MicStatus } from '../../components/MicStatus.tsx';
+import { MixBalance } from '../../components/MixBalance.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
@@ -180,6 +182,8 @@ export function Sing(props: { id: string }) {
     else camera.stopAutoFrame();
   }, [camStream, camOn]);
   useEffect(() => feed.setFraming(app.zoomPreset, app.autoZoom), [app.zoomPreset, app.autoZoom]);
+  // The Track / Vocal volume of the recorded mix (the same controls as the live stage; kept on the device).
+  useEffect(() => show.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
   const origin = camera.origin.value;
   useEffect(() => feed.setOrigin(origin), [origin.x, origin.y]);
   // Vocal-driven auto zoom: the mic meter decides when I'm singing.
@@ -463,8 +467,15 @@ export function Sing(props: { id: string }) {
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })} disabled={busy}>
               {app.cameraOn ? <IcCamera /> : <IcCameraOff />}
             </button>
+            {app.cameraOn && <Framing />}
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" title="Hear myself (use headphones)" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
+            </button>
+            <button class="btn icon" aria-label="Voice FX" onClick={() => setFxOpen(true)}>
+              <IcSliders />
+            </button>
+            <button class="btn icon" aria-label="Stage setup" onClick={() => setSetupOpen(true)} disabled={live}>
+              <IcZoom />
             </button>
             {live ? (
               <>
@@ -489,13 +500,8 @@ export function Sing(props: { id: string }) {
                 {busy ? <Spinner /> : <IcPlay />} {busy ? (phase === 'finishing' ? 'Wrapping up…' : 'Starting…') : 'Start singing'}
               </button>
             )}
-            <button class="btn icon" aria-label="Voice FX" onClick={() => setFxOpen(true)}>
-              <IcSliders />
-            </button>
-            <button class="btn icon" aria-label="Stage setup" onClick={() => setSetupOpen(true)} disabled={live}>
-              <IcZoom />
-            </button>
           </div>
+          <MixBalance />
           <div class="row between small">
             <div class="row" style="gap:8px">
               {engine?.micOpen.value && (
