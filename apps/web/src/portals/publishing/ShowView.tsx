@@ -1,13 +1,16 @@
 /**
  * Publishing mode — the show view (/publishing/show/:id). This is the picture that goes out to
- * YouTube / Facebook / Instagram / Twitch and the in-house portal: the performers, cut out of their
- * cameras and standing huge on one shared stage, no lyrics, no controls in the frame — a televised
- * stage show. The publisher joins the meet as its own kind of participant ("publisher": never on
- * stage, never counted as audience), receives every performer's video over the same mesh the singers
- * use (receive-only), and runs the broadcast from a bar that hides itself while the show plays.
- * Nothing here touches the singers' rooms: they keep their lyrics and controls; the show view only
- * listens to the meet (stage, transport) and pulls video. The picture itself is `showStage.tsx`,
- * shared with the Preview tab's monitor tiles.
+ * YouTube and the in-house portal: the performers, cut out of their cameras and standing huge on
+ * one shared stage, no lyrics, no controls in the frame — a televised stage show — with the backing
+ * track and every singer's vocal (after their own FX) blended as the sound. The publisher joins the
+ * meet as its own kind of participant ("publisher": never on stage, never counted as audience),
+ * receives every performer's video and vocal over the same mesh the singers use (receive-only), and
+ * runs the broadcast from a bar that hides itself while the show plays. **Go live** makes this
+ * browser the encoder (`broadcast.ts`): H.264 + AAC, two-second segments, delivered to the service,
+ * which keeps them for the watch page and forwards them to YouTube's HLS ingestion. Nothing here
+ * touches the singers' rooms: they keep their lyrics and controls; the show view only listens to
+ * the meet (stage, transport) and pulls media. The picture itself is `showStage.tsx`, shared with
+ * the Preview tab's monitor tiles.
  */
 import { DESTINATIONS, formatMs, playbackPositionMs, type Destination, type DestinationKind, type Meet, type Participant, type PublishJob } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -21,7 +24,9 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { privileged } from '../../state/session.ts';
 import { MeetSession } from '../meets/meetSession.ts';
 import { loadMeetTrack } from '../meets/trackSource.ts';
+import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
 import { VOCAL_LAG_MS } from '../../video/showRecorder.ts';
+import { Broadcast } from './broadcast.ts';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
 
 const IDLE_MS = 3000;
@@ -113,6 +118,11 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   const [trackUrl, setTrackUrl] = useState<string | null>(null);
   const [trackNote, setTrackNote] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  // The broadcast: sound bus + picture + encoder + sender, one per show view.
+  const broadcast = useMemo(() => new Broadcast(), []);
+  const sending = broadcast.status.value;
+  const support = broadcast.support.value;
+  const broadcasting = sending !== null && (sending.state === 'sending' || sending.state === 'live');
   const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const live = meet.state === 'live';
   const over = meet.state === 'ended' || meet.state === 'expired';
@@ -121,7 +131,34 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   useEffect(() => {
     (window as unknown as { __svMesh?: unknown; __svShow?: unknown }).__svMesh = feed.mesh; // support / e2e hooks
     (window as unknown as { __svShow?: unknown }).__svShow = feed.compositor;
+    (window as unknown as { __svBroadcast?: unknown }).__svBroadcast = broadcast;
   }, [feed.mesh]);
+  // The bus hears what the picture shows: the track element and every vocal; the monitor switches are the publisher's own.
+  useEffect(() => {
+    broadcast.bus.setBacking(audioRef.current);
+  }, [trackUrl]);
+  useEffect(() => {
+    broadcast.bus.setVocals(feed.vocals);
+  }, [feed.vocals]);
+  useEffect(() => {
+    broadcast.bus.setMonitor({ vocals: vocalsOn, music });
+  }, [vocalsOn, music]);
+  // The broadcast's own canvas draws the same background and performers the picture shows.
+  const bgItems = backgrounds.value;
+  useEffect(() => {
+    void loadBackgrounds();
+    const item = backgroundById(meet.backgroundId);
+    broadcast.setBackground(item ?? null, backgroundSrc(item));
+  }, [meet.backgroundId, bgItems.length]);
+  useEffect(() => {
+    broadcast.setPerformers(feed.performers);
+  }, [feed.performers]);
+  useEffect(
+    () => () => {
+      broadcast.dispose();
+    },
+    [],
+  );
 
   // ---- the broadcast: destinations + the publish job for this meet ----
   useEffect(() => {
@@ -157,13 +194,22 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     return () => clearInterval(t);
   }, [job?.jobId, job?.state]);
 
+  /** This browser starts encoding and sending the show for the job (YouTube and/or the in-house portal). */
+  const startSending = async (j: PublishJob) => {
+    const browserFed = j.destinations.some((k) => DESTINATIONS.find((d) => d.kind === k)?.browserLive);
+    if (!browserFed) return;
+    const s = await broadcast.start(j, (m) => toast(`Broadcast stopped: ${m}`, 'error', 10000));
+    if (!s.ok) toast(s.reason, 'error', 12000);
+    else if (s.reason) toast(s.reason, 'warn', 12000);
+  };
   const goLive = async () => {
     if (!picked?.length) return toast('Pick at least one destination', 'warn');
     setBusy(true);
     try {
+      await broadcast.bus.resume(); // inside the click: the browser lets the sound run
       const r = await api.post('POST /publishing/jobs', '/publishing/jobs', { meetId: meet.meetId, destinations: picked, title: meet.title, description: meet.trackTitle ? `${meet.trackTitle} — live on SingersVoice` : '' });
       setJob(r.job);
-      toast('Publishing requested', 'ok');
+      await startSending(r.job);
     } catch (e) {
       if (e instanceof ApiError && e.code === 'already_publishing') await loadJob();
       else toast(e instanceof ApiError ? e.message : errorText(e), 'error', 8000);
@@ -174,6 +220,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   const stopLive = async () => {
     if (!job) return;
     setBusy(true);
+    broadcast.stop();
     try {
       const r = await api.post('POST /publishing/jobs/:id/stop', `/publishing/jobs/${encodeURIComponent(job.jobId)}/stop`);
       setJob(r.job);
@@ -183,6 +230,21 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
       setBusy(false);
     }
   };
+  // A job found running when the view opens (a reload): this browser picks the sending up again.
+  useEffect(() => {
+    if (job && activeJob(job) && !broadcast.running && job.live && !busy) void startSending(job);
+  }, [job?.jobId]);
+  // Leaving the show view ends the broadcast: nothing else is encoding it.
+  const jobRef = useRef<PublishJob | null>(null);
+  jobRef.current = job;
+  useEffect(
+    () => () => {
+      const j = jobRef.current;
+      broadcast.stop();
+      if (j && activeJob(j)) void api.post('POST /publishing/jobs/:id/stop', `/publishing/jobs/${encodeURIComponent(j.jobId)}/stop`).catch(() => undefined);
+    },
+    [],
+  );
 
   // ---- the backing track, in sync with the meet's transport (what the show's audience hears) ----
   const trackKey = `${meet.trackId ?? ''}|${meet.catalogTrackId ?? ''}`;
@@ -204,10 +266,11 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
       if (url) URL.revokeObjectURL(url);
     };
   }, [trackKey]);
+  const needTrack = music || broadcasting;
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (!music || !trackUrl) {
+    if (!needTrack || !trackUrl) {
       a.pause();
       return;
     }
@@ -243,13 +306,14 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
       clearTimeout(timer);
       clearInterval(drift);
     };
-  }, [music, trackUrl, pb.state, pb.epoch, pb.pauseAtEpochMs, meet.kickstartEpochMs, clock.value.offsetMs]);
+  }, [needTrack, trackUrl, pb.state, pb.epoch, pb.pauseAtEpochMs, meet.kickstartEpochMs, clock.value.offsetMs]);
 
   // ---- chrome hides itself while the show plays; any movement brings it back ----
   const wake = () => {
     setIdle(false);
     clearTimeout(idleTimer.current);
     idleTimer.current = setTimeout(() => setIdle(true), IDLE_MS);
+    void broadcast.bus.resume();
   };
   useEffect(() => {
     wake();
@@ -296,8 +360,8 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
           Back to Publishing
         </button>
       </ShowPicture>
-      <audio ref={audioRef} src={trackUrl ?? undefined} preload="auto" />
-      <Vocals vocals={feed.vocals} on={vocalsOn} />
+      <audio ref={audioRef} src={trackUrl ?? undefined} preload="auto" crossOrigin="anonymous" />
+      <Vocals vocals={feed.vocals} on={false} />
 
       <header class="show-top">
         <div class="show-title">
@@ -361,8 +425,17 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
           </button>
         </div>
         {job && (
-          <div class="jobline small">
-            <b>{job.state}</b> · {job.destinations.join(' · ')}
+          <div class="jobline small" data-live-state={sending?.state ?? ''} data-live-segments={sending?.segments ?? 0} data-live-youtube={sending?.youtube ?? ''}>
+            <b>{sending?.state === 'live' ? 'LIVE' : job.state}</b> · {job.destinations.join(' · ')}
+            {sending && sending.state === 'live' && (
+              <>
+                {' '}
+                · {formatMs(Date.now() - sending.startedAt)} · {sending.kbps} kbps · {sending.segments} segment{sending.segments === 1 ? '' : 's'}
+                {!sending.audio && <span class="warn"> · video only (no AAC in this browser)</span>}
+                {sending.youtube !== 'off' && <span class={sending.youtube === 'ok' ? '' : sending.youtube === 'waiting' ? 'muted' : 'danger'}> · YouTube: {sending.youtubeNote || (sending.youtube === 'waiting' ? 'sending…' : sending.youtube)}</span>}
+              </>
+            )}
+            {sending?.state === 'sending' && <span class="muted"> · starting the encoder…</span>}
             {job.watchUrl && (
               <>
                 {' '}
@@ -372,7 +445,8 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
                 </a>
               </>
             )}
-            {job.error && <span class="danger"> · {job.error}</span>}
+            {(sending?.error ?? job.error) && <span class="danger"> · {sending?.error ?? job.error}</span>}
+            {support && !support.ok && <span class="danger"> · {support.reason}</span>}
           </div>
         )}
       </footer>

@@ -63,15 +63,21 @@ function authHeaders(): Record<string, string> {
   return {};
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** A request body sent as it is (a media segment), with its own content type. */
+export interface RawBody {
+  bytes: Uint8Array;
+  contentType: string;
+}
+
+async function request<T>(method: string, path: string, body?: unknown, raw?: RawBody): Promise<T> {
   const base = controlUrl.value;
   if (!base) throw new ApiError(0, 'unconfigured', 'Live services are not configured for this build (VITE_CONTROL_URL)');
   let r: Response;
   try {
     r = await fetch(`${base}${path}`, {
       method,
-      headers: { ...authHeaders(), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: { ...authHeaders(), ...(raw ? { 'Content-Type': raw.contentType } : body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+      body: raw ? (raw.bytes as unknown as BodyInit) : body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
     controlStatus.value = 'offline';
@@ -116,8 +122,13 @@ export const api = {
   get: <K extends keyof Routes>(_key: K, path: string) => request<Res<K>>('GET', path),
   post: <K extends keyof Routes>(_key: K, path: string, body?: Req<K>) => request<Res<K>>('POST', path, body ?? {}),
   put: <K extends keyof Routes>(_key: K, path: string, body: Req<K>) => request<Res<K>>('PUT', path, body),
+  /** PUT raw bytes (a media segment) and read the JSON answer. */
+  putBytes: <K extends keyof Routes>(_key: K, path: string, raw: RawBody) => request<Res<K>>('PUT', path, undefined, raw),
   del: <K extends keyof Routes>(_key: K, path: string) => request<Res<K>>('DELETE', path),
 };
+
+/** An absolute URL on the service for things the browser fetches itself (an HLS playlist). */
+export const serviceUrl = (path: string): string => `${controlUrl.value}${path}`;
 
 export async function checkControl(): Promise<ControlStatus> {
   if (!controlUrl.value) return (controlStatus.value = 'unconfigured');

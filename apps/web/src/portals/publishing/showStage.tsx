@@ -24,6 +24,8 @@ export interface ShowFeed {
   onStage: number;
   /** Each singer's vocal (after their FX), by participant — the broadcast mix is these plus the backing track. */
   vocals: Record<string, MediaStream>;
+  /** The performers as the compositor draws them (the broadcast encoder's own canvas draws the same). */
+  performers: StagePerformer[];
 }
 
 /** Receive every performer's video (the publisher never sends a camera) and lay them out as a show. */
@@ -33,6 +35,7 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
   const remoteVideos = useRef(new Map<string, { video: HTMLVideoElement; frame: UnpackedFrame }>());
   const [peerStates, setPeerStates] = useState<Record<string, PeerState>>({});
   const [vocals, setVocals] = useState<Record<string, MediaStream>>({});
+  const [performers, setPerformers] = useState<StagePerformer[]>([]);
 
   useEffect(() => {
     if (!mesh) return;
@@ -101,10 +104,11 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
       return { id: s.participantId!, slot: s.slot, label: s.displayName.split(' ')[0] || 'Singer', picture: s.picture, color, source: r ? { kind: 'frame', frame: r.frame } : { kind: 'none' } };
     });
     compositor.setPerformers(list);
+    setPerformers(list);
   }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), peerStates]);
 
   const linked = stagePerformers.filter((s) => peerStates[s.participantId!] === 'connected').length;
-  return { compositor, mesh, linked, onStage: stagePerformers.length, vocals };
+  return { compositor, mesh, linked, onStage: stagePerformers.length, vocals, performers };
 }
 
 /**

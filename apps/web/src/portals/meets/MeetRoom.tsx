@@ -19,6 +19,7 @@ import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcMusic, IcPause, IcPlay, IcPlus, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
+import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Progress, Seg, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, serverNow } from '../../lib/api.ts';
@@ -343,8 +344,12 @@ function Lobby(props: {
   const pbEpoch = meet.playback?.epoch ?? 0;
   const mixRef = useRef<MixPlayer | null>(null);
   const [mixState, setMixState] = useState<{ hearing: boolean; silent: boolean; seq: number; behindS: number }>({ hearing: false, silent: false, seq: 0, behindS: 0 });
+  // The show itself (the publisher's broadcast), when it is on: the audience watches it here; its sound replaces the mix.
+  const liveStatus = useLiveStatus(meet.meetId);
+  const [show, setShow] = useState<LiveShowState>({ live: false, audio: false, playing: false });
+  const showHasSound = show.playing && show.audio;
   useEffect(() => {
-    if (!listen || onStage) return;
+    if (!listen || onStage || showHasSound) return;
     const e = props.engine ?? getEngine(); // the audience has no mic open: the engine is only the speaker here
     void e.resume();
     if (!mixPlaySupported()) {
@@ -360,8 +365,8 @@ function Lobby(props: {
       mp.stop();
       mixRef.current = null;
     };
-  }, [listen, props.engine, onStage]);
-  const fallbackTrack = listen && mixState.silent;
+  }, [listen, props.engine, onStage, showHasSound]);
+  const fallbackTrack = listen && mixState.silent && !showHasSound;
   useEffect(() => {
     const e = fallbackTrack ? (props.engine ?? getEngine()) : null;
     if (!fallbackTrack || !e || !props.track?.loaded || meet.kickstartEpochMs === null || pbState !== 'playing') return;
@@ -427,30 +432,39 @@ function Lobby(props: {
               </button>
             ) : (
               <>
-                {props.track?.loaded ? (
-                  <div style="height:220px;position:relative;border-radius:12px;overflow:hidden">
-                    <StageBackground id={meet.backgroundId} />
-                    <LyricsPanel lines={props.track.loaded.track.lyrics} tMs={Math.max(0, audienceTMs)} mySlot={0} countdown={countingDown && !mixState.hearing ? Math.max(1, Math.ceil(-(serverNow() - meet.kickstartEpochMs!) / 1000)) : null} showWho={props.track.loaded.track.singerCount > 1} />
-                  </div>
+                {/* The audience's picture: the show when the publisher is on air; the stage background and who is on it otherwise. Never lyrics — those are the singers'. */}
+                <div class="watch-stage" style="height:240px">
+                  <StageBackground id={meet.backgroundId} />
+                  <LiveShow meetId={meet.meetId} status={liveStatus} onState={setShow}>
+                    <div class="watch-center">
+                      <div class="stack" style="text-align:center;justify-items:center">
+                        <div class="muted small">{meet.trackTitle || 'On stage'} · {formatMs(Math.max(0, audienceTMs))}</div>
+                        <div class="small faint">{meet.performerCount} on stage — the show picture appears here when the publisher goes live</div>
+                      </div>
+                    </div>
+                  </LiveShow>
+                </div>
+                {showHasSound ? (
+                  <div class="small muted">The show's own sound — the track and every singer, blended.</div>
                 ) : (
-                  <div class="muted small">Lyrics follow along here when the song can be loaded on this device (the singer who picked it needs a Drive sign-in so it can be shared).</div>
+                  <>
+                    <label class="switch">
+                      <input type="checkbox" checked={listen} onChange={(e) => setListen((e.currentTarget as HTMLInputElement).checked)} />
+                      <span>Hear the stage — the singers and the track, blended</span>
+                    </label>
+                    {listen && (
+                      <div class="small muted" data-mix-hearing={mixState.hearing ? '1' : '0'} data-mix-seq={mixState.seq}>
+                        {mixState.hearing
+                          ? `Hearing the stage · ${mixState.behindS.toFixed(1)} s behind`
+                          : mixState.silent
+                            ? mixPlaySupported()
+                              ? `No sound from the stage yet (the host's device sends it once a song runs)${props.track?.loaded ? ' — playing the backing track here meanwhile' : ''}`
+                              : `This browser cannot play the stage mix${props.track?.loaded ? ' — playing the backing track here instead' : ''}`
+                            : 'Tuning in…'}
+                      </div>
+                    )}
+                  </>
                 )}
-                <label class="switch">
-                  <input type="checkbox" checked={listen} onChange={(e) => setListen((e.currentTarget as HTMLInputElement).checked)} />
-                  <span>Hear the stage — the singers and the track, blended</span>
-                </label>
-                {listen && (
-                  <div class="small muted" data-mix-hearing={mixState.hearing ? '1' : '0'} data-mix-seq={mixState.seq}>
-                    {mixState.hearing
-                      ? `Hearing the stage · ${mixState.behindS.toFixed(1)} s behind${props.track?.loaded ? ' — the lyrics follow the sound' : ''}`
-                      : mixState.silent
-                        ? mixPlaySupported()
-                          ? `No sound from the stage yet (the host's device sends it once a song runs)${props.track?.loaded ? ' — playing the backing track here meanwhile' : ''}`
-                          : `This browser cannot play the stage mix${props.track?.loaded ? ' — playing the backing track here instead' : ''}`
-                        : 'Tuning in…'}
-                  </div>
-                )}
-                {meet.streamUrl && <div class="callout">Live stream: {meet.streamUrl}</div>}
               </>
             )}
           </section>

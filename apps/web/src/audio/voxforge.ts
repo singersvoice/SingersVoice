@@ -1,6 +1,12 @@
 /**
  * VoxForge vocal chain on Web Audio (the browser twin of the JUCE plugin):
- * trim → pitch/auto-tune (worklet) → HPF → 3-band EQ → compressor → saturation → chorus → stereo delay → reverb → out.
+ * trim → pitch/auto-tune (worklet) → HPF → EQ (low · mid · presence · air) → compressor → parallel
+ * "punch" compression → de-esser → exciter → saturation → chorus → stereo delay → reverb → rider → out.
+ *
+ * Everything runs on the audio thread in 128-frame blocks: the chain adds no buffering of its own
+ * (under 3 ms at 48 kHz); only the pitch stage holds one grain (~46 ms) while it is correcting.
+ * The rider is the one stage steered from the main thread — a slow gain that only ever moves a few
+ * dB per second, so a late timer costs nothing audible.
  */
 import { totalSemitones, type VoxForgeParams } from '@singersvoice/protocol';
 
@@ -10,9 +16,17 @@ export interface VoxForgeChain {
   pitchNode: AudioWorkletNode | null;
   apply(p: VoxForgeParams): void;
   dispose(): void;
+  /** The rider's current gain in dB (for meters / tests). */
+  readonly riderDb: number;
 }
 
 const dB = (v: number) => Math.pow(10, v / 20);
+/** Where a sung vocal should sit (RMS): the rider steers every phrase toward this. */
+const RIDER_TARGET_DB = -20;
+/** Below this the rider holds still — room noise and breaths are not phrases. */
+const RIDER_GATE_DB = -50;
+const RIDER_MAX_CUT_DB = -6;
+const RIDER_MAX_LIFT_DB = 12;
 
 function saturationCurve(drive: number): Float32Array<ArrayBuffer> {
   const n = 1024;
@@ -71,6 +85,10 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
   mid.type = 'peaking';
   mid.frequency.value = 1200;
   mid.Q.value = 1;
+  const pres = ctx.createBiquadFilter();
+  pres.type = 'peaking';
+  pres.frequency.value = 3200;
+  pres.Q.value = 1.1;
   const hi = ctx.createBiquadFilter();
   hi.type = 'highshelf';
   hi.frequency.value = 6500;
@@ -78,6 +96,68 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
   const comp = ctx.createDynamicsCompressor();
   comp.knee.value = 6;
   const makeup = ctx.createGain();
+
+  // Parallel ("New York") compression: the dry vocal plus a crushed copy underneath — soft phrases come
+  // up, loud ones keep their transients, nothing sounds squashed.
+  const pcIn = ctx.createGain();
+  const pcDry = ctx.createGain();
+  const pcComp = ctx.createDynamicsCompressor();
+  pcComp.threshold.value = -36;
+  pcComp.knee.value = 10;
+  pcComp.ratio.value = 10;
+  pcComp.attack.value = 0.002;
+  pcComp.release.value = 0.09;
+  const pcMakeup = ctx.createGain();
+  pcMakeup.gain.value = dB(10);
+  const pcWet = ctx.createGain();
+  const pcOut = ctx.createGain();
+
+  // De-esser: a Linkwitz-Riley split at 5 kHz; the top band goes through a fast compressor of its own,
+  // so an "s" is ducked for the few milliseconds it spikes and the rest of the voice is untouched.
+  const dsIn = ctx.createGain();
+  const dsBypass = ctx.createGain();
+  const dsLo1 = ctx.createBiquadFilter();
+  const dsLo2 = ctx.createBiquadFilter();
+  const dsHi1 = ctx.createBiquadFilter();
+  const dsHi2 = ctx.createBiquadFilter();
+  for (const f of [dsLo1, dsLo2]) {
+    f.type = 'lowpass';
+    f.frequency.value = 5000;
+    f.Q.value = Math.SQRT1_2;
+  }
+  for (const f of [dsHi1, dsHi2]) {
+    f.type = 'highpass';
+    f.frequency.value = 5000;
+    f.Q.value = Math.SQRT1_2;
+  }
+  const dsLoGain = ctx.createGain();
+  const dsHiGain = ctx.createGain();
+  const dsComp = ctx.createDynamicsCompressor();
+  dsComp.knee.value = 4;
+  dsComp.attack.value = 0.001;
+  dsComp.release.value = 0.06;
+  const dsOut = ctx.createGain();
+
+  // Exciter: harmonics generated from the top of the voice (above 3 kHz) and blended in — the sparkle
+  // and "air" of a studio chain, not a plain treble boost.
+  const exIn = ctx.createGain();
+  const exDry = ctx.createGain();
+  const exHp = ctx.createBiquadFilter();
+  exHp.type = 'highpass';
+  exHp.frequency.value = 3000;
+  exHp.Q.value = 0.7;
+  const exShaper = ctx.createWaveShaper();
+  exShaper.oversample = '2x';
+  exShaper.curve = saturationCurve(0.6);
+  const exWet = ctx.createGain();
+  const exOut = ctx.createGain();
+
+  // Rider: a slow automatic level after the effects, steered from the main thread.
+  const riderIn = ctx.createGain();
+  const rider = ctx.createGain();
+  const riderMeter = ctx.createAnalyser();
+  riderMeter.fftSize = 2048;
+  riderMeter.smoothingTimeConstant = 0;
 
   // Saturation (dry/wet)
   const satIn = ctx.createGain();
@@ -127,7 +207,17 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
     last.connect(pitchNode);
     last = pitchNode;
   }
-  last.connect(hpf).connect(low).connect(mid).connect(hi).connect(comp).connect(makeup).connect(satIn);
+  last.connect(hpf).connect(low).connect(mid).connect(pres).connect(hi).connect(comp).connect(makeup).connect(pcIn);
+  pcIn.connect(pcDry).connect(pcOut);
+  pcIn.connect(pcComp).connect(pcMakeup).connect(pcWet).connect(pcOut);
+  pcOut.connect(dsIn);
+  dsIn.connect(dsBypass).connect(dsOut);
+  dsIn.connect(dsLo1).connect(dsLo2).connect(dsLoGain).connect(dsOut);
+  dsIn.connect(dsHi1).connect(dsHi2).connect(dsComp).connect(dsHiGain).connect(dsOut);
+  dsOut.connect(exIn);
+  exIn.connect(exDry).connect(exOut);
+  exIn.connect(exHp).connect(exShaper).connect(exWet).connect(exOut);
+  exOut.connect(satIn);
   satIn.connect(satDry).connect(satOut);
   satIn.connect(shaper).connect(satWet).connect(satOut);
   satOut.connect(chDry).connect(chOut);
@@ -139,11 +229,38 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
   dlL.connect(panL).connect(dlWet);
   dlR.connect(panR).connect(dlWet);
   dlWet.connect(dlOut);
-  dlOut.connect(rvDry).connect(output);
-  dlOut.connect(preDelay).connect(conv).connect(rvWet).connect(output);
+  dlOut.connect(rvDry).connect(riderIn);
+  dlOut.connect(preDelay).connect(conv).connect(rvWet).connect(riderIn);
+  riderIn.connect(rider).connect(output);
+  riderIn.connect(riderMeter);
 
   let lastIrKey = '';
   let irTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // ---- the rider: RMS every 50 ms; soft phrases lifted slowly, loud ones pulled down a little faster ----
+  let riderOn = false;
+  let riderLift = RIDER_MAX_LIFT_DB;
+  let riderDb = 0;
+  const meterBuf = new Float32Array(riderMeter.fftSize);
+  const riderTimer = setInterval(() => {
+    if (!riderOn) {
+      if (riderDb !== 0) {
+        riderDb = 0;
+        rider.gain.setTargetAtTime(1, ctx.currentTime, 0.1);
+      }
+      return;
+    }
+    riderMeter.getFloatTimeDomainData(meterBuf);
+    let sum = 0;
+    for (let i = 0; i < meterBuf.length; i++) sum += meterBuf[i]! * meterBuf[i]!;
+    const rms = 20 * Math.log10(Math.sqrt(sum / meterBuf.length) + 1e-9);
+    if (rms < RIDER_GATE_DB) return; // nothing sung right now: hold the level
+    const wanted = Math.max(RIDER_MAX_CUT_DB, Math.min(riderLift, RIDER_TARGET_DB - rms));
+    // Up slowly (a phrase, not a syllable), down a little faster, never more than a few dB a second.
+    const step = wanted > riderDb ? 0.35 : 0.6;
+    riderDb += Math.max(-step, Math.min(step, wanted - riderDb));
+    rider.gain.setTargetAtTime(dB(riderDb), ctx.currentTime, 0.08);
+  }, 50);
 
   function apply(p: VoxForgeParams): void {
     const t = ctx.currentTime;
@@ -160,6 +277,7 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
     hpf.frequency.setTargetAtTime(p.eqOn ? p.hpfHz : 20, t, ramp);
     low.gain.setTargetAtTime(p.eqOn ? p.eqLow : 0, t, ramp);
     mid.gain.setTargetAtTime(p.eqOn ? p.eqMid : 0, t, ramp);
+    pres.gain.setTargetAtTime(p.eqOn ? p.eqPres : 0, t, ramp);
     hi.gain.setTargetAtTime(p.eqOn ? p.eqHi : 0, t, ramp);
 
     comp.threshold.setTargetAtTime(p.compOn ? p.cThr : 0, t, ramp);
@@ -167,6 +285,23 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
     comp.attack.setTargetAtTime(p.cAtk / 1000, t, ramp);
     comp.release.setTargetAtTime(p.cRel / 1000, t, ramp);
     makeup.gain.setTargetAtTime(p.compOn ? dB(p.cMk) : 1, t, ramp);
+
+    pcWet.gain.setTargetAtTime(p.pcOn ? p.pcMx * 0.8 : 0, t, ramp);
+    pcDry.gain.setTargetAtTime(p.pcOn ? 1 - p.pcMx * 0.25 : 1, t, ramp);
+
+    // De-ess amount: how early the top band is caught and how hard.
+    const dsActive = p.dsOn && p.dsAmt > 0;
+    dsBypass.gain.setTargetAtTime(dsActive ? 0 : 1, t, ramp);
+    dsLoGain.gain.setTargetAtTime(dsActive ? 1 : 0, t, ramp);
+    dsHiGain.gain.setTargetAtTime(dsActive ? 1 : 0, t, ramp);
+    dsComp.threshold.setTargetAtTime(dsActive ? -22 - p.dsAmt * 16 : 0, t, ramp);
+    dsComp.ratio.setTargetAtTime(dsActive ? 3 + p.dsAmt * 7 : 1, t, ramp);
+
+    exWet.gain.setTargetAtTime(p.exOn ? p.exAmt * 0.45 : 0, t, ramp);
+    exDry.gain.setTargetAtTime(1, t, ramp);
+
+    riderOn = p.rdOn && p.rdAmt > 0;
+    riderLift = RIDER_MAX_LIFT_DB * Math.max(0, Math.min(1, p.rdAmt));
 
     shaper.curve = saturationCurve(p.satDr);
     satWet.gain.setTargetAtTime(p.satOn ? p.satMx : 0, t, ramp);
@@ -197,14 +332,25 @@ export function createVoxForgeChain(ctx: AudioContext, workletAvailable: boolean
   }
 
   function dispose(): void {
+    clearInterval(riderTimer);
+    clearTimeout(irTimer);
     try {
       lfo.stop();
     } catch {
       /* already stopped */
     }
-    for (const n of [input, output, hpf, low, mid, hi, comp, makeup, satIn, satDry, satWet, shaper, satOut, chDry, chWet, chDelay, chOut, dlDry, dlWet, dlL, dlR, fbL, fbR, panL, panR, dlOut, rvDry, rvWet, preDelay, conv]) n.disconnect();
+    for (const n of [input, output, hpf, low, mid, pres, hi, comp, makeup, pcIn, pcDry, pcComp, pcMakeup, pcWet, pcOut, dsIn, dsBypass, dsLo1, dsLo2, dsHi1, dsHi2, dsLoGain, dsHiGain, dsComp, dsOut, exIn, exDry, exHp, exShaper, exWet, exOut, riderIn, rider, riderMeter, satIn, satDry, satWet, shaper, satOut, chDry, chWet, chDelay, chOut, dlDry, dlWet, dlL, dlR, fbL, fbR, panL, panR, dlOut, rvDry, rvWet, preDelay, conv]) n.disconnect();
     pitchNode?.disconnect();
   }
 
-  return { input, output, pitchNode, apply, dispose };
+  return {
+    input,
+    output,
+    pitchNode,
+    apply,
+    dispose,
+    get riderDb() {
+      return riderDb;
+    },
+  };
 }

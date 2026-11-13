@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { MIX_KEEP, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type MeetSignal, type MixBatch, type Participant, type PublishJob, type UserRecord } from '@singersvoice/protocol';
+import { LIVE_KEEP, MIX_KEEP, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type UserRecord } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { SCHEMA_SQL } from './schema.ts';
 
@@ -380,4 +380,38 @@ export class SqlStore {
     const rows = await this.db.all<{ data: string }>("SELECT data FROM publish_jobs WHERE meet_id=? AND state IN ('requested','starting','live') ORDER BY created_at DESC", [meetId]);
     return rows.map((r) => JSON.parse(r.data) as PublishJob);
   }
+
+  // ---------- live segments (the browser-published show, a rolling window per job) ----------
+
+  async addLiveSegment(jobId: string, seg: LiveSegmentInfo, data: Uint8Array): Promise<void> {
+    // A publisher that started over (a reload) counts from 0 again: what remains of the earlier run is stale.
+    await this.db.run('DELETE FROM live_segments WHERE job_id=? AND seq>=?', [jobId, seg.seq]);
+    await this.db.run(
+      `INSERT INTO live_segments (job_id, seq, name, duration_ms, created_at, data) VALUES (?,?,?,?,?,?)
+       ON CONFLICT(job_id, seq) DO UPDATE SET name=excluded.name, duration_ms=excluded.duration_ms, created_at=excluded.created_at, data=excluded.data`,
+      [jobId, seg.seq, seg.name, seg.durationMs, seg.createdAt, data],
+    );
+    await this.db.run('DELETE FROM live_segments WHERE job_id=? AND seq<=?', [jobId, seg.seq - LIVE_KEEP]);
+  }
+
+  async listLiveSegments(jobId: string): Promise<LiveSegmentInfo[]> {
+    const rows = await this.db.all<{ seq: number; name: string; duration_ms: number; created_at: string }>('SELECT seq, name, duration_ms, created_at FROM live_segments WHERE job_id=? ORDER BY seq ASC', [jobId]);
+    return rows.map((r) => ({ seq: Number(r.seq), name: r.name, durationMs: Number(r.duration_ms), createdAt: r.created_at }));
+  }
+
+  async getLiveSegment(jobId: string, name: string): Promise<Uint8Array | null> {
+    const r = await this.db.get<{ data: unknown }>('SELECT data FROM live_segments WHERE job_id=? AND name=?', [jobId, name]);
+    return r ? toBytes(r.data) : null;
+  }
+
+  async clearLiveSegments(jobId: string): Promise<void> {
+    await this.db.run('DELETE FROM live_segments WHERE job_id=?', [jobId]);
+  }
+}
+
+function toBytes(v: unknown): Uint8Array {
+  if (v instanceof Uint8Array) return v;
+  if (v instanceof ArrayBuffer) return new Uint8Array(v);
+  if (ArrayBuffer.isView(v)) return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  return new Uint8Array(0);
 }

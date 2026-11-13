@@ -227,6 +227,22 @@ export class ShowRecorder {
    * Start drawing now and recording at `atCtxTime` (the song's kickstart on the engine's clock), so
    * the first frames are already in step when the music starts.
    */
+  /** Draw the picture only (the publisher's broadcast encoder reads the canvas); no recorder, no audio bus. */
+  startDrawing(fps = SHOW_FPS): void {
+    if (this.running) return;
+    this.running = true;
+    clearInterval(this.timer);
+    this.timer = setInterval(() => this.frame(), 1000 / fps);
+    this.frame();
+  }
+
+  stopDrawing(): void {
+    if (this.mr) return; // a recording is running: stop() ends it
+    this.running = false;
+    clearInterval(this.timer);
+    this.timer = undefined;
+  }
+
   start(engine: AudioEngine, atCtxTime: number): void {
     if (this.running) return;
     this.running = true;

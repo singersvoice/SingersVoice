@@ -269,4 +269,87 @@ describe('sv-control API', () => {
     expect(joined.status).toBe(201);
     expect((await app.request('/publishing/jobs', { method: 'POST', headers: as('bob'), body: JSON.stringify({ meetId: bobs.meet.meetId, destinations: ['inhouse'] }) })).status).toBe(403); // bob is not privileged
   });
+
+  it('live segments: kept for the portal, forwarded to YouTube with a playlist; the key decides live vs rejected', async () => {
+    const meet = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Live show' }) }));
+    const id = meet.meet.meetId;
+    await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, streamKey: 'wxyz-9876' }) });
+    const { job } = await json<{ job: { jobId: string } }>(await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: id, destinations: ['youtube', 'inhouse'], title: 'Show' }) }));
+    // Not on yet.
+    expect((await json<{ live: boolean }>(await app.request(`/watch/${id}/live`))).live).toBe(false);
+    expect((await app.request(`/watch/${id}/live.m3u8`)).status).toBe(404);
+
+    // YouTube is a fetch away: record what the service sends it.
+    const sent: { url: string; method: string; type: string; body: string | Uint8Array }[] = [];
+    const realFetch = globalThis.fetch;
+    let youtubeStatus = 200;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body;
+      sent.push({ url: String(input), method: init?.method ?? 'GET', type: new Headers(init?.headers).get('content-type') ?? '', body: typeof body === 'string' ? body : new Uint8Array(body as ArrayBuffer) });
+      return new Response('', { status: youtubeStatus });
+    }) as typeof fetch;
+    try {
+      const seg = (n: number) => new Uint8Array([0x47, ...Array.from({ length: 187 }, (_, i) => (i + n) & 0xff)]);
+      const put = (name: string, seq: number, bytes: Uint8Array, dur = 2000) => app.request(`/publishing/jobs/${job.jobId}/live/${name}?seq=${seq}&dur=${dur}`, { method: 'PUT', headers: { 'X-Dev-User': 'alice', 'X-Dev-Name': 'alice', 'Content-Type': 'video/MP2T' }, body: bytes as unknown as BodyInit });
+      expect((await put('bad name.ts', 0, seg(0))).status).toBe(400);
+      expect((await put('s0.ts', 0, new Uint8Array([1, 2, 3]))).status).toBe(400); // not TS
+      expect((await app.request(`/publishing/jobs/${job.jobId}/live/s0.ts?seq=0&dur=2000`, { method: 'PUT', headers: { 'X-Dev-User': 'bob', 'X-Dev-Name': 'bob' }, body: seg(0) as unknown as BodyInit })).status).toBe(403); // bob: not privileged
+      const first = await json<{ job: { state: string; live: { segments: number; youtube: string } }; youtube: { status: number } | null }>(await put('s0.ts', 0, seg(0)));
+      expect(first.job.state).toBe('live');
+      expect(first.job.live.segments).toBe(1);
+      expect(first.job.live.youtube).toBe('ok');
+      expect(first.youtube?.status).toBe(200);
+      // Segment then playlist, to the key's ingest URL, the key never in the playlist body.
+      expect(sent.map((x) => x.method)).toEqual(['PUT', 'PUT']);
+      expect(sent[0]!.url).toContain('cid=wxyz-9876&copy=0&file=s0.ts');
+      expect(sent[0]!.type).toBe('video/MP2T');
+      expect(sent[1]!.url).toContain('file=live.m3u8');
+      expect(sent[1]!.body).toContain('#EXT-X-MEDIA-SEQUENCE:0');
+      expect(sent[1]!.body).toContain('#EXTINF:2.000,\ns0.ts');
+      await put('s1.ts', 1, seg(1));
+      await put('s2.ts', 2, seg(2), 1900);
+      expect(sent[5]!.body).toContain('#EXT-X-TARGETDURATION:2');
+
+      // The portal: on, with a playlist of the kept segments and the bytes themselves.
+      const status = await json<{ live: boolean; segments: number; playlistPath: string }>(await app.request(`/watch/${id}/live`));
+      expect(status.live).toBe(true);
+      expect(status.segments).toBe(3);
+      expect(status.playlistPath).toBe(`/watch/${id}/live.m3u8`);
+      const pl = await app.request(`/watch/${id}/live.m3u8`);
+      expect(pl.headers.get('content-type')).toContain('mpegurl');
+      const text = await pl.text();
+      expect(text).toContain('#EXT-X-MEDIA-SEQUENCE:0');
+      expect(text).toContain('live/s2.ts');
+      const bytes = new Uint8Array(await (await app.request(`/watch/${id}/live/s1.ts`)).arrayBuffer());
+      expect(bytes).toEqual(seg(1));
+      expect((await app.request(`/watch/${id}/live/nope.ts`)).status).toBe(404);
+      // The rolling window: after 10 segments only the last 8 remain, the sequence moves on.
+      for (let i = 3; i < 10; i++) await put(`s${i}.ts`, i, seg(i));
+      const later = await (await app.request(`/watch/${id}/live.m3u8`)).text();
+      expect(later).toContain('#EXT-X-MEDIA-SEQUENCE:2');
+      expect(later).not.toContain('live/s1.ts');
+      expect((await app.request(`/watch/${id}/live/s1.ts`)).status).toBe(404);
+
+      // The publisher started over (seq from 0 again): the earlier run's segments go, the playlist starts afresh.
+      await put('r0.ts', 0, seg(20));
+      const restarted = await (await app.request(`/watch/${id}/live.m3u8`)).text();
+      expect(restarted).toContain('#EXT-X-MEDIA-SEQUENCE:0');
+      expect(restarted).not.toContain('live/s9.ts');
+      for (let i = 1; i < 11; i++) await put(`r${i}.ts`, i, seg(20 + i));
+      // A wrong key: YouTube answers 401 → rejected, the job carries the reason, the portal keeps playing.
+      youtubeStatus = 401;
+      const rejected = await json<{ job: { state: string; error: string | null; live: { youtube: string } } }>(await put('r11.ts', 11, seg(31)));
+      expect(rejected.job.live.youtube).toBe('rejected');
+      expect(rejected.job.error).toContain('stream key');
+      expect(rejected.job.state).toBe('live');
+      expect((await json<{ live: boolean }>(await app.request(`/watch/${id}/live`))).live).toBe(true);
+
+      // Stop: segments gone, the portal off, no more segments accepted.
+      await app.request(`/publishing/jobs/${job.jobId}/stop`, { method: 'POST', headers: as('alice') });
+      expect((await json<{ live: boolean }>(await app.request(`/watch/${id}/live`))).live).toBe(false);
+      expect((await put('r12.ts', 12, seg(32))).status).toBe(409);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });

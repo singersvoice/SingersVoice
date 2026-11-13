@@ -37,7 +37,7 @@ CI uploads the screenshots as an artifact on every PR.
 ## Known limits of this increment
 
 - Live meets, the catalog and publishing need `sv-control` deployed (`VITE_CONTROL_URL`) — see docs/DEPLOY_CONTROL.md; the portals explain this inline until then.
-- Performers do not hear each other (Solo foldback, by design); the audience hears the composed stream only once the session container exists.
+- Performers do not hear each other (Solo foldback, by design); the audience hears the stage mix the host's device relays, and watches the show (video + mix) once a publisher's show view is on air.
 - The "Import a track shared with me" button needs `VITE_GOOGLE_API_KEY` (Google Picker).
 - Tempo changes are real-time granular time-stretch on the backing track (key kept); extreme values sound grainy.
 - On iOS the Google sign-in popup must be triggered by a tap (it is), and tokens last 1 h → *Reconnect Drive*.

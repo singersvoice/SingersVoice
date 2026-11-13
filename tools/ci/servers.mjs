@@ -31,7 +31,7 @@ async function waitFor(url, ms = 20000) {
   throw new Error(`${url} did not come up`);
 }
 
-export async function startServers({ base = '/SingersVoice/', logDir = process.env.SV_SERVER_LOGS } = {}) {
+export async function startServers({ base = '/SingersVoice/', logDir = process.env.SV_SERVER_LOGS, fakeYoutubeDir = process.env.SV_FAKE_YOUTUBE_DIR } = {}) {
   const controlPort = await freePort();
   const port = await freePort();
   const procs = [];
@@ -46,7 +46,16 @@ export async function startServers({ base = '/SingersVoice/', logDir = process.e
     name: 'control',
     cwd: path.resolve('services/control'),
     // The first account seen (alice) is privileged by bootstrap; carol is the Publishing-mode tester.
-    env: { ...process.env, PORT: String(controlPort), DEV_AUTH: '1', SV_DB: ':memory:', ALLOWED_ORIGINS: `http://localhost:${port}`, PRIVILEGED_EMAILS: 'carol@dev.local' },
+    env: {
+      ...process.env,
+      PORT: String(controlPort),
+      DEV_AUTH: '1',
+      SV_DB: ':memory:',
+      ALLOWED_ORIGINS: `http://localhost:${port}`,
+      PRIVILEGED_EMAILS: 'carol@dev.local',
+      // YouTube stands in for itself: the control server's own fake ingestion endpoint keeps the segments in a directory.
+      ...(fakeYoutubeDir ? { SV_FAKE_YOUTUBE_DIR: fakeYoutubeDir, YOUTUBE_HLS_BASE: `http://localhost:${controlPort}/fake/youtube/http_upload_hls` } : {}),
+    },
   });
   run('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], { name: 'web', cwd: path.resolve('apps/web'), env: { ...process.env, BASE_PATH: base } });
   const stop = () => {
@@ -61,5 +70,5 @@ export async function startServers({ base = '/SingersVoice/', logDir = process.e
   };
   process.on('exit', stop);
   await Promise.all([waitFor(`http://localhost:${controlPort}/health`), waitFor(`http://localhost:${port}${base}`)]);
-  return { port, controlPort, base, appUrl: `http://localhost:${port}${base}`, controlUrl: `http://localhost:${controlPort}`, stop };
+  return { port, controlPort, base, appUrl: `http://localhost:${port}${base}`, controlUrl: `http://localhost:${controlPort}`, fakeYoutubeDir, stop };
 }

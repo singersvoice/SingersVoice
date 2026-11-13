@@ -229,8 +229,30 @@ link; the first four tiles connect by themselves, the rest on request.
    packets back to back on the audio clock 1.6 s behind the newest batch (a jitter buffer), so the
    sound runs ~2–3 s behind the stage; the position of what is being heard drives the lyrics. Needs
    WebCodecs on both ends (Chrome, Edge, Safari 16.4+, Firefox 130+); otherwise — or when no batch
-   has arrived for 6 s — the device plays the backing track alone, in sync. A session container
-   (video to the audience, RTMPS out) remains the next increment.
+   has arrived for 6 s — the device plays the backing track alone, in sync.
+5. **The show to the audience and to YouTube — from the publisher's browser.** The show view
+   (`portals/publishing/broadcast.ts`) runs a `PublisherBus` (the track element and every vocal off
+   the mesh, the saved-show balance, a limiter; two monitor switches that never touch the
+   broadcast), draws the show on a `ShowRecorder` canvas, and `broadcast/liveEncoder.ts` turns it
+   into a stream: `VideoEncoder` (H.264 Annex B, `avc1.4d401f`, 3 Mbps, 30 fps backing off to 15
+   when the encoder falls behind, a keyframe every 2 s by time) and `AudioEncoder` (AAC-LC ADTS,
+   48 kHz stereo, 128 kbps; absent on Linux Chrome / Firefox → video only), cut at the keyframes
+   and muxed by `broadcast/tsMuxer.ts` (PAT/PMT first, PES with PTS, PCR on video, AUDs, continuity
+   across segments — unit-tested against ffmpeg-made streams and decoded back by ffmpeg).
+   `broadcast/liveSender.ts` PUTs each segment to `PUT /publishing/jobs/:id/live/:name` (raw body,
+   `?seq&dur&audio`), a queue of four, retries with back-off. The service (`live.ts`) keeps a rolling
+   window of eight per job in `live_segments` (BLOBs; node:sqlite takes typed arrays, Durable
+   Object SQL ArrayBuffers — the driver converts), serves `GET /watch/:id/live` (status),
+   `/watch/:id/live.m3u8` and `/watch/:id/live/:name` publicly, and when the job includes YouTube
+   PUTs the segment then a four-entry media playlist to `YOUTUBE_HLS_BASE` (default
+   `https://a.upload.youtube.com/http_upload_hls`) with `cid=<stream key>` — 200/202 ok, 401 key
+   rejected, 400 refused, 5xx error — recorded on the job (`live.youtube`, `youtubeNote`). The job
+   goes `live` on the first segment and is off air 20 s after the last. The audience plays the
+   playlist with hls.js (lazy chunk; Safari natively) in `components/LiveShow.tsx`, on the watch
+   page and in the room's audience view — no lyrics there. Tests: `SV_FAKE_YOUTUBE_DIR` makes the
+   Node service serve a stand-in at `/fake/youtube/http_upload_hls`; the live e2e goes live from
+   the show view, ffprobes a segment the fake received and watches the show on both pages. RTMP
+   platforms (Facebook, Instagram, Twitch) remain the session container's job.
 5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.
 
 ## Components
@@ -240,7 +262,7 @@ link; the first four tiles connect by themselves, the rest on request.
 | PWA client | `apps/web` | iOS Safari (installable), Android Chrome (installable), desktop browsers |
 | Shared protocol | `packages/protocol` | client + services |
 | sv-control (SVT DB) | `services/control` | Hono on Node 22 (node:sqlite) or Cloudflare Workers (one SQLite-backed Durable Object): users (privileged flag), catalog, meets, chat, recordings, publishing destinations/jobs; Google access-token auth |
-| sv-session (V3) | `services/session` (planned) | one pod per meet: mediasoup ingest → VoxForge C++ mixer-composer → FFmpeg encoder → RTMPS / LL-HLS |
+| sv-session (V3) | `services/session` (planned) | RTMPS relay for Facebook / Instagram / Twitch: takes the browser's segments, speaks RTMPS (the browser already encodes the show) |
 
 ## Audio chain (VoxForge, web twin of the JUCE plugin)
 
@@ -253,14 +275,23 @@ Bluetooth headset's HFP mic) and the `MicStatus` component says so and offers an
 **leveller** (`startLeveller`) replaces AGC: the raw peaks are watched 10× a second; under
 −18 dBFS the trim rises 1 dB at a time (to +18 dB), past −3 dBFS it drops 3 dB at once (to −6 dB) —
 slow up, fast down, no pumping, never clipped. Then: trim → pitch worklet (granular shifter + NSDF
-auto-tune) → HPF → low shelf 120 Hz / peak 1.2 kHz / high shelf 6.5 kHz → compressor → saturation →
-chorus/doubler → ping-pong delay → convolution reverb → out. The chain runs live on the captured
-voice: what is recorded, sent to the publisher and the other singers' recordings, and heard in the
-monitor is the processed vocal. Parameters and presets live in `packages/protocol/src/audio.ts`
-and round-trip with the plugin's `APVTS` layout; the *Natural* default is a clean, present vocal
-(HPF 90 Hz, +1 dB mid, +2.5 dB air, gentle 3.5:1 compression). A singer's preset choice is kept on
-their device (`audio_plugin_settings`, localStorage, mirrored to `SingersVoice/Config/` in Drive)
-until they change it.
+auto-tune) → HPF → low shelf 120 Hz / peak 1.2 kHz / **presence peak 3.2 kHz** / high shelf 6.5 kHz
+→ compressor → **parallel compression** (a crushed copy, 10:1 from −36 dB, blended under the dry
+vocal: soft phrases up, transients kept — punch without over-compression) → **de-esser**
+(Linkwitz-Riley split at 5 kHz, the top band through its own 1 ms compressor) → **exciter**
+(harmonics made from the voice above 3 kHz, blended in — air, not a treble boost) → saturation →
+chorus/doubler → ping-pong delay → convolution reverb → **vocal rider** (an RMS meter every 50 ms;
+below −50 dBFS it holds, otherwise it steers toward −20 dBFS: up to +12 dB lift, −6 dB cut, a few
+dB a second at most — every phrase up front) → out. Every stage is a Web Audio node in the
+128-frame graph: no buffering, under 3 ms; the pitch stage alone holds one 46 ms grain while it
+corrects. The chain runs live on the captured voice: what is recorded, sent to the publisher and
+the other singers' recordings, and heard in the monitor is the processed vocal. Parameters and
+presets live in `packages/protocol/src/audio.ts` and round-trip with the plugin's `APVTS` layout;
+**Studio** is the default for a new singer (HPF 95 Hz, presence +2.5 dB, air +2 dB, 3:1
+compression, parallel 0.25, de-ess 0.5, exciter 0.25, rider 0.6, a short room); Natural Tune,
+Punch, Up Front, Radio-Ready and Vibrant are the other finished-vocal presets. A singer's preset
+choice is kept on their device (`audio_plugin_settings`, localStorage, mirrored to
+`SingersVoice/Config/` in Drive) until they change it.
 
 ## Data formats
 

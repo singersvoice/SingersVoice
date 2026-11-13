@@ -2,7 +2,7 @@
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
 import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
 import type { MixBatch } from './mix.ts';
-import type { Destination, DestinationKind, DestinationUpdate, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
+import type { Destination, DestinationKind, DestinationUpdate, LiveStatus, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 
 export interface ApiError {
   error: string;
@@ -189,6 +189,10 @@ export interface Routes {
   'GET /publishing/jobs': { res: { jobs: PublishJob[] } };
   'POST /publishing/jobs': { req: PublishJobRequest; res: { job: PublishJob } };
   'POST /publishing/jobs/:id/stop': { res: { job: PublishJob } };
+  /** The publisher's browser delivers one MPEG-TS segment (raw body, `?seq=&dur=` ms); the service keeps it for the portal and forwards it to YouTube. */
+  'PUT /publishing/jobs/:id/live/:name': { res: { job: PublishJob; youtube: { status: number } | null } };
+  /** Public: whether the show is on and where its HLS playlist is (`/watch/:id/live.m3u8`, segments at `/watch/:id/live/<name>`). */
+  'GET /watch/:id/live': { res: LiveStatus };
 }
 
 export type { MeetRole, DestinationKind };

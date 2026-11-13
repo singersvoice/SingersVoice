@@ -103,4 +103,13 @@ CREATE TABLE IF NOT EXISTS publish_jobs (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_owner ON publish_jobs(owner_user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS live_segments (
+  job_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  data BLOB NOT NULL,
+  PRIMARY KEY (job_id, seq)
+);
 `;

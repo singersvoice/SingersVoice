@@ -41,10 +41,16 @@ import {
   type SongPick,
   type StartMeetRequest,
   type UserRecord,
+  LIVE_STALE_MS,
+  YOUTUBE_HLS_INGEST,
+  type LiveSegmentInfo,
+  type LiveStatus,
+  type PublishJobLive,
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
 import { addSong, claimSlot, decideRequest, ensureMeet, isHost, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, withdrawRequest, seek, canTransport } from './meets.ts';
+import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
 export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -72,6 +78,10 @@ export interface AppDeps {
   allowedOrigins: string[];
   privilegedEmails: string[];
   version: string;
+  /** YouTube's HLS ingestion endpoint (YOUTUBE_HLS_BASE env; tests point it at the fake below). */
+  youtubeHlsBase?: string;
+  /** Node, tests and local dev only: accept YouTube-style PUTs at /fake/youtube/http_upload_hls and keep the files in this directory. */
+  fakeYoutubeDir?: string;
 }
 
 type Vars = { deps: AppDeps; user: UserRecord };
@@ -140,11 +150,68 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json({ ...r, serverEpochMs: Date.now() });
   });
 
+  // The show itself, as the publisher's browser delivers it: an HLS playlist of the last few segments.
+  const liveJob = async (store: SqlStore, meetId: string): Promise<PublishJob | null> => {
+    const jobs = await store.liveJobsForMeet(meetId);
+    return jobs.find((j) => j.state === 'live' && j.live?.lastSegmentAt && Date.now() - Date.parse(j.live.lastSegmentAt) < LIVE_STALE_MS) ?? null;
+  };
+  app.get('/watch/:id/live', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const job = await liveJob(store, meet.meetId);
+    const status: LiveStatus = {
+      live: job !== null,
+      jobId: job?.jobId ?? null,
+      segments: job?.live?.segments ?? 0,
+      lastSegmentAt: job?.live?.lastSegmentAt ?? null,
+      playlistPath: job ? `/watch/${meet.meetId}/live.m3u8` : null,
+      audio: job?.live?.audio ?? false,
+    };
+    return c.json(status);
+  });
+  app.get('/watch/:id/live.m3u8', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const job = await liveJob(store, meet.meetId);
+    if (!job) return err(c, 404, 'not_live', 'The show is not on');
+    const segments = await store.listLiveSegments(job.jobId);
+    if (!segments.length) return err(c, 404, 'not_live', 'No segment yet');
+    return c.body(hlsPlaylist(segments, (name) => `live/${name}`), 200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store' });
+  });
+  app.get('/watch/:id/live/:name', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const name = c.req.param('name');
+    if (!SEGMENT_NAME.test(name)) return err(c, 400, 'bad_name', 'Not a segment name');
+    const job = await liveJob(store, meet.meetId);
+    const bytes = job ? await store.getLiveSegment(job.jobId, name) : null;
+    if (!bytes) return err(c, 404, 'no_segment', 'That segment is gone');
+    return c.body(bytes as unknown as ArrayBuffer, 200, { 'Content-Type': 'video/MP2T', 'Cache-Control': 'max-age=60' });
+  });
+
+  // A stand-in for YouTube's ingestion endpoint (tests, local runs): keeps what it is sent in a directory.
+  app.put('/fake/youtube/http_upload_hls', async (c) => {
+    const { fakeYoutubeDir, runtime } = c.get('deps');
+    if (!fakeYoutubeDir || runtime !== 'node') return err(c, 404, 'not_found', 'Not found');
+    const file = c.req.query('file') ?? '';
+    if (!/^[A-Za-z0-9_./-]+$/.test(file) || file.includes('..')) return c.body('bad file', 400);
+    if (!c.req.query('cid')) return c.body('no key', 401);
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    await fs.mkdir(fakeYoutubeDir, { recursive: true });
+    await fs.writeFile(path.join(fakeYoutubeDir, path.basename(file)), bytes);
+    return c.body('', 200);
+  });
+
   // ---------- auth ----------
 
   app.use('*', async (c, next) => {
     const path = c.req.path;
-    if (path === '/health' || path === '/time' || path.startsWith('/watch/') || c.req.method === 'OPTIONS') return next();
+    if (path === '/health' || path === '/time' || path.startsWith('/watch/') || path.startsWith('/fake/') || c.req.method === 'OPTIONS') return next();
     const deps = c.get('deps');
     const id = await deps.auth(c.req.raw);
     if (!id) return err(c, 401, 'unauthenticated', 'Sign in with Google to use SingersVoice');
@@ -865,6 +932,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (missing.length) return err(c, 400, 'destination_disabled', `Enable first: ${missing.join(', ')}`);
     if ((await store.liveJobsForMeet(meet.meetId)).length) return err(c, 409, 'already_publishing', 'A publish job is already running for this meet');
     const now = new Date().toISOString();
+    const browserFed = wanted.filter((k) => DESTINATIONS.find((d) => d.kind === k)?.browserLive);
     const job: PublishJob = {
       jobId: newId('pub-'),
       meetId: meet.meetId,
@@ -878,7 +946,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       error: null,
       createdAt: now,
       updatedAt: now,
-      events: [{ at: now, state: 'requested', note: 'Queued — a session container picks this up when the meet goes live' }],
+      events: [{ at: now, state: 'requested', note: browserFed.length ? `Waiting for the show view to send the first segment (${browserFed.join(', ')})` : 'Queued — a session container picks this up when the meet goes live' }],
+      live: { segments: 0, bytes: 0, lastSegmentAt: null, youtube: wanted.includes('youtube') ? 'waiting' : 'off', youtubeNote: '' },
     };
     await store.saveJob(job);
     return c.json({ job }, 201);
@@ -895,7 +964,59 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       job.events.push({ at: now, state: 'stopped', note: 'Stopped by the publisher' });
       await store.saveJob(job);
     }
+    await store.clearLiveSegments(job.jobId);
     return c.json({ job });
+  });
+
+  // One segment of the show from the publisher's browser: kept for the portal, forwarded to YouTube.
+  app.put('/publishing/jobs/:id/live/:name', async (c) => {
+    const { store, secrets, youtubeHlsBase } = c.get('deps');
+    const job = await store.getJob(c.req.param('id'));
+    if (!job || job.ownerUserId !== c.get('user').userId) return err(c, 404, 'no_job', 'Job not found');
+    if (job.state === 'stopped' || job.state === 'failed' || job.state === 'stopping') return err(c, 409, 'not_live', `This broadcast is ${job.state}`);
+    const name = c.req.param('name');
+    if (!SEGMENT_NAME.test(name)) return err(c, 400, 'bad_name', 'Segment names are letters, digits, - and _, ending in .ts');
+    const seq = Math.floor(Number(c.req.query('seq')));
+    const durationMs = Math.round(Number(c.req.query('dur')));
+    if (!Number.isFinite(seq) || seq < 0 || !Number.isFinite(durationMs) || durationMs <= 0 || durationMs > 10_000) return err(c, 400, 'bad_request', 'seq and dur (ms, up to 10000) are required');
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (!bytes.length || bytes.length > 6_000_000) return err(c, 400, 'too_big', 'A segment is a couple of seconds of video (up to 6 MB)');
+    if (bytes[0] !== 0x47) return err(c, 400, 'not_ts', 'Not an MPEG-TS segment');
+    const now = new Date().toISOString();
+    const info: LiveSegmentInfo = { seq, name, durationMs, createdAt: now };
+    await store.addLiveSegment(job.jobId, info, bytes);
+    const live: PublishJobLive = job.live ?? { segments: 0, bytes: 0, lastSegmentAt: null, youtube: job.destinations.includes('youtube') ? 'waiting' : 'off', youtubeNote: '' };
+    live.segments += 1;
+    live.bytes += bytes.length;
+    live.lastSegmentAt = now;
+    live.audio = c.req.query('audio') !== '0';
+    let youtube: { status: number } | null = null;
+    if (job.destinations.includes('youtube')) {
+      const dest = await store.getDestination(job.ownerUserId, 'youtube');
+      const key = dest?.keyEnc ? await secrets.open(dest.keyEnc).catch(() => '') : '';
+      if (!key) {
+        live.youtube = 'rejected';
+        live.youtubeNote = 'No YouTube stream key is saved';
+      } else {
+        const window = youtubeWindow(await store.listLiveSegments(job.jobId));
+        const playlist = hlsPlaylist(window, (n) => n);
+        const r = await sendToYoutube(youtubeHlsBase || YOUTUBE_HLS_INGEST, key, { name, bytes }, playlist);
+        youtube = { status: r.status };
+        live.youtube = r.status === 200 || r.status === 202 ? (r.playlistStatus === 200 || r.playlistStatus === 202 ? 'ok' : 'error') : r.status === 401 || r.status === 400 ? 'rejected' : 'error';
+        live.youtubeNote = r.note;
+        if (r.status === 401) {
+          job.error = r.note;
+        } else if (live.youtube === 'ok') job.error = null;
+      }
+    }
+    job.live = live;
+    if (job.state !== 'live') {
+      job.state = 'live';
+      job.events.push({ at: now, state: 'live', note: `On air — the show view is sending${job.destinations.includes('youtube') ? ` (YouTube: ${live.youtubeNote})` : ''}` });
+    }
+    job.updatedAt = now;
+    await store.saveJob(job);
+    return c.json({ job, youtube });
   });
 
   app.notFound((c) => c.json({ error: 'Not found', code: 'not_found' }, 404));

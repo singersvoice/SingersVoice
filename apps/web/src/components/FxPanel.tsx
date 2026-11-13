@@ -2,13 +2,17 @@ import { applyPreset, VOXFORGE_PRESETS, VOXFORGE_RANGES, type AudioPluginSetting
 import { Switch } from './ui.tsx';
 
 type NumKey = keyof typeof VOXFORGE_RANGES;
-type OnKey = 'pitchOn' | 'eqOn' | 'compOn' | 'satOn' | 'chOn' | 'dlOn' | 'rvOn';
+type OnKey = 'pitchOn' | 'eqOn' | 'compOn' | 'pcOn' | 'dsOn' | 'exOn' | 'rdOn' | 'satOn' | 'chOn' | 'dlOn' | 'rvOn';
 
 const SECTIONS: { title: string; on: OnKey | null; keys: NumKey[] }[] = [
   { title: 'Gain', on: null, keys: ['inGain', 'outGain'] },
   { title: 'Pitch & Auto-tune', on: 'pitchOn', keys: ['octave', 'pitchSt', 'pitchCt', 'autoStr', 'autoSpeed'] },
-  { title: 'EQ', on: 'eqOn', keys: ['hpfHz', 'eqLow', 'eqMid', 'eqHi'] },
+  { title: 'EQ', on: 'eqOn', keys: ['hpfHz', 'eqLow', 'eqMid', 'eqPres', 'eqHi'] },
   { title: 'Compressor', on: 'compOn', keys: ['cThr', 'cRat', 'cAtk', 'cRel', 'cMk'] },
+  { title: 'Punch (parallel compression)', on: 'pcOn', keys: ['pcMx'] },
+  { title: 'De-esser', on: 'dsOn', keys: ['dsAmt'] },
+  { title: 'Air (exciter)', on: 'exOn', keys: ['exAmt'] },
+  { title: 'Vocal rider', on: 'rdOn', keys: ['rdAmt'] },
   { title: 'Saturation', on: 'satOn', keys: ['satDr', 'satMx'] },
   { title: 'Chorus / Doubler', on: 'chOn', keys: ['chRt', 'chDp', 'chMx'] },
   { title: 'Stereo delay', on: 'dlOn', keys: ['dlTm', 'dlFb', 'dlMx'] },
@@ -78,15 +82,23 @@ export function FxPanel(props: { value: AudioPluginSettings; onChange: (patch: P
   );
 }
 
-/** One-tap preset chips for the Sing screen. */
+/** One-tap preset chips for the Sing screen and the live stage: applied to the captured voice the instant they are tapped. */
 export function PresetChips(props: { value: AudioPluginSettings; onChange: (patch: Partial<AudioPluginSettings>) => void }) {
+  const active = VOXFORGE_PRESETS.find((pr) => pr.id === props.value.activePresetId);
   return (
-    <div class="fxbar" role="listbox" aria-label="Voice preset">
-      {VOXFORGE_PRESETS.map((pr) => (
-        <button key={pr.id} type="button" role="option" aria-selected={props.value.activePresetId === pr.id} class={props.value.activePresetId === pr.id ? 'on' : ''} onClick={() => props.onChange({ activePresetId: pr.id, params: applyPreset(props.value.params, pr) })}>
-          {pr.name}
-        </button>
-      ))}
+    <div class="stack" style="gap:4px">
+      <div class="fxbar" role="listbox" aria-label="Voice preset">
+        {VOXFORGE_PRESETS.map((pr) => (
+          <button key={pr.id} type="button" role="option" aria-selected={props.value.activePresetId === pr.id} class={props.value.activePresetId === pr.id ? 'on' : ''} title={pr.blurb} onClick={() => props.onChange({ activePresetId: pr.id, params: applyPreset(props.value.params, pr) })}>
+            {pr.name}
+          </button>
+        ))}
+      </div>
+      {active && (
+        <div class="small faint" data-preset-blurb>
+          {active.blurb}
+        </div>
+      )}
     </div>
   );
 }

@@ -115,18 +115,34 @@ host's take of a song is the meet's saved performance**: registered with the mee
 everyone who was in it — anyone with its link can watch it. Pick the next song, sing, and on, until
 the singers drop off.
 
+**The voice.** Under the lyrics, one row of chips applies a finished-vocal treatment to the
+captured voice the instant it is tapped (the chain runs in 128-frame blocks — under 3 ms — so
+nothing is delayed): **Studio** (the default for a new singer: clean low end, presence, de-essed, a
+touch of air, held at one level), **Natural Tune** (the same plus gentle, slow pitch correction
+that keeps the vibrato), **Punch** (punch without over-compression: a light main compressor with a
+crushed copy blended under), **Up Front** (placement: on top of the track, every phrase at one
+level, a short pre-delayed room), **Radio-Ready** (bright, dense, loud, a hint of grit), **Vibrant**
+(maximum air and presence, the rider all the way — even a whisper fills the stage), then Pop Star,
+Warm, Bright, Warm Ballad, Stadium, Telephone, Doubler, Robot, Octave Down. The choice is the
+singer's own, kept on their device (and in their Drive config) until they change it; what the
+recording, the publisher and the other singers' recordings get is the treated voice.
+
 ## 4 · The room — audience
 
 Audience see the stage (performers' placeholders — video is private to the stage and the
-publisher), the set list, who is on stage, **Ask to sing**, chat, and **Hear the stage — the singers
-and the track, blended**: the very mix the host's device builds for the saved show (the backing
-track with every singer's vocal, after their FX, in sync) is sent out by the host's device a second
-at a time (WebCodecs/Opus, 64 kbps, through `/meets/:id/mix` on the relay — no media server) and
-played here a couple of seconds behind the stage; the lyrics follow what is being heard, not the
-clock. The status line says *Hearing the stage · 2.1 s behind*. When nothing arrives (the host's
-browser has no WebCodecs — Chrome, Edge, Safari 16.4+ and Firefox 130+ do — or the host is not
-singing yet) the device plays the backing track alone, in sync, as before. The singers on stage
-never hear this (or each other): Solo foldback, so latency never pulls them apart.
+publisher), the set list, who is on stage, **Ask to sing**, chat, and **the show** when a publisher
+is on air — the publisher's broadcast, every singer on the stage background with the track and
+their voices blended (section 6), played a few seconds behind behind a *Watch the show* tap — and
+otherwise the stage background with who is on it, plus **Hear the stage — the singers and the
+track, blended**: the very mix the host's device builds for the saved show (the backing track with
+every singer's vocal, after their FX, in sync) is sent out by the host's device a second at a time
+(WebCodecs/Opus, 64 kbps, through `/meets/:id/mix` on the relay — no media server) and played a
+couple of seconds behind the stage. The status line says *Hearing the stage · 2.1 s behind*. When
+nothing arrives (the host's browser has no WebCodecs — Chrome, Edge, Safari 16.4+ and Firefox 130+
+do — or the host is not singing yet) the device plays the backing track alone, in sync. While the
+show plays with its own sound the mix stays off. **No lyrics for the audience, ever** — lyrics are
+Performer mode's, for the singers on stage. The singers on stage never hear any of this (or each
+other): Solo foldback, so latency never pulls them apart.
 
 ## 5 · Between songs and the end
 
@@ -189,8 +205,25 @@ to the other singers' links for their recordings only; singers never hear each o
 never pulls them apart while they sing the same lines — and the show view plays those vocals with
 the backing track, which it runs a quarter second behind the shared clock to meet them. The same
 blend reaches the audience in the room through *Hear the stage* (section 4).
-Preview tiles monitor silently; one can be heard on request. (The session container that encodes
-this mix to RTMPS/LL-HLS is the next increment; until then the show view's own sound is the mix.)
+Preview tiles monitor silently; one can be heard on request.
+
+**Go live — the show view is the encoder.** Nothing sits between the publisher and the platforms:
+the show view's own browser encodes the picture (its 1280×720 show canvas through WebCodecs,
+H.264, a keyframe every two seconds, no B-frames) and the sound (the bus above through WebCodecs,
+AAC-LC 48 kHz stereo 128 kbps), cuts them at the keyframes into two-second MPEG-TS segments and
+PUTs each one to the service (`PUT /publishing/jobs/:id/live/<name>.ts`). The service keeps the
+last eight for the **in-house portal** (an HLS playlist, `GET /watch/:id/live.m3u8`, that the
+watch page and the room's audience play through hls.js — Safari natively — a few seconds behind)
+and forwards each segment, then a fresh playlist, to **YouTube's HLS ingestion** with the saved
+stream key (`https://a.upload.youtube.com/http_upload_hls?cid=<key>&copy=0&file=…`): the key
+never leaves the service. The broadcast bar says *LIVE · 1:23 · 3100 kbps · 41 segments ·
+YouTube: YouTube is receiving the show*; a wrong key reads *YouTube rejected the stream key
+(401)*. Stop, or leaving the show view, ends the job; a job whose segments stop for 20 s is off
+air. What a browser needs: WebCodecs (Chrome, Edge, Safari 17+, Firefox 130+) and an AAC encoder
+for sound — Windows, macOS, iOS and Android have one; Chrome on Linux and Firefox do not and go
+out **video only** (the bar says so; the audience then hears the stage mix for sound). Facebook,
+Instagram and Twitch accept RTMP(S) only, which a browser cannot speak: their jobs stay
+*requested* until a session container relays the same segments as RTMPS.
 
 ## 7 · What is independent of what
 
@@ -199,7 +232,7 @@ this mix to RTMPS/LL-HLS is the next increment; until then the show view's own s
 | Stage (room) | cameras, cut-outs, performer video mesh | the meet's slot list only |
 | Set list | which song is current / queued | `lib/catalog.ts` + your Drive to resolve a song |
 | Song transport | kickstart, pause/resume/restart, takes | the current song being loadable on each device |
-| Audience | lyrics, hearing the stage, chat, asking to sing | the meet snapshot; the host's mix batches (falls back to the backing track alone) |
+| Audience | the show (when on air) or the stage, hearing the stage, chat, asking to sing | the meet snapshot; the publisher's segments; the host's mix batches (falls back to the backing track alone) |
 | Publishing show / Preview | the broadcast picture, jobs | the meet's slot list + the performers' video |
 
 Each of these can fail or change without the others noticing: a song that one device cannot load

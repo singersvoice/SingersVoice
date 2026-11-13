@@ -9,20 +9,22 @@ import { createRequire } from 'node:module';
 import { startServers } from './servers.mjs';
 const require = createRequire(import.meta.url);
 let pw; try { pw = require('playwright'); } catch { pw = require('/opt/npm-tools/node_modules/playwright'); }
-const servers = await startServers({ base: process.env.BASE_PATH ?? '/SingersVoice/' });
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, readdirSync, statSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+const out = process.argv[2] ?? 'screenshots';
+mkdirSync(out, { recursive: true });
+// YouTube stands in for itself: the control server's fake ingestion endpoint keeps what the show view sends it here.
+const fakeYoutubeDir = path.resolve(out, 'fake-youtube');
+const servers = await startServers({ base: process.env.BASE_PATH ?? '/SingersVoice/', fakeYoutubeDir });
 const base = servers.appUrl;
 const control = `control=${servers.controlUrl}`;
 // A synthetic person as the fake camera, so the real segmentation model has something to cut out.
-import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 const clip = path.join(tmpdir(), 'sv-fake-person.y4m');
 execFileSync('node', [new URL('./fake-person.mjs', import.meta.url).pathname, clip], { stdio: 'inherit' });
 const browser = await pw.chromium.launch({ args: ['--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${clip}`, '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
-const out = process.argv[2] ?? 'screenshots';
-import { mkdirSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
-mkdirSync(out, { recursive: true });
 let failed = false;
 const extraPages = {};
 const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) failed = true; };
@@ -154,6 +156,9 @@ try {
   const meshBack = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   check(meshBack !== undefined && meshBack === (await alice.page.evaluate(() => window.__svMeshId)), `back in the room: the same mesh, nothing reconnected (${meshBack})`);
 
+  // Carol's YouTube key (the Publish tab sets it up in the screenshot flow; here straight through the API), so her show goes to YouTube too.
+  const ytSetup = await fetch(`${servers.controlUrl}/publishing/destinations/youtube`, { method: 'PUT', headers: { 'X-Dev-User': 'carol', 'X-Dev-Name': 'carol', 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, streamKey: 'test-key-0001' }) });
+  check(ytSetup.status === 200, `carol's YouTube stream key is saved (${ytSetup.status})`);
   // Publishing: the show is its own process — carol's show view gets both performers while the song has not started.
   const carol = await person('carol', { width: 1920, height: 1080 }, { track: false });
   extraPages.carol = carol.page;
@@ -276,11 +281,66 @@ try {
   await carol.page.mouse.move(920, 940);
   await carol.page.locator('.show[data-idle="0"]').waitFor({ timeout: 5000 });
   await carol.page.locator('.showbar .dest', { hasText: 'In-house portal' }).waitFor({ timeout: 15000 });
+  await carol.page.locator('.showbar .dest', { hasText: 'YouTube Live' }).waitFor({ timeout: 15000 });
+  check((await carol.page.locator('.showbar .dest.on').allInnerTexts()).join(',').includes('YouTube'), 'YouTube is picked once its key is saved');
+  // Go live: this browser becomes the encoder — H.264 (+ AAC where the platform has it) in two-second MPEG-TS
+  // segments, delivered to the service, kept for the in-house portal and forwarded to (the fake) YouTube.
   await carol.page.getByRole('button', { name: 'Go live' }).click();
   await carol.page.locator('.showbar .jobline').waitFor({ timeout: 15000 });
-  const jobline = await carol.page.locator('.showbar .jobline').innerText();
-  check(/requested/.test(jobline) && /inhouse/.test(jobline), `publish job queued from the show view (${jobline.replace(/\s+/g, ' ')})`);
   check(await carol.page.getByRole('button', { name: 'Stop publishing' }).isVisible(), 'the show view offers Stop while the job is active');
+  const tLive = Date.now();
+  await carol.page.locator('.showbar .jobline[data-live-state="live"]').waitFor({ timeout: 45000 });
+  let liveSegments = 0;
+  while (Date.now() - tLive < 45000 && (liveSegments = Number(await carol.page.locator('.showbar .jobline').getAttribute('data-live-segments'))) < 3) await wait(500);
+  const jobline = (await carol.page.locator('.showbar .jobline').innerText()).replace(/\s+/g, ' ');
+  console.log('broadcast:', jobline, '| segments', liveSegments, 'in', Math.round((Date.now() - tLive) / 1000), 's');
+  check(/LIVE/.test(jobline) && liveSegments >= 3, `the show view is on air: ${liveSegments} segments encoded and delivered from the browser (${jobline})`);
+  check((await carol.page.locator('.showbar .jobline').getAttribute('data-live-youtube')) === 'ok' && /YouTube is receiving the show/.test(jobline), 'YouTube accepted the segments and the playlist');
+  const ytFiles = readdirSync(fakeYoutubeDir);
+  const ytSegs = ytFiles.filter((f) => f.endsWith('.ts')).sort();
+  check(ytSegs.length >= 3 && ytFiles.includes('live.m3u8'), `the fake YouTube received ${ytSegs.length} segments and the playlist`);
+  // The segment itself: a real MPEG-TS with H.264 720p (AAC where the browser can encode it — not this Chromium on Linux).
+  const probeSeg = path.join(fakeYoutubeDir, ytSegs[Math.max(0, ytSegs.length - 2)]);
+  const probe = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', probeSeg]).toString());
+  const vStream = probe.streams.find((x) => x.codec_type === 'video');
+  const aStream = probe.streams.find((x) => x.codec_type === 'audio');
+  console.log('youtube segment:', path.basename(probeSeg), statSync(probeSeg).size, 'bytes', JSON.stringify({ format: probe.format.format_name, duration: probe.format.duration, video: vStream && `${vStream.codec_name} ${vStream.width}x${vStream.height}`, audio: aStream && `${aStream.codec_name} ${aStream.sample_rate} Hz` }));
+  check(probe.format.format_name === 'mpegts' && vStream?.codec_name === 'h264' && vStream.width === 1280 && vStream.height === 720, 'the segments are MPEG-TS with H.264 1280×720');
+  check(Number(probe.format.duration) > 1.5 && Number(probe.format.duration) < 3.5, `a segment is about two seconds (${probe.format.duration} s)`);
+  const liveAudio = await carol.page.evaluate(() => window.__svBroadcast?.support.value?.audio);
+  check(liveAudio === 'aac' ? aStream?.codec_name === 'aac' : !aStream, `the segments carry ${liveAudio === 'aac' ? 'AAC sound' : 'video only (no AAC encoder in this browser)'}`);
+  const decoded = (() => { try { execFileSync('ffmpeg', ['-v', 'error', '-xerror', '-i', probeSeg, '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] }); return true; } catch { return false; } })();
+  check(decoded, 'ffmpeg decodes a segment without errors');
+  // The in-house portal: the audience in the room watches the show (no lyrics anywhere for the audience).
+  await dave.page.locator('.liveshow[data-live="1"]').waitFor({ timeout: 30000 });
+  check((await dave.page.locator('.lyrics, .cue').count()) === 0, 'the audience view carries no lyrics (those are the singers\' on stage)');
+  await dave.page.locator('[data-live-watch]').click();
+  await dave.page.locator('.liveshow[data-live-playing="1"]').waitFor({ timeout: 45000 });
+  await wait(3000);
+  const daveVideo = await dave.page.evaluate(() => { const v = document.querySelector('.liveshow video'); return v ? { t: v.currentTime, w: v.videoWidth, h: v.videoHeight, paused: v.paused } : null; });
+  console.log('audience video:', JSON.stringify(daveVideo));
+  check(daveVideo && !daveVideo.paused && daveVideo.t > 0.5 && daveVideo.w === 1280, `the audience watches the show in the room (${daveVideo?.w}×${daveVideo?.h}, ${daveVideo?.t.toFixed(1)} s in)`);
+  // The public watch page, no sign-in: the same show.
+  const viewer = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const viewerPage = await viewer.newPage();
+  viewerPage.on('pageerror', (e) => errors.dave.push(`viewer: ${String(e)}`));
+  await viewerPage.goto(`${base}watch/${meetId}?${control}`, { waitUntil: 'networkidle' });
+  await viewerPage.locator('.liveshow[data-live="1"]').waitFor({ timeout: 30000 });
+  check((await viewerPage.locator('.lyrics, .cue').count()) === 0, 'the public watch page shows the stage show, never lyrics');
+  await viewerPage.locator('[data-live-watch]').click();
+  await viewerPage.locator('.liveshow[data-live-playing="1"]').waitFor({ timeout: 45000 });
+  await viewerPage.screenshot({ path: `${out}/watch-live.png` });
+  await viewer.close();
+  // Stop the broadcast here: the portal goes dark at once, and this one test machine (four browsers plus a
+  // software H.264 encoder) gets its CPU back for the sync checks that follow.
+  await carol.page.mouse.move(900, 900);
+  await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
+  await carol.page.getByRole('button', { name: 'Go live' }).waitFor({ timeout: 15000 });
+  await wait(1000);
+  const afterStop = await (await fetch(`${servers.controlUrl}/watch/${meetId}/live`)).json();
+  check(afterStop.live === false, 'stopping the broadcast takes the show off the portal');
+  await dave.page.locator('.liveshow[data-live="0"]').waitFor({ timeout: 15000 });
+  check(true, 'the audience view falls back to the stage once the show is off');
   // The singers' rooms are untouched by the publisher: still 2 performers, video still linked.
   const a2 = await stageInfo(alice.page);
   check(a2.performers === '2' && /1\/1 video linked/.test(a2.text), 'the performers\' stage is unaffected by the show view joining');
@@ -312,7 +372,7 @@ try {
   check(tile.performers === '2' && tile.linked === '2', `the tile reports 2 on stage, 2 linked (${tile.card})`);
   check(tile.left > 500 && tile.right > 500 && tile.lyrics === 0, 'the tile draws both cut-outs, no lyrics (the exact broadcast picture)');
   check(Math.abs(tile.ratio - 16 / 9) < 0.05, `the tile is 16:9 (${tile.ratio.toFixed(2)})`);
-  check(/LIVE|requested/.test(tile.card), 'the tile shows the publish state of the meet');
+  check(/LIVE|requested|not publishing/.test(tile.card), `the tile shows the publish state of the meet (${/not publishing/.test(tile.card) ? 'not publishing — the broadcast was stopped above' : 'on air'})`);
   const showStill = await carol.page.evaluate(() => Object.values(window.__svMesh.peerStates()).filter((s) => s === 'connected').length);
   check(showStill === 2, `the show view keeps both links while the Preview tile watches too (${showStill})`);
   await monitor.screenshot({ path: `${out}/preview-carol.png` });
@@ -465,7 +525,7 @@ try {
   await carol.page.mouse.move(900, 900);
   await carol.page.mouse.move(930, 950);
   await carol.page.locator('.show[data-idle="0"]').waitFor({ timeout: 5000 });
-  await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
+  if (await carol.page.getByRole('button', { name: 'Stop publishing' }).isVisible().catch(() => false)) await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
   await carol.page.locator('.showbar .jobline', { hasText: 'stopped' }).waitFor({ timeout: 15000 });
   await monitor.close();
   // "Failed to load resource" is the browser noting any non-2xx fetch (a deleted meet's last heartbeat, say); real errors are the rest.

@@ -43,16 +43,19 @@ export interface SqlStorageLike {
   exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
 }
 
+/** Durable Object SQL binds BLOBs as ArrayBuffer (node:sqlite as a typed array): hand each driver what it takes. */
+const toArrayBuffer = (params: unknown[]): unknown[] => params.map((p) => (ArrayBuffer.isView(p) ? p.buffer.slice(p.byteOffset, p.byteOffset + p.byteLength) : p));
+
 export function durableSqlDriver(sql: SqlStorageLike): Driver {
   return {
     async run(q, params = []) {
-      sql.exec(q, ...params);
+      sql.exec(q, ...toArrayBuffer(params));
     },
     async all<T>(q: string, params: unknown[] = []) {
-      return sql.exec(q, ...params).toArray() as T[];
+      return sql.exec(q, ...toArrayBuffer(params)).toArray() as T[];
     },
     async get<T>(q: string, params: unknown[] = []) {
-      return (sql.exec(q, ...params).toArray()[0] as T | undefined) ?? undefined;
+      return (sql.exec(q, ...toArrayBuffer(params)).toArray()[0] as T | undefined) ?? undefined;
     },
     async exec(q) {
       for (const stmt of q.split(';').map((s) => s.trim()).filter(Boolean)) sql.exec(stmt);

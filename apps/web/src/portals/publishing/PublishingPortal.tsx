@@ -6,7 +6,9 @@
  * play), Destinations (ingest URL + stream key per platform), History (jobs with their event
  * timeline). The show view (/publishing/show/:id) is the broadcast picture: performers huge on one
  * stage, no lyrics.
- * The encoder that executes a job lives in the session container (next increment); jobs queue here.
+ * The encoder is the show view's own browser (WebCodecs → MPEG-TS segments → the service → YouTube's
+ * HLS ingestion and the in-house portal); Facebook, Instagram and Twitch take RTMP(S) only and wait
+ * for a session container, so their jobs queue here.
  */
 import { DESTINATIONS, meetIsOpen, type Destination, type DestinationKind, type Meet, type PublishJob } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
@@ -347,7 +349,7 @@ function Publish(props: { onDone: () => void }) {
                       if (!v && open) setSetup(null);
                     }}
                     label={def.label}
-                    hint={!def.needsKey ? undefined : ready ? `Stream key ends with ${d.keyHint || '…'}` : 'Needs its stream key — switch it on to set it up'}
+                    hint={!def.needsKey ? undefined : `${ready ? `Stream key ends with ${d.keyHint || '…'}` : 'Needs its stream key — switch it on to set it up'}${def.browserLive ? '' : ' · RTMP only: waits for the session container'}`}
                   />
                   {def.needsKey && ready && !open && (
                     <button class="btn ghost sm" onClick={() => setSetup(def.kind)}>
@@ -383,7 +385,7 @@ function Publish(props: { onDone: () => void }) {
       <section class="card stack">
         <h3>4 · Publish</h3>
         <p class="muted small">
-          Opens the <b>show view</b>: the performers cut out of their cameras, huge on one stage, no lyrics — the picture your audience sees. The job is queued for the chosen destinations; when the host starts the song, the session container composes the stage and pushes RTMPS to the platforms (the in-house portal gets LL-HLS). Until the container is deployed, the job stays <b>requested</b> — nothing is sent anywhere.
+          Opens the <b>show view</b>: the performers cut out of their cameras, huge on one stage, no lyrics, the track and every singer's voice blended — the show your audience sees and hears. <b>Go live</b> there makes this browser the encoder: the show goes out to <b>YouTube</b> (through the service, to YouTube's HLS ingestion — Chrome or Edge on Windows or Mac for sound, since YouTube needs AAC) and to the <b>in-house portal</b> (the watch page, a few seconds behind). Facebook, Instagram and Twitch take RTMP only, which a browser cannot send: those jobs stay <b>requested</b> until the session container exists.
         </p>
         <div class="row">
           <button class="btn accent lg" disabled={busy || !meetId || !chosen.length} onClick={() => void publish()}>

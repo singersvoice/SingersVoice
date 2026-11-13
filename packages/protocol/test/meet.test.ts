@@ -81,4 +81,20 @@ describe('voxforge params', () => {
     expect(hard.inGain).toBe(3);
     expect(totalSemitones({ ...hard, octave: -1, pitchSt: 2, pitchCt: 50 })).toBeCloseTo(-9.5);
   });
+  it('the finished-vocal presets exist, stay within range and switch the polish stages on', () => {
+    for (const id of ['studio', 'tune', 'punch', 'upfront', 'radio', 'vibrant']) {
+      const preset = VOXFORGE_PRESETS.find((p) => p.id === id);
+      expect(preset, id).toBeDefined();
+      const p = applyPreset(VOXFORGE_DEFAULTS, preset!);
+      expect(clampParams(p)).toEqual(p); // every value inside its range
+      expect(p.dsOn && p.rdOn && p.pcOn, `${id} polish`).toBe(true);
+    }
+    expect(applyPreset(VOXFORGE_DEFAULTS, VOXFORGE_PRESETS.find((p) => p.id === 'tune')!).autoStr).toBeGreaterThan(0.5);
+    expect(applyPreset(VOXFORGE_DEFAULTS, VOXFORGE_PRESETS.find((p) => p.id === 'punch')!).cRat).toBeLessThanOrEqual(2.5); // punch without over-compression
+    // Settings saved by older builds carry no polish keys: they come back as the defaults.
+    const old = clampParams({ hpfHz: 90, eqHi: 2 } as never);
+    expect(old.dsOn).toBe(true);
+    expect(old.rdOn).toBe(false);
+    expect(old.eqPres).toBe(VOXFORGE_DEFAULTS.eqPres);
+  });
 });
