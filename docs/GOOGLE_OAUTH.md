@@ -34,6 +34,8 @@ SingersVoice signs people in with Google and keeps their files in **their** Driv
   `VITE_GOOGLE_CLIENT_ID = <client id>` → re-run *Deploy web*.
 - **Local:** `apps/web/.env.local` → `VITE_GOOGLE_CLIENT_ID=<client id>` (git-ignored).
 - Optional Picker: create an **API key** restricted to the Picker API + your origins and set `VITE_GOOGLE_API_KEY`.
+  Pulling a published track from another singer's Drive needs no key: the service fetches it (optionally with
+  its own `GOOGLE_API_KEY`, Drive API enabled, no referrer restriction).
 
 Without a client ID the app still runs fully in **device mode** (IndexedDB), so testing never blocks on Google.
 

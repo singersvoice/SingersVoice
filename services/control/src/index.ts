@@ -9,6 +9,7 @@
  *   DEV_AUTH=1                accept X-Dev-User headers (local dev / CI only)
  *   ICE_SERVERS=[…]           JSON array of RTCIceServer for performer video (default: Google STUN; add TURN for strict NATs)
  *   YOUTUBE_HLS_BASE=…        YouTube's HLS ingestion endpoint (default https://a.upload.youtube.com/http_upload_hls)
+ *   GOOGLE_API_KEY=…          optional: published tracks are then read through the Drive API instead of Drive's public download page
  *   SV_FAKE_YOUTUBE_DIR=…     dev/CI: serve a stand-in for YouTube at /fake/youtube/http_upload_hls that writes the files here
  */
 import { serve } from '@hono/node-server';
@@ -34,6 +35,7 @@ const deps: AppDeps = {
   privilegedEmails: (process.env.PRIVILEGED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   version: '2.1.0',
   youtubeHlsBase: process.env.YOUTUBE_HLS_BASE || undefined,
+  googleApiKey: process.env.GOOGLE_API_KEY || undefined,
   fakeYoutubeDir: process.env.SV_FAKE_YOUTUBE_DIR || undefined,
 };
 

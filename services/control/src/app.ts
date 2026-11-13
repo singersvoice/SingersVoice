@@ -51,6 +51,7 @@ import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
 import { addSong, claimSlot, decideRequest, ensureMeet, isHost, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
+import { fetchPublicDriveFile } from './driveFiles.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
 export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -82,6 +83,10 @@ export interface AppDeps {
   youtubeHlsBase?: string;
   /** Node, tests and local dev only: accept YouTube-style PUTs at /fake/youtube/http_upload_hls and keep the files in this directory. */
   fakeYoutubeDir?: string;
+  /** Optional Google API key (GOOGLE_API_KEY env): the service then reads published tracks through the Drive API instead of the public download page. */
+  googleApiKey?: string;
+  /** Tests: how the service reaches Drive for a published track's files. */
+  fetchImpl?: typeof fetch;
 }
 
 type Vars = { deps: AppDeps; user: UserRecord };
@@ -246,6 +251,25 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   app.get('/catalog/tracks/:id', async (c) => {
     const track = await c.get('deps').store.getCatalogTrack(c.req.param('id'));
     return track ? c.json({ track }) : err(c, 404, 'no_track', 'Track is not in the catalog');
+  });
+
+  // A published track's files, fetched from the owner's Drive by the service (a browser with another
+  // account's token cannot read them, and Drive's download page has no CORS): "Add to my Drive" and
+  // a meet's song on a device that does not own it come through here when no API key is at hand.
+  app.get('/catalog/tracks/:id/file/:which', async (c) => {
+    const { store, googleApiKey, fetchImpl } = c.get('deps');
+    const track = await store.getCatalogTrack(c.req.param('id'));
+    if (!track) return err(c, 404, 'no_track', 'Track is not in the catalog');
+    const which = c.req.param('which');
+    const fileId = which === 'json' ? track.trackJsonId : which === 'audio' ? track.audioId : '';
+    if (!fileId) return err(c, 400, 'bad_request', 'The file is json or audio');
+    try {
+      const file = await fetchPublicDriveFile(fileId, { apiKey: googleApiKey, fetchImpl });
+      const contentType = which === 'json' ? 'application/json' : track.audioMime || file.contentType;
+      return new Response(file.body, { status: 200, headers: { 'Content-Type': contentType, 'Cache-Control': 'private, max-age=3600', ...(file.size ? { 'Content-Length': String(file.size) } : {}) } });
+    } catch (e) {
+      return err(c, 404, 'not_shared', `This song could not be fetched from ${track.ownerName}'s Drive: ${e instanceof Error ? e.message : String(e)}`);
+    }
   });
 
   app.post('/catalog/tracks', async (c) => {

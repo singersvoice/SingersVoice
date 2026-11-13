@@ -13,7 +13,7 @@
  */
 import { createTrack, normalizeTrack, type CatalogListResponse, type CatalogTrack } from '@singersvoice/protocol';
 import { api, ApiError, controlConfigured } from './api.ts';
-import { GOOGLE_API_KEY } from './google.ts';
+import { AuthExpiredError, GOOGLE_API_KEY } from './google.ts';
 import type { LoadedTrack, Progress, TrackSummary } from './storage/types.ts';
 import { driveProvider, profile, withProvider } from '../state/session.ts';
 
@@ -90,20 +90,37 @@ export async function getCatalogTrack(trackId: string): Promise<CatalogTrack> {
   return r.track;
 }
 
-/** Fetch a published track from its owner's Drive (own token → API key → public download URL). */
+/**
+ * Fetch a published track from its owner's Drive: with my own token when the file is one of mine
+ * (a `drive.file` token sees only the files this app made for me), else with the app's Google API
+ * key when the build has one (public files read straight from Drive), else through the service,
+ * which fetches it from Drive for me — no key, no CORS. Drive's own download page is never
+ * fetched from the browser: it sends no CORS headers, which is the "Load failed" of old.
+ */
 export async function fetchCatalogTrack(entry: CatalogTrack, onProgress?: Progress): Promise<LoadedTrack> {
   const d = driveProvider();
-  const fetchBlob = async (id: string) => {
-    if (d) return d.downloadPublic(id, GOOGLE_API_KEY);
-    const key = GOOGLE_API_KEY ? `&key=${encodeURIComponent(GOOGLE_API_KEY)}` : '';
-    const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media${key}`);
-    if (!r.ok) throw new Error('Sign in with Google to pull catalog tracks');
-    return r.blob();
+  const fetchBlob = async (id: string, which: 'json' | 'audio') => {
+    if (d) {
+      try {
+        return await d.download(id);
+      } catch (e) {
+        if (e instanceof AuthExpiredError) throw e; // not mine: the other ways below
+      }
+    }
+    if (GOOGLE_API_KEY) {
+      try {
+        const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media&key=${encodeURIComponent(GOOGLE_API_KEY)}`);
+        if (r.ok) return await r.blob();
+      } catch {
+        /* the service then */
+      }
+    }
+    return api.getBlob('GET /catalog/tracks/:id/file/:which', `/catalog/tracks/${encodeURIComponent(entry.trackId)}/file/${which}`);
   };
   onProgress?.({ label: "Fetching from the owner's Drive", fraction: 0.1 });
-  const json = await fetchBlob(entry.trackJsonId);
+  const json = await fetchBlob(entry.trackJsonId, 'json');
   onProgress?.({ label: 'Fetching the backing track', fraction: 0.35 });
-  const audio = await fetchBlob(entry.audioId);
+  const audio = await fetchBlob(entry.audioId, 'audio');
   const track = normalizeTrack(JSON.parse(await json.text()) as LoadedTrack['track']);
   const audioMime = entry.audioMime || audio.type || 'audio/mpeg';
   return { track, audio: new Blob([audio], { type: audioMime }), audioMime };

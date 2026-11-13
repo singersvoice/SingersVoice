@@ -118,8 +118,39 @@ function offerReconnect(): void {
 type Res<K extends keyof Routes> = Routes[K]['res'];
 type Req<K extends keyof Routes> = Routes[K] extends { req: infer R } ? R : never;
 
+/** GET a file (bytes) from the service, with the same sign-in and error handling as the JSON calls. */
+async function requestBlob(path: string): Promise<Blob> {
+  const base = controlUrl.value;
+  if (!base) throw new ApiError(0, 'unconfigured', 'Live services are not configured for this build (VITE_CONTROL_URL)');
+  let r: Response;
+  try {
+    r = await fetch(`${base}${path}`, { headers: authHeaders() });
+  } catch {
+    controlStatus.value = 'offline';
+    throw new ApiError(0, 'offline', 'Cannot reach the SingersVoice service — check your connection');
+  }
+  if (controlStatus.value !== 'online') controlStatus.value = 'online';
+  if (!r.ok) {
+    let e: { error?: string; code?: string } = {};
+    try {
+      e = JSON.parse(await r.text()) as { error?: string; code?: string };
+    } catch {
+      /* not JSON */
+    }
+    if (r.status === 401 && profile.value?.mode === 'drive') {
+      needsReconnect.value = true;
+      offerReconnect();
+      throw new ApiError(401, 'reconnect', 'Your Google session expired — tap Reconnect and try again');
+    }
+    throw new ApiError(r.status, e.code ?? `http_${r.status}`, e.error ?? `Request failed (${r.status})`);
+  }
+  return r.blob();
+}
+
 export const api = {
   get: <K extends keyof Routes>(_key: K, path: string) => request<Res<K>>('GET', path),
+  /** GET bytes (a published track's file). */
+  getBlob: <K extends keyof Routes>(_key: K, path: string) => requestBlob(path),
   post: <K extends keyof Routes>(_key: K, path: string, body?: Req<K>) => request<Res<K>>('POST', path, body ?? {}),
   put: <K extends keyof Routes>(_key: K, path: string, body: Req<K>) => request<Res<K>>('PUT', path, body),
   /** PUT raw bytes (a media segment) and read the JSON answer. */

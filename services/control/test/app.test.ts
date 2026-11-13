@@ -8,10 +8,11 @@ import { openNodeSqlite } from '../src/store/node-sqlite.ts';
 import { SqlStore } from '../src/store/sql.ts';
 
 let app: ReturnType<typeof createApp>;
+let deps: AppDeps;
 
 beforeAll(async () => {
   const db = await openNodeSqlite(':memory:');
-  const deps: AppDeps = {
+  deps = {
     store: new SqlStore(nodeSqliteDriver(db)),
     auth: createAuthenticator({ devAuth: true }),
     secrets: new SecretBox(''),
@@ -48,6 +49,40 @@ describe('sv-control API', () => {
     expect(pull.pulls).toBe(1);
     expect((await app.request('/catalog/tracks/trk-1', { method: 'DELETE', headers: as('bob') })).status).toBe(404);
     expect((await app.request('/catalog/tracks/trk-1', { method: 'DELETE', headers: as('alice') })).status).toBe(200);
+  });
+
+  it("catalog: the service fetches a published track's files from the owner's Drive for another account (no key, no CORS)", async () => {
+    const body = { trackId: 'trk-2', title: 'Ammo', artist: 'SV', genre: 'Telugu', language: 'Telugu', durationMs: 283000, singerCount: 5, lineCount: 67, driveFolderId: 'f2', driveFolderLink: '', trackJsonId: 'json0000000002', audioId: 'audio000000002', audioMime: 'audio/mpeg' };
+    expect((await app.request('/catalog/tracks', { method: 'POST', headers: as('alice'), body: JSON.stringify(body) })).status).toBe(201);
+    // Drive as seen anonymously: the first endpoint answers with its HTML "cannot download" page, the next with the file.
+    const asked: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      asked.push(url);
+      if (url.includes('drive.usercontent.google.com') && url.includes('json0000000002')) return new Response('<html>virus scan</html>', { status: 200, headers: { 'content-type': 'text/html' } });
+      if (url.includes('json0000000002')) return new Response(JSON.stringify({ trackId: 'trk-2', title: 'Ammo' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (url.includes('audio000000002')) return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'audio/mpeg', 'content-length': '3' } });
+      return new Response('nope', { status: 404, headers: { 'content-type': 'text/html' } });
+    }) as typeof fetch;
+    deps.fetchImpl = fetchImpl;
+    const j = await app.request('/catalog/tracks/trk-2/file/json', { headers: as('bob') });
+    expect(j.status).toBe(200);
+    expect(j.headers.get('content-type')).toBe('application/json');
+    expect((await j.json()).title).toBe('Ammo');
+    expect(asked.filter((u) => u.includes('json0000000002'))).toHaveLength(2); // the HTML answer was not taken for the file
+    const a = await app.request('/catalog/tracks/trk-2/file/audio', { headers: as('bob') });
+    expect(a.status).toBe(200);
+    expect(a.headers.get('content-type')).toBe('audio/mpeg');
+    expect(new Uint8Array(await a.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    expect((await app.request('/catalog/tracks/trk-2/file/video', { headers: as('bob') })).status).toBe(400);
+    expect((await app.request('/catalog/tracks/trk-none/file/json', { headers: as('bob') })).status).toBe(404);
+    // With an API key the service asks the Drive API first.
+    deps.googleApiKey = 'k';
+    asked.length = 0;
+    await app.request('/catalog/tracks/trk-2/file/audio', { headers: as('bob') });
+    expect(asked[0]).toContain('www.googleapis.com/drive/v3/files/audio000000002?alt=media&key=k');
+    deps.googleApiKey = undefined;
+    deps.fetchImpl = undefined;
   });
 
   it('meets: create → join by code → slots → chat → kickstart → recordings → stop', async () => {

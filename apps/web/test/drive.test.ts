@@ -258,7 +258,7 @@ describe('DriveProvider (fake Drive v3)', () => {
     expect(link).toBe(refs.folderLink);
     expect(refs.shared).toBe(true);
     expect(drive.files.get(refs.folderId)!.permissions.some((x) => x.type === 'anyone')).toBe(true);
-    const json = await p.downloadPublic(refs.trackJsonId, '');
+    const json = await p.download(refs.trackJsonId); // one's own file: the token reads it
     expect(JSON.parse(await json.text()).trackId).toBe('trk-test-1');
     await p.unshareTrack('trk-test-1');
     expect(drive.files.get(refs.folderId)!.permissions.some((x) => x.type === 'anyone')).toBe(false);

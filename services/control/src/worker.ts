@@ -3,7 +3,7 @@
  * Object ("main"), so deploying needs only the standard Workers permissions (no D1 setup).
  *
  * Bindings (wrangler.jsonc): SVT_DB (Durable Object namespace, class SvtDb)
- * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH, ICE_SERVERS, YOUTUBE_HLS_BASE
+ * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH, ICE_SERVERS, YOUTUBE_HLS_BASE, GOOGLE_API_KEY (optional)
  */
 import { createApp, parseIceServers, sweepMeets, type AppDeps } from './app.ts';
 import { createAuthenticator } from './auth.ts';
@@ -20,6 +20,7 @@ interface Env {
   DEV_AUTH?: string;
   ICE_SERVERS?: string;
   YOUTUBE_HLS_BASE?: string;
+  GOOGLE_API_KEY?: string;
 }
 
 interface DurableState {
@@ -45,6 +46,7 @@ export class SvtDb {
       privilegedEmails: (env.PRIVILEGED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
       version: '2.1.0',
       youtubeHlsBase: env.YOUTUBE_HLS_BASE || undefined,
+      googleApiKey: env.GOOGLE_API_KEY || undefined,
     };
     this.app = createApp(() => this.deps);
   }

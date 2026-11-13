@@ -40,9 +40,14 @@ No portal imports another's screens; they share only `packages/protocol`, `lib/`
    and the catalog (SVT DB) gets the entry with the public Drive file ids. Offered right after saving in
    Track Maker, in Tracks, and inline in Live Meets when a private track is picked.
 3. **Pull** (`lib/catalog.ts: pullCatalogTrack` / `fetchCatalogTrack`): any signed-in singer fetches the
-   two files straight from the owner's Drive (own token → API key → public download URL) and saves a copy
-   in their own storage. The Sing picker ("Add & sing"), Tracks ("Add to my Drive") and a meet room
-   (streamed for the performance, no copy) all use the same two functions.
+   two files and saves a copy in their own storage. Own token first (it reads the singer's own files; a
+   `drive.file` token of another account cannot see someone else's shared file), then the app's Google
+   API key when the build has one (public files straight from Drive), else **the service fetches the
+   file from the owner's Drive for the app** (`GET /catalog/tracks/:id/file/:which`,
+   `services/control/src/driveFiles.ts`: the service's own `GOOGLE_API_KEY` if set, else Drive's public
+   download endpoint — which has no CORS for a browser, the "Load failed" of old). The Sing picker
+   ("Add & sing"), Tracks ("Add to my Drive") and a meet room (streamed for the performance, no copy)
+   all use the same two functions.
 
 `lib/catalog.ts` is the only place that knows how publishing and pulling work; portals call it and never
 each other, so any portal can be removed or replaced without touching the others.

@@ -137,6 +137,8 @@ export interface Routes {
   'GET /me': { res: MeResponse };
   'GET /catalog/tracks': { res: CatalogListResponse };
   'GET /catalog/tracks/:id': { res: { track: CatalogTrack } };
+  /** The track's file (json | audio), fetched from the owner's Drive by the service. */
+  'GET /catalog/tracks/:id/file/:which': { res: never };
   'POST /catalog/tracks': { req: CatalogPublishRequest; res: { track: CatalogTrack } };
   'DELETE /catalog/tracks/:id': { res: { ok: true } };
   'POST /catalog/tracks/:id/pull': { res: { ok: true; pulls: number } };

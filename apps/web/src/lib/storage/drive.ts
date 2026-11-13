@@ -270,7 +270,7 @@ export class DriveProvider implements StorageProvider {
 
   /** File bytes, always as a Blob — `alt=media` answers with the file's own content type (track.json is
    *  application/json), so this must not go through the JSON-parsing `req`. */
-  private async download(fileId: string): Promise<Blob> {
+  async download(fileId: string): Promise<Blob> {
     const r = await this.fetchOk(`${API}/files/${fileId}?alt=media`);
     return r.blob();
   }
@@ -525,26 +525,6 @@ export class DriveProvider implements StorageProvider {
         body: JSON.stringify({ appProperties: { ...(json.appProperties ?? {}), svShared: '0' } }),
       }).catch(() => undefined);
     }
-  }
-
-  /**
-   * Fetch a file another singer shared anyone-with-link (catalog pull). Tries the signed-in token
-   * first (works for files this app created), then the API key (public files), then the Drive
-   * download URL as a last resort.
-   */
-  async downloadPublic(fileId: string, apiKey: string): Promise<Blob> {
-    try {
-      return await this.download(fileId);
-    } catch (e) {
-      if (e instanceof AuthExpiredError) throw e;
-    }
-    if (apiKey) {
-      const r = await fetch(`${API}/files/${fileId}?alt=media&key=${encodeURIComponent(apiKey)}`);
-      if (r.ok) return r.blob();
-    }
-    const r = await fetch(`https://drive.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`);
-    if (r.ok) return r.blob();
-    throw new Error('Could not fetch the shared file from Drive (is the folder still shared "anyone with the link"?)');
   }
 
   /** Import a track folder/file another singer shared (after the Google Picker granted access to it). */
