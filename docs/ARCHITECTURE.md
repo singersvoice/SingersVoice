@@ -217,7 +217,7 @@ is that recording (`videoOffsetMs` = its first frame's place on the track timeli
 A live take never waits for a review: the stage hands it to the **background saver**
 (`lib/saveQueue.ts`, one job at a time, each stage memoised so a retry never uploads twice, three
 automatic retries then a Retry chip; `portals/meets/liveTake.ts` is the job) and the singer is
-already back on the stage. The take is kept at once in `Performances/Live`, registered as the
+already back on the stage. The take is kept at once as one file in `Performances`, registered as the
 singer's take (`POST /meets/:id/recordings`, by account — the singer may have left the room by
 then), and the host's copy is **the meet's performance**: shared from the host's Drive
 anyone-with-the-link and with each member's Google account, registered with the meet

@@ -36,7 +36,7 @@ export interface PerformanceSummary {
   createdAt: string;
   expiresAt: string | null;
   ref: string;
-  /** The performance folder. */
+  /** The performance's file in Drive (one file per performance; a folder only for one saved by an older build). */
   link?: string;
   /** The video file itself (Drive): watchable in a browser once shared. */
   videoLink?: string;

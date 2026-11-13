@@ -185,7 +185,7 @@ export interface MeetPerformance {
   songTitle: string;
   trackId: string;
   singers: { slot: number; displayName: string; userId?: string }[];
-  /** The performance folder (manifest, vocal, video) — anyone with the link. */
+  /** The performance's file in Drive — anyone with the link (a folder, for one saved by an older build). */
   link: string | null;
   /** The video itself, for watching in a browser. */
   videoLink: string | null;

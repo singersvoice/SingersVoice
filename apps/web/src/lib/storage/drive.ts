@@ -17,7 +17,6 @@ import {
   DRIVE_FOLDER_PATHS,
   DRIVE_ROOT,
   normalizeTrack,
-  performanceFolderName,
   performanceVideoName,
   safeName,
   type DriveFolderKey,
@@ -34,7 +33,7 @@ const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const CHUNK = 8 * 1024 * 1024; // multiple of 256 KiB
-const FILE_FIELDS = 'id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,parents,appProperties,webViewLink,trashed';
+const FILE_FIELDS = 'id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,parents,appProperties,description,webViewLink,trashed';
 
 interface DriveFile {
   id: string;
@@ -46,13 +45,14 @@ interface DriveFile {
   createdTime?: string;
   parents?: string[];
   appProperties?: Record<string, string>;
+  description?: string;
   webViewLink?: string;
   trashed?: boolean;
 }
 
 type Tree = Record<DriveFolderKey, string>;
 /** Bump to make every device walk (and tidy) its Drive folder tree once more. */
-const TIDY_VERSION = '1';
+const TIDY_VERSION = '2';
 
 export class DriveProvider implements StorageProvider {
   readonly kind = 'drive' as const;
@@ -329,7 +329,15 @@ export class DriveProvider implements StorageProvider {
     }
     this.tree = tree;
     localStorage.setItem(this.treeKey, JSON.stringify(tree));
-    localStorage.setItem(`${this.treeKey}.tidy`, TIDY_VERSION);
+    const flattened = await this.flattenPerformances().then(
+      () => true,
+      (e) => {
+        if (e instanceof AuthExpiredError) throw e;
+        console.warn('Drive: performances not flattened', e); // tried again next start: the tidy mark is not set
+        return false;
+      },
+    );
+    if (flattened) localStorage.setItem(`${this.treeKey}.tidy`, TIDY_VERSION);
   }
 
   private folder(key: DriveFolderKey): string {
@@ -559,92 +567,20 @@ export class DriveProvider implements StorageProvider {
     return { track, audio: blob, audioMime: audio.mimeType || blob.type };
   }
 
-  // ---------- Performances ----------
+  // ---------- Performances: one file each, one level ----------
+  //
+  // A performance is ONE file in `Performances` (or `Temp` while it is a temporary take): the show
+  // video — or, for a take without video, the vocal WAV — named for the people a Drive link reaches
+  // ("Song · Meet [id] · date.mp4"). Its summary rides in the file's appProperties (how it is found
+  // and listed) and the whole manifest in its `description`. Delete means delete: the file is gone.
 
-  async listPerformances(): Promise<PerformanceSummary[]> {
-    await this.ready();
-    const files = await this.list(`appProperties has { key='${APP_PROPS.type}' and value='performance' } and trashed=false`);
-    return files
-      .map((f) => {
-        const p = f.appProperties ?? {};
-        return {
-          performanceId: p[APP_PROPS.id] ?? f.id,
-          trackId: p[APP_PROPS.trackId] ?? '',
-          trackTitle: p.svTitle ?? f.name,
-          state: (p[APP_PROPS.state] === 'kept' ? 'kept' : 'temp') as 'temp' | 'kept',
-          mode: (p.svMode === 'live' ? 'live' : 'offline') as 'offline' | 'live',
-          kind: (p.svKind === 'show' ? 'show' : 'take') as 'take' | 'show',
-          meetId: p[APP_PROPS.meetId] || null,
-          meetTitle: p.svMeet || undefined,
-          durationMs: Number(p.svDurationMs ?? 0),
-          createdAt: p.svCreatedAt ?? f.modifiedTime ?? '',
-          expiresAt: p.svExpiresAt || null,
-          ref: f.parents?.[0] ?? f.id,
-          link: f.parents?.[0] ? `https://drive.google.com/drive/folders/${f.parents[0]}` : f.webViewLink,
-          videoLink: p.svVideoId ? `https://drive.google.com/file/d/${p.svVideoId}/view` : undefined,
-          hasVideo: p.svVideo === '1',
-          shared: p.svShared === '1',
-        } satisfies PerformanceSummary;
-      })
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  private async perfFiles(performanceId: string): Promise<DriveFile[]> {
-    return this.list(`appProperties has { key='svPerfId' and value='${esc(performanceId)}' } and trashed=false`);
-  }
-
-  async getPerformance(performanceId: string): Promise<LoadedPerformance | null> {
-    await this.ready();
-    const files = await this.perfFiles(performanceId);
-    const json = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performance');
-    const vocal = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performanceAudio');
-    const video = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performanceVideo');
-    if (!json || !vocal) return null;
-    const [manifest, vocalBlob, videoBlob] = await Promise.all([
-      this.downloadJson<PerformanceManifest>(json.id),
-      this.download(vocal.id),
-      video ? this.download(video.id) : Promise.resolve(null),
-    ]);
-    return { manifest, vocal: vocalBlob, video: videoBlob };
-  }
-
-  async savePerformance(manifest: PerformanceManifest, files: { vocal: Blob; video: Blob | null }, onProgress?: Progress): Promise<PerformanceSummary> {
-    await this.ready();
-    const parentKey: DriveFolderKey = manifest.state === 'temp' ? 'temp' : manifest.mode === 'live' ? 'performancesLive' : 'performancesOffline';
-    const name = performanceFolderName(manifest);
-    onProgress?.({ label: 'Creating performance folder', fraction: 0.03 });
-    const folder = await this.createFolder(name, this.folder(parentKey), {
-      [APP_PROPS.type]: 'performanceFolder',
-      svPerfId: manifest.performanceId,
-      [APP_PROPS.trackId]: manifest.trackId,
-    });
-    const common = { svPerfId: manifest.performanceId, [APP_PROPS.trackId]: manifest.trackId, [APP_PROPS.meetId]: manifest.meetId ?? '' };
-    const vocalFile = await this.upload('vocal.wav', files.vocal, folder.id, { ...common, [APP_PROPS.type]: 'performanceAudio' }, (f) =>
-      onProgress?.({ label: 'Uploading vocal', fraction: 0.05 + f * (files.video ? 0.45 : 0.85) }),
-    );
-    let videoFile: DriveFile | null = null;
-    if (files.video) {
-      const ext = extFromMime(files.video.type, 'webm');
-      // Named for the people a Drive link reaches ("Song · Meet · date.mp4"); found again by its app property, not its name.
-      videoFile = await this.upload(performanceVideoName(manifest, ext), files.video, folder.id, { ...common, [APP_PROPS.type]: 'performanceVideo' }, (f) =>
-        onProgress?.({ label: 'Uploading video', fraction: 0.5 + f * 0.4 }),
-      );
-    }
-    const stamped: PerformanceManifest = {
-      ...manifest,
-      files: manifest.files.map((fe) =>
-        fe.name === 'vocal.wav'
-          ? { ...fe, driveId: vocalFile.id, md5: vocalFile.md5Checksum }
-          : videoFile && fe.name.startsWith('video.')
-            ? { ...fe, driveId: videoFile.id, md5: videoFile.md5Checksum }
-            : fe,
-      ),
-    };
-    onProgress?.({ label: 'Writing manifest', fraction: 0.95 });
-    await this.upload('manifest.json', new Blob([JSON.stringify(stamped, null, 1)], { type: 'application/json' }), folder.id, {
-      ...common,
+  private perfProps(manifest: PerformanceManifest, media: 'video' | 'vocal', shared: string): Record<string, string> {
+    return {
       [APP_PROPS.type]: 'performance',
       [APP_PROPS.id]: manifest.performanceId,
+      svPerfId: manifest.performanceId,
+      [APP_PROPS.trackId]: manifest.trackId,
+      [APP_PROPS.meetId]: manifest.meetId ?? '',
       [APP_PROPS.state]: manifest.state,
       svMode: manifest.mode,
       svKind: manifest.kind ?? 'take',
@@ -653,79 +589,162 @@ export class DriveProvider implements StorageProvider {
       svDurationMs: String(manifest.durationMs),
       svCreatedAt: manifest.createdAt,
       svExpiresAt: manifest.expiresAt ?? '',
-      svVideo: files.video ? '1' : '0',
-      svVideoId: videoFile?.id ?? '',
-      svShared: '0',
-    });
-    onProgress?.({ label: 'Saved to Drive', fraction: 1 });
-    return {
-      performanceId: manifest.performanceId,
-      trackId: manifest.trackId,
-      trackTitle: manifest.trackTitle,
-      state: manifest.state,
-      mode: manifest.mode,
-      kind: manifest.kind ?? 'take',
-      meetId: manifest.meetId,
-      meetTitle: manifest.meetTitle,
-      singers: manifest.singers,
-      durationMs: manifest.durationMs,
-      createdAt: manifest.createdAt,
-      expiresAt: manifest.expiresAt,
-      ref: folder.id,
-      link: `https://drive.google.com/drive/folders/${folder.id}`,
-      videoLink: videoFile ? `https://drive.google.com/file/d/${videoFile.id}/view` : undefined,
-      hasVideo: Boolean(files.video),
-      shared: false,
+      svMedia: media,
+      svShared: shared,
     };
+  }
+
+  private perfSummary(f: DriveFile): PerformanceSummary {
+    const p = f.appProperties ?? {};
+    const view = `https://drive.google.com/file/d/${f.id}/view`;
+    const legacy = f.mimeType === 'application/json'; // a manifest.json still in a folder of its own (not migrated yet)
+    const video = legacy ? (p.svVideo === '1' ? `https://drive.google.com/file/d/${p.svVideoId}/view` : undefined) : p.svMedia === 'video' ? view : undefined;
+    return {
+      performanceId: p[APP_PROPS.id] ?? f.id,
+      trackId: p[APP_PROPS.trackId] ?? '',
+      trackTitle: p.svTitle ?? f.name,
+      state: (p[APP_PROPS.state] === 'kept' ? 'kept' : 'temp') as 'temp' | 'kept',
+      mode: (p.svMode === 'live' ? 'live' : 'offline') as 'offline' | 'live',
+      kind: (p.svKind === 'show' ? 'show' : 'take') as 'take' | 'show',
+      meetId: p[APP_PROPS.meetId] || null,
+      meetTitle: p.svMeet || undefined,
+      durationMs: Number(p.svDurationMs ?? 0),
+      createdAt: p.svCreatedAt ?? f.modifiedTime ?? '',
+      expiresAt: p.svExpiresAt || null,
+      ref: f.id,
+      link: legacy && f.parents?.[0] ? `https://drive.google.com/drive/folders/${f.parents[0]}` : view,
+      videoLink: video,
+      hasVideo: Boolean(video),
+      shared: p.svShared === '1',
+    };
+  }
+
+  async listPerformances(): Promise<PerformanceSummary[]> {
+    await this.ready();
+    const files = await this.list(`appProperties has { key='${APP_PROPS.type}' and value='performance' } and trashed=false`);
+    return files.map((f) => this.perfSummary(f)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /** The performance's file (the media; a manifest.json for one not migrated yet). */
+  private async perfFile(performanceId: string): Promise<DriveFile | null> {
+    const files = await this.list(`appProperties has { key='svPerfId' and value='${esc(performanceId)}' } and trashed=false`);
+    return files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performance') ?? null;
+  }
+
+  /** The manifest a file carries in its description, or the little its properties say. */
+  private manifestOf(f: DriveFile): PerformanceManifest {
+    const fromDescription = readJson<PerformanceManifest>(f.description ?? null);
+    if (fromDescription && fromDescription.performanceId) return fromDescription;
+    const s = this.perfSummary(f);
+    return {
+      schema: 'singersvoice.performance.v2',
+      performanceId: s.performanceId,
+      mode: s.mode,
+      state: s.state,
+      kind: s.kind,
+      ...(s.meetTitle ? { meetTitle: s.meetTitle } : {}),
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      trackId: s.trackId,
+      trackTitle: s.trackTitle,
+      trackArtist: '',
+      singerSlot: 1,
+      meetId: s.meetId ?? null,
+      durationMs: s.durationMs,
+      timeline: { startedAtEpochMs: Date.parse(s.createdAt) || 0, vocalOffsetMs: 0, videoOffsetMs: 0, latencyCompMs: 0, sampleRate: 48000 },
+      playback: { tempo: 1, keyShift: 0, backingGain: 0.85 },
+      fx: {} as PerformanceManifest['fx'],
+      device: { userAgent: '', platform: '', headphones: null },
+      files: [],
+      notes: '',
+    } as PerformanceManifest;
+  }
+
+  async getPerformance(performanceId: string): Promise<LoadedPerformance | null> {
+    await this.ready();
+    const f = await this.perfFile(performanceId);
+    if (!f) return null;
+    if (f.mimeType === 'application/json') return this.getLegacyPerformance(f);
+    const manifest = this.manifestOf(f);
+    const blob = await this.download(f.id);
+    const video = f.appProperties?.svMedia === 'video';
+    return { manifest, vocal: video ? new Blob([], { type: 'audio/wav' }) : blob, video: video ? blob : null };
+  }
+
+  /** A performance still in a folder of its own (made before the one-file layout; migrated on the next start). */
+  private async getLegacyPerformance(json: DriveFile): Promise<LoadedPerformance | null> {
+    const folderId = json.parents?.[0];
+    const files = folderId ? await this.list(`'${folderId}' in parents and trashed=false`) : [];
+    const vocal = files.find((x) => x.appProperties?.[APP_PROPS.type] === 'performanceAudio');
+    const video = files.find((x) => x.appProperties?.[APP_PROPS.type] === 'performanceVideo');
+    const [manifest, vocalBlob, videoBlob] = await Promise.all([this.downloadJson<PerformanceManifest>(json.id), vocal ? this.download(vocal.id) : Promise.resolve(new Blob([], { type: 'audio/wav' })), video ? this.download(video.id) : Promise.resolve(null)]);
+    return { manifest, vocal: vocalBlob, video: videoBlob };
+  }
+
+  async savePerformance(manifest: PerformanceManifest, files: { vocal: Blob; video: Blob | null }, onProgress?: Progress): Promise<PerformanceSummary> {
+    await this.ready();
+    const media = files.video ?? files.vocal;
+    const kind: 'video' | 'vocal' = files.video ? 'video' : 'vocal';
+    const ext = files.video ? extFromMime(files.video.type, 'webm') : 'wav';
+    const parent = this.folder(manifest.state === 'temp' ? 'temp' : 'performances');
+    onProgress?.({ label: kind === 'video' ? 'Uploading the show' : 'Uploading the vocal', fraction: 0.03 });
+    // Named for the people a Drive link reaches ("Song · Meet · date.mp4"); found again by its app properties, not its name.
+    const file = await this.upload(performanceVideoName(manifest, ext), media, parent, this.perfProps(manifest, kind, '0'), (f) => onProgress?.({ label: kind === 'video' ? 'Uploading the show' : 'Uploading the vocal', fraction: 0.03 + f * 0.9 }));
+    const entry = manifest.files.find((fe) => (kind === 'video' ? fe.name.startsWith('video.') : fe.name === 'vocal.wav'));
+    const stamped: PerformanceManifest = { ...manifest, files: [{ name: kind === 'video' ? `video.${ext}` : 'vocal.wav', mimeType: media.type, size: media.size, sha256: entry?.sha256 ?? '', driveId: file.id, md5: file.md5Checksum }] };
+    onProgress?.({ label: 'Writing the details', fraction: 0.95 });
+    await this.setDescription(file.id, stamped);
+    onProgress?.({ label: 'Saved to Drive', fraction: 1 });
+    return this.perfSummary({ ...file, appProperties: this.perfProps(manifest, kind, '0') });
+  }
+
+  /** The manifest, in the file's description (best effort: the properties already say what the lists need). */
+  private async setDescription(fileId: string, manifest: PerformanceManifest): Promise<void> {
+    await this.req(`${API}/files/${fileId}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: JSON.stringify(manifest) }) }).catch((e) => console.warn('Drive: performance details not written', e));
   }
 
   async sharePerformance(performanceId: string, with_: { type: 'anyone' } | { type: 'user'; email: string }): Promise<{ link: string; videoLink: string | null }> {
     await this.ready();
-    const files = await this.perfFiles(performanceId);
-    const json = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performance');
-    const video = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performanceVideo');
-    const folderId = files.find((f) => f.mimeType === FOLDER_MIME)?.id ?? json?.parents?.[0];
-    if (!folderId) throw new Error('Performance folder not found in Drive');
+    const f = await this.perfFile(performanceId);
+    if (!f) throw new Error('Performance not found in Drive');
     const body = with_.type === 'anyone' ? { role: 'reader', type: 'anyone' } : { role: 'reader', type: 'user', emailAddress: with_.email };
     const params = with_.type === 'user' ? '?sendNotificationEmail=true&emailMessage=' + encodeURIComponent('A SingersVoice performance you sang in was shared with you. It is also listed under Performances in SingersVoice.') : '';
-    await this.req(`${API}/files/${folderId}/permissions${params}`, {
+    await this.req(`${API}/files/${f.id}/permissions${params}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (json && with_.type === 'anyone') {
-      await this.req(`${API}/files/${json.id}?fields=id`, {
+    if (with_.type === 'anyone') {
+      await this.req(`${API}/files/${f.id}?fields=id`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appProperties: { ...(json.appProperties ?? {}), svShared: '1' } }),
+        body: JSON.stringify({ appProperties: { ...(f.appProperties ?? {}), svShared: '1' } }),
       }).catch(() => undefined);
     }
-    return { link: `https://drive.google.com/drive/folders/${folderId}`, videoLink: video ? `https://drive.google.com/file/d/${video.id}/view` : null };
+    const s = this.perfSummary(f);
+    return { link: s.link ?? `https://drive.google.com/file/d/${f.id}/view`, videoLink: s.videoLink ?? null };
   }
 
   async keepPerformance(performanceId: string): Promise<void> {
     await this.ready();
-    const files = await this.perfFiles(performanceId);
-    const json = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performance');
-    const folderId = files.find((f) => f.mimeType === FOLDER_MIME)?.id ?? json?.parents?.[0];
-    if (!json || !folderId) throw new Error('Performance not found');
-    const manifest = await this.downloadJson<PerformanceManifest>(json.id);
-    const dest = this.folder(manifest.mode === 'live' ? 'performancesLive' : 'performancesOffline');
-    await this.req(`${API}/files/${folderId}?addParents=${dest}&removeParents=${this.folder('temp')}&fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    const kept: PerformanceManifest = { ...manifest, state: 'kept', expiresAt: null };
-    await this.req(`${API}/files/${json.id}?fields=id`, {
+    const f = await this.perfFile(performanceId);
+    if (!f) throw new Error('Performance not found');
+    const manifest: PerformanceManifest = { ...this.manifestOf(f), state: 'kept', expiresAt: null };
+    const from = f.parents?.[0] ?? this.folder('temp');
+    await this.req(`${API}/files/${f.id}?addParents=${this.folder('performances')}&removeParents=${from}&fields=id`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ appProperties: { ...(json.appProperties ?? {}), [APP_PROPS.state]: 'kept', svExpiresAt: '' } }),
+      body: JSON.stringify({ appProperties: { ...(f.appProperties ?? {}), [APP_PROPS.state]: 'kept', svExpiresAt: '' }, description: JSON.stringify(manifest) }),
     });
-    await this.replaceContent(json.id, new Blob([JSON.stringify(kept, null, 1)], { type: 'application/json' }));
   }
 
+  /** Gone for good: the file is deleted, not trashed (a performance not migrated yet loses its whole folder). */
   async deletePerformance(performanceId: string): Promise<void> {
     await this.ready();
-    const files = await this.perfFiles(performanceId);
-    const folderId = files.find((f) => f.mimeType === FOLDER_MIME)?.id ?? files[0]?.parents?.[0];
-    if (folderId) await this.req(`${API}/files/${folderId}`, { method: 'DELETE' });
+    const f = await this.perfFile(performanceId);
+    if (!f) return;
+    const target = f.mimeType === 'application/json' && f.parents?.[0] ? f.parents[0] : f.id;
+    await this.req(`${API}/files/${target}`, { method: 'DELETE' });
   }
 
   async sweepTemp(): Promise<number> {
@@ -739,6 +758,49 @@ export class DriveProvider implements StorageProvider {
       }
     }
     return n;
+  }
+
+  /**
+   * One-time: performances saved as a folder each (manifest.json + vocal.wav + the video, under
+   * Performances/Live or /Offline) become one file each, straight under Performances — the video
+   * (or the vocal when there is none) moved up, stamped with the summary and the manifest, shared
+   * again where the folder was; the folder and what is left in it are deleted; the emptied Live and
+   * Offline folders too.
+   */
+  private async flattenPerformances(): Promise<void> {
+    const folders = await this.list(`appProperties has { key='${APP_PROPS.type}' and value='performanceFolder' } and trashed=false`);
+    for (const folder of folders) {
+      try {
+        const files = await this.list(`'${folder.id}' in parents and trashed=false`);
+        const json = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performance');
+        const video = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performanceVideo');
+        const vocal = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'performanceAudio');
+        const media = video ?? vocal;
+        if (!json || !media) continue; // not one of ours as we know them: left alone
+        const manifest = await this.downloadJson<PerformanceManifest>(json.id);
+        const kind: 'video' | 'vocal' = video ? 'video' : 'vocal';
+        const dest = this.folder(manifest.state === 'temp' ? 'temp' : 'performances');
+        const shared = json.appProperties?.svShared ?? '0';
+        const name = video ? media.name : performanceVideoName(manifest, 'wav');
+        await this.req(`${API}/files/${media.id}?addParents=${dest}&removeParents=${folder.id}&fields=id`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, appProperties: this.perfProps(manifest, kind, shared), description: JSON.stringify({ ...manifest, files: manifest.files.filter((fe) => (kind === 'video' ? fe.name.startsWith('video.') : fe.name === 'vocal.wav')) }) }),
+        });
+        if (shared === '1') await this.req(`${API}/files/${media.id}/permissions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: 'reader', type: 'anyone' }) }).catch(() => undefined);
+        await this.req(`${API}/files/${folder.id}`, { method: 'DELETE' });
+      } catch (e) {
+        if (e instanceof AuthExpiredError) throw e;
+        console.warn('Drive: performance not flattened', folder.name, e);
+      }
+    }
+    for (const name of ['Live', 'Offline']) {
+      const subs = await this.list(`name='${esc(name)}' and '${this.folder('performances')}' in parents and mimeType='${FOLDER_MIME}' and trashed=false`);
+      for (const sub of subs) {
+        const inside = await this.list(`'${sub.id}' in parents and trashed=false`, 1);
+        if (!inside.length) await this.req(`${API}/files/${sub.id}`, { method: 'DELETE' }).catch(() => undefined);
+      }
+    }
   }
 
   // ---------- Config ----------

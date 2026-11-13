@@ -112,7 +112,7 @@ singer's vocal, which travels over the links for the recording only — nobody e
 When the song is over (or you stop your take) **nothing asks you anything**: you are straight
 back on the stage — the lobby with the next song up, or, after your own Stop mid-song, the live
 stage with *Join the song* — and the take saves itself in the background, kept at once in your
-Drive `Performances/Live` (never Temp). A chip in the room says *Saving "song"… · 40 %* → *Saved
+Drive `Performances` (never Temp). A chip in the room says *Saving "song"… · 40 %* → *Saved
 "song"* (→ Performances), or *Could not save — Retry*; the saver keeps going when you change page,
 leave the room or the meet ends, retries by itself, and the app never reloads under it. **The
 host's take of a song is the meet's saved performance**: registered with the meet and shared with
@@ -178,19 +178,24 @@ Everything you ever sang, by date and name:
 
 | Section | What is in it |
 | --- | --- |
-| **Meet performances** | One saved show per song of every meet you hosted or were in: *meet · song*, date and time, length, who sang, who hosted. **Play** (your own: in the app) / **Watch** (the host's Drive link — anyone with it can watch), **Share** (copies the link, or the phone's share sheet). The host can remove one from the meet. |
-| **Your takes** | Your own takes: every take of a meet song (kept by itself) and Studio takes (Temp for 7 days unless kept). Open one to play it, keep it, download it (vocal WAV, show video, manifest), **Share link** (shares the Drive folder anyone-with-the-link and copies the video's link), or delete it. |
+| **Meet performances** | One saved show per song of every meet you hosted or were in: *meet · song*, date and time, length, who sang, who hosted. **Play** (your own: in the app) / **Open** (the host's Drive link — anyone with it can watch), **Share** (copies the link, or the phone's share sheet). The host's own: **Delete** — permanently; the file leaves their Drive and the meet's list. Nothing in between. |
+| **Your takes** | Your own takes: every take of a meet song (kept by itself) and Studio takes (Temp for 7 days unless kept). Open one to play it, keep it, download it, **Share link** (shares the file anyone-with-the-link and copies it), or **Delete** it — permanently. |
 | **Saving now** | Whatever the background saver is still on (with Retry when something is stuck). |
 
-In Drive: `SingersVoice/Performances/Live/<date time song · meet [meet id] (id)>/manifest.json +
-vocal.wav + <song · meet [meet id] · date time>.mp4` — e.g. `2026-11-12 2047 Ammo · Friday Meet
-[mwe8q644-onrv6m] (abc123)/Ammo · Friday Meet [mwe8q644-onrv6m] · 2026-11-12 2047.mp4` (local
-time; the meet's title and id so every take of a meet is found together; the show is **MP4** with
-H.264 and AAC on Windows, Mac and iOS, H.264 and Opus on Linux Chrome, WebM only on Firefox; the
-sound at 192 kbps; Drive's own player opens it for anyone with the link), `Performances/Offline/…`
-for Studio takes (`<date time song (id)>`), `Temp/…` until kept. There is exactly one `Live`, one
-`Offline`, one of each app folder: the folder tree is built once per device, every caller waiting
-for the same build, and the first start after an update walks the tree once more and folds any
+In Drive: **one level, one file per performance** — `SingersVoice/Performances/<song · meet [meet
+id] · date time>.mp4`, e.g. `Performances/Ammo · Friday Meet [mwe8q644-onrv6m] · 2026-11-12
+2047.mp4` (local time; the meet's title and id so every take of a meet is found together; the show
+is **MP4** with H.264 and AAC on Windows, Mac and iOS, H.264 and Opus on Linux Chrome, WebM only on
+Firefox; the sound at 192 kbps; Drive's own player opens it for anyone with the link). A take
+without video is its vocal WAV, named the same way. The details (who sang, offsets, settings) ride
+on the file itself — its Drive properties and description — so nothing else is stored beside it;
+Studio takes land in the same folder, `Temp/…` until kept. **Delete is delete**: the file is
+removed from Drive, not trashed. Performances saved by older builds (a folder each, under
+`Performances/Live` or `/Offline`) are flattened once on the first start after the update: the show
+moved up and stamped, shared again where the folder was, the folder and the `Live` / `Offline`
+folders deleted. There is exactly one of each app folder: the folder tree is built once per device,
+every caller waiting for the same build, and the first start after an update walks the tree once
+more and folds any
 doubled folders (made by older builds racing, or by two devices at once) into the oldest — files
 moved over, the emptied duplicates trashed. **Share** on a performance puts the bare link on the
 clipboard on a computer (nothing appended); on a phone it opens the share sheet with the link alone. The Studio's own lists (*Sing a

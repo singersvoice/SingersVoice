@@ -36,8 +36,8 @@ Without a client ID the app still runs fully in **device mode** (IndexedDB), so 
 
 1. "Continue with Google" opens the Google consent (one popup; on iOS Safari it is a sheet).
 2. The app receives a 1-hour access token (kept in session/local storage, never sent anywhere but Google).
-3. It creates, once per account: `SingersVoice/Tracks`, `Performances/Live`, `Performances/Offline`, `Temp`,
-   `Config`, `Backgrounds`, `Exports` — every file carries `appProperties` (`svType`, `svId`, …).
+3. It creates, once per account: `SingersVoice/Tracks`, `Performances` (one file per performance),
+   `Temp`, `Config`, `Backgrounds`, `Exports` — every file carries `appProperties` (`svType`, `svId`, …).
 4. When the token expires a **Reconnect Drive** button appears in the top bar (a tap, no re-consent).
 
 ## 4. Native iOS / Android apps (later)

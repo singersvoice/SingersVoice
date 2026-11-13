@@ -80,7 +80,7 @@ export function Performances() {
             <h3 style="margin:0">Meet performances</h3>
             <span class="chip">{shows?.length ?? '…'}</span>
           </div>
-          <div class="muted small">One saved show per song of every meet you hosted or were in: everyone on stage over the stage background, with the whole mix — what Publisher mode showed. Kept in the host's Drive, shared with everyone who was in the meet; anyone with the link can watch.</div>
+          <div class="muted small">One saved show per song of every meet you hosted or were in: everyone on stage over the stage background, with the whole mix — what Publisher mode showed. One file each, straight under Performances in the host's Drive, shared with everyone who was in the meet; anyone with the link can watch. Delete removes the file for good.</div>
           {shows === null && (
             <div class="row">
               <Spinner /> Loading…
@@ -204,36 +204,21 @@ function daysLeft(expiresAt: string | null): string {
   return d === 0 ? 'expires today' : `${d}d left`;
 }
 
-/** Host-only housekeeping of a meet performance that is not (or no longer) in this device's own storage. */
+/** A meet performance that lives in someone else's Drive: it opens there, and that is all (its owner deletes it). */
 function ShowActions(props: { show: MeetPerformance; onChanged: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const remove = async () => {
-    if (!confirm('Remove this performance from the meet (everyone loses the link)? The files stay in your Drive.')) return;
-    setBusy(true);
-    try {
-      await api.del('DELETE /performances/:id', `/performances/${encodeURIComponent(props.show.performanceId)}`);
-      props.onChanged();
-    } catch (e) {
-      toast(errorText(e), 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
   const s = props.show;
+  const url = s.videoLink ?? s.link;
   return (
     <div class="stack">
       <div class="muted small">
-        {new Date(s.createdAt).toLocaleString()} · {formatMs(s.durationMs)} · {s.singers.map((x) => `S${x.slot} ${x.displayName}`).join(' · ')}
+        {new Date(s.createdAt).toLocaleString()} · {formatMs(s.durationMs)} · {s.singers.map((x) => `S${x.slot} ${x.displayName}`).join(' · ')} · in {s.hostName}'s Drive
       </div>
       <div class="row">
-        {s.link && (
-          <a class="btn" href={s.link} target="_blank" rel="noopener">
-            Drive folder
+        {url && (
+          <a class="btn" href={url} target="_blank" rel="noopener">
+            <IcPlay /> Open
           </a>
         )}
-        <button class="btn danger" disabled={busy} onClick={() => void remove()}>
-          <IcTrash /> Remove from the meet
-        </button>
       </div>
     </div>
   );
@@ -338,7 +323,7 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
     }
   };
   const del = async () => {
-    if (!confirm(props.show ? 'Delete this performance? Everyone in the meet loses it.' : 'Delete this performance?')) return;
+    if (!confirm(props.show ? 'Delete this performance permanently? The file is removed from your Drive and everyone in the meet loses it.' : 'Delete this performance permanently? The file is removed from your Drive.')) return;
     setBusy(true);
     try {
       await withProvider((p) => p.deletePerformance(props.summary.performanceId));
@@ -357,7 +342,7 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
     if (loaded.video) downloadBlob(loaded.video, `${base} ${isShow ? 'show' : 'video'}.${loaded.video.type.includes('mp4') ? 'mp4' : 'webm'}`);
     downloadBlob(new Blob([JSON.stringify(loaded.manifest, null, 1)], { type: 'application/json' }), `${base} manifest.json`);
   };
-  /** A link anyone can open: the Drive folder is shared anyone-with-the-link on first use. */
+  /** A link anyone can open: the file is shared anyone-with-the-link on first use. */
   const shareLink = async () => {
     try {
       let s = shared;
@@ -409,8 +394,8 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
           <IcDownload /> Download
         </button>
         {s.link && isDrive.value && (
-          <a class="btn ghost" href={s.link} target="_blank" rel="noopener">
-            Drive folder
+          <a class="btn ghost" href={s.videoLink ?? s.link} target="_blank" rel="noopener">
+            Open in Drive
           </a>
         )}
         <button class="btn danger" disabled={busy} onClick={() => void del()}>

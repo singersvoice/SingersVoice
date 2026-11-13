@@ -13,7 +13,7 @@ Live build: **https://singersvoice.github.io/SingersVoice/**
 
 - **Tracks** — My Drive / Public catalog tabs; *More → Publish to public catalog* shares the Drive folder and lists the track for everyone; *Add to my Drive* pulls a catalog track.
 - **Studio** — Track Maker, Sing, Performances (unchanged flows, now under `/studio`).
-- **Live Meets** — Create meet (pick a *public* track so others can load it) → share the link/code → performers *Take a stage slot* → *I'm ready* → host *Start the song (8 s count-in)* → everyone's stage starts at the same instant → *Finish* → Keep → the take lands in `Performances/Live` and is listed on the meet's ended page. Idle 5 minutes → the meet closes itself.
+- **Live Meets** — Create meet (pick a *public* track so others can load it) → share the link/code → performers *Take a stage slot* → *I'm ready* → host *Start the song (8 s count-in)* → everyone's stage starts at the same instant → *Finish* → the take lands as one file in `Performances` and is listed on the meet's ended page. Idle 5 minutes → the meet closes itself.
 - **Publishing** (privileged accounts) — Destinations (stream keys), Publish a meet, History; `/watch/<meetId>` is the public in-house page.
 
 ## 10-minute smoke test
