@@ -1290,3 +1290,22 @@
   background: var(--accent);
   border-color: var(--accent);
 }
+
+/* Plans: two plan cards side by side, stacked on a phone. */
+.plans .card h3 {
+  margin: 0;
+}
+.plans .card > b {
+  font-size: 1.3em;
+}
+.plans ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+@media (max-width: 560px) {
+  .plans.grid-2 {
+    grid-template-columns: 1fr;
+  }
+}

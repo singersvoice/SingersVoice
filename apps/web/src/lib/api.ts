@@ -5,7 +5,7 @@
  */
 import { computed, signal } from '@preact/signals';
 import { bestClockOffset, clockOffsetMs, type Routes } from '@singersvoice/protocol';
-import { needsReconnect, profile, reconnect, setAccountUserId, setPrivileged, token } from '../state/session.ts';
+import { needsReconnect, profile, reconnect, setAccountUserId, setPlan, setPrivileged, token } from '../state/session.ts';
 import { toast } from './toast.ts';
 
 const OVERRIDE_KEY = 'sv.controlUrl';
@@ -198,12 +198,13 @@ export function serverNow(): number {
   return Date.now() + clock.value.offsetMs;
 }
 
-/** Pull my account record from the SVT DB (privileged flag). Silent when the service is not configured. */
+/** Pull my account record from the SVT DB (admin flag, plan). Silent when the service is not configured. */
 export async function refreshAccount(): Promise<void> {
   if (!controlUrl.value) return;
   try {
     const { user } = await api.get('GET /me', '/me');
     setPrivileged(user.privileged);
+    setPlan(user.plan ?? 'free', user.planUntil ?? null, user.canPublish ?? user.privileged);
     setAccountUserId(user.userId);
   } catch {
     /* offline or not signed in */

@@ -9,7 +9,7 @@ import { idb, STORES } from '../lib/idb.ts';
 import { asset, go, href } from '../lib/nav.ts';
 import { bytes, isStandalone, platformName } from '../lib/platform.ts';
 import { errorText, toast } from '../lib/toast.ts';
-import { isDrive, privileged, profile, provider, signInWithGoogle, signOut, withProvider } from '../state/session.ts';
+import { isDrive, plan, privileged, profile, provider, signInWithGoogle, signOut, withProvider } from '../state/session.ts';
 import { checkControl, controlStatus, controlUrl, controlVersion, refreshAccount, setControlUrl } from '../lib/api.ts';
 import { appSettings, audioSettings, pullSettings, updateApp, updateAudio } from '../state/settings.ts';
 
@@ -130,7 +130,11 @@ export function Settings() {
             <span class={`chip ${controlStatus.value === 'online' ? 'ok' : controlStatus.value === 'unconfigured' ? '' : 'warn'}`}>
               {controlStatus.value === 'online' ? `online${controlVersion.value ? ` · v${controlVersion.value}` : ''}` : controlStatus.value === 'checking' ? 'checking…' : controlStatus.value === 'offline' ? 'unreachable' : 'not configured'}
             </span>
-            {privileged.value && <span class="chip ok">privileged (Publishing)</span>}
+            {privileged.value && <span class="chip ok">admin</span>}
+            <span class={`chip ${plan.value === 'publisher' ? 'ok' : ''}`}>{plan.value === 'publisher' ? 'Publisher plan' : 'Free plan'}</span>
+            <a class="btn sm" href={href('/plans')}>
+              Plans
+            </a>
             <a class="btn sm" href={href('/publishing')}>
               Publishing portal
             </a>

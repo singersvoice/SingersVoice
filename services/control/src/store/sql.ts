@@ -1,7 +1,31 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { LIVE_KEEP, MIX_KEEP, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type UserRecord } from '@singersvoice/protocol';
+import { LIVE_KEEP, MIX_KEEP, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type UserRecord } from '@singersvoice/protocol';
+import { planActive } from '../billing.ts';
 import type { Driver } from './driver.ts';
 import { SCHEMA_SQL } from './schema.ts';
+
+/** One account's plan: what it is on, until when, and the Stripe ids behind it (none for a grant). */
+export interface Subscription {
+  userId: string;
+  plan: PlanId;
+  planUntil: string | null;
+  customerId: string | null;
+  subscriptionId: string | null;
+  source: 'stripe' | 'grant';
+  updatedAt: string;
+}
+
+type UserRow = { user_id: string; email: string; name: string; picture: string; privileged: number; created_at: string; last_seen_at: string; plan?: string | null; plan_until?: string | null };
+
+/** A user row (joined with its subscription) as the record the service hands out: the plan, and whether Publishing is open. */
+function userFromRow(r: UserRow): UserRecord {
+  const plan: PlanId = r.plan === 'publisher' ? 'publisher' : 'free';
+  const planUntil = r.plan_until ?? null;
+  const privileged = !!r.privileged;
+  return { userId: r.user_id, email: r.email, name: r.name, picture: r.picture, privileged, plan, planUntil, canPublish: privileged || planActive(plan, planUntil), createdAt: r.created_at, lastSeenAt: r.last_seen_at };
+}
+
+const USER_SELECT = 'SELECT u.*, s.plan AS plan, s.plan_until AS plan_until FROM users u LEFT JOIN subscriptions s ON s.user_id = u.user_id';
 
 export interface StoredParticipant extends Participant {
   meetId: string;
@@ -27,7 +51,7 @@ export class SqlStore {
 
   // ---------- users ----------
 
-  async upsertUser(u: Omit<UserRecord, 'createdAt' | 'lastSeenAt' | 'privileged'> & { privileged?: boolean }): Promise<UserRecord> {
+  async upsertUser(u: Pick<UserRecord, 'userId' | 'email' | 'name' | 'picture'> & { privileged?: boolean }): Promise<UserRecord> {
     const now = new Date().toISOString();
     const existing = await this.getUser(u.userId);
     if (existing) {
@@ -40,7 +64,7 @@ export class SqlStore {
         now,
         u.userId,
       ]);
-      return { ...existing, email: u.email || existing.email, name: u.name || existing.name, picture: u.picture || existing.picture, privileged, lastSeenAt: now };
+      return { ...existing, email: u.email || existing.email, name: u.name || existing.name, picture: u.picture || existing.picture, privileged, canPublish: privileged || planActive(existing.plan, existing.planUntil), lastSeenAt: now };
     }
     const count = await this.countUsers();
     // The very first account becomes privileged (bootstrap admin) unless told otherwise.
@@ -54,15 +78,50 @@ export class SqlStore {
       now,
       now,
     ]);
-    return { userId: u.userId, email: u.email, name: u.name, picture: u.picture, privileged, createdAt: now, lastSeenAt: now };
+    return { userId: u.userId, email: u.email, name: u.name, picture: u.picture, privileged, plan: 'free', planUntil: null, canPublish: privileged, createdAt: now, lastSeenAt: now };
   }
 
   async getUser(userId: string): Promise<UserRecord | null> {
-    const r = await this.db.get<{ user_id: string; email: string; name: string; picture: string; privileged: number; created_at: string; last_seen_at: string }>(
-      'SELECT * FROM users WHERE user_id=?',
-      [userId],
+    const r = await this.db.get<UserRow>(`${USER_SELECT} WHERE u.user_id=?`, [userId]);
+    return r ? userFromRow(r) : null;
+  }
+
+  async getUserByEmail(email: string): Promise<UserRecord | null> {
+    const r = await this.db.get<UserRow>(`${USER_SELECT} WHERE lower(u.email)=? ORDER BY u.last_seen_at DESC`, [email.toLowerCase()]);
+    return r ? userFromRow(r) : null;
+  }
+
+  // ---------- plans (billing) ----------
+
+  async getSubscription(userId: string): Promise<Subscription | null> {
+    const r = await this.db.get<{ user_id: string; plan: string; plan_until: string | null; customer_id: string | null; subscription_id: string | null; source: string; updated_at: string }>('SELECT * FROM subscriptions WHERE user_id=?', [userId]);
+    return r ? { userId: r.user_id, plan: r.plan === 'publisher' ? 'publisher' : 'free', planUntil: r.plan_until, customerId: r.customer_id, subscriptionId: r.subscription_id, source: r.source === 'grant' ? 'grant' : 'stripe', updatedAt: r.updated_at } : null;
+  }
+
+  async userIdByCustomer(customerId: string): Promise<string | null> {
+    const r = await this.db.get<{ user_id: string }>('SELECT user_id FROM subscriptions WHERE customer_id=?', [customerId]);
+    return r?.user_id ?? null;
+  }
+
+  /** Put an account on a plan (a Stripe event, or an admin's grant); ids not given are kept. */
+  async setSubscription(s: { userId: string; plan: PlanId; planUntil: string | null; customerId?: string | null; subscriptionId?: string | null; source: 'stripe' | 'grant' }): Promise<Subscription> {
+    const now = new Date().toISOString();
+    const existing = await this.getSubscription(s.userId);
+    const customerId = s.customerId === undefined ? (existing?.customerId ?? null) : s.customerId;
+    const subscriptionId = s.subscriptionId === undefined ? (existing?.subscriptionId ?? null) : s.subscriptionId;
+    await this.db.run(
+      'INSERT INTO subscriptions (user_id, plan, plan_until, customer_id, subscription_id, source, updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan, plan_until=excluded.plan_until, customer_id=excluded.customer_id, subscription_id=excluded.subscription_id, source=excluded.source, updated_at=excluded.updated_at',
+      [s.userId, s.plan, s.planUntil, customerId, subscriptionId, s.source, now],
     );
-    return r ? { userId: r.user_id, email: r.email, name: r.name, picture: r.picture, privileged: !!r.privileged, createdAt: r.created_at, lastSeenAt: r.last_seen_at } : null;
+    return { userId: s.userId, plan: s.plan, planUntil: s.planUntil, customerId, subscriptionId, source: s.source, updatedAt: now };
+  }
+
+  /** Stripe retries webhooks: true the first time an event id is seen. */
+  async markBillingEvent(eventId: string): Promise<boolean> {
+    const seen = await this.db.get<{ event_id: string }>('SELECT event_id FROM billing_events WHERE event_id=?', [eventId]);
+    if (seen) return false;
+    await this.db.run('INSERT INTO billing_events (event_id, received_at) VALUES (?,?)', [eventId, new Date().toISOString()]);
+    return true;
   }
 
   async setPrivileged(userId: string, privileged: boolean): Promise<void> {
@@ -235,11 +294,8 @@ export class SqlStore {
   }
 
   async listMembers(meetId: string): Promise<UserRecord[]> {
-    const rows = await this.db.all<{ user_id: string; email: string; name: string; picture: string; privileged: number; created_at: string; last_seen_at: string }>(
-      'SELECT u.* FROM meet_members m JOIN users u ON u.user_id = m.user_id WHERE m.meet_id=? ORDER BY m.joined_at ASC',
-      [meetId],
-    );
-    return rows.map((r) => ({ userId: r.user_id, email: r.email, name: r.name, picture: r.picture, privileged: !!r.privileged, createdAt: r.created_at, lastSeenAt: r.last_seen_at }));
+    const rows = await this.db.all<UserRow>(`SELECT u.*, s.plan AS plan, s.plan_until AS plan_until FROM meet_members m JOIN users u ON u.user_id = m.user_id LEFT JOIN subscriptions s ON s.user_id = u.user_id WHERE m.meet_id=? ORDER BY m.joined_at ASC`, [meetId]);
+    return rows.map(userFromRow);
   }
 
   // ---------- performances: the saved shows (one per song, registered by the host) ----------

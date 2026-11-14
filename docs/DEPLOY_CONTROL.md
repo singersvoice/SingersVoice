@@ -15,7 +15,7 @@ Node 22 host. The web app finds it through `VITE_CONTROL_URL` (or discovers it, 
    - `CLOUDFLARE_API_TOKEN` = the token
    - `CLOUDFLARE_ACCOUNT_ID` = the account id
 4. *Settings → Secrets and variables → Actions → Variables*:
-   - `PRIVILEGED_EMAILS` = your Google address (comma-separate several). These accounts get Publishing mode.
+   - `PRIVILEGED_EMAILS` = your Google address (comma-separate several). These are admin accounts: Publishing mode without a plan, and the right to grant the Publisher plan to others (docs/BILLING.md).
    - `VITE_GOOGLE_CLIENT_ID` (from docs/GOOGLE_OAUTH.md) — the service also uses it to validate tokens.
 5. https://github.com/singersvoice/SingersVoice/actions/workflows/deploy-control.yml → **Run workflow**
    (it also runs by itself on every push that touches the service).
@@ -49,7 +49,8 @@ Then set the repo variable `VITE_CONTROL_URL` to `https://<your host>` and run *
 | --- | --- | --- |
 | `GOOGLE_CLIENT_ID` | var | Access tokens must be issued to this OAuth client |
 | `ALLOWED_ORIGINS` | var | Extra browser origins (GitHub Pages + localhost are always allowed) |
-| `PRIVILEGED_EMAILS` | var/secret | Accounts allowed to use Publishing mode (the first account ever seen is privileged too) |
+| `PRIVILEGED_EMAILS` | var/secret | Admin accounts: Publishing mode without a plan, and the right to grant plans (the first account ever seen is one too) |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PUBLISHER`, `APP_URL` | secret | The Publisher plan through Stripe — docs/BILLING.md |
 | `PUBLISH_KEY_SECRET` | secret | AES-GCM key (base64, 32 bytes) for stream keys at rest — generated on the worker if not given |
 | `DEV_AUTH` | var | `1` accepts `X-Dev-User` headers — local dev and CI only, never in production |
 | `ICE_SERVERS` | var/secret | JSON array of RTCIceServer for performer-to-performer video, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]`. Default: Google STUN only (works for most home/mobile networks; add TURN for corporate NATs) |

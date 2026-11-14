@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { CatalogListResponse, JoinMeetResponse, Meet, MeetSnapshot } from '@singersvoice/protocol';
 import { createApp, type AppDeps } from '../src/app.ts';
 import { edgeCacheControl, edgeCacheTtl } from '../src/worker.ts';
+import { resetPriceCache, signStripePayload } from '../src/billing.ts';
 import { createAuthenticator } from '../src/auth.ts';
 import { SecretBox } from '../src/crypto.ts';
 import { nodeSqliteDriver } from '../src/store/driver.ts';
@@ -308,7 +309,78 @@ describe('sv-control API', () => {
     expect(list.meets.map((m) => m.title).sort()).toEqual(['Dave 0', 'Dave 2', 'Dave 3']);
   });
 
-  it('publishing: privileged only; keys are sealed and only hinted; jobs need enabled destinations', async () => {
+  it('billing: Publishing is the Publisher plan — a Stripe webhook (signed, replay-safe) opens it, cancellation closes it, an admin can grant it', async () => {
+    // Nobody but an admin can publish until they are on the plan.
+    const locked = await app.request('/publishing/destinations', { headers: as('erin') });
+    expect(locked.status).toBe(403);
+    expect((await json<{ code: string }>(locked)).code).toBe('publisher_plan');
+    const erin = await json<{ user: { userId: string; plan: string; canPublish: boolean } }>(await app.request('/me', { headers: as('erin') }));
+    expect(erin.user.plan).toBe('free');
+    expect(erin.user.canPublish).toBe(false);
+    // Without Stripe configured, the Plans page still knows the plans and that checkout is off.
+    const status = await json<{ checkout: boolean; portal: boolean; plans: Record<string, { title: string }>; price: unknown }>(await app.request('/billing', { headers: as('erin') }));
+    expect(status.checkout).toBe(false);
+    expect(status.plans.publisher!.title).toBe('Publisher');
+    expect((await app.request('/billing/checkout', { method: 'POST', headers: as('erin'), body: '{}' })).status).toBe(409);
+
+    // Stripe arrives: checkout creates a session with our user id on it, the webhook signs its events.
+    const asked: { url: string; body: string }[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      asked.push({ url, body: String(init?.body ?? '') });
+      if (url.endsWith('/checkout/sessions')) return Response.json({ id: 'cs_1', url: 'https://checkout.stripe.com/c/pay/cs_1' });
+      if (url.endsWith('/billing_portal/sessions')) return Response.json({ url: 'https://billing.stripe.com/p/session/1' });
+      if (url.includes('/prices/')) return Response.json({ unit_amount: 1499, currency: 'usd', recurring: { interval: 'month' } });
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    deps.billing = { secretKey: 'sk_test_x', webhookSecret: 'whsec_test_secret', pricePublisher: 'price_pub', appUrl: 'https://singersvoice.github.io/SingersVoice/', fetchImpl };
+    const priced = await json<{ checkout: boolean; price: { amount: number; currency: string; interval: string } | null }>(await app.request('/billing', { headers: as('erin') }));
+    expect(priced.checkout).toBe(true);
+    expect(priced.price).toEqual({ amount: 1499, currency: 'usd', interval: 'month' });
+    const co = await json<{ url: string }>(await app.request('/billing/checkout', { method: 'POST', headers: as('erin'), body: '{}' }));
+    expect(co.url).toContain('checkout.stripe.com');
+    const sent = new URLSearchParams(asked.find((a) => a.url.endsWith('/checkout/sessions'))!.body);
+    expect(sent.get('client_reference_id')).toBe(erin.user.userId);
+    expect(sent.get('line_items[0][price]')).toBe('price_pub');
+    expect(sent.get('success_url')).toBe('https://singersvoice.github.io/SingersVoice/plans?billing=success');
+
+    const webhook = async (event: Record<string, unknown>, secret = 'whsec_test_secret', t = Math.floor(Date.now() / 1000)) => {
+      const body = JSON.stringify(event);
+      return app.request('/billing/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Stripe-Signature': await signStripePayload(secret, body, t) }, body });
+    };
+    // A forged or stale signature is refused.
+    expect((await webhook({ id: 'evt_0', type: 'checkout.session.completed', data: { object: {} } }, 'whsec_wrong')).status).toBe(400);
+    expect((await webhook({ id: 'evt_0', type: 'checkout.session.completed', data: { object: {} } }, 'whsec_test_secret', Math.floor(Date.now() / 1000) - 3600)).status).toBe(400);
+    // Checkout done: the plan opens and the customer is tied to the account.
+    expect((await webhook({ id: 'evt_1', type: 'checkout.session.completed', data: { object: { client_reference_id: erin.user.userId, customer: 'cus_erin', subscription: 'sub_erin' } } })).status).toBe(200);
+    const open = await json<{ user: { plan: string; canPublish: boolean } }>(await app.request('/me', { headers: as('erin') }));
+    expect(open.user.plan).toBe('publisher');
+    expect(open.user.canPublish).toBe(true);
+    expect((await app.request('/publishing/destinations', { headers: as('erin') })).status).toBe(200);
+    const portal = await json<{ url: string }>(await app.request('/billing/portal', { method: 'POST', headers: as('erin'), body: '{}' }));
+    expect(portal.url).toContain('billing.stripe.com');
+    // The subscription's period end becomes the plan's end; a retry of the same event changes nothing.
+    const end = Math.floor(Date.now() / 1000) + 30 * 86400;
+    expect((await webhook({ id: 'evt_2', type: 'customer.subscription.updated', data: { object: { id: 'sub_erin', customer: 'cus_erin', status: 'active', current_period_end: end } } })).status).toBe(200);
+    const dated = await json<{ user: { plan: string; planUntil: string | null } }>(await app.request('/me', { headers: as('erin') }));
+    expect(dated.user.planUntil).toBe(new Date(end * 1000).toISOString());
+    const again = await json<{ seen?: boolean }>(await webhook({ id: 'evt_2', type: 'customer.subscription.deleted', data: { object: { id: 'sub_erin', customer: 'cus_erin', status: 'canceled' } } }));
+    expect(again.seen).toBe(true);
+    expect((await json<{ user: { plan: string } }>(await app.request('/me', { headers: as('erin') }))).user.plan).toBe('publisher');
+    // The subscription ends: Publishing closes.
+    expect((await webhook({ id: 'evt_3', type: 'customer.subscription.deleted', data: { object: { id: 'sub_erin', customer: 'cus_erin', status: 'canceled' } } })).status).toBe(200);
+    expect((await json<{ user: { plan: string; canPublish: boolean } }>(await app.request('/me', { headers: as('erin') }))).user.canPublish).toBe(false);
+    expect((await app.request('/publishing/destinations', { headers: as('erin') })).status).toBe(403);
+    // An admin grants the plan by email; a non-admin cannot.
+    expect((await app.request('/admin/plan', { method: 'POST', headers: as('bob'), body: JSON.stringify({ email: 'erin@dev.local', plan: 'publisher' }) })).status).toBe(403);
+    const granted = await json<{ user: { plan: string; canPublish: boolean } }>(await app.request('/admin/plan', { method: 'POST', headers: as('alice'), body: JSON.stringify({ email: 'Erin@dev.local', plan: 'publisher' }) }));
+    expect(granted.user.canPublish).toBe(true);
+    expect((await app.request('/publishing/destinations', { headers: as('erin') })).status).toBe(200);
+    delete deps.billing;
+    resetPriceCache();
+  });
+
+  it('publishing: the plan (or an admin) only; keys are sealed and only hinted; jobs need enabled destinations', async () => {
     expect((await app.request('/publishing/destinations', { headers: as('bob') })).status).toBe(403);
     const list = await json<{ destinations: { kind: string; enabled: boolean }[] }>(await app.request('/publishing/destinations', { headers: as('alice') }));
     expect(list.destinations.map((d) => d.kind)).toEqual(['youtube', 'facebook', 'instagram', 'twitch', 'inhouse']);

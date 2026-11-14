@@ -41,6 +41,8 @@ import {
   type SongPick,
   type StartMeetRequest,
   type UserRecord,
+  type BillingStatus,
+  type PlanId,
   LIVE_STALE_MS,
   YOUTUBE_HLS_INGEST,
   type LiveSegmentInfo,
@@ -52,6 +54,7 @@ import type { SecretBox } from './crypto.ts';
 import { addSong, claimSlot, decideRequest, ensureMeet, isHost, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
+import { checkoutConfigured, createCheckoutSession, createPortalSession, fetchPublisherPrice, PLANS, planFromSubscription, verifyStripeSignature, type BillingConfig, type StripeSubscription } from './billing.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
 export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -87,6 +90,8 @@ export interface AppDeps {
   googleApiKey?: string;
   /** Tests: how the service reaches Drive for a published track's files. */
   fetchImpl?: typeof fetch;
+  /** Stripe (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PUBLISHER, APP_URL); without a key the Plans page shows the plans and an admin grants them. */
+  billing?: BillingConfig;
 }
 
 type Vars = { deps: AppDeps; user: UserRecord };
@@ -219,7 +224,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 
   app.use('*', async (c, next) => {
     const path = c.req.path;
-    if (path === '/health' || path === '/time' || path.startsWith('/watch/') || path.startsWith('/fake/') || c.req.method === 'OPTIONS') return next();
+    if (path === '/health' || path === '/time' || path === '/billing/webhook' || path.startsWith('/watch/') || path.startsWith('/fake/') || c.req.method === 'OPTIONS') return next();
     const deps = c.get('deps');
     const id = await deps.auth(c.req.raw);
     if (!id) return err(c, 401, 'unauthenticated', 'Sign in with Google to use SingersVoice');
@@ -420,7 +425,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (meet.state === 'ended') return err(c, 410, 'ended', 'This meet has ended');
     const now = new Date().toISOString();
     const publisher = body.role === 'publisher';
-    if (publisher && !user.privileged) return err(c, 403, 'not_privileged', 'Publishing mode is for privileged accounts');
+    if (publisher && !user.canPublish) return err(c, 403, 'publisher_plan', 'Publishing mode is part of the Publisher plan — see Plans');
     // A publisher's show view is its own participant: the same account may be performing on another device.
     let p = body.resumeToken ? await store.getParticipantByToken(meet.meetId, body.resumeToken) : null;
     // A member (host / performer / audience) is one per account; every publisher view (the show view,
@@ -892,10 +897,99 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json({ ok: true as const });
   });
 
-  // ---------- Publishing mode (privileged) ----------
+  // ---------- Billing: the Publisher plan ----------
+
+  const billingOf = (deps: AppDeps): BillingConfig => deps.billing ?? { appUrl: 'https://singersvoice.github.io/SingersVoice' };
+
+  app.get('/billing', async (c) => {
+    const deps = c.get('deps');
+    const user = c.get('user');
+    const b = billingOf(deps);
+    const sub = await deps.store.getSubscription(user.userId);
+    const status: BillingStatus = {
+      plan: user.plan,
+      planUntil: user.planUntil,
+      canPublish: user.canPublish,
+      privileged: user.privileged,
+      checkout: checkoutConfigured(b),
+      portal: Boolean(b.secretKey && sub?.customerId),
+      price: await fetchPublisherPrice(b),
+      plans: PLANS,
+    };
+    return c.json(status);
+  });
+
+  app.post('/billing/checkout', async (c) => {
+    const deps = c.get('deps');
+    const user = c.get('user');
+    const b = billingOf(deps);
+    if (!checkoutConfigured(b)) return err(c, 409, 'billing_unconfigured', 'Payments are not set up on this service yet — ask the admin for the Publisher plan');
+    const sub = await deps.store.getSubscription(user.userId);
+    try {
+      return c.json(await createCheckoutSession(b, { userId: user.userId, email: user.email, customerId: sub?.customerId ?? null }));
+    } catch (e) {
+      return err(c, 409, 'stripe', e instanceof Error ? e.message : 'Stripe did not answer');
+    }
+  });
+
+  app.post('/billing/portal', async (c) => {
+    const deps = c.get('deps');
+    const b = billingOf(deps);
+    const sub = await deps.store.getSubscription(c.get('user').userId);
+    if (!b.secretKey || !sub?.customerId) return err(c, 404, 'no_customer', 'No subscription to manage on this account');
+    try {
+      return c.json(await createPortalSession(b, sub.customerId));
+    } catch (e) {
+      return err(c, 409, 'stripe', e instanceof Error ? e.message : 'Stripe did not answer');
+    }
+  });
+
+  /**
+   * Stripe tells us what happened to a subscription. The signature proves it is Stripe; the event id
+   * makes retries harmless. `checkout.session.completed` ties the Stripe customer to our account (the
+   * session carries our user id); the subscription events carry the plan and its period end.
+   */
+  app.post('/billing/webhook', async (c) => {
+    const deps = c.get('deps');
+    const b = billingOf(deps);
+    if (!b.webhookSecret) return err(c, 404, 'billing_unconfigured', 'No webhook secret on this service');
+    const raw = await c.req.text();
+    if (!(await verifyStripeSignature(b.webhookSecret, raw, c.req.header('stripe-signature') ?? null))) return err(c, 400, 'bad_signature', 'Not a Stripe signature for this body');
+    const event = JSON.parse(raw) as { id: string; type: string; data: { object: Record<string, unknown> } };
+    if (!(await deps.store.markBillingEvent(event.id))) return c.json({ ok: true as const, seen: true });
+    const obj = event.data.object;
+    if (event.type === 'checkout.session.completed') {
+      const userId = (obj.client_reference_id as string | null) ?? (obj.metadata as { userId?: string } | undefined)?.userId ?? null;
+      const customerId = typeof obj.customer === 'string' ? obj.customer : null;
+      const subscriptionId = typeof obj.subscription === 'string' ? obj.subscription : null;
+      if (userId && (await deps.store.getUser(userId))) await deps.store.setSubscription({ userId, plan: 'publisher', planUntil: null, customerId, subscriptionId, source: 'stripe' });
+    } else if (event.type.startsWith('customer.subscription.')) {
+      const sub = obj as unknown as StripeSubscription;
+      const userId = sub.metadata?.userId || (await deps.store.userIdByCustomer(sub.customer));
+      if (userId && (await deps.store.getUser(userId))) {
+        const { plan, until } = event.type === 'customer.subscription.deleted' ? { plan: 'free' as const, until: null } : planFromSubscription(sub);
+        await deps.store.setSubscription({ userId, plan, planUntil: until, customerId: sub.customer, subscriptionId: sub.id, source: 'stripe' });
+      }
+    }
+    return c.json({ ok: true as const });
+  });
+
+  /** Admin: a plan by hand — a comp, a tester, a payment taken outside Stripe. `until` null = no end. */
+  app.post('/admin/plan', async (c) => {
+    if (!c.get('user').privileged) return err(c, 403, 'not_privileged', 'Only an admin can grant plans');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { email?: string; plan?: PlanId; until?: string | null };
+    const target = body.email ? await c.get('deps').store.getUserByEmail(String(body.email)) : null;
+    if (!target) return err(c, 404, 'no_user', 'No account with that email has signed in yet');
+    const plan: PlanId = body.plan === 'publisher' ? 'publisher' : 'free';
+    const until = body.until ? new Date(body.until).toISOString() : null;
+    await c.get('deps').store.setSubscription({ userId: target.userId, plan, planUntil: plan === 'free' ? null : until, source: 'grant' });
+    return c.json({ user: (await c.get('deps').store.getUser(target.userId))! });
+  });
+
+  // ---------- Publishing mode (the Publisher plan, or an admin) ----------
 
   app.use('/publishing/*', async (c, next) => {
-    if (!c.get('user').privileged) return err(c, 403, 'not_privileged', 'Publishing is available to privileged users only — ask an admin to enable it for your account');
+    if (!c.get('user').canPublish) return err(c, 403, 'publisher_plan', 'Publishing mode is part of the Publisher plan — subscribe on the Plans page');
     await next();
   });
 

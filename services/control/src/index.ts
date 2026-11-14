@@ -4,7 +4,8 @@
  *   PORT=8787                 SV_DB=./sv-control.sqlite (or :memory:)
  *   GOOGLE_CLIENT_ID=…        tokens must be issued to this OAuth client (recommended)
  *   ALLOWED_ORIGINS=a,b       extra browser origins
- *   PRIVILEGED_EMAILS=a,b     accounts allowed to use Publishing mode (the first account ever seen is privileged too)
+ *   PRIVILEGED_EMAILS=a,b     admin accounts: Publishing mode without a plan, and the right to grant plans (the first account ever seen is one too)
+ *   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PUBLISHER, APP_URL — the Publisher plan through Stripe (docs/BILLING.md)
  *   PUBLISH_KEY_SECRET=…      base64 32-byte key for stream keys at rest (generate once: node -e "…randomSecretB64()")
  *   DEV_AUTH=1                accept X-Dev-User headers (local dev / CI only)
  *   ICE_SERVERS=[…]           JSON array of RTCIceServer for performer video (default: Google STUN; add TURN for strict NATs)
@@ -36,6 +37,7 @@ const deps: AppDeps = {
   version: '2.1.0',
   youtubeHlsBase: process.env.YOUTUBE_HLS_BASE || undefined,
   googleApiKey: process.env.GOOGLE_API_KEY || undefined,
+  billing: { secretKey: process.env.STRIPE_SECRET_KEY || undefined, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined, pricePublisher: process.env.STRIPE_PRICE_PUBLISHER || undefined, appUrl: process.env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
   fakeYoutubeDir: process.env.SV_FAKE_YOUTUBE_DIR || undefined,
 };
 

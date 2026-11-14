@@ -30,7 +30,7 @@ and use *Share → Add to Home Screen* / *Install app* to get the standalone app
 | Recording | ✅ sample-accurate WAV + camera video, pause/resume on the track timeline; resumable, md5-verified uploads | |
 | Public catalog (SVT DB) | ✅ publish / unpublish / search / pull | sv-control |
 | Live meets | ✅ rooms, host on stage at creation, audience → ask to sing → host permits (or open stage), stage live from the lobby (camera cut-out at once, video mesh before the song), set list (library / catalog picker, queue, play now, skip, song over → next song), ready, chat, kickstart sync, transport cued for everyone (pause/resume/restart/seek), late singers mid-song, personal takes saved by themselves, the audience hears the stage mix (~2 s behind) and watches the show when a publisher is on air, 5-min expiry, watch page | performers don't hear each other (Solo foldback by design); lyrics only for singers on stage |
-| Publishing | ✅ own portal for privileged accounts: destinations + **show view** (performers huge, no lyrics, the whole mix) that **encodes and sends the show itself** (YouTube HLS ingestion + in-house HLS) + **Preview** monitor wall + jobs + history + in-house watch page | Facebook / Instagram / Twitch (RTMP) need the session container, next increment; AAC sound needs Chrome/Edge on Windows/Mac (Linux Chrome, Firefox: video only) |
+| Publishing | ✅ own portal for the **Publisher plan** (paid through Stripe, docs/BILLING.md; admins free): destinations + **show view** (performers huge, no lyrics, the whole mix) that **encodes and sends the show itself** (YouTube HLS ingestion + in-house HLS) + **Preview** monitor wall + jobs + history + in-house watch page | Facebook / Instagram / Twitch (RTMP) need the session container, next increment; AAC sound needs Chrome/Edge on Windows/Mac (Linux Chrome, Firefox: video only) |
 | sv-control | ✅ Hono on Node 22 (node:sqlite) **and** Cloudflare Workers (SQLite Durable Object); Google token auth; tests + boot smoke | [docs/DEPLOY_CONTROL.md](docs/DEPLOY_CONTROL.md) — one workflow run after two secrets |
 | Session container (RTMP out) | ⏳ next | for Facebook / Instagram / Twitch: a relay that takes the browser's segments and speaks RTMPS |
 
@@ -52,7 +52,7 @@ tools/brand/           make_brand.py (icons from the logo render), export_logo_b
 tools/backgrounds/     convert.sh (jpg/mp4 → web sizes + index.json)
 tools/ci/              check-budget.mjs, screenshots.mjs (viewport matrix + solo and live-meet e2e), live-duet.mjs, audio-lab.mjs (the vocal chain and mix bus, measured), control-smoke.mjs
 tools/cf/              deploy.mjs — sv-control to Cloudflare Workers in one run; control-url.mjs — finds the service URL for Deploy web
-docs/                  GOOGLE_OAUTH.md, RESTORE_POINTS.md, ARCHITECTURE.md, TESTING.md
+docs/                  GOOGLE_OAUTH.md, RESTORE_POINTS.md, ARCHITECTURE.md, TESTING.md, BILLING.md
 ```
 
 ## Develop

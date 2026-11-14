@@ -139,8 +139,24 @@ export async function withProvider<T>(fn: (p: StorageProvider) => Promise<T>): P
   }
 }
 
-/** Privileged (Publishing mode) flag from the SVT DB — refreshed by refreshAccount(). */
+/** Admin flag from the SVT DB (Publishing without a plan, the right to grant plans) — refreshed by refreshAccount(). */
 export const privileged = signal<boolean>(localStorage.getItem('sv.privileged') === '1');
+/** The account's plan and whether Publishing mode is open to it (an admin, or an active Publisher plan). */
+export const plan = signal<'free' | 'publisher'>(localStorage.getItem('sv.plan') === 'publisher' ? 'publisher' : 'free');
+export const planUntil = signal<string | null>(localStorage.getItem('sv.planUntil') || null);
+export const canPublish = signal<boolean>(localStorage.getItem('sv.canPublish') === '1');
+export function setPlan(p: 'free' | 'publisher', until: string | null, publish: boolean): void {
+  plan.value = p;
+  planUntil.value = until;
+  canPublish.value = publish;
+  try {
+    localStorage.setItem('sv.plan', p);
+    localStorage.setItem('sv.planUntil', until ?? '');
+    localStorage.setItem('sv.canPublish', publish ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
 /** My account id in the SVT DB (`g-<google sub>` / `dev-<id>`), from /me — what meets and catalog entries carry as owner. */
 export const accountUserId = signal<string>(localStorage.getItem('sv.accountUserId') ?? '');
 export function setAccountUserId(id: string): void {

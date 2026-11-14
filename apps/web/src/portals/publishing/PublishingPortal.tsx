@@ -18,7 +18,7 @@ import { Empty, Field, Seg, Spinner, Switch } from '../../components/ui.tsx';
 import { api, ApiError, controlConfigured, refreshAccount } from '../../lib/api.ts';
 import { go, href } from '../../lib/nav.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { privileged } from '../../state/session.ts';
+import { canPublish } from '../../state/session.ts';
 import { resolveMeet } from './meetLookup.ts';
 import { Preview } from './Preview.tsx';
 
@@ -44,7 +44,7 @@ export function PublishingPortal() {
         <div class="callout warn">Publishing needs the SingersVoice service (VITE_CONTROL_URL).</div>
       </Page>
     );
-  if (!privileged.value)
+  if (!canPublish.value)
     return (
       <Page title="Publishing">
         <div class="stack">
@@ -53,7 +53,10 @@ export function PublishingPortal() {
               <Spinner /> Checking your account…
             </div>
           )}
-          <Empty title="Publishing mode is for privileged users" body="Streaming meets to YouTube, Facebook, Instagram, Twitch and the in-house portal is enabled per account by the SingersVoice admin (PRIVILEGED_EMAILS on the service). Ask them to add your Google account, then reopen this page.">
+          <Empty title="Publishing mode is part of the Publisher plan" body="Streaming meets to YouTube and the in-house watch page — the show view, destinations, going live — is for Publisher subscribers. Singing, hosting and joining meets stay free.">
+            <a class="btn primary" href={href('/plans')}>
+              See the Publisher plan
+            </a>
             <a class="btn" href={href('/meets')}>
               Back to Live Meets
             </a>

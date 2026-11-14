@@ -570,6 +570,21 @@ try {
   await alice.page.getByRole('button', { name: 'Delete Duet e2e' }).click();
   await wait(1500);
   check((await alice.page.locator('.meet-item').count()) === 0, 'the host deleted the meet from the list');
+  // Publishing is the Publisher plan: dave (a free account) finds it closed, with the plan on offer; an admin can grant it, and then it opens.
+  await dave.page.goto(`${base}publishing?${control}`, { waitUntil: 'networkidle' });
+  await dave.page.getByText('Publishing mode is part of the Publisher plan').waitFor({ timeout: 15000 });
+  check(true, 'a free account finds Publishing closed, with the Publisher plan on offer');
+  await dave.page.goto(`${base}plans?${control}`, { waitUntil: 'networkidle' });
+  await dave.page.locator('[data-plan="free"]').waitFor({ timeout: 15000 });
+  check((await dave.page.locator('[data-plan-card="publisher"]').innerText()).includes('Publisher'), 'the Plans page shows Free and Publisher');
+  check(await dave.page.getByRole('button', { name: 'Request the plan' }).isVisible(), 'without Stripe configured the plan is requested from the admin, not bought');
+  await alice.page.goto(`${base}plans?${control}`, { waitUntil: 'networkidle' });
+  await alice.page.locator('[data-admin-grant] input').fill('dave@dev.local');
+  await alice.page.getByRole('button', { name: 'Grant Publisher' }).click();
+  await alice.page.getByText(/is on the Publisher plan/).waitFor({ timeout: 10000 });
+  await dave.page.goto(`${base}publishing?${control}`, { waitUntil: 'networkidle' });
+  await dave.page.getByRole('radio', { name: 'Publish a meet' }).waitFor({ timeout: 15000 });
+  check(true, "an admin's grant opens Publishing for that account at once");
   await carol.page.mouse.move(900, 900);
   await carol.page.mouse.move(930, 950);
   await carol.page.locator('.show[data-idle="0"]').waitFor({ timeout: 5000 });

@@ -4,7 +4,7 @@ import { IcDrive, IcLibrary, IcMic, IcPlay, IcShare, IcUsers } from '../componen
 import { Page } from '../components/Shell.tsx';
 import { checkControl, controlConfigured, controlStatus, refreshAccount } from '../lib/api.ts';
 import { href } from '../lib/nav.ts';
-import { isDrive, privileged, profile, provider } from '../state/session.ts';
+import { canPublish, isDrive, plan, privileged, profile, provider } from '../state/session.ts';
 
 export function Home() {
   useEffect(() => {
@@ -27,7 +27,8 @@ export function Home() {
               <IcDrive size={14} /> {isDrive.value ? 'Drive linked' : 'device only'}
             </span>
             <span class={`chip ${svc === 'online' ? 'ok' : svc === 'unconfigured' ? '' : 'warn'}`}>SVT DB · {svc === 'online' ? 'online' : svc === 'checking' ? 'checking' : svc === 'offline' ? 'unreachable' : 'not deployed'}</span>
-            {privileged.value && <span class="chip ok">privileged</span>}
+            {privileged.value && <span class="chip ok">admin</span>}
+            {plan.value === 'publisher' && <span class="chip ok">Publisher plan</span>}
           </div>
         </section>
 
@@ -50,7 +51,7 @@ export function Home() {
           <a href={href('/publishing')}>
             <IcShare />
             <b>Publishing</b>
-            <span>{privileged.value ? 'Stream meets to YouTube, Facebook, Instagram, Twitch, in-house' : 'For privileged users — streaming to YouTube, Facebook, Instagram, Twitch'}</span>
+            <span>{canPublish.value ? 'Stream meets to YouTube and the in-house watch page' : 'Publisher plan — stream meets to YouTube and the in-house watch page'}</span>
           </a>
           <a href={href('/studio/performances')}>
             <IcPlay />
@@ -64,7 +65,7 @@ export function Home() {
           <p class="muted small">
             Tracks are files in each singer's Drive; publishing one shares its link through the catalog so anyone can pull it. The Studio works entirely offline. A Live Meet is a link anyone can
             join: performers take stage slots, every device starts the track at the same server instant, each singer's take stays personal in their own Drive. Publishing streams a meet out to the platforms
-            for privileged users.
+            for Publisher subscribers (see <a href={href('/plans')}>Plans</a>).
           </p>
         </section>
       </div>

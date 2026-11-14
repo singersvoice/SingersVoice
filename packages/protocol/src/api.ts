@@ -2,7 +2,7 @@
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
 import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
 import type { MixBatch } from './mix.ts';
-import type { Destination, DestinationKind, DestinationUpdate, LiveStatus, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
+import type { BillingStatus, Destination, DestinationKind, DestinationUpdate, LiveStatus, PlanId, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 
 export interface ApiError {
   error: string;
@@ -140,6 +140,14 @@ export interface Routes {
   'GET /health': { res: HealthResponse };
   'GET /time': { res: TimeResponse };
   'GET /me': { res: MeResponse };
+  /** Billing: the account's plan and the Publisher price. */
+  'GET /billing': { res: BillingStatus };
+  /** Start a Stripe Checkout for the Publisher plan: the page to send the browser to. */
+  'POST /billing/checkout': { req: Record<string, never>; res: { url: string } };
+  /** Open the Stripe Customer Portal (change card, cancel, invoices). */
+  'POST /billing/portal': { req: Record<string, never>; res: { url: string } };
+  /** Admin: put an account on a plan by email (a comp, a test, a payment taken elsewhere). */
+  'POST /admin/plan': { req: { email: string; plan: PlanId; until?: string | null }; res: { user: UserRecord } };
   'GET /catalog/tracks': { res: CatalogListResponse };
   'GET /catalog/tracks/:id': { res: { track: CatalogTrack } };
   /** The track's file (json | audio), fetched from the owner's Drive by the service. */

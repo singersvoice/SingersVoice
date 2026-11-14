@@ -3,7 +3,8 @@
  * Object ("main"), so deploying needs only the standard Workers permissions (no D1 setup).
  *
  * Bindings (wrangler.jsonc): SVT_DB (Durable Object namespace, class SvtDb)
- * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH, ICE_SERVERS, YOUTUBE_HLS_BASE, GOOGLE_API_KEY (optional)
+ * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH, ICE_SERVERS, YOUTUBE_HLS_BASE, GOOGLE_API_KEY (optional),
+ * STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PUBLISHER, APP_URL (the Publisher plan — docs/BILLING.md)
  */
 import { createApp, parseIceServers, sweepMeets, type AppDeps } from './app.ts';
 import { createAuthenticator } from './auth.ts';
@@ -21,6 +22,10 @@ interface Env {
   ICE_SERVERS?: string;
   YOUTUBE_HLS_BASE?: string;
   GOOGLE_API_KEY?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  STRIPE_PRICE_PUBLISHER?: string;
+  APP_URL?: string;
 }
 
 interface DurableState {
@@ -47,6 +52,7 @@ export class SvtDb {
       version: '2.1.0',
       youtubeHlsBase: env.YOUTUBE_HLS_BASE || undefined,
       googleApiKey: env.GOOGLE_API_KEY || undefined,
+      billing: { secretKey: env.STRIPE_SECRET_KEY || undefined, webhookSecret: env.STRIPE_WEBHOOK_SECRET || undefined, pricePublisher: env.STRIPE_PRICE_PUBLISHER || undefined, appUrl: env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
     };
     this.app = createApp(() => this.deps);
   }

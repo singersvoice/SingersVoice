@@ -9,6 +9,20 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS subscriptions (
+  user_id TEXT PRIMARY KEY,
+  plan TEXT NOT NULL DEFAULT 'free',
+  plan_until TEXT,
+  customer_id TEXT,
+  subscription_id TEXT,
+  source TEXT NOT NULL DEFAULT 'stripe',
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(customer_id);
+CREATE TABLE IF NOT EXISTS billing_events (
+  event_id TEXT PRIMARY KEY,
+  received_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS catalog_tracks (
   track_id TEXT PRIMARY KEY,
   owner_user_id TEXT NOT NULL,

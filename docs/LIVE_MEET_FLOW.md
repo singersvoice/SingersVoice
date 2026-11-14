@@ -29,7 +29,7 @@ follow you around.
 ## 2 · The room (`/meet/:id`) — lobby
 
 The room is one page with two tabs, **Stage** and **Chat**. The header shows the host, the join
-code, **Share link**, the idle countdown and, for privileged accounts, **Show view** (Publishing).
+code, **Share link**, the idle countdown and, for Publisher-plan (or admin) accounts, **Show view** (Publishing).
 
 ### The stage (always on)
 
@@ -212,7 +212,7 @@ panel; Performances deletes an opened take. A meet's
 performance is also shared, from the host's Drive, with each singer's Google account (it shows up in
 their Drive's *Shared with me*).
 
-## 6 · Publishing (privileged accounts) — its own process
+## 6 · Publishing (the Publisher plan, or an admin) — its own process
 
 `/publishing`: **Publish a meet** (pick a meet you host or joined, or any by link/code; switch on
 the destinations — a platform that has no stream key yet opens its setup right there: ingest URL

@@ -21,7 +21,7 @@ import { api, ApiError, clock, controlConfigured, refreshAccount, serverNow } fr
 import { go, href } from '../../lib/nav.ts';
 import { keepAwake } from '../../lib/platform.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { privileged } from '../../state/session.ts';
+import { canPublish } from '../../state/session.ts';
 import { MeetSession } from '../meets/meetSession.ts';
 import { loadMeetTrack } from '../meets/trackSource.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
@@ -49,7 +49,7 @@ export function ShowView(props: { id: string }) {
         <div class="callout warn">Publishing needs the SingersVoice service (VITE_CONTROL_URL).</div>
       </Page>
     );
-  if (!privileged.value)
+  if (!canPublish.value)
     return (
       <Page title="Publishing">
         {!checked ? (
@@ -57,7 +57,10 @@ export function ShowView(props: { id: string }) {
             <Spinner /> Checking your account…
           </div>
         ) : (
-          <Empty title="Publishing mode is for privileged users" body="The show view streams a meet to YouTube, Facebook, Instagram, Twitch and the in-house portal. Ask the SingersVoice admin to enable Publishing for your Google account.">
+          <Empty title="Publishing mode is part of the Publisher plan" body="The show view streams a meet to YouTube and the in-house watch page. Subscribe to the Publisher plan to open it.">
+            <a class="btn primary" href={href('/plans')}>
+              See the Publisher plan
+            </a>
             <a class="btn" href={href('/meets')}>
               Back to Live Meets
             </a>

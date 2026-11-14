@@ -31,7 +31,7 @@ import { href } from '../../lib/nav.ts';
 import { isIOS, keepAwake } from '../../lib/platform.ts';
 import type { TakeResult } from '../../lib/takes.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { privileged } from '../../state/session.ts';
+import { canPublish as canPublishSignal } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
 import { MicStatus } from '../../components/MicStatus.tsx';
@@ -408,7 +408,7 @@ function Lobby(props: {
                 <button class="btn sm" onClick={() => void share()}>
                   <IcShare size={16} /> Share link
                 </button>
-                {privileged.value && (
+                {canPublishSignal.value && (
                   <a class="btn sm" href={href(`/publishing/show/${encodeURIComponent(meet.meetId)}`)} target="_blank" rel="noopener" title="Publishing mode: the broadcast picture (performers huge, no lyrics), in a new tab">
                     Show view
                   </a>
@@ -1061,7 +1061,7 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
   const recs = snap?.recordings ?? [];
   const shows = snap?.performances ?? [];
   const host = props.you.userId === meet.hostUserId;
-  const canPublish = privileged.value;
+  const canPublish = canPublishSignal.value;
   const shareShow = async (p: { songTitle: string; videoLink: string | null; link: string | null }) => {
     const url = p.videoLink ?? p.link;
     if (!url) return toast('This performance has no link yet (the host saved it without Drive)', 'warn');

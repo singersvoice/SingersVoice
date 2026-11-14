@@ -106,13 +106,37 @@ export interface PublishJobRequest {
   description: string;
 }
 
+/** The plans an account can be on. Publishing mode is part of `publisher` (and of a privileged admin account). */
+export type PlanId = 'free' | 'publisher';
+
 /** Account record kept in the SVT DB (name/picture mirror the Google profile). */
 export interface UserRecord {
   userId: string;
   email: string;
   name: string;
   picture: string;
+  /** An admin: Publishing mode without a plan, and the right to grant plans. The first account ever seen is one. */
   privileged: boolean;
+  plan: PlanId;
+  /** When the plan lapses unless renewed (null = no end), ISO. */
+  planUntil: string | null;
+  /** Publishing mode is open to this account: privileged, or on an active Publisher plan. */
+  canPublish: boolean;
   createdAt: string;
   lastSeenAt: string;
+}
+
+/** `GET /billing`: where this account stands and what the Publisher plan costs. */
+export interface BillingStatus {
+  plan: PlanId;
+  planUntil: string | null;
+  canPublish: boolean;
+  privileged: boolean;
+  /** The service can start a Checkout (Stripe is configured). */
+  checkout: boolean;
+  /** This account has a Stripe customer, so the portal (change card, cancel, invoices) is available. */
+  portal: boolean;
+  /** The Publisher price as Stripe has it (minor units, e.g. 1499 = $14.99), or null when unknown. */
+  price: { amount: number; currency: string; interval: 'day' | 'week' | 'month' | 'year' } | null;
+  plans: Record<PlanId, { title: string; blurb: string }>;
 }

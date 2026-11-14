@@ -52,7 +52,7 @@ export function NavBar() {
   return (
     <nav class="navbar" aria-label="Primary">
       {NAV.map((n) => {
-        const active = rel === n.to || rel.startsWith(`${n.to}/`) || (n.to === '/meets' && rel.startsWith('/meet/')) || (n.to === '/settings' && rel.startsWith('/publishing'));
+        const active = rel === n.to || rel.startsWith(`${n.to}/`) || (n.to === '/meets' && rel.startsWith('/meet/')) || (n.to === '/settings' && (rel.startsWith('/publishing') || rel.startsWith('/plans')));
         return (
           <a key={n.to} href={href(n.to)} class={`${active ? 'active' : ''} ${n.primary ? 'primary' : ''}`} aria-current={active ? 'page' : undefined}>
             <span class="ico">

@@ -180,7 +180,7 @@ connection, a link that failed its ICE restarts is re-made, and a new DTLS finge
 
 ## Publishing mode (the show view)
 
-Publishing is its own portal (`/publishing`) for privileged accounts (`PRIVILEGED_EMAILS` on the
+Publishing is its own portal (`/publishing`) for the Publisher plan — paid through Stripe (docs/BILLING.md) — and for admin accounts (`PRIVILEGED_EMAILS` on the
 service): per-platform destinations (YouTube, Facebook, Instagram, Twitch — RTMPS ingest URL +
 stream key, stored sealed — and the in-house portal), a publish job per meet, history. **Publish**
 opens the **show view** (`/publishing/show/:id`): the broadcast picture. It joins the meet as a
@@ -191,7 +191,7 @@ it is not on the stage list), and draws them with the compositor in `show` mode:
 the frame (≈96 % of its height for one or two, 92 % up to four, 86 % beyond), bigger name tags, no
 lyrics, no controls in the picture. The chrome (title, LIVE badge, destinations, Go live / Stop,
 backing track in sync with the meet's transport, full screen) fades out while the show plays and
-comes back on any pointer movement. Only the host, or a privileged account that joined the meet
+comes back on any pointer movement. Only the host, or a publishing account that joined the meet
 (the show view does), may queue a job for it. The singers' rooms are untouched: they keep their
 lyrics, cue deck and transport; the show view only listens to the meet and pulls video. Because
 the performers' stage runs from the lobby on, the show view (and Preview) carry the singers before
@@ -319,7 +319,7 @@ A meet is light by construction, and light in a different way for each kind of p
 | --- | --- | --- |
 | PWA client | `apps/web` | iOS Safari (installable), Android Chrome (installable), desktop browsers |
 | Shared protocol | `packages/protocol` | client + services |
-| sv-control (SVT DB) | `services/control` | Hono on Node 22 (node:sqlite) or Cloudflare Workers (one SQLite-backed Durable Object): users (privileged flag), catalog, meets, chat, recordings, publishing destinations/jobs; Google access-token auth |
+| sv-control (SVT DB) | `services/control` | Hono on Node 22 (node:sqlite) or Cloudflare Workers (one SQLite-backed Durable Object): users (admin flag, plan via `subscriptions`), catalog, meets, chat, recordings, publishing destinations/jobs, Stripe billing; Google access-token auth |
 | sv-session (V3) | `services/session` (planned) | RTMPS relay for Facebook / Instagram / Twitch: takes the browser's segments, speaks RTMPS (the browser already encodes the show) |
 
 ## The mix bus (`audio/mixBus.ts`) — every listener gets the same balance
