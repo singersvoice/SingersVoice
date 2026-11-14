@@ -67,7 +67,11 @@ to the singers on stage: from the count-in to the end nobody new steps on (`clai
 The host (the meet's admin) takes any slot freely; anyone else **asks to sing** (`POST /meets/:id/requests`) and the host **lets them on** or declines
 (`…/requests/:pid/decide` — the server seats them in the first free slot, so the singer touches
 nothing), clears a slot (`…/stage/:pid/remove`) or opens the stage to everyone
-(`…/policy` → `stagePolicy: 'open'`, default `'ask'`). Requests live on the meet (`meet.requests`),
+(`…/policy` → `stagePolicy: 'open' | 'ask'`; **a new meet is open** — whoever has the link takes a
+free slot — and the host switches to `'ask'` to decide each one). Only the host **removes anyone
+from the meet** (`…/participants/:pid/kick`): off the stage and wait list, out of the room, and the
+account is on the meet's `bannedUserIds`, which `join` and `heartbeat` refuse with 403 `removed`.
+Requests live on the meet (`meet.requests`),
 the member's own state on their participant (`stageRequest: none | pending | declined`); requests
 from members who left are dropped by the reconcile. The stage is live from the moment the meet
 exists: a slot may be taken during the song too (a late singer starts mid-song).
@@ -282,8 +286,33 @@ link; the first four tiles connect by themselves, the rest on request.
    playlist with hls.js (lazy chunk; Safari natively) in `components/LiveShow.tsx`, on the watch
    page and in the room's audience view — no lyrics there. Tests: `SV_FAKE_YOUTUBE_DIR` makes the
    Node service serve a stand-in at `/fake/youtube/http_upload_hls`; the live e2e goes live from
-   the show view, ffprobes a segment the fake received and watches the show on both pages. RTMP
-   platforms (Facebook, Instagram, Twitch) remain the session container's job.
+   the show view, ffprobes a segment the fake received and watches the show on both pages.
+4b. **The RTMP relay** (`services/relay`, docs/RELAY.md) is the low-latency road: with
+   `RELAY_URL` + `RELAY_SECRET` set, the service (`src/relay.ts`) starts one stream per job on the
+   relay with the job's RTMP targets (ingest url + key, opened from the sealed store — the only
+   place a key is ever in the clear, and it goes service → relay only), hands every segment on
+   (`POST /streams/:id/segments`, the raw TS bytes) and stops it with the job. The relay pipes the
+   bytes into one `ffmpeg -f mpegts -i pipe:0 -c copy -bsf:a aac_adtstoasc -f flv rtmps://…` per
+   show (`-f tee` for several targets, `onfail=ignore` so one platform's refusal never ends the
+   others), with back-pressure on stdin and a sweep of streams idle for a minute. YouTube then rides
+   RTMP (its *ultra-low latency* setting: 4–7 s behind the stage instead of 20–40 s on HLS
+   ingestion, which is skipped when the relay carries YouTube); Facebook, Instagram and Twitch go
+   live at all. `live.relay` / `relayNote` on the job say how it goes: a 404 from the relay (it
+   restarted, or swept the stream) starts the stream again at once and resends the segment; a relay
+   that is down backs off six seconds between attempts; nothing of it ever stops the in-house
+   portal. `GET /publishing/destinations` returns `relay: true` so the web knows which destinations
+   the browser can feed (`fedDestinations` in the protocol). Tests: the control test drives the
+   service against a fake relay (`deps.relay.fetchImpl`), the relay's own test runs the server
+   against a stub ffmpeg.
+4c. **The film of the meet** (`video/meetRecorder.ts`): on the host's device, from the host on
+   stage with the mic open until the meet is over, one MediaRecorder on the room's ShowRecorder
+   canvas (drawn for the whole meet — `keepDrawing`) with a tap (`setTap`) on every mix bus the
+   device builds (the song's, the talk-back's), ten-second pieces into a `PerformanceStream` — the
+   Drive provider's `beginPerformanceStream`: one resumable upload session fed in order, pieces in
+   256 KiB multiples as 4 MiB fill, the last with the total; the session and the confirmed offset
+   are remembered in localStorage, and a film whose tab died is completed by the next start
+   (`finishDanglingFilms`: Drive is asked what it holds, the file is closed there). The result is a
+   performance of the meet ("Full meet", kind `show`), registered and shared like a song's show.
 5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.
 
 ## A hundred in a meet — what each one costs
@@ -320,7 +349,7 @@ A meet is light by construction, and light in a different way for each kind of p
 | PWA client | `apps/web` | iOS Safari (installable), Android Chrome (installable), desktop browsers |
 | Shared protocol | `packages/protocol` | client + services |
 | sv-control (SVT DB) | `services/control` | Hono on Node 22 (node:sqlite) or Cloudflare Workers (one SQLite-backed Durable Object): users (admin flag, plan via `subscriptions`), catalog, meets, chat, recordings, publishing destinations/jobs, Stripe billing; Google access-token auth |
-| sv-session (V3) | `services/session` (planned) | RTMPS relay for Facebook / Instagram / Twitch: takes the browser's segments, speaks RTMPS (the browser already encodes the show) |
+| sv-relay | `services/relay` | Node 22 + ffmpeg in one container (Fly.io scale-to-zero, or any Docker host): takes the browser's segments from sv-control and speaks RTMP(S) to YouTube (ultra-low latency), Facebook, Instagram, Twitch — `-c copy`, no transcoding (docs/RELAY.md) |
 
 ## The mix bus (`audio/mixBus.ts`) — every listener gets the same balance
 

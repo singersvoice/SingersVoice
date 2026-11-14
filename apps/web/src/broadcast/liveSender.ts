@@ -23,12 +23,15 @@ export interface SenderState {
   lastAt: number;
   youtube: PublishJobLive['youtube'];
   youtubeNote: string;
+  /** The RTMP relay's verdict on the last segment (off = this job has no RTMP destination, or no relay is deployed). */
+  relay: NonNullable<PublishJobLive['relay']>;
+  relayNote: string;
   error: string | null;
   audio: boolean;
 }
 
 export class LiveSender {
-  readonly state = signal<SenderState>({ state: 'idle', segments: 0, bytes: 0, kbps: 0, startedAt: 0, lastAt: 0, youtube: 'off', youtubeNote: '', error: null, audio: true });
+  readonly state = signal<SenderState>({ state: 'idle', segments: 0, bytes: 0, kbps: 0, startedAt: 0, lastAt: 0, youtube: 'off', youtubeNote: '', relay: 'off', relayNote: '', error: null, audio: true });
   private queue: LiveSegment[] = [];
   private busy = false;
   private running = false;
@@ -83,6 +86,8 @@ export class LiveSender {
           lastAt: now,
           youtube: r.job.live?.youtube ?? 'off',
           youtubeNote: r.job.live?.youtubeNote ?? '',
+          relay: r.job.live?.relay ?? 'off',
+          relayNote: r.job.live?.relayNote ?? '',
           error: r.job.error,
           audio: seg.audio,
         };

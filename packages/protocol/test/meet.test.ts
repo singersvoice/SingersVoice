@@ -5,8 +5,10 @@ import {
   clampParams,
   clockOffsetMs,
   emptyStage,
+  fedDestinations,
   MAX_PERFORMERS,
   meetIsOpen,
+  RELAY_KINDS,
   newJoinCode,
   localStamp,
   performanceFolderName,
@@ -64,6 +66,13 @@ describe('performance helpers', () => {
     expect(performanceVideoName({ createdAt: at, trackTitle: 'Ammo', meetId: 'meet-mwe8q644-onrv6m', meetTitle: 'Friday Meet' }, 'mp4')).toBe(`Ammo · Friday Meet [mwe8q644-onrv6m] · ${stamp}.mp4`);
     expect(performanceVideoName({ createdAt: at, trackTitle: 'A/B: "C"?', meetTitle: null }, 'webm')).toBe(`A B C · ${stamp}.webm`);
     expect(performanceVideoName({ createdAt: at, trackTitle: '   ' }, 'mp4')).toBe(`Performance · ${stamp}.mp4`);
+  });
+  it('which destinations the publisher\'s browser can feed: the watch page and YouTube alone, every RTMP platform with the relay', () => {
+    const all = ['youtube', 'facebook', 'instagram', 'twitch', 'inhouse'] as const;
+    expect(fedDestinations([...all], false)).toEqual(['youtube', 'inhouse']);
+    expect(fedDestinations([...all], true)).toEqual([...all]);
+    expect(fedDestinations(['twitch'], false)).toEqual([]);
+    expect(RELAY_KINDS).toEqual(['youtube', 'facebook', 'instagram', 'twitch']);
   });
 });
 

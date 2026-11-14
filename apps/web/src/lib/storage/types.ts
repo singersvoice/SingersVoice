@@ -53,6 +53,27 @@ export interface LoadedPerformance {
 
 export type Progress = (p: { label: string; fraction: number }) => void;
 
+/**
+ * A performance's video written as it is recorded — an hour-long meet never has to fit in the
+ * browser's memory: pieces go out in order (Drive: a resumable upload, finished with the total;
+ * local: kept and saved at the end), and the performance is listed once `finish` ran.
+ */
+export interface PerformanceStream {
+  readonly performanceId: string;
+  /** The next piece of the file, in order (and how long the recording is by then). Never throws: a piece that cannot go out yet waits in the buffer. */
+  push(chunk: Blob, progress?: { durationMs: number }): void;
+  /** Bytes handed over so far. */
+  readonly bytes: number;
+  /** Bytes the store has confirmed so far. */
+  readonly stored: number;
+  /** The last error on the way (the stream keeps trying), or null. */
+  readonly error: string | null;
+  /** The file is complete: everything buffered goes out, the manifest is written with the final duration and size. */
+  finish(final: { durationMs: number }): Promise<PerformanceSummary>;
+  /** Give the file up (best effort: what was stored is removed). */
+  abort(): Promise<void>;
+}
+
 export interface ProviderLinks {
   root?: string;
   tracks?: string;
@@ -77,6 +98,8 @@ export interface StorageProvider {
   listPerformances(): Promise<PerformanceSummary[]>;
   getPerformance(performanceId: string): Promise<LoadedPerformance | null>;
   savePerformance(manifest: PerformanceManifest, files: { vocal: Blob; video: Blob | null }, onProgress?: Progress): Promise<PerformanceSummary>;
+  /** Start writing a performance's video piece by piece (the film of a whole meet); `manifest.files` names the one video file. */
+  beginPerformanceStream(manifest: PerformanceManifest, mimeType: string): Promise<PerformanceStream>;
   keepPerformance(performanceId: string): Promise<void>;
   deletePerformance(performanceId: string): Promise<void>;
   /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, playbackPositionMs, type Participant } from '@singersvoice/protocol';
-import { addSong, claimSlot, decideRequest, ensureMeet, ensurePlayback, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setStagePolicy, SNAPSHOT_AUDIENCE_NAMES, songAction, start, stop, tick, TOUCH_COALESCE_MS, touch, touchForHeartbeat, visibleParticipants, withdrawRequest } from '../src/meets.ts';
+import { addSong, claimSlot, decideRequest, ensureMeet, ensurePlayback, isBanned, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setStagePolicy, SNAPSHOT_AUDIENCE_NAMES, songAction, start, stop, tick, TOUCH_COALESCE_MS, touch, touchForHeartbeat, visibleParticipants, withdrawRequest } from '../src/meets.ts';
 
 const T0 = Date.parse('2026-11-11T10:00:00Z');
 const person = (id: string, userId = `u-${id}`): Participant => ({
@@ -34,9 +34,10 @@ describe('meet rules', () => {
   });
 
   it('a hundred in the room cost a poll the same as three: a dozen audience names, the rest a count; heartbeats rewrite the meet only when due', () => {
-    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: null, trackTitle: '', catalogTrackId: null, backgroundId: 'bg' }, T0); // the host decides who sings
+    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: null, trackTitle: '', catalogTrackId: null, backgroundId: 'bg' }, T0);
     const host = { ...person('host', 'u-host'), role: 'host' as const };
     claimSlot(m, host, 1);
+    setStagePolicy(m, 'ask'); // the host decides who sings, so there is a wait list to name
     const singer = person('singer');
     expect(decideRequest(m, singer, true, 2).ok).toBe(true);
     const crowd = Array.from({ length: 100 }, (_, i) => ({ ...person(`a${i}`), joinedAt: new Date(T0 + i * 1000).toISOString() }));
@@ -63,6 +64,24 @@ describe('meet rules', () => {
     expect(reportClock(m, singer, 3, 40)).toBe(true);
     expect(reportClock(m, singer, 3, 40)).toBe(false);
     expect(reportClock(m, crowd[0]!, 3, 40)).toBe(false);
+  });
+
+  it('the host removes a singer or a listener from the meet, and they cannot come back; nobody else can, and never the host', () => {
+    const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: null, trackTitle: '', catalogTrackId: null, backgroundId: 'bg' }, T0);
+    const host = { ...person('host', 'u-host'), role: 'host' as const };
+    const singer = person('singer');
+    const fan = person('fan');
+    claimSlot(m, host, 1);
+    claimSlot(m, singer, 2);
+    expect(kick(m, singer, fan)).toEqual({ ok: false, reason: 'not_host' });
+    expect(kick(m, host, host)).toEqual({ ok: false, reason: 'self' });
+    expect(kick(m, host, singer)).toEqual({ ok: true });
+    expect(singer.slot).toBeNull();
+    expect(m.stage.find((s) => s.slot === 2)?.participantId).toBeNull();
+    expect(isBanned(m, singer.userId)).toBe(true);
+    expect(kick(m, host, fan)).toEqual({ ok: true });
+    expect(m.bannedUserIds).toEqual([singer.userId, fan.userId]);
+    expect(isBanned(m, host.userId)).toBe(false);
   });
 
   it('seats at most 10 performers, refuses taken slots, frees slots of silent participants', () => {
@@ -147,8 +166,9 @@ describe('meet rules', () => {
 
   it('stage policy: everyone enters as audience; they ask, the host decides; the host steps on freely; open stage needs no asking', () => {
     const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: 'trk', trackTitle: 'AA', catalogTrackId: null, backgroundId: 'bg' }, T0);
-    expect(m.stagePolicy).toBe('ask');
+    expect(m.stagePolicy).toBe('open'); // a new meet: whoever has the link may sing
     const host = person('h', 'u-host');
+    setStagePolicy(m, 'ask'); // the host would rather decide
     const a = person('a');
     const b = person('b');
     expect(claimSlot(m, a, 1)).toEqual({ ok: false, reason: 'ask_first' });
@@ -194,6 +214,7 @@ describe('meet rules', () => {
     const host = person('h', 'u-host');
     const a = person('a');
     claimSlot(m, host, 1);
+    setStagePolicy(m, 'ask');
     expect(start(m, 5000, T0)).toEqual({ ok: false, reason: 'no_song' }); // nothing to sing yet
     expect(addSong(m, a, { trackId: 't1', catalogTrackId: 'c1', trackTitle: 'One' })).toMatchObject({ ok: false, reason: 'not_on_stage' }); // audience picks nothing
     decideRequest(m, a, true); // seated by the host

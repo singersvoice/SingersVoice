@@ -23,12 +23,12 @@ const base = servers.appUrl;
 const control = `control=${servers.controlUrl}`;
 // A synthetic person as the fake camera, so the real segmentation model has something to cut out.
 const clip = path.join(tmpdir(), 'sv-fake-person.y4m');
-// The song: the 20 s sample looped to 150 s, so the broadcast checks and the transport checks happen inside one song
+// The song: the 20 s sample looped to 200 s, so the broadcast checks and the transport checks happen inside one song
 // on a slow test machine; a forward seek near the end lets the song finish on its own afterwards.
-const SONG_S = 150;
+const SONG_S = 200;
 const longSong = path.join(tmpdir(), 'sv-e2e-song.mp3');
 const longTrack = path.join(tmpdir(), 'sv-e2e-song.track.json');
-execFileSync('ffmpeg', ['-v', 'error', '-y', '-stream_loop', '8', '-i', 'apps/web/test/fixtures/sample.mp3', '-t', String(SONG_S), '-c:a', 'libmp3lame', '-b:a', '128k', longSong]);
+execFileSync('ffmpeg', ['-v', 'error', '-y', '-stream_loop', '10', '-i', 'apps/web/test/fixtures/sample.mp3', '-t', String(SONG_S), '-c:a', 'libmp3lame', '-b:a', '128k', longSong]);
 {
   const { readFileSync, writeFileSync } = await import('node:fs');
   const t = JSON.parse(readFileSync('apps/web/test/fixtures/sample.track.json', 'utf8'));
@@ -123,10 +123,15 @@ try {
   check(sa.onstage === '1' && sa.performers === '1' && sa.blend === 'model' && sa.left + sa.right > 300, `the host sees herself on the stage the moment her meet starts (${Math.round((Date.now() - tStrip) / 1000)} s, blend ${sa.blend})`);
   await alice.page.screenshot({ path: `${out}/lobby-alice-onstage.png` });
 
-  // Guest joins by link: audience first. He has to ask; the host lets him on.
+  // Guest joins by link. A new meet's stage is open: he could take a slot straight away. The host
+  // would rather decide: she closes the stage, and now he asks and she lets him on.
   await bob.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
   await bob.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
-  check(!(await bob.page.getByRole('button', { name: 'Take a stage slot' }).isVisible().catch(() => false)), 'an audience member cannot just take a slot (the stage policy is "ask")');
+  await bob.page.getByRole('button', { name: 'Take a stage slot' }).waitFor({ timeout: 15000 });
+  check(true, 'a new meet has an open stage: whoever has the link can take a slot, no permission needed');
+  await alice.page.getByLabel(/Open stage: anyone may take a free slot/).uncheck();
+  await bob.page.getByRole('button', { name: 'Ask to sing' }).waitFor({ timeout: 15000 });
+  check(!(await bob.page.getByRole('button', { name: 'Take a stage slot' }).isVisible().catch(() => false)), 'the host closed the stage: an audience member now asks, and the host decides');
   await bob.page.getByRole('button', { name: 'Ask to sing' }).click();
   await bob.page.getByText(/On the wait list — waiting for/).waitFor({ timeout: 15000 });
   await alice.page.locator('.requests').waitFor({ timeout: 15000 });
@@ -196,12 +201,24 @@ try {
   await alice.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
   await bob.page.getByRole('button', { name: /I'm ready/ }).click();
   await bob.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
+  // Talk-back: with both mics open in the lobby, each singer hears the other (the arriving vocal plays) — until the song.
+  const vocalEls = (p) => p.evaluate(() => [...document.querySelectorAll('audio[data-sv-vocal]')].map((a) => ({ id: a.dataset.svVocal, muted: a.muted })));
+  await alice.page.waitForFunction(() => document.querySelectorAll('audio[data-sv-vocal]').length >= 1, null, { timeout: 20000 }).catch(() => undefined);
+  const talkA = await vocalEls(alice.page);
+  const talkB = await vocalEls(bob.page);
+  console.log('talk-back alice:', JSON.stringify(talkA), 'bob:', JSON.stringify(talkB));
+  check(talkA.length >= 1 && talkA.every((a) => a.muted === false), "between songs the host hears the other singer's vocal (talk-back)");
+  check(await alice.page.locator('[data-talkback="1"]').isVisible(), 'the lobby says talk-back is on');
+  await alice.page.locator('[data-meet-film="on"]').waitFor({ timeout: 15000 }).catch(() => undefined);
+  check((await alice.page.locator('[data-meet-film="on"]').count()) === 1, "the host's device films the whole meet from the moment her mic is open (into her storage as it goes)");
   const meshBefore = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   await alice.page.getByRole('button', { name: /Start the song/ }).click();
   // Both land on the live stage; wait for the kickstart (8 s lead).
   await alice.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
   await bob.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
   await wait(9000);
+  const soloA = await vocalEls(alice.page);
+  check(soloA.length >= 1 && soloA.every((a) => a.muted === true), 'once the song runs nobody on stage hears anyone else (Solo foldback) — the vocal still feeds the mix');
   const meshAfter = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   check(meshBefore !== undefined && meshBefore === meshAfter, 'the same video mesh carries on from the lobby into the song (no reconnection)');
   const t0 = Date.now();
@@ -520,18 +537,34 @@ try {
   await alice.page.locator('[data-save="done"][data-save-id]').nth(0).waitFor({ timeout: 60000 });
   await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 90000 });
   check((await alice.page.locator('[data-save="failed"]').count()) === 0, 'the second song saved itself too (nothing stuck)');
+  // Only the host removes people: dave (on stage by now) is put out of the meet for good and sees why.
+  alice.page.once('dialog', (d) => void d.accept());
+  await alice.page.getByRole('button', { name: 'Remove dave from the meet' }).click();
+  await dave.page.locator('[data-closed="removed"]').waitFor({ timeout: 30000 });
+  check(/removed you from this meet/.test(await dave.page.locator('[data-closed="removed"]').innerText()), 'the host removed a listener from the meet; their device says so and offers the way back to the list');
+  await dave.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
+  await dave.page.locator('[data-closed="removed"], .callout.danger').first().waitFor({ timeout: 30000 });
+  check(/removed you/.test(await dave.page.locator('[data-closed="removed"], .callout.danger').first().innerText()), 'a removed account cannot come back in by the link');
   alice.page.once('dialog', (d) => void d.accept());
   await alice.page.getByRole('button', { name: 'End meet' }).click();
   await alice.page.getByText(/Meet ended/).waitFor({ timeout: 15000 });
   check(true, 'the host ends the meet');
-  // The ended screen lists the saved performances of the meet (one per song the host sang); so does everyone's Performances.
-  await alice.page.locator('[data-performance]').nth(1).waitFor({ timeout: 20000 }).catch(() => undefined);
-  const endedShows = await alice.page.locator('[data-performance]').count();
-  check(endedShows === 2, `the ended meet lists its saved performances, one per song (${endedShows})`);
+  // The ended screen lists the saved performances of the meet: one per song the host sang, and the film of the whole
+  // meet (the host's device recorded it from her mic opening to "End meet", straight into her storage); so does everyone's Performances.
+  await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 90000 });
+  await alice.page.locator('[data-performance]').nth(2).waitFor({ timeout: 30000 }).catch(() => undefined);
+  const endedList = (await alice.page.locator('[data-performance]').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+  const endedShows = endedList.length;
+  check(endedShows === 3, `the ended meet lists its saved performances, one per song and the film of the meet (${endedShows})`);
+  const filmLine = endedList.find((t) => /Full meet/.test(t)) ?? '';
+  const filmDur = / · (\d+):(\d\d) · /.exec(filmLine); // "Full meet 11/14/2026, 3:22 AM · 9:55 · alice, bob" — the duration sits between the separators
+  const filmSecs = filmDur ? Number(filmDur[1]) * 60 + Number(filmDur[2]) : -1;
+  check(filmSecs >= 240, `the film of the meet spans the whole meet, both songs and the talk between (${filmLine || 'no film listed'})`);
+  check((await alice.page.locator('[data-meet-film]').count()) === 0 || (await alice.page.locator('[data-meet-film="on"]').count()) === 0, 'the film stopped with the meet');
   await navigate(bob.page, `${new URL(base).pathname}studio/performances`);
   await bob.page.locator('[data-show]').first().waitFor({ timeout: 20000 });
-  const bobShows = await bob.page.locator('[data-show]').allInnerTexts();
-  check(bobShows.length === 2 && bobShows.every((t) => /Duet e2e · CI Sample Song/.test(t.replace(/\s+/g, ' '))), `a singer finds the meet's performances under Performances, by name and date (${bobShows.length})`);
+  const bobShows = (await bob.page.locator('[data-show]').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+  check(bobShows.length === 3 && bobShows.filter((t) => /Duet e2e · CI Sample Song/.test(t)).length === 2 && bobShows.some((t) => /Duet e2e · Full meet/.test(t)), `a singer finds the meet's performances under Performances, by name and date — the songs and the film (${bobShows.length})`);
   await bob.page.screenshot({ path: `${out}/performances-bob.png` });
   const bobTakes = (await bob.page.locator('.list .item').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
   check(bobTakes.some((t) => /CI Sample Song/.test(t) && /show video/.test(t) && /Kept/.test(t)), `a singer's own takes are kept by themselves, their video the show (${bobTakes.length} items)`);

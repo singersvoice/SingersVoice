@@ -170,6 +170,8 @@ export interface Routes {
   'POST /meets/:id/requests/withdraw': { req: { resumeToken: string }; res: MeetSnapshot };
   'POST /meets/:id/requests/:pid/decide': { req: DecideRequest; res: MeetSnapshot };
   'POST /meets/:id/stage/:pid/remove': { req: { resumeToken: string }; res: MeetSnapshot };
+  /** The host removes someone from the meet altogether (stage or audience); they cannot come back in. */
+  'POST /meets/:id/participants/:pid/kick': { req: { resumeToken: string }; res: MeetSnapshot };
   'POST /meets/:id/policy': { req: { resumeToken: string; stagePolicy: StagePolicy }; res: MeetSnapshot };
   /** The set list (karaoke queue): anyone on stage adds a song; the host orders it, plays one now, or ends the current song. */
   'POST /meets/:id/songs': { req: { resumeToken: string; song: SongPick; now?: boolean }; res: MeetSnapshot };
@@ -199,7 +201,8 @@ export interface Routes {
   'GET /performances': { res: { performances: MeetPerformance[] } };
   'DELETE /performances/:id': { res: { ok: true } };
   'GET /watch/:id': { res: WatchResponse };
-  'GET /publishing/destinations': { res: { destinations: Destination[] } };
+  /** `relay`: the RTMP relay is deployed — Facebook, Instagram and Twitch go live, and YouTube at low latency. */
+  'GET /publishing/destinations': { res: { destinations: Destination[]; relay: boolean } };
   'PUT /publishing/destinations/:kind': { req: DestinationUpdate; res: { destination: Destination } };
   'GET /publishing/jobs': { res: { jobs: PublishJob[] } };
   'POST /publishing/jobs': { req: PublishJobRequest; res: { job: PublishJob } };

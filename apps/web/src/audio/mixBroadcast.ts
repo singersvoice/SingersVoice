@@ -9,6 +9,8 @@ import { MIX_BITRATE, type MixBatch, type MixPacket } from '@singersvoice/protoc
 
 const OUT_RATE = 48000;
 const BATCH_MS = 1000;
+/** A second whose loudest sample is under this (−54 dBFS) is silence — nobody is singing or talking — and is not sent. */
+const SILENCE_PEAK = 0.002;
 
 export const mixBroadcastSupported = (): boolean => typeof AudioEncoder !== 'undefined' && typeof AudioData !== 'undefined';
 
@@ -17,6 +19,8 @@ export class MixBroadcaster {
   private encoder: AudioEncoder | null = null;
   private packets: MixPacket[] = [];
   private batchAtMs: number | null = null;
+  /** The loudest sample of the batch being built: a silent second (the stage between songs, nobody talking) is not sent. */
+  private batchPeak = 0;
   private seq = 0;
   private frames = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -62,6 +66,12 @@ export class MixBroadcaster {
       const m = e.data;
       if (m.type !== 'block' || !this.running || this.failed || encoder.state !== 'configured') return;
       if (this.batchAtMs === null) this.batchAtMs = Math.max(0, Math.round(this.positionAt(m.contextTime)));
+      let peak = this.batchPeak;
+      for (let i = 0; i < m.data.length; i++) {
+        const a = Math.abs(m.data[i]!);
+        if (a > peak) peak = a;
+      }
+      this.batchPeak = peak;
       const data: Float32Array<ArrayBuffer> = m.sampleRate === OUT_RATE ? m.data : resample(m.data, m.sampleRate, OUT_RATE);
       try {
         encoder.encode(new AudioData({ format: 'f32', sampleRate: OUT_RATE, numberOfFrames: data.length, numberOfChannels: 1, timestamp: Math.round((this.frames / OUT_RATE) * 1e6), data }));
@@ -76,9 +86,15 @@ export class MixBroadcaster {
 
   private async flush(): Promise<void> {
     if (!this.packets.length || this.batchAtMs === null) return;
+    const silent = this.batchPeak < SILENCE_PEAK;
     const batch: MixBatch = { seq: ++this.seq, atMs: this.batchAtMs, codec: 'opus', sampleRate: OUT_RATE, channels: 1, packets: this.packets };
     this.packets = [];
     this.batchAtMs = null;
+    this.batchPeak = 0;
+    if (silent) {
+      this.seq--; // nothing to hear: the next audible second takes this number
+      return;
+    }
     try {
       await this.send(batch);
       this.sent++;

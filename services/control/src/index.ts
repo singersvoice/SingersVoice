@@ -11,6 +11,7 @@
  *   ICE_SERVERS=[…]           JSON array of RTCIceServer for performer video (default: Google STUN; add TURN for strict NATs)
  *   YOUTUBE_HLS_BASE=…        YouTube's HLS ingestion endpoint (default https://a.upload.youtube.com/http_upload_hls)
  *   GOOGLE_API_KEY=…          optional: published tracks are then read through the Drive API instead of Drive's public download page
+ *   RELAY_URL, RELAY_SECRET   optional: the RTMP relay (services/relay) — low-latency YouTube, Facebook, Instagram, Twitch (docs/RELAY.md)
  *   SV_FAKE_YOUTUBE_DIR=…     dev/CI: serve a stand-in for YouTube at /fake/youtube/http_upload_hls that writes the files here
  */
 import { serve } from '@hono/node-server';
@@ -38,6 +39,7 @@ const deps: AppDeps = {
   youtubeHlsBase: process.env.YOUTUBE_HLS_BASE || undefined,
   googleApiKey: process.env.GOOGLE_API_KEY || undefined,
   billing: { secretKey: process.env.STRIPE_SECRET_KEY || undefined, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined, pricePublisher: process.env.STRIPE_PRICE_PUBLISHER || undefined, appUrl: process.env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
+  relay: process.env.RELAY_URL && process.env.RELAY_SECRET ? { url: process.env.RELAY_URL, secret: process.env.RELAY_SECRET } : undefined,
   fakeYoutubeDir: process.env.SV_FAKE_YOUTUBE_DIR || undefined,
 };
 

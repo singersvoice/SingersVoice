@@ -12,7 +12,7 @@
  * picture with the whole mix, drawn from the same cut-outs (the other singers' vocals come over
  * the mesh for it — and are never played).
  */
-import { SLOT_COLORS, type Meet, type Participant, type SingerSlot } from '@singersvoice/protocol';
+import { meetIsOpen, SLOT_COLORS, type Meet, type Participant, type PerformanceSinger, type SingerSlot } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
@@ -20,10 +20,12 @@ import { appSettings } from '../../state/settings.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
 import { LocalFeed } from '../../video/localFeed.ts';
+import { MeetRecorder } from '../../video/meetRecorder.ts';
 import { PerformerMesh, type PeerState } from '../../video/peers.ts';
 import type { SegmenterMode } from '../../video/segmenter.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
 import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
+import { registerMeetFilm } from './liveTake.ts';
 import type { MeetSession } from './meetSession.ts';
 
 export interface RoomStage {
@@ -32,6 +34,8 @@ export interface RoomStage {
   mesh: PerformerMesh | null;
   /** The saved performance of a song: the show picture with the whole mix, recorded on this device. */
   show: ShowRecorder;
+  /** The film of the whole meet (runs on the host's device while the host is on stage; see video/meetRecorder.ts). */
+  film: MeetRecorder;
   peerStates: Record<string, PeerState>;
   /** How my cut-out is made right now (model / soft-focus oval / loading / off). */
   blend: SegmenterMode;
@@ -150,7 +154,7 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       }
       setPeerStates((s) => ({ ...s, [id]: state }));
     };
-    mesh.onRemoteAudio = (id, stream) => show.setVocal(id, stream); // the recording's mix only — never the speakers
+    mesh.onRemoteAudio = (id, stream) => show.setVocal(id, stream); // the mix always; the speakers only between songs (talk-back)
     (window as unknown as { __svMesh?: PerformerMesh; __svFeed?: LocalFeed }).__svMesh = mesh; // support / e2e hooks
     (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed;
     session.onLeave = () => mesh.close(); // goodbyes before the session leaves
@@ -201,11 +205,26 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   // The host's device sends the mix to the audience (nobody on stage ever hears it).
   show.broadcast = you.userId === meet.hostUserId ? (b) => session.sendMix(b) : null;
 
-  // My vocal (after FX) goes to publisher links only, from the moment my mic is open (I'm ready / singing).
+  // My vocal (after FX) goes out over the mesh from the moment my mic is open on stage: to the other
+  // singers (heard between songs only — talk-back), to the host's mix (the audience) and to a publisher.
   const micOpen = opts.engine?.micOpen.value ?? false;
   useEffect(() => {
     mesh?.setLocalAudio(micOpen && onStage ? (opts.engine?.vocalStream()?.getAudioTracks()[0] ?? null) : null);
   }, [mesh, micOpen, onStage, opts.engine]);
+  // Talk-back: the singers on stage hear each other until the countdown; from then to the end of the
+  // song nobody on stage hears anyone (Solo foldback). The host's device keeps the mix going for the
+  // audience between songs too, so the stage talk reaches the room.
+  const songRunning = meet.state === 'countdown' || meet.state === 'live';
+  const host = you.userId === meet.hostUserId;
+  useEffect(() => {
+    show.setHearOthers(onStage && !songRunning);
+  }, [show, onStage, songRunning]);
+  useEffect(() => {
+    const engine = opts.engine;
+    if (!host || !onStage || !micOpen || songRunning || !engine) return;
+    show.startTalk(engine);
+    return () => show.stopTalk();
+  }, [show, host, onStage, micOpen, songRunning, opts.engine]);
 
   const stagePerformers = meet.stage.filter((s) => s.participantId);
   const peerIds = stagePerformers.map((s) => s.participantId!).filter((id) => id !== you.participantId);
@@ -228,7 +247,32 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     show.setPerformers(list.map((p) => ({ ...p, label: p.isMe ? 'You' : p.label.replace(/ · S\d+$/, '') })));
   }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), camStream, camOn, facing, peerStates, you.participantId]);
 
+  // ---- the film of the meet (the host's device): the whole meet as one video in the host's Drive ----
+  const film = useMemo(() => new MeetRecorder(show), [show]);
+  const filmWanted = app.recordMeet;
+  const meetOpen = meetIsOpen(meet);
+  /** Everyone who stood on stage while the film ran (the manifest names them). */
+  const filmSingers = useRef(new Map<number, PerformanceSinger>());
+  useEffect(() => {
+    if (!film.recording) return;
+    for (const s of stagePerformers) filmSingers.current.set(s.slot, { slot: s.slot, displayName: s.displayName });
+  }, [film.recording, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|')]);
+  useEffect(() => {
+    const engine = opts.engine;
+    if (!host || !onStage || !engine || !filmWanted || !meetOpen) return;
+    filmSingers.current = new Map(stagePerformers.map((s) => [s.slot, { slot: s.slot, displayName: s.displayName }]));
+    void film.start(engine, { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot) });
+  }, [film, host, onStage, opts.engine, filmWanted, meetOpen]);
+  const endFilm = () => {
+    const singers = [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot);
+    void film.stop().then((saved) => saved && registerMeetFilm({ saved, meet: { meetId: meet.meetId, title: meet.title, hostName: meet.hostName }, singers, session }));
+  };
+  useEffect(() => {
+    if (!meetOpen || !onStage || !filmWanted) endFilm();
+  }, [meetOpen, onStage, filmWanted]);
+  useEffect(() => () => endFilm(), [film]);
+
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, show, peerStates, blend, camOn, camStream, camError, openCamera, linked, others };
+  return { feed, compositor, mesh, show, film, peerStates, blend, camOn, camStream, camError, openCamera, linked, others };
 }

@@ -12,7 +12,7 @@
  * the meet (stage, transport) and pulls media. The picture itself is `showStage.tsx`, shared with
  * the Preview tab's monitor tiles.
  */
-import { DESTINATIONS, formatMs, playbackPositionMs, type Destination, type DestinationKind, type Meet, type Participant, type PublishJob } from '@singersvoice/protocol';
+import { DESTINATIONS, fedDestinations, formatMs, playbackPositionMs, type Destination, type DestinationKind, type Meet, type Participant, type PublishJob } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { IcMic, IcMusic, IcPlay, IcStop, IcUsers, IcX, IcZoom } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
@@ -116,6 +116,8 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   const [fullscreen, setFullscreen] = useState(false);
   const [job, setJob] = useState<PublishJob | null>(null);
   const [dests, setDests] = useState<Destination[] | null>(null);
+  /** The RTMP relay is deployed: Facebook, Instagram and Twitch go out live, YouTube at low latency. */
+  const [relayOn, setRelayOn] = useState(false);
   const [picked, setPicked] = useState<DestinationKind[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [music, setMusic] = useState(false);
@@ -179,6 +181,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
       .get('GET /publishing/destinations', '/publishing/destinations')
       .then((r) => {
         setDests(r.destinations);
+        setRelayOn(Boolean(r.relay));
         const wanted = new URLSearchParams(location.search).get('dest')?.split(',').filter(Boolean) as DestinationKind[] | undefined;
         const enabled = r.destinations.filter((d) => d.enabled).map((d) => d.kind);
         setPicked((p) => p ?? (wanted?.length ? wanted.filter((k) => enabled.includes(k)) : enabled));
@@ -207,10 +210,10 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     return () => clearInterval(t);
   }, [job?.jobId, job?.state]);
 
-  /** This browser starts encoding and sending the show for the job (YouTube and/or the in-house portal). */
+  /** This browser starts encoding and sending the show for the job: the watch page, YouTube, and every RTMP destination the relay carries. */
   const startSending = async (j: PublishJob) => {
-    const browserFed = j.destinations.some((k) => DESTINATIONS.find((d) => d.kind === k)?.browserLive);
-    if (!browserFed) return;
+    const viaRelay = relayOn || (j.live?.relay !== undefined && j.live.relay !== 'off'); // the service said so when it made the job
+    if (!fedDestinations(j.destinations, viaRelay).length) return;
     const s = await broadcast.start(j, (m) => toast(`Broadcast stopped: ${m}`, 'error', 10000));
     if (!s.ok) toast(s.reason, 'error', 12000);
     else if (s.reason) toast(s.reason, 'warn', 12000);
@@ -447,14 +450,21 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
           <span class="small faint">{ownOnStage.length ? 'Your own voice stays out of this monitor (you hear it on stage); the broadcast carries it.' : 'The monitor buttons change what you hear here, never the broadcast.'}</span>
         </div>
         {job && (
-          <div class="jobline small" data-live-state={sending?.state ?? ''} data-live-segments={sending?.segments ?? 0} data-live-youtube={sending?.youtube ?? ''}>
+          <div class="jobline small" data-live-state={sending?.state ?? ''} data-live-segments={sending?.segments ?? 0} data-live-youtube={sending?.youtube ?? ''} data-live-relay={sending?.relay ?? ''}>
             <b>{sending?.state === 'live' ? 'LIVE' : job.state}</b> · {job.destinations.join(' · ')}
             {sending && sending.state === 'live' && (
               <>
                 {' '}
                 · {formatMs(Date.now() - sending.startedAt)} · {sending.kbps} kbps · {sending.segments} segment{sending.segments === 1 ? '' : 's'}
                 {!sending.audio && <span class="warn"> · video only (no AAC in this browser)</span>}
-                {sending.youtube !== 'off' && <span class={sending.youtube === 'ok' ? '' : sending.youtube === 'waiting' ? 'muted' : 'danger'}> · YouTube: {sending.youtubeNote || (sending.youtube === 'waiting' ? 'sending…' : sending.youtube)}</span>}
+                {sending.relay !== 'off' ? (
+                  <span class={sending.relay === 'ok' ? '' : sending.relay === 'starting' ? 'muted' : 'danger'} title="The RTMP relay: YouTube at ultra-low latency, Facebook, Instagram, Twitch">
+                    {' '}
+                    · relay: {sending.relay === 'ok' ? sending.relayNote || 'streaming' : sending.relay === 'starting' ? 'starting…' : sending.relayNote || 'error'}
+                  </span>
+                ) : (
+                  sending.youtube !== 'off' && <span class={sending.youtube === 'ok' ? '' : sending.youtube === 'waiting' ? 'muted' : 'danger'}> · YouTube: {sending.youtubeNote || (sending.youtube === 'waiting' ? 'sending…' : sending.youtube)}</span>
+                )}
               </>
             )}
             {sending?.state === 'sending' && <span class="muted"> · starting the encoder…</span>}

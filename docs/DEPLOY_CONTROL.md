@@ -51,6 +51,7 @@ Then set the repo variable `VITE_CONTROL_URL` to `https://<your host>` and run *
 | `ALLOWED_ORIGINS` | var | Extra browser origins (GitHub Pages + localhost are always allowed) |
 | `PRIVILEGED_EMAILS` | var/secret | Admin accounts: Publishing mode without a plan, and the right to grant plans (the first account ever seen is one too) |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PUBLISHER`, `APP_URL` | secret | The Publisher plan through Stripe — docs/BILLING.md |
+| `RELAY_URL`, `RELAY_SECRET` | secret | The RTMP relay (`services/relay`): YouTube at ultra-low latency, Facebook / Instagram / Twitch live — docs/RELAY.md. Without them YouTube goes through HLS ingestion and the other three stay queued |
 | `PUBLISH_KEY_SECRET` | secret | AES-GCM key (base64, 32 bytes) for stream keys at rest — generated on the worker if not given |
 | `DEV_AUTH` | var | `1` accepts `X-Dev-User` headers — local dev and CI only, never in production |
 | `ICE_SERVERS` | var/secret | JSON array of RTCIceServer for performer-to-performer video, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]`. Default: Google STUN only (works for most home/mobile networks; add TURN for corporate NATs) |

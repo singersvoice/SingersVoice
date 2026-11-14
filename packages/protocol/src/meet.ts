@@ -125,8 +125,10 @@ export interface Meet {
   streamUrl: string | null;
   /** Meet-wide privacy: anyone with the link can join (always true in this increment). */
   openJoin: boolean;
-  /** Who may step on stage (see StagePolicy). */
+  /** Who may step on stage (see StagePolicy). New meets are open: whoever has the link takes a free slot. */
   stagePolicy: StagePolicy;
+  /** Accounts the host removed from this meet; they cannot come back in. */
+  bannedUserIds?: string[];
   /** Audience members waiting for the host's permission to sing. */
   requests: StageRequest[];
   /** Songs queued after the current one (`trackId` / `catalogTrackId` / `trackTitle` above). */

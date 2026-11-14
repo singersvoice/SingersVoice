@@ -160,13 +160,17 @@ function DestinationSetup(props: { dest: Destination; onSaved: (d: Destination) 
 
 function Destinations() {
   const [list, setList] = useState<Destination[] | null>(null);
+  const [relay, setRelay] = useState(false);
   const [edit, setEdit] = useState<Record<string, { ingestUrl: string; streamKey: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = () =>
     api
       .get('GET /publishing/destinations', '/publishing/destinations')
-      .then((r) => setList(r.destinations))
+      .then((r) => {
+        setList(r.destinations);
+        setRelay(Boolean(r.relay));
+      })
       .catch((e) => {
         setList([]);
         toast(errorText(e), 'error');
@@ -198,7 +202,18 @@ function Destinations() {
     );
   return (
     <div class="stack">
-      <p class="muted small">Stream keys are stored encrypted on the service and never shown again (only the last 4 characters). Each meet can go to any enabled destinations at once.</p>
+      <p class="muted small">Stream keys are stored encrypted on the service and never shown again (only the last 4 characters). Each meet can go to any enabled destinations at once — set up once, remembered for every show.</p>
+      <p class="muted small" data-relay={relay ? '1' : '0'}>
+        {relay ? (
+          <>
+            The <b>RTMP relay</b> is on: YouTube runs at its <b>ultra-low latency</b> (set that in YouTube Studio → Stream settings → Stream latency), and Facebook, Instagram and Twitch go out live too.
+          </>
+        ) : (
+          <>
+            No RTMP relay is deployed: YouTube goes through HLS ingestion (choose <b>Low latency</b> in YouTube Studio; expect 15–25 s), and Facebook, Instagram and Twitch stay queued. The relay is one small container — see docs/RELAY.md.
+          </>
+        )}
+      </p>
       {list.map((d) => {
         const def = DESTINATIONS.find((x) => x.kind === d.kind)!;
         const e = edit[d.kind] ?? { ingestUrl: usableIngest(d.ingestUrl), streamKey: '' };
@@ -240,6 +255,7 @@ function Destinations() {
 function Publish(props: { onDone: () => void }) {
   const [meets, setMeets] = useState<Meet[] | null>(null);
   const [dests, setDests] = useState<Destination[] | null>(null);
+  const [relay, setRelay] = useState(false);
   const [meetId, setMeetId] = useState(() => new URLSearchParams(location.search).get('meet') ?? '');
   const [link, setLink] = useState('');
   const [resolving, setResolving] = useState(false);
@@ -256,6 +272,7 @@ function Publish(props: { onDone: () => void }) {
       .get('GET /publishing/destinations', '/publishing/destinations')
       .then((r) => {
         setDests(r.destinations);
+        setRelay(Boolean(r.relay));
         setPicked((p) => p ?? r.destinations.filter((d) => d.enabled).map((d) => d.kind));
       })
       .catch(() => setDests([]));
@@ -352,7 +369,7 @@ function Publish(props: { onDone: () => void }) {
                       if (!v && open) setSetup(null);
                     }}
                     label={def.label}
-                    hint={!def.needsKey ? undefined : `${ready ? `Stream key ends with ${d.keyHint || '…'}` : 'Needs its stream key — switch it on to set it up'}${def.browserLive ? '' : ' · RTMP only: waits for the session container'}`}
+                    hint={!def.needsKey ? undefined : `${ready ? `Stream key ends with ${d.keyHint || '…'}` : 'Needs its stream key — switch it on to set it up'}${def.browserLive || relay ? '' : ' · RTMP only: needs the relay (docs/RELAY.md), stays queued without it'}`}
                   />
                   {def.needsKey && ready && !open && (
                     <button class="btn ghost sm" onClick={() => setSetup(def.kind)}>
@@ -388,7 +405,18 @@ function Publish(props: { onDone: () => void }) {
       <section class="card stack">
         <h3>4 · Publish</h3>
         <p class="muted small">
-          Opens the <b>show view</b>: the performers cut out of their cameras, huge on one stage, no lyrics, the track and every singer's voice blended — the show your audience sees and hears. <b>Go live</b> there makes this browser the encoder: the show goes out to <b>YouTube</b> (through the service, to YouTube's HLS ingestion — Chrome or Edge on Windows or Mac for sound, since YouTube needs AAC) and to the <b>in-house portal</b> (the watch page, a few seconds behind). Facebook, Instagram and Twitch take RTMP only, which a browser cannot send: those jobs stay <b>requested</b> until the session container exists.
+          Opens the <b>show view</b>: the performers cut out of their cameras, huge on one stage, no lyrics, the track and every singer's voice blended — the show your audience sees and hears. <b>Go live</b> there makes this browser the encoder (Chrome or Edge on Windows or Mac for sound — the platforms need AAC): the show goes out to the <b>in-house portal</b> (the watch page, a few seconds behind)
+          {relay ? (
+            <>
+              {' '}
+              and, through the <b>RTMP relay</b>, to <b>YouTube</b> at ultra-low latency, <b>Facebook</b>, <b>Instagram</b> and <b>Twitch</b> — a few seconds behind the stage.
+            </>
+          ) : (
+            <>
+              {' '}
+              and to <b>YouTube</b> through its HLS ingestion (15–25 s behind with YouTube's "Low latency" setting). Facebook, Instagram and Twitch take RTMP only, which a browser cannot send: those jobs stay <b>requested</b> until the RTMP relay is deployed (docs/RELAY.md — it also takes YouTube down to a few seconds).
+            </>
+          )}
         </p>
         <div class="row">
           <button class="btn accent lg" disabled={busy || !meetId || !chosen.length} onClick={() => void publish()}>

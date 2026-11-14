@@ -27,7 +27,7 @@ import {
 import { extFromMime } from '../decode.ts';
 import { AuthExpiredError, type GoogleToken } from '../google.ts';
 import { md5Blob } from '../md5.ts';
-import type { LoadedPerformance, LoadedTrack, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
+import type { LoadedPerformance, LoadedTrack, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
 
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
@@ -285,9 +285,13 @@ export class DriveProvider implements StorageProvider {
   async ready(): Promise<void> {
     if (this.tree) return;
     if (!this.treeReady) {
-      this.treeReady = this.buildTree().finally(() => {
-        this.treeReady = null;
-      });
+      this.treeReady = this.buildTree()
+        .then(() => {
+          void this.finishDanglingFilms().catch(() => undefined); // a film cut short by a dying tab is completed in the background
+        })
+        .finally(() => {
+          this.treeReady = null;
+        });
     }
     return this.treeReady;
   }
@@ -683,6 +687,87 @@ export class DriveProvider implements StorageProvider {
     await this.req(`${API}/files/${fileId}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: JSON.stringify(manifest) }) }).catch((e) => console.warn('Drive: performance details not written', e));
   }
 
+  // ---------- a performance written as it is recorded (the film of a whole meet) ----------
+
+  /**
+   * One resumable upload session, fed in order while the recording runs — a two-hour meet never
+   * has to fit in the browser's memory, and a tab that dies mid-meet leaves a film that the next
+   * start of the app completes with what Drive already holds (`finishDanglingFilms`). The file is
+   * listed under Performances from the moment it completes (its properties are set with the session).
+   */
+  async beginPerformanceStream(manifest: PerformanceManifest, mimeType: string): Promise<PerformanceStream> {
+    await this.ready();
+    const ext = extFromMime(mimeType, 'webm');
+    const parent = this.folder(manifest.state === 'temp' ? 'temp' : 'performances');
+    const meta = { name: performanceVideoName(manifest, ext), parents: [parent], appProperties: this.perfProps(manifest, 'video', '0'), mimeType };
+    const start = await fetch(`${UPLOAD}?uploadType=resumable&fields=${FILE_FIELDS}`, {
+      method: 'POST',
+      headers: { Authorization: this.auth(), 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': mimeType },
+      body: JSON.stringify(meta),
+    });
+    if (start.status === 401) throw new AuthExpiredError();
+    if (!start.ok) throw new Error(await errorMessage(start));
+    const session = start.headers.get('Location');
+    if (!session) throw new Error('Drive did not return an upload session');
+    return new DriveFilm({ session, manifest, mimeType, ext, stored: 0, durationMs: 0 }, this.filmHost());
+  }
+
+  private filmHost(): FilmHost {
+    return {
+      remember: (entry, keep) => this.rememberFilm(entry, keep),
+      complete: async (fileId, manifest) => {
+        await this.req(`${API}/files/${fileId}?fields=id`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description: JSON.stringify(manifest), appProperties: this.perfProps(manifest, 'video', '0') }),
+        }).catch((e) => console.warn('Drive: film details not written', e));
+      },
+      summary: (file, manifest) => this.perfSummary({ ...file, appProperties: this.perfProps(manifest, 'video', '0') }),
+    };
+  }
+
+  private get filmsKey(): string {
+    return `${this.treeKey}.films`;
+  }
+
+  /** The films being written right now, so an interrupted one can be completed later. */
+  private rememberFilm(entry: FilmEntry, keep: boolean): void {
+    try {
+      const all = (JSON.parse(localStorage.getItem(this.filmsKey) ?? '[]') as FilmEntry[]).filter((f) => f.session !== entry.session);
+      if (keep) all.push(entry);
+      localStorage.setItem(this.filmsKey, JSON.stringify(all.slice(-5)));
+    } catch {
+      /* no storage: a dying tab then loses the film's end */
+    }
+  }
+
+  private filmsChecked = false;
+  /**
+   * A film whose tab died mid-meet: Drive still holds the session and every piece that was
+   * confirmed. The file is completed as it stands (an fMP4 cut at a fragment boundary plays to
+   * there) and stamped with the last known duration — so the meet is not lost, just shorter.
+   */
+  async finishDanglingFilms(): Promise<number> {
+    if (this.filmsChecked) return 0;
+    this.filmsChecked = true;
+    let entries: FilmEntry[] = [];
+    try {
+      entries = JSON.parse(localStorage.getItem(this.filmsKey) ?? '[]') as FilmEntry[];
+    } catch {
+      return 0;
+    }
+    let n = 0;
+    for (const e of entries) {
+      try {
+        const film = new DriveFilm(e, this.filmHost());
+        if (await film.completeAsIs()) n++;
+      } catch (err) {
+        console.warn('Drive: an interrupted film was not completed', err);
+      }
+    }
+    return n;
+  }
+
   async sharePerformance(performanceId: string, with_: { type: 'anyone' } | { type: 'user'; email: string }): Promise<{ link: string; videoLink: string | null }> {
     await this.ready();
     const f = await this.perfFile(performanceId);
@@ -845,5 +930,208 @@ async function errorMessage(r: Response): Promise<string> {
     return `Drive error ${r.status}: ${j.error?.message ?? r.statusText}`;
   } catch {
     return `Drive error ${r.status}: ${r.statusText}`;
+  }
+}
+
+// ---------- the film of a meet: a resumable upload fed while it is recorded ----------
+
+/** A film in progress, as localStorage remembers it (enough to complete it after the tab died). */
+interface FilmEntry {
+  session: string;
+  manifest: PerformanceManifest;
+  mimeType: string;
+  ext: string;
+  /** Bytes Drive confirmed. */
+  stored: number;
+  /** The recording's length at the last confirmed piece. */
+  durationMs: number;
+}
+
+interface FilmHost {
+  remember(entry: FilmEntry, keep: boolean): void;
+  /** The file is complete: write its manifest (duration, size) and properties. */
+  complete(fileId: string, manifest: PerformanceManifest): Promise<void>;
+  summary(file: DriveFile, manifest: PerformanceManifest): PerformanceSummary;
+}
+
+/** Drive takes a piece of a resumable upload only in multiples of this (the last piece excepted). */
+const FILM_UNIT = 256 * 1024;
+/** Pieces go out once this much waits in the buffer (a few seconds of 720p). */
+const FILM_PIECE = 4 * 1024 * 1024;
+const FILM_RETRIES = 6;
+
+/** "bytes=0-262143" → 262144 (the next byte Drive wants); null when the header says nothing. */
+function rangeNext(header: string | null): number | null {
+  const m = /(\d+)\s*$/.exec(header ?? '');
+  return m ? Number(m[1]) + 1 : null;
+}
+
+class DriveFilm implements PerformanceStream {
+  readonly performanceId: string;
+  /** Everything after `stored`, in order (Blobs are references: nothing is copied until it is sent). */
+  private buffer: Blob[] = [];
+  private buffered = 0;
+  bytes: number;
+  stored: number;
+  error: string | null = null;
+  private durationMs: number;
+  private pump: Promise<void> = Promise.resolve();
+  private finished = false;
+
+  constructor(
+    private readonly entry: FilmEntry,
+    private readonly host: FilmHost,
+  ) {
+    this.performanceId = entry.manifest.performanceId;
+    this.bytes = entry.stored;
+    this.stored = entry.stored;
+    this.durationMs = entry.durationMs;
+    host.remember(this.snapshot(), true);
+  }
+
+  private snapshot(): FilmEntry {
+    return { ...this.entry, stored: this.stored, durationMs: this.durationMs };
+  }
+
+  push(chunk: Blob, progress?: { durationMs: number }): void {
+    if (this.finished || !chunk.size) return;
+    this.buffer.push(chunk);
+    this.buffered += chunk.size;
+    this.bytes += chunk.size;
+    if (progress) this.durationMs = progress.durationMs;
+    if (this.buffered >= FILM_PIECE) this.pump = this.pump.then(() => this.send(false)).then(() => undefined, () => undefined);
+  }
+
+  /** Bytes Drive confirmed leave the buffer; the session is remembered as it stands. */
+  private trim(next: number): void {
+    let drop = next - this.stored;
+    if (drop <= 0) return;
+    this.stored = next;
+    while (drop > 0 && this.buffer.length) {
+      const b = this.buffer[0]!;
+      if (b.size <= drop) {
+        drop -= b.size;
+        this.buffered -= b.size;
+        this.buffer.shift();
+      } else {
+        this.buffer[0] = b.slice(drop);
+        this.buffered -= drop;
+        drop = 0;
+      }
+    }
+    this.host.remember(this.snapshot(), true);
+  }
+
+  /** Where Drive is after a hiccup: whatever it confirms stays confirmed, the rest is resent. */
+  private async resync(): Promise<void> {
+    try {
+      const r = await fetch(this.entry.session, { method: 'PUT', headers: { 'Content-Range': 'bytes */*' } });
+      if (r.status === 308) {
+        const next = rangeNext(r.headers.get('Range'));
+        if (next !== null) this.trim(next);
+      }
+    } catch {
+      /* still offline: the next attempt asks again */
+    }
+  }
+
+  /**
+   * Send what the buffer holds from `stored` on: the largest 256 KiB-aligned piece (the file goes on),
+   * or everything with the total (`final`: the file is complete, Drive answers with it).
+   */
+  private async send(final: boolean): Promise<DriveFile | null> {
+    for (let attempt = 0; ; attempt++) {
+      const all = new Blob(this.buffer);
+      const len = final ? all.size : Math.floor(all.size / FILM_UNIT) * FILM_UNIT;
+      if (!final && len === 0) return null;
+      const total = this.stored + all.size;
+      const range = len === 0 ? `bytes */${total}` : `bytes ${this.stored}-${this.stored + len - 1}/${final ? total : '*'}`;
+      let r: Response;
+      try {
+        r = await fetch(this.entry.session, { method: 'PUT', headers: { 'Content-Range': range, 'Content-Type': this.entry.mimeType }, body: len ? all.slice(0, len) : undefined });
+      } catch (e) {
+        if (attempt >= FILM_RETRIES) throw e;
+        this.error = 'No connection — the film waits and retries';
+        await sleep(1000 * 2 ** attempt);
+        await this.resync();
+        continue;
+      }
+      if (r.status === 308) {
+        this.trim(rangeNext(r.headers.get('Range')) ?? this.stored + len);
+        this.error = null;
+        return null;
+      }
+      if (r.ok) {
+        this.trim(this.stored + len);
+        this.error = null;
+        return (await r.json()) as DriveFile;
+      }
+      if ((r.status >= 500 || r.status === 429) && attempt < FILM_RETRIES) {
+        this.error = `Drive answered ${r.status} — retrying`;
+        await sleep(1000 * 2 ** attempt + Math.random() * 300);
+        await this.resync();
+        continue;
+      }
+      if (r.status === 404 || r.status === 410) throw new Error('Drive no longer has this upload (the session expired)');
+      throw new Error(await errorMessage(r));
+    }
+  }
+
+  async finish(final: { durationMs: number }): Promise<PerformanceSummary> {
+    if (this.finished) throw new Error('The film is already finished');
+    this.finished = true;
+    this.durationMs = final.durationMs;
+    await this.pump;
+    if (this.stored + this.buffered === 0) {
+      await this.abort();
+      throw new Error('Nothing was recorded');
+    }
+    const file = await this.send(true);
+    if (!file) throw new Error('Drive did not complete the film');
+    return this.stamp(file);
+  }
+
+  /** The completed file gets its manifest (duration, size); the session is forgotten. */
+  private async stamp(file: DriveFile): Promise<PerformanceSummary> {
+    this.host.remember(this.snapshot(), false);
+    const m = this.entry.manifest;
+    const stamped: PerformanceManifest = { ...m, durationMs: this.durationMs, files: [{ name: `video.${this.entry.ext}`, mimeType: this.entry.mimeType, size: this.stored, sha256: '', driveId: file.id, md5: file.md5Checksum }] };
+    await this.host.complete(file.id, stamped);
+    return this.host.summary(file, stamped);
+  }
+
+  /** An interrupted film (the tab died): complete it with what Drive holds. False when Drive holds nothing or forgot the session. */
+  async completeAsIs(): Promise<boolean> {
+    this.finished = true;
+    const probe = await fetch(this.entry.session, { method: 'PUT', headers: { 'Content-Range': 'bytes */*' } });
+    if (probe.status === 404 || probe.status === 410 || probe.status === 400) {
+      this.host.remember(this.snapshot(), false);
+      return false;
+    }
+    if (probe.ok) {
+      await this.stamp((await probe.json()) as DriveFile); // it was complete after all
+      return true;
+    }
+    const have = probe.status === 308 ? (rangeNext(probe.headers.get('Range')) ?? 0) : 0;
+    if (!have) {
+      this.host.remember(this.snapshot(), false);
+      return false;
+    }
+    this.stored = have;
+    this.buffer = [];
+    this.buffered = 0;
+    const done = await fetch(this.entry.session, { method: 'PUT', headers: { 'Content-Range': `bytes */${have}` } });
+    if (!done.ok) throw new Error(await errorMessage(done));
+    await this.stamp((await done.json()) as DriveFile);
+    return true;
+  }
+
+  async abort(): Promise<void> {
+    this.finished = true;
+    await this.pump;
+    this.host.remember(this.snapshot(), false);
+    await fetch(this.entry.session, { method: 'DELETE' }).catch(() => undefined); // Drive drops the session (and its bytes)
+    this.buffer = [];
+    this.buffered = 0;
   }
 }

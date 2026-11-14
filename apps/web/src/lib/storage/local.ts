@@ -5,7 +5,7 @@
 import { normalizeTrack, type PerformanceManifest, type TrackPackageV2 } from '@singersvoice/protocol';
 import { idb, STORES } from '../idb.ts';
 import { storageEstimate } from '../platform.ts';
-import type { LoadedPerformance, LoadedTrack, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
+import type { LoadedPerformance, LoadedTrack, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
 
 interface TrackRecord {
   track: TrackPackageV2;
@@ -126,6 +126,36 @@ export class LocalProvider implements StorageProvider {
       expiresAt: manifest.expiresAt,
       ref: manifest.performanceId,
       hasVideo: Boolean(files.video),
+    };
+  }
+
+  /** On this device the pieces are kept in memory and the record is written when the film is finished. */
+  async beginPerformanceStream(manifest: PerformanceManifest, mimeType: string): Promise<PerformanceStream> {
+    const pieces: Blob[] = [];
+    let bytes = 0;
+    const self = this;
+    return {
+      performanceId: manifest.performanceId,
+      push(chunk) {
+        pieces.push(chunk);
+        bytes += chunk.size;
+      },
+      get bytes() {
+        return bytes;
+      },
+      get stored() {
+        return bytes;
+      },
+      error: null,
+      async finish(final) {
+        const video = new Blob(pieces, { type: mimeType });
+        const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+        const done: PerformanceManifest = { ...manifest, durationMs: final.durationMs, files: [{ name: `video.${ext}`, mimeType, size: video.size, sha256: '' }] };
+        return self.savePerformance(done, { vocal: new Blob([], { type: 'audio/wav' }), video });
+      },
+      async abort() {
+        pieces.length = 0;
+      },
     };
   }
 

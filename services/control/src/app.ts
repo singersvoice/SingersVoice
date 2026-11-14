@@ -44,17 +44,20 @@ import {
   type BillingStatus,
   type PlanId,
   LIVE_STALE_MS,
+  RELAY_KINDS,
   YOUTUBE_HLS_INGEST,
+  fedDestinations,
   type LiveSegmentInfo,
   type LiveStatus,
   type PublishJobLive,
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
-import { addSong, claimSlot, decideRequest, ensureMeet, isHost, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
+import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
 import { checkoutConfigured, createCheckoutSession, createPortalSession, fetchPublisherPrice, PLANS, planFromSubscription, verifyStripeSignature, type BillingConfig, type StripeSubscription } from './billing.ts';
+import { relayNote, relaySegment, relayStart, relayStop, type RelayConfig, type RelayOutcome, type RelayTarget } from './relay.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
 export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -92,6 +95,8 @@ export interface AppDeps {
   fetchImpl?: typeof fetch;
   /** Stripe (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PUBLISHER, APP_URL); without a key the Plans page shows the plans and an admin grants them. */
   billing?: BillingConfig;
+  /** The RTMP relay (RELAY_URL, RELAY_SECRET — services/relay, docs/RELAY.md): low-latency YouTube, and Facebook / Instagram / Twitch at all. */
+  relay?: RelayConfig;
 }
 
 type Vars = { deps: AppDeps; user: UserRecord };
@@ -334,7 +339,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const rec = reconcile(meet, stored);
     changed = changed || rec.changed;
     if (changed) await store.saveMeet(meet);
-    const participants: Participant[] = (visibleParticipants(meet, rec.active) as StoredParticipant[]).map(({ resumeToken: _t, meetId: _m, ...p }) => p);
+    const participants: Participant[] = (visibleParticipants(meet, rec.active, you && isHost(meet, you) ? Infinity : undefined) as StoredParticipant[]).map(({ resumeToken: _t, meetId: _m, ...p }) => p);
     const chat = chatSince !== undefined ? await store.chatSince(meetId, chatSince) : await store.chatTail(meetId, 50);
     const [recordings, performances] = await Promise.all([store.listRecordings(meetId), store.listPerformancesForMeet(meetId)]);
     const youPublic: Participant | undefined = you ? (({ resumeToken: _t, meetId: _m, ...p }: StoredParticipant) => p)(you) : undefined;
@@ -423,6 +428,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     tick(meet);
     if (meet.state === 'expired') return err(c, 410, 'expired', 'This meet expired after 5 minutes without activity');
     if (meet.state === 'ended') return err(c, 410, 'ended', 'This meet has ended');
+    if (isBanned(meet, user.userId)) return err(c, 403, 'removed', 'The host removed you from this meet');
     const now = new Date().toISOString();
     const publisher = body.role === 'publisher';
     if (publisher && !user.canPublish) return err(c, 403, 'publisher_plan', 'Publishing mode is part of the Publisher plan — see Plans');
@@ -470,6 +476,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<HeartbeatRequest>;
     const meet = await store.getMeet(c.req.param('id'));
     if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    if (isBanned(meet, c.get('user').userId)) return err(c, 403, 'removed', 'The host removed you from this meet');
     const p = await participantFromBody(c, meet.meetId, body.resumeToken);
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
     p.lastSeenAt = new Date().toISOString();
@@ -634,6 +641,25 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     touch(meet);
     await store.saveMeet(meet);
     return c.json((await snapshot(c, meet.meetId, p))!);
+  });
+
+  app.post('/meets/:id/participants/:pid/kick', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const host = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!host) return err(c, 403, 'not_participant', 'Join the meet first');
+    const target = await store.getParticipant(meet.meetId, c.req.param('pid'));
+    if (!target) return err(c, 404, 'no_participant', 'They are no longer in the meet');
+    const r = kick(meet, host, target);
+    if (!r.ok) return err(c, r.reason === 'not_host' ? 403 : 409, r.reason ?? 'kick', r.reason === 'not_host' ? 'Only the host removes people from the meet' : r.reason === 'self' ? 'The host cannot remove themselves' : 'This meet has ended');
+    await store.removeParticipant(meet.meetId, target.participantId);
+    reconcile(meet, await store.listParticipants(meet.meetId));
+    touch(meet);
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, host))!);
   });
 
   app.post('/meets/:id/policy', async (c) => {
@@ -994,15 +1020,54 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   });
 
   app.get('/publishing/destinations', async (c) => {
-    const { store } = c.get('deps');
+    const { store, relay } = c.get('deps');
     const stored = await store.listDestinations(c.get('user').userId);
     const destinations: Destination[] = DESTINATIONS.map((d) => {
       const s = stored.find((x) => x.kind === d.kind);
       // The in-house portal needs no key and is always available; the others are off until configured.
       return s ? (({ keyEnc: _k, ...pub }) => pub)(s) : { kind: d.kind, label: d.label, enabled: !d.needsKey, ingestUrl: d.needsKey ? d.ingestHint : '', keyHint: '', updatedAt: '' };
     });
-    return c.json({ destinations });
+    return c.json({ destinations, relay: Boolean(relay) });
   });
+
+  /**
+   * The relay's targets for a job: every RTMP destination of the job with its saved ingest url and
+   * key, opened from the sealed store here — the only place a key is ever in the clear, and it goes
+   * service-to-service only. Destinations without a key are left out (the job's log says so).
+   */
+  const relayTargets = async ({ store, secrets }: AppDeps, job: PublishJob): Promise<{ targets: RelayTarget[]; missing: DestinationKind[] }> => {
+    const targets: RelayTarget[] = [];
+    const missing: DestinationKind[] = [];
+    for (const kind of job.destinations.filter((k) => RELAY_KINDS.includes(k))) {
+      const dest = await store.getDestination(job.ownerUserId, kind);
+      const key = dest?.keyEnc ? await secrets.open(dest.keyEnc).catch(() => '') : '';
+      const url = (dest?.ingestUrl || DESTINATIONS.find((d) => d.kind === kind)?.ingestHint || '').trim();
+      if (key && /^rtmps?:\/\//.test(url)) targets.push({ kind, url, key });
+      else missing.push(kind);
+    }
+    return { targets, missing };
+  };
+
+  /** When a job's relay stream last had to be started (per job): a relay that is down is asked again every few seconds, not on every segment. */
+  const relayAttempts = new Map<string, number>();
+  const RELAY_RETRY_MS = 6000;
+
+  /** Start (or start over) the relay stream of a job; the job's live block and log say how it went. */
+  const startRelay = async (deps: AppDeps, job: PublishJob, live: PublishJobLive, now: string): Promise<boolean> => {
+    const relay = deps.relay!;
+    const { targets, missing } = await relayTargets(deps, job);
+    if (!targets.length) {
+      live.relay = 'error';
+      live.relayNote = `no stream key saved for ${missing.join(', ')}`;
+      return false;
+    }
+    const r = await relayStart(relay, job.jobId, targets);
+    live.relay = r.ok ? 'starting' : 'error';
+    live.relayNote = r.ok ? `streaming to ${targets.map((t) => t.kind).join(', ')}${missing.length ? ` (no key saved for ${missing.join(', ')})` : ''}` : relayNote(r);
+    const note = r.ok ? `Relay: RTMP to ${targets.map((t) => t.kind).join(', ')}` : `Relay: ${r.note}`;
+    if (job.events.at(-1)?.note !== note) job.events.push({ at: now, state: job.state, note }); // a relay that stays down is logged once, not every few seconds
+    return r.ok;
+  };
 
   app.put('/publishing/destinations/:kind', async (c) => {
     const { store, secrets } = c.get('deps');
@@ -1055,7 +1120,9 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (missing.length) return err(c, 400, 'destination_disabled', `Enable first: ${missing.join(', ')}`);
     if ((await store.liveJobsForMeet(meet.meetId)).length) return err(c, 409, 'already_publishing', 'A publish job is already running for this meet');
     const now = new Date().toISOString();
-    const browserFed = wanted.filter((k) => DESTINATIONS.find((d) => d.kind === k)?.browserLive);
+    const relayOn = Boolean(c.get('deps').relay);
+    const browserFed = fedDestinations(wanted, relayOn);
+    const queued = wanted.filter((k) => !browserFed.includes(k));
     const job: PublishJob = {
       jobId: newId('pub-'),
       meetId: meet.meetId,
@@ -1069,15 +1136,23 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       error: null,
       createdAt: now,
       updatedAt: now,
-      events: [{ at: now, state: 'requested', note: browserFed.length ? `Waiting for the show view to send the first segment (${browserFed.join(', ')})` : 'Queued — a session container picks this up when the meet goes live' }],
-      live: { segments: 0, bytes: 0, lastSegmentAt: null, youtube: wanted.includes('youtube') ? 'waiting' : 'off', youtubeNote: '' },
+      events: [
+        {
+          at: now,
+          state: 'requested',
+          note: browserFed.length
+            ? `Waiting for the show view to send the first segment (${browserFed.join(', ')})${queued.length ? ` — ${queued.join(', ')} need the RTMP relay, which is not deployed (docs/RELAY.md)` : ''}`
+            : 'Queued — these destinations need the RTMP relay, which is not deployed (docs/RELAY.md)',
+        },
+      ],
+      live: { segments: 0, bytes: 0, lastSegmentAt: null, youtube: wanted.includes('youtube') ? 'waiting' : 'off', youtubeNote: '', relay: relayOn && wanted.some((k) => RELAY_KINDS.includes(k)) ? 'starting' : 'off', relayNote: '' },
     };
     await store.saveJob(job);
     return c.json({ job }, 201);
   });
 
   app.post('/publishing/jobs/:id/stop', async (c) => {
-    const { store } = c.get('deps');
+    const { store, relay } = c.get('deps');
     const job = await store.getJob(c.req.param('id'));
     if (!job || job.ownerUserId !== c.get('user').userId) return err(c, 404, 'no_job', 'Job not found');
     const now = new Date().toISOString();
@@ -1085,15 +1160,19 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       job.state = 'stopped';
       job.updatedAt = now;
       job.events.push({ at: now, state: 'stopped', note: 'Stopped by the publisher' });
+      if (job.live && job.live.relay && job.live.relay !== 'off') job.live.relay = 'off';
       await store.saveJob(job);
     }
     await store.clearLiveSegments(job.jobId);
+    if (relay && job.destinations.some((k) => RELAY_KINDS.includes(k))) await relayStop(relay, job.jobId); // ends the RTMP streams (ffmpeg closes them cleanly)
     return c.json({ job });
   });
 
-  // One segment of the show from the publisher's browser: kept for the portal, forwarded to YouTube.
+  // One segment of the show from the publisher's browser: kept for the portal, handed to the RTMP relay
+  // (YouTube at low latency, Facebook, Instagram, Twitch) when there is one, else to YouTube's HLS ingestion.
   app.put('/publishing/jobs/:id/live/:name', async (c) => {
-    const { store, secrets, youtubeHlsBase } = c.get('deps');
+    const deps = c.get('deps');
+    const { store, secrets, youtubeHlsBase, relay } = deps;
     const job = await store.getJob(c.req.param('id'));
     if (!job || job.ownerUserId !== c.get('user').userId) return err(c, 404, 'no_job', 'Job not found');
     if (job.state === 'stopped' || job.state === 'failed' || job.state === 'stopping') return err(c, 409, 'not_live', `This broadcast is ${job.state}`);
@@ -1114,7 +1193,26 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     live.lastSegmentAt = now;
     live.audio = c.req.query('audio') !== '0';
     let youtube: { status: number } | null = null;
-    if (job.destinations.includes('youtube')) {
+    // The relay carries every RTMP destination of the job. A stream the relay no longer has (its first
+    // segment, a relay that restarted, a stream closed for silence) is started again and the segment resent.
+    const relayed = relay && job.destinations.some((k) => RELAY_KINDS.includes(k));
+    if (relayed) {
+      let r: RelayOutcome | null = live.relay === 'ok' ? await relaySegment(relay, job.jobId, bytes) : null;
+      // 404 = the relay is up and has no such stream (restarted, or swept): start it again at once; anything else backs off.
+      if (!r?.ok && (r?.status === 404 || Date.now() - (relayAttempts.get(job.jobId) ?? 0) > RELAY_RETRY_MS)) {
+        relayAttempts.set(job.jobId, Date.now());
+        if (await startRelay(deps, job, live, now)) r = await relaySegment(relay, job.jobId, bytes);
+      }
+      if (r) {
+        live.relay = r.ok ? 'ok' : 'error';
+        if (!r.ok) live.relayNote = relayNote(r);
+      }
+      if (job.destinations.includes('youtube')) {
+        // YouTube rides the relay (RTMP, ultra-low latency): no HLS ingestion beside it.
+        live.youtube = live.relay === 'ok' ? 'ok' : live.relay === 'starting' ? 'waiting' : 'error';
+        live.youtubeNote = live.relay === 'ok' ? 'RTMP through the relay' : live.relayNote ?? '';
+      }
+    } else if (job.destinations.includes('youtube')) {
       const dest = await store.getDestination(job.ownerUserId, 'youtube');
       const key = dest?.keyEnc ? await secrets.open(dest.keyEnc).catch(() => '') : '';
       if (!key) {

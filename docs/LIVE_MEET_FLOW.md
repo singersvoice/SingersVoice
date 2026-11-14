@@ -29,7 +29,8 @@ follow you around.
 ## 2 · The room (`/meet/:id`) — lobby
 
 The room is one page with two tabs, **Stage** and **Chat**. The header shows the host, the join
-code, **Share link**, the idle countdown and, for Publisher-plan (or admin) accounts, **Show view** (Publishing).
+code, **Share link**, the idle countdown and, for Publisher-plan (or admin) accounts, **Publish**
+(the show view in a new tab, with the destinations saved on the account — see §6).
 
 ### The stage (always on)
 
@@ -50,13 +51,24 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 
 - Everyone who enters is **audience** (chat, lyrics and the backing track once the song runs).
 - The **host** is the admin: seated on S1 at the start, takes any slot freely, decides who sings,
-  orders the set list, starts/pauses/resumes/restarts/ends songs, ends the meet.
-- A **singer** is anyone on a slot (up to 10). Audience become singers by **Ask to sing** → the
-  host's lobby shows the **wait list** (*"<name> wants to sing"*) with **Let them sing** / **Not
-  now**. On yes, the server seats them in the first free slot; their camera opens by itself.
-  Declined singers may ask again; a pending ask can be withdrawn. **Open stage** (host switch) lets
-  anyone take a free slot without asking. The host can clear any slot (×). Singers can move to
-  another free slot and **Leave stage**.
+  orders the set list, starts/pauses/resumes/restarts/ends songs, ends the meet — and is the only
+  one who can **remove anyone from the meet** (the **out** button on a slot, × on a name in the
+  audience list): the person is off the stage and out of the room, their device says *"<host>
+  removed you from this meet"*, and the link no longer lets that account back in.
+- A **singer** is anyone on a slot (up to 10). **A new meet has an open stage**: whoever has the
+  link takes a free slot with **Take a stage slot** — no permission needed (the three friends you
+  sent the link to are meant to sing). The host can switch **Open stage** off; then audience ask
+  with **Ask to sing** → the host's lobby shows the **wait list** (*"<name> wants to sing"*) with
+  **Let them sing** / **Not now**, and on yes the server seats them in the first free slot.
+  Declined singers may ask again; a pending ask can be withdrawn. Taking a slot opens your mic and
+  camera with that tap. The host can clear any slot (× — back to the audience). Singers can move
+  to another free slot and **Leave stage** (the mic closes with it).
+- **Talk-back.** While no song runs, the singers on stage hear each other (each one's voice goes
+  over the stage's own links), and the audience hears the stage through the host's device — so a
+  stage can talk, count in, agree on the next song. From the countdown to the end of the song
+  **nobody on stage hears anyone else** (Solo foldback: latency never pulls a duet apart), while the
+  audience, the recording and any broadcast get the whole blend. Headphones are recommended on stage
+  (the chip says so): with speakers, talk-back feeds the room back into every mic.
 - **A running song belongs to the singers on stage.** From the count-in to the end of the song
   nobody new steps on: a newcomer sees *Ask to sing next* and joins the wait list (the host sees
   *wait list · N* on the live stage, nothing else), *Let them sing* waits until the song is over,
@@ -77,7 +89,9 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 
 | Option | Who | What it does |
 | --- | --- | --- |
-| **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS), decodes the current song, marks you *ready*. Shown once there is a song; ready resets whenever the set list moves on. Under it the **Mic** line says what the microphone really gives: its name, its sample rate, the automatic level — and warns in red when it is a *phone-call quality* line (a Bluetooth headset's mic: 8–16 kHz, thin and muffled), with a menu to sing into another microphone; **I'm on speakers** turns echo cancellation on (only needed when the track plays out of speakers; with headphones it stays off for the cleanest voice — a hint appears when the sound is going out through speakers). |
+| **Turn my mic on** | singers | On stage without a mic yet (the host is seated by the meet itself; a browser refused the first tap): opens the mic for talk-back. |
+| **Film the whole meet into my Drive** | host | On by default. From the moment the host's mic is open on stage until **End meet** (or the host steps off), the host's device records the whole meet as **one video** — the show picture (everyone on stage over the background, no lyrics) with the stage mix (the songs, the talk between them) — and writes it into their Drive *as it goes* (ten seconds at a time, a resumable upload): a two-hour meet never has to fit in memory, and a tab that dies loses seconds, not the meet (the next start of the app completes the file with what Drive already holds). The switch shows what it is doing (*Filming · 12:34 · 210 MB in Drive*). The finished film is a performance of the meet, **Full meet**, listed on the ended screen and under Performances, shared with everyone who was in the meet like a song's show. |
+| **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS) if it is not open yet, decodes the current song, marks you *ready*. Shown once there is a song; ready resets whenever the set list moves on. Under it the **Mic** line says what the microphone really gives: its name, its sample rate, the automatic level — and warns in red when it is a *phone-call quality* line (a Bluetooth headset's mic: 8–16 kHz, thin and muffled), with a menu to sing into another microphone; **I'm on speakers** turns echo cancellation on (only needed when the track plays out of speakers; with headphones it stays off for the cleanest voice — a hint appears when the sound is going out through speakers). |
 | **Start the song (8 s count-in)** | host | Needs a song and at least one singer. Every device starts the backing track at the same server instant (the GMT kickstart); a singer who is not ready yet can still **Join the song on stage** afterwards and starts mid-song. |
 | **End meet** | host | Ends the event for everyone (after a confirmation). |
 
@@ -112,7 +126,8 @@ lyrics), with the whole mix as its sound (the backing track, your vocal after FX
 singer's vocal, which travels over the links for the recording only — nobody ever hears it).
 When the song is over (or you stop your take) **nothing asks you anything**: you are straight
 back on the stage — the lobby with the next song up, or, after your own Stop mid-song, the live
-stage with *Join the song* — and the take saves itself in the background, kept at once in your
+stage with *Join the song* — your mic stays open (talk-back is back on: the stage hears each
+other again), and the take saves itself in the background, kept at once in your
 Drive `Performances` (never Temp). A chip in the room says *Saving "song"… · 40 %* → *Saved
 "song"* (→ Performances), or *Could not save — Retry*; the saver keeps going when you change page,
 leave the room or the meet ends, retries by itself, and the app never reloads under it. **The
@@ -262,9 +277,23 @@ YouTube: YouTube is receiving the show*; a wrong key reads *YouTube rejected the
 (401)*. Stop, or leaving the show view, ends the job; a job whose segments stop for 20 s is off
 air. What a browser needs: WebCodecs (Chrome, Edge, Safari 17+, Firefox 130+) and an AAC encoder
 for sound — Windows, macOS, iOS and Android have one; Chrome on Linux and Firefox do not and go
-out **video only** (the bar says so; the audience then hears the stage mix for sound). Facebook,
-Instagram and Twitch accept RTMP(S) only, which a browser cannot speak: their jobs stay
-*requested* until a session container relays the same segments as RTMPS.
+out **video only** (the bar says so; the audience then hears the stage mix for sound).
+
+**Low latency — the RTMP relay (`services/relay`, docs/RELAY.md).** YouTube's HLS ingestion is
+the slow road: YouTube plays an HLS-ingested stream 20–40 s behind the stage (its *ultra-low
+latency* setting, a few seconds, exists for RTMP only), and Facebook, Instagram and Twitch take
+RTMP(S) and nothing else — which a browser cannot speak. The relay is one small container
+(Node + ffmpeg, scale-to-zero on Fly.io or any Docker host) that closes the gap: when `RELAY_URL`
+and `RELAY_SECRET` are set on the service, every segment the show view sends is handed on to the
+relay, where one `ffmpeg -c copy` per show (no transcoding, a sliver of a CPU) writes the same
+bytes to every RTMP target of the job at once — YouTube included, which then runs at *ultra-low
+latency* (set that in YouTube Studio → Stream settings): the viewer is 4–7 s behind the stage.
+Stream keys travel service → relay only (`Authorization: Bearer`), never through a browser. The
+Destinations page says whether the relay is on; the broadcast bar reads *relay: streaming to
+youtube, facebook*; a stream the relay lost (it restarted, or was idle a minute) is started again
+by the next segment, a relay that is down is retried every few seconds and reported, and the watch
+page keeps playing throughout. Without a relay, YouTube keeps working through HLS ingestion (choose
+*Low latency* in YouTube Studio: 15–25 s), and jobs for the other three stay *requested*.
 
 ## 7 · What is independent of what
 
@@ -275,6 +304,8 @@ Instagram and Twitch accept RTMP(S) only, which a browser cannot speak: their jo
 | Song transport | kickstart, pause/resume/restart, takes | the current song being loadable on each device |
 | Audience | the show (when on air) or the stage, hearing the stage, chat, asking to sing | the meet snapshot; the publisher's segments; the host's mix batches (falls back to the backing track alone) |
 | Publishing show / Preview | the broadcast picture, jobs | the meet's slot list + the performers' video |
+| The film of the meet | one video of the whole meet in the host's Drive | the host's device being on stage with its mic open (the stage's video and sound reach it only there) |
+| RTMP relay | the RTMP streams of a job | the service forwarding segments; the saved keys |
 
 Each of these can fail or change without the others noticing: a song that one device cannot load
 leaves that singer in the audience's position for that song; a publisher leaving changes nothing on

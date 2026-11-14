@@ -4,7 +4,8 @@
  *
  * Bindings (wrangler.jsonc): SVT_DB (Durable Object namespace, class SvtDb)
  * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH, ICE_SERVERS, YOUTUBE_HLS_BASE, GOOGLE_API_KEY (optional),
- * STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PUBLISHER, APP_URL (the Publisher plan — docs/BILLING.md)
+ * STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PUBLISHER, APP_URL (the Publisher plan — docs/BILLING.md),
+ * RELAY_URL, RELAY_SECRET (the RTMP relay for low-latency YouTube, Facebook, Instagram, Twitch — docs/RELAY.md)
  */
 import { createApp, parseIceServers, sweepMeets, type AppDeps } from './app.ts';
 import { createAuthenticator } from './auth.ts';
@@ -26,6 +27,8 @@ interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
   STRIPE_PRICE_PUBLISHER?: string;
   APP_URL?: string;
+  RELAY_URL?: string;
+  RELAY_SECRET?: string;
 }
 
 interface DurableState {
@@ -53,6 +56,7 @@ export class SvtDb {
       youtubeHlsBase: env.YOUTUBE_HLS_BASE || undefined,
       googleApiKey: env.GOOGLE_API_KEY || undefined,
       billing: { secretKey: env.STRIPE_SECRET_KEY || undefined, webhookSecret: env.STRIPE_WEBHOOK_SECRET || undefined, pricePublisher: env.STRIPE_PRICE_PUBLISHER || undefined, appUrl: env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
+      relay: env.RELAY_URL && env.RELAY_SECRET ? { url: env.RELAY_URL, secret: env.RELAY_SECRET } : undefined,
     };
     this.app = createApp(() => this.deps);
   }

@@ -33,6 +33,8 @@ export interface AppSettings {
   /** The mix balance on this device (dB): the backing track and the vocals in what is recorded, relayed and broadcast from here. */
   trackDb: number;
   vocalDb: number;
+  /** Host: the whole meet is filmed on this device (the show picture with the stage mix) straight into Drive, as one video. */
+  recordMeet: boolean;
 }
 
 export const APP_DEFAULTS: AppSettings = {
@@ -56,6 +58,7 @@ export const APP_DEFAULTS: AppSettings = {
   onboarded: false,
   trackDb: 0,
   vocalDb: 0,
+  recordMeet: true,
 };
 
 const APP_KEY = 'sv.settings.app';

@@ -34,6 +34,7 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { canPublish as canPublishSignal } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
+import type { MeetRecorder } from '../../video/meetRecorder.ts';
 import { MicStatus } from '../../components/MicStatus.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
@@ -94,28 +95,58 @@ export function MeetRoom(props: { id: string }) {
   useEffect(() => {
     if (track?.source === 'catalog' && you?.slot != null) keepMeetTrack(track);
   }, [track, you?.slot]);
+  // The mic is a stage thing: open while on stage (talk-back between songs, the vocal in the song), closed on stepping off or when the meet is over.
+  const onStageNow = you?.slot != null;
+  const meetOver = meet?.state === 'ended' || meet?.state === 'expired';
+  useEffect(() => {
+    if ((!onStageNow || meetOver) && engineRef.current?.micOpen.value) engineRef.current.closeMic();
+  }, [onStageNow, meetOver]);
+
+  /**
+   * The microphone (and on iOS the camera with it, one capture), through the vocal chain: opened
+   * with the tap that takes the stage, so the singer can talk to the others before the song and
+   * is heard by the audience; "I'm ready" opens it too when it is not open yet.
+   */
+  const openMic = async (): Promise<AudioEngine> => {
+    const app = appSettings.peek();
+    const audio = audioSettings.peek();
+    const engine = engineRef.current ?? getEngine();
+    engineRef.current = engine;
+    await engine.resume();
+    const wantCombined = isIOS && app.cameraOn;
+    if (wantCombined) camera.close();
+    const video = await engine.openMic({
+      deviceId: app.audioInputId || undefined,
+      echoCancellation: app.echoCancellation,
+      video: wantCombined ? { facingMode: app.cameraFacing, width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+    });
+    if (video) camera.adopt(video, app.cameraFacing);
+    else if (app.cameraOn && !camera.on.value) await camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined }).catch(() => undefined);
+    engine.applyFx(audio.params);
+    engine.setMonitor(audio.monitor);
+    return engine;
+  };
+  const [micBusy, setMicBusy] = useState(false);
+  const openMicForStage = async () => {
+    if (engineRef.current?.micOpen.value) return;
+    setMicBusy(true);
+    try {
+      await openMic();
+    } catch (e) {
+      toast(errorText(e), 'warn', 6000);
+    } finally {
+      setMicBusy(false);
+    }
+  };
 
   /** User-gesture pre-flight: audio context, mic (+camera on iOS), decode the track. Then "ready". */
   const prepare = async () => {
     if (!track?.loaded) return toast('The track is not available on this device yet', 'warn');
     setPreparing(true);
     try {
-      const app = appSettings.peek();
       const audio = audioSettings.peek();
-      const engine = engineRef.current ?? getEngine();
-      engineRef.current = engine;
+      const engine = engineRef.current?.micOpen.value ? engineRef.current : await openMic();
       await engine.resume();
-      const wantCombined = isIOS && app.cameraOn;
-      if (wantCombined) camera.close();
-      const video = await engine.openMic({
-        deviceId: app.audioInputId || undefined,
-        echoCancellation: app.echoCancellation,
-        video: wantCombined ? { facingMode: app.cameraFacing, width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-      });
-      if (video) camera.adopt(video, app.cameraFacing);
-      else if (app.cameraOn && !camera.on.value) await camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined }).catch(() => undefined);
-      engine.applyFx(audio.params);
-      engine.setMonitor(audio.monitor);
       const player = engine.player!;
       if (loadedKey.current !== trackKey || !player.buffer) {
         await player.load(track.loaded.audio, track.loaded.track.trackId);
@@ -138,12 +169,12 @@ export function MeetRoom(props: { id: string }) {
         <div class="callout warn">Live meets need the SingersVoice service — this build has no VITE_CONTROL_URL.</div>
       </Page>
     );
-  if (session.error.value && !meet)
+  if ((session.error.value && !meet) || session.over.value)
     return (
-      <Page title="Meet">
-        <div class="stack">
-          <div class="callout danger">{session.error.value}</div>
-          <a class="btn" href={href('/meets')}>
+      <Page title={meet?.title ?? 'Meet'}>
+        <div class="stack" data-closed={session.over.value?.code ?? 'error'}>
+          <div class="callout danger">{session.over.value?.code === 'removed' ? `${meet?.hostName ?? 'The host'} removed you from this meet.` : (session.over.value?.message ?? session.error.value)}</div>
+          <a class="btn primary" href={href('/meets')}>
             Back to meets
           </a>
         </div>
@@ -169,6 +200,8 @@ export function MeetRoom(props: { id: string }) {
       prepared={prepared}
       preparing={preparing}
       onPrepare={prepare}
+      onOpenMic={openMicForStage}
+      micBusy={micBusy}
       participants={snap?.participants ?? []}
       onTake={(t, loaded, singers) => {
         // The take saves itself in the background; the singer is already back on the stage (ready again for the next song, or to rejoin this one).
@@ -190,6 +223,8 @@ function Room(props: {
   prepared: boolean;
   preparing: boolean;
   onPrepare: () => Promise<void>;
+  onOpenMic: () => Promise<void>;
+  micBusy: boolean;
   participants: Participant[];
   onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>, singers: { slot: number; displayName: string; userId?: string }[]) => void;
 }) {
@@ -207,7 +242,7 @@ function Room(props: {
 
   if (meet.state === 'ended' || meet.state === 'expired') return <Ended session={session} meet={meet} you={you} />;
 
-  return <Lobby session={session} meet={meet} you={you} track={track} stage={stage} prepared={props.prepared} preparing={props.preparing} onPrepare={props.onPrepare} participants={props.participants} engine={engine} />;
+  return <Lobby session={session} meet={meet} you={you} track={track} stage={stage} prepared={props.prepared} preparing={props.preparing} onPrepare={props.onPrepare} onOpenMic={props.onOpenMic} micBusy={props.micBusy} participants={props.participants} engine={engine} />;
 }
 
 // ---------------- Lobby + audience ----------------
@@ -234,11 +269,14 @@ function Lobby(props: {
   prepared: boolean;
   preparing: boolean;
   onPrepare: () => Promise<void>;
+  onOpenMic: () => Promise<void>;
+  micBusy: boolean;
   participants: Participant[];
   engine: AudioEngine | null;
 }) {
   const { session, meet, you, stage } = props;
   const [tab, setTab] = useState<'stage' | 'chat'>('stage');
+  const micOpen = props.engine?.micOpen.value ?? false;
   const [deciding, setDeciding] = useState<string | null>(null);
   useEffect(() => {
     stage.compositor.mode = 'show'; // no lyrics over the lobby stage: the performers fill it
@@ -266,13 +304,17 @@ function Lobby(props: {
   };
   const openStage = meet.stagePolicy === 'open';
   const askState = you.stageRequest ?? 'none';
-  /** Step on a slot: the camera opens with the tap (browsers that need the gesture), then the slot is taken. */
+  /** Step on a slot: the mic and camera open with the tap (browsers need the gesture), then the slot is taken. */
   const claim = async (slot: number | null) => {
-    if (slot !== null && appSettings.peek().cameraOn) void stage.openCamera();
+    if (slot !== null) {
+      void props.onOpenMic(); // talk to the other singers until the song starts; the audience hears the stage
+      if (appSettings.peek().cameraOn) void stage.openCamera();
+    }
     try {
       await session.claimSlot(slot);
     } catch (e) {
       toast(errorText(e), 'warn');
+      if (slot !== null && session.you.peek()?.slot == null) props.engine?.closeMic(); // the slot was not ours after all: no open mic off stage
     }
   };
   const ask = async () => {
@@ -303,6 +345,16 @@ function Lobby(props: {
   const remove = async (participantId: string) => {
     try {
       await session.removeFromStage(participantId);
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
+  /** Host: out of the meet for good (stage or audience). */
+  const kick = async (p: { participantId: string; displayName: string }) => {
+    if (!confirm(`Remove ${p.displayName} from this meet? They cannot come back in.`)) return;
+    try {
+      await session.kick(p.participantId);
+      toast(`${p.displayName} was removed from the meet`, 'ok');
     } catch (e) {
       toast(errorText(e), 'warn');
     }
@@ -409,8 +461,8 @@ function Lobby(props: {
                   <IcShare size={16} /> Share link
                 </button>
                 {canPublishSignal.value && (
-                  <a class="btn sm" href={href(`/publishing/show/${encodeURIComponent(meet.meetId)}`)} target="_blank" rel="noopener" title="Publishing mode: the broadcast picture (performers huge, no lyrics), in a new tab">
-                    Show view
+                  <a class="btn sm accent" href={href(`/publishing/show/${encodeURIComponent(meet.meetId)}`)} target="_blank" rel="noopener" data-publish title="Publishing mode, in a new tab: the broadcast picture (performers huge, no lyrics) and Go live to the destinations saved on your account — YouTube and the watch page">
+                    <IcShare size={16} /> Publish
                   </a>
                 )}
               </div>
@@ -514,7 +566,7 @@ function Lobby(props: {
             )}
             <div class="stage-grid">
               {meet.stage.map((s) => (
-                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} canClaim={!s.participantId && (onStage || (!live && (host || openStage)))} onClaim={() => void claim(s.slot)} onRemove={host && s.participantId && s.participantId !== you.participantId ? () => void remove(s.participantId!) : undefined} />
+                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} canClaim={!s.participantId && (onStage || (!live && (host || openStage)))} onClaim={() => void claim(s.slot)} onRemove={host && s.participantId && s.participantId !== you.participantId ? () => void remove(s.participantId!) : undefined} onKick={host && s.participantId && s.participantId !== you.participantId ? () => void kick({ participantId: s.participantId!, displayName: s.displayName }) : undefined} />
               ))}
             </div>
             <div class="row">
@@ -531,7 +583,13 @@ function Lobby(props: {
                   <button class="btn" onClick={() => void claim(null)}>
                     Leave stage
                   </button>
-                  {props.prepared && <MicStatus engine={props.engine} onChange={() => void reopenMic(props.engine)} />}
+                  {!micOpen && (
+                    <button class="btn" disabled={props.micBusy} title="Talk to the other singers before the song; the audience hears the stage" onClick={() => void props.onOpenMic()}>
+                      {props.micBusy ? <Spinner /> : <IcMic />} Turn my mic on
+                    </button>
+                  )}
+                  {micOpen && <MicStatus engine={props.engine} onChange={() => void reopenMic(props.engine)} />}
+                  {micOpen && !live && <span class="chip ok" data-talkback="1" title="Until the countdown, the singers on stage hear each other and the audience hears the stage; once the song runs, nobody on stage hears anyone else">Talk-back on · headphones recommended</span>}
                 </>
               ) : host || openStage ? (
                 live ? (
@@ -573,10 +631,30 @@ function Lobby(props: {
               )}
             </div>
             {host && <Switch checked={openStage} onChange={(v) => void setPolicy(v)} label="Open stage: anyone may take a free slot" hint={openStage ? 'Switch off to be asked first' : 'Off: the audience asks, you decide who sings'} />}
-            <div class="small muted">
-              Audience ({meet.audienceCount}): {audienceLine(meet.audienceCount, props.participants)}
-              {!host && !onStage && !openStage && ' · ask to sing and the host lets you on stage between songs'}
-            </div>
+            {host && <MeetFilmSwitch film={stage.film} onStage={onStage} />}
+            {host ? (
+              <div class="small muted audience-list" data-audience={meet.audienceCount}>
+                Audience ({meet.audienceCount}):{' '}
+                {props.participants.filter((p) => p.slot === null && p.role !== 'publisher').length === 0 && 'nobody yet'}
+                {props.participants
+                  .filter((p) => p.slot === null && p.role !== 'publisher')
+                  .map((p) => (
+                    <span key={p.participantId} class="chip audience-chip">
+                      {p.displayName}
+                      <button type="button" class="chip-x" aria-label={`Remove ${p.displayName} from the meet`} title="Remove from the meet" onClick={() => void kick(p)}>
+                        <IcX size={12} />
+                      </button>
+                    </span>
+                  ))}
+                <span class="faint"> · only you, the host, can remove anyone (× on a name or a slot)</span>
+              </div>
+            ) : (
+              <div class="small muted">
+                Audience ({meet.audienceCount}): {audienceLine(meet.audienceCount, props.participants)}
+                {!onStage && !openStage && ' · ask to sing and the host lets you on stage between songs'}
+                {!onStage && openStage && !live && ' · the stage is open: take a slot to sing'}
+              </div>
+            )}
             {meet.stage.some((s) => s.participantId && s.rttMs !== null) && (
               <div class="small faint">
                 Sync: {meet.stage.filter((s) => s.participantId && s.rttMs !== null).map((s) => `${s.displayName} ±${Math.round((s.rttMs ?? 0) / 2)} ms`).join(' · ')} — every device starts the track at the same server instant.
@@ -591,7 +669,30 @@ function Lobby(props: {
 }
 
 
-function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; onClaim: () => void; onRemove?: () => void }) {
+/** Host: the film of the whole meet — on by default, with what it is doing right now. */
+function MeetFilmSwitch(props: { film: MeetRecorder; onStage: boolean }) {
+  const on = appSettings.value.recordMeet;
+  const s = props.film.state.value;
+  const mb = (n: number) => `${Math.round(n / 1e5) / 10} MB`;
+  const hint = !on
+    ? 'Off: nothing of this meet is kept as one video'
+    : s.recording
+      ? `Filming · ${formatMs(s.seconds * 1000)} · ${mb(s.bytes)}${s.stored < s.bytes ? ` (${mb(s.stored)} in Drive)` : ' in Drive'}${s.note ? ` · ${s.note}` : ''}`
+      : s.saved
+        ? `Saved: ${s.saved.trackTitle} · ${formatMs(s.saved.durationMs)}`
+        : s.note
+          ? s.note
+          : props.onStage
+            ? 'Starts with your mic — the show picture and the stage mix, as the audience sees and hears it, into your Drive as it happens'
+            : 'Films while you are on stage: the show picture and the stage mix, into your Drive as it happens';
+  return (
+    <div data-meet-film={s.recording ? 'on' : on ? 'armed' : 'off'} data-film-seconds={s.seconds}>
+      <Switch checked={on} onChange={(v) => updateApp({ recordMeet: v })} label="Film the whole meet into my Drive" hint={hint} />
+    </div>
+  );
+}
+
+function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; onClaim: () => void; onRemove?: () => void; onKick?: () => void }) {
   const s = props.slot;
   return (
     <div class={`slot-card ${s.participantId ? 'taken' : ''} ${props.mine ? 'mine' : ''}`} style={{ borderColor: SLOT_COLORS[s.slot as SingerSlot] }}>
@@ -601,8 +702,13 @@ function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; on
         {s.participantId && <span class={`chip ${s.ready ? 'ok' : ''}`}>{s.ready ? 'ready' : 'joined'}</span>}
       </button>
       {props.onRemove && (
-        <button type="button" class="slot-remove" aria-label={`Clear slot ${s.slot} (${s.displayName})`} title="Clear this slot" onClick={props.onRemove}>
+        <button type="button" class="slot-remove" aria-label={`Clear slot ${s.slot} (${s.displayName}) — back to the audience`} title="Back to the audience" onClick={props.onRemove}>
           <IcX size={14} />
+        </button>
+      )}
+      {props.onKick && (
+        <button type="button" class="slot-kick" aria-label={`Remove ${s.displayName} from the meet`} title="Remove from the meet" onClick={props.onKick}>
+          out
         </button>
       )}
     </div>
@@ -899,7 +1005,7 @@ function LiveStage(props: {
       const rec = await show.stop();
       const video = rec?.video ?? null;
       const videoOffsetMs = rec ? (rec.startCtxTime - origin) * 1000 - rec.lagMs : null;
-      engine.closeMic();
+      // The mic stays open: the singer is still on stage, and between songs the stage talks (talk-back); it closes when they step off.
       await keepAwake(false);
       (window as unknown as { __svFinish?: unknown }).__svFinish = { at: Date.now(), step: 'stopped', host, state: meet.state };
       // The host's take ending ends the song for everyone: the meet goes back to the lobby, next song up.
@@ -1045,6 +1151,11 @@ function LiveStage(props: {
               <span class="dot" style={{ background: level > 0.9 ? 'var(--danger)' : 'var(--ok)', opacity: 0.4 + level * 0.6 }} /> ±{Math.round(clock.value.rttMs / 2)} ms
             </span>
             <span class="chip" style={{ borderColor: SLOT_COLORS[mySlot] }}>S{mySlot}</span>
+            {canPublishSignal.value && (
+              <a class="btn sm" href={href(`/publishing/show/${encodeURIComponent(meet.meetId)}`)} target="_blank" rel="noopener" data-publish title="Publishing mode, in a new tab: the show view and Go live with your saved destinations">
+                Publish
+              </a>
+            )}
           </div>
           <MixBalance />
         </section>
@@ -1079,7 +1190,7 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
         </div>
         <section class="card stack">
           <h3>Performances of this meet</h3>
-          <div class="muted small">One per song: the show — everyone on stage over the stage background, with the whole mix — saved by the host and shared with everyone who was in the meet. Find them any time under Performances.</div>
+          <div class="muted small">One per song: the show — everyone on stage over the stage background, with the whole mix — and the film of the whole meet, saved by the host and shared with everyone who was in the meet. Find them any time under Performances.</div>
           {!shows.length && <div class="muted small">No song was recorded in this meet.</div>}
           <div class="list">
             {shows.map((p) => (

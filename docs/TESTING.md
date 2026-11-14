@@ -13,8 +13,8 @@ Live build: **https://singersvoice.github.io/SingersVoice/**
 
 - **Tracks** — My Drive / Public catalog tabs; *More → Publish to public catalog* shares the Drive folder and lists the track for everyone; *Add to my Drive* pulls a catalog track.
 - **Studio** — Track Maker, Sing, Performances (unchanged flows, now under `/studio`).
-- **Live Meets** — Create meet (pick a *public* track so others can load it) → share the link/code → performers *Take a stage slot* → *I'm ready* → host *Start the song (8 s count-in)* → everyone's stage starts at the same instant → *Finish* → the take lands as one file in `Performances` and is listed on the meet's ended page. Idle 5 minutes → the meet closes itself.
-- **Publishing** (privileged accounts) — Destinations (stream keys), Publish a meet, History; `/watch/<meetId>` is the public in-house page.
+- **Live Meets** — Create meet (pick a *public* track so others can load it) → share the link/code → whoever has the link takes a slot with *Take a stage slot* (the stage is open; the host can switch to deciding each one) → with headphones on, the singers on stage hear each other and the audience hears the stage (talk-back) → *I'm ready* → host *Start the song (8 s count-in)* → everyone's stage starts at the same instant, nobody on stage hears anyone else → the song ends → the take lands as one file in `Performances` and is listed on the meet's ended page; the host's device films the whole meet into their Drive as it goes (*Full meet*, on the ended page too). Only the host can remove someone (*out* on a slot, × on a name). Idle 5 minutes → the meet closes itself.
+- **Publishing** (Publisher plan or admin) — Destinations (stream keys, saved once), Publish a meet, History; **Publish** in the room opens the show view; `/watch/<meetId>` is the public in-house page. With the RTMP relay deployed (docs/RELAY.md) YouTube runs at ultra-low latency and Facebook / Instagram / Twitch go live.
 
 ## 10-minute smoke test
 
@@ -62,9 +62,12 @@ or `apps/web/public/worklets`.
 Two Chromium contexts with a synthetic-person clip as the fake camera (`tools/ci/fake-person.mjs`,
 so the real segmentation model has someone to cut out) — the host on a desktop viewport, a guest on a phone — import
 the sample track and meet in one room. The host takes a slot and must see herself cut out on the
-lobby's stage within seconds; the guest arrives as audience, cannot take a slot, asks to sing, the
-host sees the request and lets him on; both lobby stages then show two performers with video linked
-both ways — before any song. The publisher's show view, opened in the lobby, receives both. Then both
+lobby's stage within seconds; the guest arrives as audience and finds the stage open (*Take a stage
+slot*); the host switches it off, so he asks to sing, the host sees the request and lets him on;
+both lobby stages then show two performers with video linked both ways — before any song. The
+publisher's show view, opened in the lobby, receives both. With both mics open the test checks
+talk-back (the arriving vocal plays on each stage device, and the host's device starts filming the
+meet) and, once the song runs, Solo foldback (muted again). Then both
 get ready and the host starts the song: the test asserts the same mesh carries on (no reconnection),
 that both devices lay out two performers on the live stage with video linked both ways through the
 SVT DB relay (cut-outs drawn on both halves), that the host's cued pause freezes both timelines
@@ -76,7 +79,10 @@ show plays, *Go live* queues a publish job (in-house destination), the pause sho
 *Stop publishing* ends the job — and the singers' own stage is unaffected. A second tab of the same
 account opens Publishing › Preview while the show view stays up: the live meet's monitor tile
 receives both performers, draws the exact 16:9 broadcast picture without lyrics, reports the publish
-state, and the show view keeps its own links. Runs in CI after the viewport screenshots:
+state, and the show view keeps its own links. After the second song the host removes a listener
+(his device says so; the link no longer lets him in) and ends the meet: the ended page lists the
+two songs' shows and the film of the whole meet (long enough to span both songs), and the guest
+finds all three under Performances. Runs in CI after the viewport screenshots:
 
 ```bash
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/live-duet.mjs screenshots

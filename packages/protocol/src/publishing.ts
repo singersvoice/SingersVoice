@@ -7,17 +7,26 @@
  * show — H.264 + AAC, two-second MPEG-TS segments — and PUTs each segment to the service, which
  * keeps a rolling window for the in-house portal (an HLS playlist anyone can play) and forwards it,
  * with a playlist, to YouTube's HLS ingestion. No media server. Facebook, Instagram and Twitch take
- * RTMP(S) only, which a browser cannot speak: those stay queued for a session container.
+ * RTMP(S) only, which a browser cannot speak: with the RTMP relay deployed (services/relay,
+ * docs/RELAY.md) the service hands every segment on to it and one ffmpeg per show writes them to
+ * each RTMP target — YouTube included, at its ultra-low latency; without a relay those three stay
+ * queued and YouTube runs through HLS ingestion (half a minute behind).
  */
 export type DestinationKind = 'youtube' | 'facebook' | 'instagram' | 'twitch' | 'inhouse';
 
-export const DESTINATIONS: { kind: DestinationKind; label: string; ingestHint: string; keyLabel: string; needsKey: boolean; /** The browser can feed it today (HLS ingestion); the others wait for the session container. */ browserLive: boolean }[] = [
+export const DESTINATIONS: { kind: DestinationKind; label: string; ingestHint: string; keyLabel: string; needsKey: boolean; /** The browser alone can feed it (YouTube's HLS ingestion, the watch page); the others need the relay (services/relay), which also gives YouTube its low-latency RTMP path. */ browserLive: boolean }[] = [
   { kind: 'youtube', label: 'YouTube Live', ingestHint: 'rtmps://a.rtmps.youtube.com:443/live2', keyLabel: 'Stream key (YouTube Studio → Go live → Stream key)', needsKey: true, browserLive: true },
   { kind: 'facebook', label: 'Facebook Live', ingestHint: 'rtmps://live-api-s.facebook.com:443/rtmp/', keyLabel: 'Stream key (Live Producer → Streaming software)', needsKey: true, browserLive: false },
   { kind: 'instagram', label: 'Instagram Live', ingestHint: 'rtmps://edgetee-upload-…instagram.com:443/rtmp/', keyLabel: 'Stream key (Instagram Live Producer, professional accounts)', needsKey: true, browserLive: false },
   { kind: 'twitch', label: 'Twitch', ingestHint: 'rtmps://live.twitch.tv/app', keyLabel: 'Primary stream key (Creator Dashboard → Settings → Stream)', needsKey: true, browserLive: false },
   { kind: 'inhouse', label: 'In-house portal', ingestHint: 'The watch page — no key needed', keyLabel: '', needsKey: false, browserLive: true },
 ];
+
+/** The destinations the RTMP relay (services/relay) carries — everything that takes RTMP(S). With a relay configured, YouTube goes this way too (its ultra-low-latency setting is RTMP only). */
+export const RELAY_KINDS: DestinationKind[] = ['youtube', 'facebook', 'instagram', 'twitch'];
+
+/** The destinations a publish job can feed from the publisher's browser: through the service alone, or through the relay when there is one. */
+export const fedDestinations = (wanted: DestinationKind[], relay: boolean): DestinationKind[] => wanted.filter((k) => DESTINATIONS.find((d) => d.kind === k)?.browserLive || (relay && RELAY_KINDS.includes(k)));
 
 /** YouTube's HLS ingestion endpoint; the stream key goes in `cid`, the file name is appended to `file=`. */
 export const YOUTUBE_HLS_INGEST = 'https://a.upload.youtube.com/http_upload_hls';
@@ -58,6 +67,9 @@ export interface PublishJobLive {
   youtubeNote: string;
   /** The segments carry sound (AAC); false when the publisher's browser could only encode the picture. */
   audio?: boolean;
+  /** The RTMP relay (services/relay): off = none configured or no RTMP destination; ok = it took the last segment; error = it could not. */
+  relay?: 'off' | 'starting' | 'ok' | 'error';
+  relayNote?: string;
 }
 
 export interface PublishJob {

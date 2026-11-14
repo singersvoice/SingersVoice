@@ -26,6 +26,10 @@ class FakeDrive {
   files = new Map<string, FakeFile>();
   calls: string[] = [];
   private seq = 1;
+  /** Resumable upload sessions: the metadata given at the start and the bytes received so far, in order. */
+  sessions = new Map<string, { meta: Partial<FakeFile>; bytes: Uint8Array[]; size: number }>();
+  /** Answer the next N session PUTs with 503 (an outage on the way). */
+  failPuts = 0;
 
   private meta(f: FakeFile) {
     return {
@@ -105,8 +109,53 @@ class FakeDrive {
     const url = new URL(String(input instanceof Request ? input.url : input));
     const method = (init.method ?? 'GET').toUpperCase();
     this.calls.push(`${method} ${url.pathname}${url.search}`);
-    if (!new Headers(init.headers).get('authorization') && !url.searchParams.has('key') && !url.pathname.includes('/uc')) return this.json({ error: { message: 'unauthorized' } }, 401);
+    const uploadId = url.searchParams.get('upload_id');
+    if (!uploadId && !new Headers(init.headers).get('authorization') && !url.searchParams.has('key') && !url.pathname.includes('/uc')) return this.json({ error: { message: 'unauthorized' } }, 401);
     const p = url.pathname;
+
+    // resumable upload: start a session (the bytes come by PUT to the session url, no auth needed there — like Drive)
+    if (method === 'POST' && p === '/upload/drive/v3/files' && url.searchParams.get('uploadType') === 'resumable') {
+      const id = `u${this.seq++}`;
+      this.sessions.set(id, { meta: JSON.parse(String(init.body)) as Partial<FakeFile>, bytes: [], size: 0 });
+      return new Response(null, { status: 200, headers: { Location: `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=${id}` } });
+    }
+    if (uploadId) {
+      const s = this.sessions.get(uploadId);
+      if (!s) return this.json({ error: { message: 'no such session' } }, 404);
+      if (method === 'DELETE') {
+        this.sessions.delete(uploadId);
+        return new Response(null, { status: 499 });
+      }
+      if (this.failPuts > 0) {
+        this.failPuts--;
+        return this.json({ error: { message: 'backend error' } }, 503);
+      }
+      const range = new Headers(init.headers).get('content-range') ?? '';
+      const m = /^bytes (?:(\d+)-(\d+)|\*)\/(\d+|\*)$/.exec(range);
+      if (!m) return this.json({ error: { message: `bad range ${range}` } }, 400);
+      const total = m[3] === '*' ? null : Number(m[3]);
+      if (m[1] !== undefined) {
+        const from = Number(m[1]);
+        const to = Number(m[2]);
+        if (from !== s.size) return this.json({ error: { message: `expected offset ${s.size}, got ${from}` } }, 400);
+        const bytes = new Uint8Array(await (init.body as Blob).arrayBuffer());
+        if (bytes.length !== to - from + 1) return this.json({ error: { message: 'range/body mismatch' } }, 400);
+        if (total === null && bytes.length % (256 * 1024) !== 0) return this.json({ error: { message: 'a piece that is not the last must be a multiple of 256 KiB' } }, 400);
+        s.bytes.push(bytes);
+        s.size += bytes.length;
+      }
+      if (total !== null && s.size === total) {
+        const all = new Uint8Array(s.size);
+        let o = 0;
+        for (const b of s.bytes) {
+          all.set(b, o);
+          o += b.length;
+        }
+        this.sessions.delete(uploadId);
+        return this.json(this.meta(this.create({ ...s.meta, mimeType: s.meta.mimeType ?? 'application/octet-stream' }, all)));
+      }
+      return new Response(null, { status: 308, headers: s.size ? { Range: `bytes=0-${s.size - 1}` } : {} });
+    }
 
     // list
     if (method === 'GET' && p === '/drive/v3/files') return this.json({ files: this.query(url.searchParams.get('q') ?? '').map((f) => this.meta(f)) });
@@ -373,6 +422,65 @@ describe('DriveProvider (fake Drive v3)', () => {
     expect(loaded.vocal.size).toBe(1);
     expect(loaded.video).toBeNull();
   });
+
+  const filmManifest = { ...(manifest as object), performanceId: 'perf-film01', trackId: '', trackTitle: 'Full meet', durationMs: 0, files: [{ name: 'video.mp4', mimeType: 'video/mp4', size: 0, sha256: '' }] } as never;
+  const kib = (n: number, fill: number) => new Blob([new Uint8Array(n * 1024).fill(fill)], { type: 'video/mp4' });
+  const bytesOf = (f: FakeFile) => f.bytes!;
+
+  it('the film of a meet streams into Drive as it is recorded: 256 KiB pieces as they fill, the rest with the total, listed when done', async () => {
+    const p = new DriveProvider(() => token, 'sub1');
+    const film = await p.beginPerformanceStream(filmManifest, 'video/mp4');
+    expect(drive.sessions.size).toBe(1);
+    expect(drive.calls.at(-1)).toContain('uploadType=resumable');
+    // Three 1.5 MiB pieces: nothing goes out under 4 MiB; the fourth tips it over → one aligned piece (5.75 MiB of 6) goes out.
+    for (let i = 0; i < 4; i++) film.push(kib(1536, i + 1), { durationMs: (i + 1) * 10_000 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(film.bytes).toBe(4 * 1536 * 1024);
+    expect(film.stored).toBe(Math.floor((4 * 1536 * 1024) / (256 * 1024)) * 256 * 1024);
+    const remembered = JSON.parse(store.get('sv.drive.tree.sub1.films')!) as { stored: number; durationMs: number; manifest: { performanceId: string } }[];
+    expect(remembered).toHaveLength(1);
+    expect(remembered[0]).toMatchObject({ stored: film.stored, durationMs: 40_000 });
+    expect(remembered[0]!.manifest.performanceId).toBe('perf-film01');
+    // The end: a last short piece, then finish with the total — Drive answers with the file.
+    film.push(kib(100, 9), { durationMs: 41_000 });
+    const saved = await film.finish({ durationMs: 41_500 });
+    expect(drive.sessions.size).toBe(0);
+    const file = drive.files.get(saved.ref)!;
+    expect(bytesOf(file).length).toBe(4 * 1536 * 1024 + 100 * 1024);
+    expect(bytesOf(file)[0]).toBe(1);
+    expect(bytesOf(file)[4 * 1536 * 1024]).toBe(9); // the pieces in order
+    expect(file.name).toMatch(/^Full meet · Friday Meet \[mwe8q644-onrv6m\] · \d{4}-\d{2}-\d{2} \d{4}\.mp4$/);
+    expect(file.parents).toEqual([folders('Performances')[0]!.id]);
+    expect(file.appProperties).toMatchObject({ svType: 'performance', svPerfId: 'perf-film01', svMedia: 'video', svDurationMs: '41500', svTitle: 'Full meet' });
+    expect(JSON.parse(file.description!).files).toEqual([expect.objectContaining({ name: 'video.mp4', size: bytesOf(file).length, driveId: file.id })]);
+    expect(saved).toMatchObject({ performanceId: 'perf-film01', trackTitle: 'Full meet', durationMs: 41_500, hasVideo: true });
+    expect(store.get('sv.drive.tree.sub1.films')).toBe('[]'); // forgotten once complete
+    expect((await p.listPerformances()).map((x) => x.performanceId)).toEqual(['perf-film01']);
+  });
+
+  it('a hiccup on the way: the piece is sent again from where Drive is; a dying tab leaves a film the next start completes', async () => {
+    const p = new DriveProvider(() => token, 'sub1');
+    const film = await p.beginPerformanceStream(filmManifest, 'video/mp4');
+    drive.failPuts = 2; // the first piece meets an outage twice (and the resync in between is refused too)
+    film.push(kib(4096, 3), { durationMs: 10_000 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(film.error).toContain('retrying');
+    await new Promise((r) => setTimeout(r, 3500)); // 1 s + 2 s back-off
+    expect(film.error).toBeNull();
+    expect(film.stored).toBe(4096 * 1024);
+    expect([...drive.sessions.values()][0]!.size).toBe(4096 * 1024);
+    // The tab dies here: no finish. The next start of the app finds the session in localStorage and completes the film as it stands.
+    const q = new DriveProvider(() => token, 'sub1');
+    await q.ready();
+    expect(await q.finishDanglingFilms()).toBe(0); // ready() did it already in the background: once per start
+    await new Promise((r) => setTimeout(r, 20));
+    expect(drive.sessions.size).toBe(0);
+    const listed = await q.listPerformances();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({ performanceId: 'perf-film01', durationMs: 10_000, hasVideo: true });
+    expect(bytesOf(drive.files.get(listed[0]!.ref)!).length).toBe(4096 * 1024);
+    expect(store.get('sv.drive.tree.sub1.films')).toBe('[]');
+  }, 10_000);
 
   it('flattens performances saved by an older build (a folder each) into one file each, once, and deletes the folders', async () => {
     // Drive as an older build left it: Performances/Live/<take folder>/{manifest.json, vocal.wav, show.mp4}, the folder shared.

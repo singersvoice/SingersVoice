@@ -15,6 +15,8 @@ export class MeetSession {
   readonly you = signal<Participant | null>(null);
   readonly chat = signal<ChatMessage[]>([]);
   readonly error = signal<string | null>(null);
+  /** Set when the meet is over for this device for good (removed by the host, the meet ended or expired): the room shows why and offers the way out. */
+  readonly over = signal<{ code: string; message: string } | null>(null);
   readonly joining = signal(false);
   resumeToken = '';
   private lastSeq = 0;
@@ -42,8 +44,12 @@ export class MeetSession {
     }
   }
 
+  private lastRole: 'audience' | 'performer' | 'publisher' = 'audience';
+  private rejoining = false;
+
   async join(role: 'audience' | 'performer' | 'publisher'): Promise<void> {
     this.joining.value = true;
+    this.lastRole = role;
     try {
       if (Date.now() - clock.value.syncedAt > 60_000) await syncClock();
       const r = await api.post('POST /meets/:id/join', `/meets/${encodeURIComponent(this.meetId)}/join`, { role, resumeToken: this.resumeToken || undefined });
@@ -101,8 +107,16 @@ export class MeetSession {
       this.apply(snap);
       this.error.value = null;
     } catch (e) {
-      if (e instanceof ApiError && (e.status === 403 || e.status === 404 || e.status === 410)) {
+      if (e instanceof ApiError && e.code === 'not_participant' && this.lastRole !== 'publisher' && !this.rejoining) {
+        // The service forgot this device (asleep for a minute, a service restart): back in as a listener, quietly.
+        this.rejoining = true;
+        this.resumeToken = '';
+        this.join('audience')
+          .catch(() => undefined)
+          .finally(() => (this.rejoining = false));
+      } else if (e instanceof ApiError && (e.status === 403 || e.status === 404 || e.status === 410)) {
         this.error.value = e.message;
+        this.over.value = { code: e.code, message: e.message };
         this.stop();
       } else if (e instanceof ApiError && e.code === 'offline') {
         this.error.value = 'Connection lost — retrying';
@@ -138,6 +152,10 @@ export class MeetSession {
   }
   decide(participantId: string, allow: boolean, slot?: number): Promise<void> {
     return this.act(`requests/${encodeURIComponent(participantId)}/decide`, { allow, ...(slot ? { slot } : {}) });
+  }
+  /** Host: remove someone from the meet altogether; they cannot come back in. */
+  kick(participantId: string): Promise<void> {
+    return this.act(`participants/${encodeURIComponent(participantId)}/kick`, {});
   }
   removeFromStage(participantId: string): Promise<void> {
     return this.act(`stage/${encodeURIComponent(participantId)}/remove`, {});

@@ -125,7 +125,10 @@ describe('sv-control API', () => {
     const seated = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, slot: 1 }) }));
     expect(seated.you?.slot).toBe(1);
 
-    // Everyone enters as audience: bob asks to sing, the host (admin) lets him on; the stage policy can be opened.
+    // A new meet's stage is open: bob could take a slot straight away. The host would rather decide: now bob asks, the host lets him on.
+    expect(meet.stagePolicy).toBe('open');
+    const closed = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/policy`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, stagePolicy: 'ask' }) }));
+    expect(closed.meet.stagePolicy).toBe('ask');
     const askFirst = await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, slot: 2 }) });
     expect(askFirst.status).toBe(403);
     expect((await json<{ code: string }>(askFirst)).code).toBe('ask_first');
@@ -285,11 +288,23 @@ describe('sv-control API', () => {
     const created = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('carol'), body: JSON.stringify({ title: 'Big night' }) }));
     const host = await json<JoinMeetResponse>(await app.request(`/meets/${created.meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ role: 'audience' }) }));
     for (let i = 0; i < 40; i++) expect((await app.request(`/meets/${created.meet.meetId}/join`, { method: 'POST', headers: as(`fan${i}`), body: JSON.stringify({ role: 'audience' }) })).status).toBe(200);
-    const snap = await json<MeetSnapshot>(await app.request(`/meets/${created.meet.meetId}/heartbeat`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ resumeToken: host.resumeToken, chatSince: 0 }) }));
-    expect(snap.meet.audienceCount).toBe(40);
-    expect(snap.participants.filter((p) => p.slot === null)).toHaveLength(12);
+    const fan0 = await json<JoinMeetResponse>(await app.request(`/meets/${created.meet.meetId}/join`, { method: 'POST', headers: as('fan0'), body: JSON.stringify({ role: 'audience' }) }));
+    const snap = await json<MeetSnapshot>(await app.request(`/meets/${created.meet.meetId}/heartbeat`, { method: 'POST', headers: as('fan0'), body: JSON.stringify({ resumeToken: fan0.resumeToken, chatSince: 0 }) }));
+    expect(snap.meet.audienceCount).toBe(40); // the host is on stage; fan0 joining again is the same account
+    expect(snap.participants.filter((p) => p.slot === null && p.role !== 'host')).toHaveLength(12);
     expect(snap.participants.some((p) => p.participantId === host.you.participantId)).toBe(true);
     expect(JSON.stringify(snap).length).toBeLessThan(12_000);
+    // The host sees everyone — they decide who stays — and removes one for good.
+    const hostView = await json<MeetSnapshot>(await app.request(`/meets/${created.meet.meetId}/heartbeat`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ resumeToken: host.resumeToken, chatSince: 0 }) }));
+    expect(hostView.participants.filter((p) => p.role === 'audience')).toHaveLength(40);
+    const fan7 = hostView.participants.find((p) => p.displayName === 'fan7')!;
+    expect((await app.request(`/meets/${created.meet.meetId}/participants/${fan7.participantId}/kick`, { method: 'POST', headers: as('fan0'), body: JSON.stringify({ resumeToken: fan0.resumeToken }) })).status).toBe(403);
+    const after = await json<MeetSnapshot>(await app.request(`/meets/${created.meet.meetId}/participants/${fan7.participantId}/kick`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ resumeToken: host.resumeToken }) }));
+    expect(after.meet.audienceCount).toBe(39);
+    expect(after.meet.bannedUserIds).toContain(fan7.userId);
+    const back = await app.request(`/meets/${created.meet.meetId}/join`, { method: 'POST', headers: as('fan7'), body: JSON.stringify({ role: 'audience' }) });
+    expect(back.status).toBe(403);
+    expect((await json<{ code: string }>(back)).code).toBe('removed');
   });
 
   it('meets list maintenance: at most 3 open meets per host, end from the list, delete for good', async () => {
@@ -489,6 +504,84 @@ describe('sv-control API', () => {
       expect((await put('r12.ts', 12, seg(32))).status).toBe(409);
     } finally {
       globalThis.fetch = realFetch;
+    }
+  });
+
+  it('with the RTMP relay deployed: RTMP destinations stream through it (keys service-to-service only), YouTube skips HLS ingestion, a lost stream is started again, stop ends it', async () => {
+    const calls: { url: string; method: string; auth: string; type: string; body: string | Uint8Array }[] = [];
+    let answer: (url: string) => Response = () => Response.json({ ok: true });
+    deps.relay = {
+      url: 'https://relay.test/',
+      secret: 'shh-relay',
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const h = new Headers(init?.headers);
+        const body = init?.body;
+        calls.push({ url: String(input), method: init?.method ?? 'GET', auth: h.get('authorization') ?? '', type: h.get('content-type') ?? '', body: typeof body === 'string' ? body : body ? new Uint8Array(body as ArrayBuffer) : '' });
+        return answer(String(input));
+      }) as typeof fetch,
+    };
+    const realFetch = globalThis.fetch;
+    const outside: string[] = []; // anything the service would send elsewhere (YouTube's HLS ingestion must stay quiet)
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      outside.push(String(input));
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    try {
+      expect((await json<{ relay: boolean }>(await app.request('/publishing/destinations', { headers: as('alice') }))).relay).toBe(true);
+      await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, streamKey: 'yt-key-0002' }) });
+      await app.request('/publishing/destinations/facebook', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, streamKey: 'fb-key-0001' }) });
+      const meet = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Relayed show' }) }));
+      const made = await json<{ job: { jobId: string; live: { relay: string }; events: { note: string }[] } }>(
+        await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: meet.meet.meetId, destinations: ['youtube', 'facebook', 'inhouse'], title: 'Show' }) }),
+      );
+      const job = made.job;
+      expect(job.live.relay).toBe('starting');
+      expect(job.events[0]!.note).toContain('youtube, facebook, inhouse'); // all three are fed from the browser now
+      expect(job.events[0]!.note).not.toContain('need the RTMP relay');
+      const seg = (n: number) => new Uint8Array([0x47, ...Array.from({ length: 187 }, (_, i) => (i + n) & 0xff)]);
+      const put = (name: string, seq: number, bytes: Uint8Array) => app.request(`/publishing/jobs/${job.jobId}/live/${name}?seq=${seq}&dur=2000`, { method: 'PUT', headers: { 'X-Dev-User': 'alice', 'X-Dev-Name': 'alice', 'Content-Type': 'video/MP2T' }, body: bytes as unknown as BodyInit });
+      const first = await json<{ job: { state: string; live: { relay: string; relayNote: string; youtube: string; youtubeNote: string } }; youtube: unknown }>(await put('s0.ts', 0, seg(0)));
+      expect(first.job.state).toBe('live');
+      expect(first.job.live.relay).toBe('ok');
+      expect(first.job.live.relayNote).toContain('youtube, facebook');
+      expect(first.job.live.youtube).toBe('ok'); // YouTube rides the relay…
+      expect(first.job.live.youtubeNote).toContain('relay');
+      expect(first.youtube).toBeNull(); // …so its HLS ingestion is never called
+      expect(outside).toEqual([]);
+      // The relay saw: start (every target with its real key and ingest url, bearer secret), then the segment bytes.
+      expect(calls.map((x) => x.url.replace(/^https:\/\/relay\.test\/streams\/[^/]+/, 'S'))).toEqual(['S/start', 'S/segments']);
+      expect(calls[0]!.url).toBe(`https://relay.test/streams/${job.jobId}/start`);
+      expect(calls.every((x) => x.auth === 'Bearer shh-relay')).toBe(true);
+      const targets = (JSON.parse(calls[0]!.body as string) as { targets: { kind: string; url: string; key: string }[] }).targets;
+      expect(targets).toEqual([
+        { kind: 'youtube', url: 'rtmps://a.rtmps.youtube.com:443/live2', key: 'yt-key-0002' },
+        { kind: 'facebook', url: 'rtmps://live-api-s.facebook.com:443/rtmp/', key: 'fb-key-0001' },
+      ]);
+      expect(calls[1]!.type).toBe('video/MP2T');
+      expect(calls[1]!.body).toEqual(seg(0));
+      // The job as the API returns it never carries a key.
+      expect(JSON.stringify(first)).not.toContain('yt-key');
+      expect(JSON.stringify(first)).not.toContain('fb-key');
+      // The relay restarted and knows no such stream (404): the service starts it again and resends the segment.
+      answer = (url) => (url.endsWith('/segments') && calls.filter((x) => x.url.endsWith('/segments')).length === 2 ? Response.json({ error: 'no stream — start it first' }, { status: 404 }) : Response.json({ ok: true }));
+      const again = await json<{ job: { live: { relay: string } } }>(await put('s1.ts', 1, seg(1)));
+      expect(again.job.live.relay).toBe('ok');
+      expect(calls.slice(2).map((x) => x.url.split('/').pop())).toEqual(['segments', 'start', 'segments']);
+      // ffmpeg died on the relay (502): reported, not fatal — the watch page keeps playing; the next segment tries again later.
+      answer = (url) => (url.endsWith('/segments') ? Response.json({ error: 'ffmpeg is gone (exit 1): Connection refused' }, { status: 502 }) : Response.json({ ok: true }));
+      const broken = await json<{ job: { state: string; live: { relay: string; relayNote: string; youtube: string } } }>(await put('s2.ts', 2, seg(2)));
+      expect(broken.job.state).toBe('live');
+      expect(broken.job.live.relay).toBe('error');
+      expect(broken.job.live.relayNote).toContain('ffmpeg is gone');
+      expect(broken.job.live.youtube).toBe('error');
+      // Stop: the relay's stream is ended too.
+      const stopped = await json<{ job: { live: { relay: string } } }>(await app.request(`/publishing/jobs/${job.jobId}/stop`, { method: 'POST', headers: as('alice') }));
+      expect(stopped.job.live.relay).toBe('off');
+      expect(calls.at(-1)!.url).toBe(`https://relay.test/streams/${job.jobId}/stop`);
+      expect(outside).toEqual([]);
+    } finally {
+      globalThis.fetch = realFetch;
+      deps.relay = undefined;
     }
   });
 });

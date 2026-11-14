@@ -42,7 +42,8 @@ export function newMeet(input: { title: string; hostUserId: string; hostName: st
     endedAt: null,
     streamUrl: null,
     openJoin: true,
-    stagePolicy: 'ask',
+    stagePolicy: 'open', // whoever has the link may sing; the host can switch to deciding each one
+    bannedUserIds: [],
     requests: [],
     setList: [],
     songCount: 0,
@@ -54,6 +55,7 @@ export function ensureMeet(m: Meet): Meet {
   ensurePlayback(m);
   if (m.stagePolicy !== 'open' && m.stagePolicy !== 'ask') m.stagePolicy = 'ask';
   if (!Array.isArray(m.requests)) m.requests = [];
+  if (!Array.isArray(m.bannedUserIds)) m.bannedUserIds = [];
   if (!Array.isArray(m.setList)) m.setList = [];
   if (typeof m.songCount !== 'number') m.songCount = 0;
   return m;
@@ -186,6 +188,7 @@ export function touchForHeartbeat(m: Meet, now = Date.now()): boolean {
  * the audience is `meet.audienceCount`.
  */
 export function visibleParticipants(m: Meet, active: Participant[], names = SNAPSHOT_AUDIENCE_NAMES): Participant[] {
+  if (names === Infinity) return active; // the host sees everyone (they decide who stays)
   const onStage = new Set(m.stage.map((s) => s.participantId).filter(Boolean));
   const asking = new Set((m.requests ?? []).map((r) => r.participantId));
   const named: Participant[] = [];
@@ -313,6 +316,23 @@ export function withdrawRequest(m: Meet, p: Participant): void {
   m.requests = (m.requests ?? []).filter((r) => r.participantId !== p.participantId);
   if (p.stageRequest === 'pending') p.stageRequest = 'none';
 }
+
+/**
+ * The host removes someone from the meet: off the stage, off the wait list, and out — the account
+ * cannot join this meet again. Only the host, never themselves.
+ */
+export function kick(m: Meet, host: Participant, target: Participant): { ok: boolean; reason?: string } {
+  if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  if (host.userId !== m.hostUserId) return { ok: false, reason: 'not_host' };
+  if (target.participantId === host.participantId || target.userId === m.hostUserId) return { ok: false, reason: 'self' };
+  claimSlot(m, target, null);
+  withdrawRequest(m, target);
+  m.bannedUserIds = [...new Set([...(m.bannedUserIds ?? []), target.userId])];
+  return { ok: true };
+}
+
+/** True when the host removed this account from the meet. */
+export const isBanned = (m: Meet, userId: string): boolean => (m.bannedUserIds ?? []).includes(userId);
 
 /** The host lets someone on stage (first free slot unless given) or declines; the decision clears the request. */
 export function decideRequest(m: Meet, target: Participant, allow: boolean, slot?: number): { ok: boolean; reason?: string } {

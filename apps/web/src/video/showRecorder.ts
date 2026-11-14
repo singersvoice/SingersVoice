@@ -189,6 +189,24 @@ export class ShowRecorder {
   /** The recording names this device's singer like everyone else ("You" is for the screen). */
   youLabel: string | null = null;
 
+  /**
+   * Talk-back: between songs the singers on stage hear each other (the vocals that arrive play
+   * here); from the countdown to the end of the song they do not — Solo foldback, so latency
+   * never pulls a duet apart. The vocals feed the mix (the recording, the audience) either way.
+   */
+  private hearOthers = false;
+  setHearOthers(hear: boolean): void {
+    if (this.hearOthers === hear) return;
+    this.hearOthers = hear;
+    for (const v of this.vocals.values()) {
+      v.el.muted = !hear;
+      if (hear) void v.el.play().catch(() => undefined);
+    }
+  }
+  get hearingOthers(): boolean {
+    return this.hearOthers;
+  }
+
   /** Another singer's vocal arrived (stream) or went away (null). */
   setVocal(id: string, stream: MediaStream | null): void {
     const had = this.vocals.get(id);
@@ -202,8 +220,9 @@ export class ShowRecorder {
     }
     if (!stream) return;
     const el = document.createElement('audio');
-    el.muted = true; // never heard here — Solo foldback; it only keeps the stream flowing for the mix
+    el.muted = !this.hearOthers; // heard only between songs (talk-back); during the song it only keeps the stream flowing for the mix
     el.autoplay = true;
+    el.dataset.svVocal = id;
     el.style.display = 'none';
     el.srcObject = stream;
     document.body.appendChild(el);
@@ -223,36 +242,81 @@ export class ShowRecorder {
     }
   }
 
-  /**
-   * Start drawing now and recording at `atCtxTime` (the song's kickstart on the engine's clock), so
-   * the first frames are already in step when the music starts.
-   */
-  /** Draw the picture only (the publisher's broadcast encoder reads the canvas); no recorder, no audio bus. */
-  startDrawing(fps = SHOW_FPS): void {
-    if (this.running) return;
+  /** Someone reads the canvas for the whole meet (the film of the meet, `MeetRecorder`): the picture is drawn between songs too, and `stop` leaves it running. */
+  keepDrawing = false;
+
+  private ensureDrawing(fps = SHOW_FPS): void {
     this.running = true;
-    clearInterval(this.timer);
+    if (this.timer) return;
     this.timer = setInterval(() => this.frame(), 1000 / fps);
     this.frame();
   }
 
+  /** Draw the picture only (the publisher's broadcast encoder, the film of the meet read the canvas); no recorder, no audio bus. */
+  startDrawing(fps = SHOW_FPS): void {
+    this.ensureDrawing(fps);
+  }
+
   stopDrawing(): void {
-    if (this.mr) return; // a recording is running: stop() ends it
+    if (this.mr || this.keepDrawing) return; // a recording is running: stop() ends it; the film of the meet: its own stop
     this.running = false;
     clearInterval(this.timer);
     this.timer = undefined;
   }
 
+  /**
+   * A listener on the mix for the whole meet (the film of the meet): every bus this device builds
+   * — the song's, the talk between songs — feeds it, so the film hears everything the audience hears.
+   */
+  private tap: AudioNode | null = null;
+  setTap(node: AudioNode | null): void {
+    if (this.tap && this.audio) {
+      try {
+        this.audio.bus.output.disconnect(this.tap);
+      } catch {
+        /* not connected */
+      }
+    }
+    this.tap = node;
+    if (node && this.audio) this.audio.bus.output.connect(node);
+  }
+
+  /**
+   * The mix without a recording: on the host's device between songs, so the audience keeps
+   * hearing the stage (the singers talking) — the bus and the relay run; `start` then records
+   * through the same bus when the song begins, and `stop` tears it down (call again after).
+   */
+  private talkWanted = false;
+  startTalk(engine: AudioEngine): void {
+    this.engine = engine;
+    this.talkWanted = true;
+    this.buildAudio(engine);
+  }
+
+  /** Tear the talk mix down (the singer left the stage); a running recording is left alone. */
+  stopTalk(): void {
+    this.talkWanted = false;
+    if (this.mr) return;
+    this.tearDownAudio();
+  }
+
+  /** The mix bus (talk or recording) is up on this device. */
+  get mixing(): boolean {
+    return this.audio !== null;
+  }
+
+  /**
+   * Start drawing now (if not already — the picture may be running for the film of the meet) and
+   * recording at `atCtxTime` (the song's kickstart on the engine's clock), so the first frames are
+   * already in step when the music starts.
+   */
   start(engine: AudioEngine, atCtxTime: number): void {
-    if (this.running) return;
-    this.running = true;
+    if (this.mr) return; // a song is being recorded already
     this.engine = engine;
     this.buildAudio(engine);
     this.chunks = [];
     this.startCtx = null;
-    clearInterval(this.timer);
-    this.timer = setInterval(() => this.frame(), 1000 / SHOW_FPS);
-    this.frame();
+    this.ensureDrawing();
     const mime = pickShowMime();
     if (!mime || !this.audio) return;
     const stream = new MediaStream([...this.canvas.captureStream(SHOW_FPS).getVideoTracks(), ...this.audio.dest.stream.getAudioTracks()]);
@@ -313,10 +377,13 @@ export class ShowRecorder {
       if (video.size && this.startCtx !== null) out = { video, mimeType: mr.mimeType, startCtxTime: this.startCtx, lagMs: this.lagMs };
     }
     this.chunks = [];
-    this.running = false;
-    clearInterval(this.timer);
-    this.timer = undefined;
+    if (!this.keepDrawing) {
+      this.running = false;
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
     this.tearDownAudio();
+    if (this.talkWanted && this.engine) this.buildAudio(this.engine); // the stage talk goes on for the audience
     return out;
   }
 
@@ -344,6 +411,7 @@ export class ShowRecorder {
     const bus = new MixBus(ctx, engine.workletAvailable);
     bus.setBalance(this.balance.trackDb, this.balance.vocalDb);
     bus.output.connect(dest);
+    if (this.tap) bus.output.connect(this.tap); // the film of the meet hears this bus too
     const lagS = this.lagMs / 1000;
     // This device's own sources wait for the others; the track also waits the round trip the singer
     // sings against (speakers out, microphone in, the chain), so the voice lands on the beat it was sung to.

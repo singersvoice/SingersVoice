@@ -770,6 +770,44 @@
   color: var(--muted);
   cursor: pointer;
 }
+.slot-card .slot-kick {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  padding: 1px 7px;
+  font-size: 0.7em;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.slot-card .slot-kick:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.audience-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 4px 2px 0;
+}
+.audience-chip .chip-x {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+.audience-chip .chip-x:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
 .slot-card .slot-remove:hover {
   color: var(--danger);
   border-color: var(--danger);
