@@ -1,7 +1,7 @@
 /**
  * The show view's broadcast, as one object: the publisher's sound bus, a 1280×720 canvas drawing
  * the show picture (the same drawing the saved performance uses), the WebCodecs encoder cutting it
- * into two-second MPEG-TS segments, and the sender delivering them to the service — which keeps
+ * into one-second MPEG-TS segments, and the sender delivering them to the service — which keeps
  * them for the in-house portal and forwards them to YouTube.
  */
 import { signal } from '@preact/signals';

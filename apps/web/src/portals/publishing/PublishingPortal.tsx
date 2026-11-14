@@ -210,7 +210,7 @@ function Destinations() {
           </>
         ) : (
           <>
-            No RTMP relay is deployed: YouTube goes through HLS ingestion (choose <b>Low latency</b> in YouTube Studio; expect 15–25 s), and Facebook, Instagram and Twitch stay queued. The relay is one small container — see docs/RELAY.md.
+            No RTMP relay is deployed: YouTube goes through HLS ingestion (choose <b>Low latency</b> in YouTube Studio; expect 10–20 s), and Facebook, Instagram and Twitch stay queued. The relay is one small container — see docs/RELAY.md.
           </>
         )}
       </p>
@@ -414,7 +414,7 @@ function Publish(props: { onDone: () => void }) {
           ) : (
             <>
               {' '}
-              and to <b>YouTube</b> through its HLS ingestion (15–25 s behind with YouTube's "Low latency" setting). Facebook, Instagram and Twitch take RTMP only, which a browser cannot send: those jobs stay <b>requested</b> until the RTMP relay is deployed (docs/RELAY.md — it also takes YouTube down to a few seconds).
+              and to <b>YouTube</b> through its HLS ingestion (10–20 s behind with YouTube's "Low latency" setting). Facebook, Instagram and Twitch take RTMP only, which a browser cannot send: those jobs stay <b>requested</b> until the RTMP relay is deployed (docs/RELAY.md — it also takes YouTube down to a few seconds).
             </>
           )}
         </p>

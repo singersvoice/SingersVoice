@@ -47,6 +47,9 @@ const errors = { alice: [], bob: [], carol: [], dave: [] };
 async function person(name, viewport, { track = true } = {}) {
   const ctx = await browser.newContext({ viewport, permissions: ['microphone', 'camera'], deviceScaleFactor: 1 });
   const page = await ctx.newPage();
+  // A main-thread watchdog: every gap of more than a second between 100 ms ticks is a stall worth knowing about (the
+  // transport checks below name the stalls when a device applies a cue late).
+  await page.addInitScript(() => { window.__svStalls = []; let last = Date.now(); setInterval(() => { const now = Date.now(); if (now - last > 1000) window.__svStalls.push({ at: new Date(last).toISOString().slice(11, 23), ms: now - last }); last = now; }, 100); });
   page.on('pageerror', (e) => errors[name].push(String(e)));
   page.on('console', (m) => m.type() === 'error' && errors[name].push(m.text()));
   page.on('response', (r) => { if (r.status() >= 400 && !/favicon/.test(r.url())) console.log(`[${name}] ${new Date().toISOString().slice(11, 23)} HTTP ${r.status()} ${r.request().method()} ${r.url().replace(servers.controlUrl, '')}`); });
@@ -198,9 +201,17 @@ try {
 
   // Everyone gets ready; the host starts the song. The stage carries on — nothing reconnects.
   await alice.page.getByRole('button', { name: /I'm ready/ }).click();
-  await alice.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
+  await alice.page.getByText(/Ready — start the song/).waitFor({ timeout: 30000 });
   await bob.page.getByRole('button', { name: /I'm ready/ }).click();
-  await bob.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
+  await bob.page.getByText(/Ready — start the song/).waitFor({ timeout: 30000 });
+  // The song belongs to the stage: the singer who is not the host has the Start button too (and the set list's controls).
+  check((await bob.page.getByRole('button', { name: /Start the song/ }).count()) === 1, 'a singer on stage (not the host) can start the song');
+  // Picking the song that is up already adds nothing: the picker says where it is instead of offering it again.
+  await bob.page.getByRole('button', { name: 'Pick your selection of song' }).click();
+  await bob.page.getByLabel('Search songs').fill('sample');
+  await bob.page.locator('.songpicker .item[data-place="current"]').waitFor({ timeout: 10000 });
+  check((await bob.page.getByRole('button', { name: 'Pick CI Sample Song' }).count()) === 0 && /Up now/.test(await bob.page.locator('.songpicker .item[data-place="current"]').innerText()), 'the song that is up is not offered twice (the picker says "Up now")');
+  await bob.page.getByRole('button', { name: 'Close the song picker' }).click();
   // Talk-back: with both mics open in the lobby, each singer hears the other (the arriving vocal plays) — until the song.
   const vocalEls = (p) => p.evaluate(() => [...document.querySelectorAll('audio[data-sv-vocal]')].map((a) => ({ id: a.dataset.svVocal, muted: a.muted })));
   await alice.page.waitForFunction(() => document.querySelectorAll('audio[data-sv-vocal]').length >= 1, null, { timeout: 20000 }).catch(() => undefined);
@@ -346,7 +357,7 @@ try {
   const aStream = probe.streams.find((x) => x.codec_type === 'audio');
   console.log('youtube segment:', path.basename(probeSeg), statSync(probeSeg).size, 'bytes', JSON.stringify({ format: probe.format.format_name, duration: probe.format.duration, video: vStream && `${vStream.codec_name} ${vStream.width}x${vStream.height}`, audio: aStream && `${aStream.codec_name} ${aStream.sample_rate} Hz` }));
   check(probe.format.format_name === 'mpegts' && vStream?.codec_name === 'h264' && vStream.width === 1280 && vStream.height === 720, 'the segments are MPEG-TS with H.264 1280×720');
-  check(Number(probe.format.duration) > 1.5 && Number(probe.format.duration) < 3.5, `a segment is about two seconds (${probe.format.duration} s)`);
+  check(Number(probe.format.duration) > 0.6 && Number(probe.format.duration) < 2.5, `a segment is about one second (${probe.format.duration} s)`);
   const liveAudio = await carol.page.evaluate(() => window.__svBroadcast?.support.value?.audio);
   check(liveAudio === 'aac' ? aStream?.codec_name === 'aac' : !aStream, `the segments carry ${liveAudio === 'aac' ? 'AAC sound' : 'video only (no AAC encoder in this browser)'}`);
   const decoded = (() => { try { execFileSync('ffmpeg', ['-v', 'error', '-xerror', '-i', probeSeg, '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] }); return true; } catch { return false; } })();
@@ -434,7 +445,7 @@ try {
   await wait(5500);
   const ta4 = await alice.page.locator('.timeline .mono').first().innerText();
   const tb4 = await bob.page.locator('.timeline .mono').first().innerText();
-  console.log('after the seek:', { alice: ta4, bob: tb4 });
+  console.log('after the seek:', { alice: ta4, bob: tb4 }, 'stalls alice:', JSON.stringify(await alice.page.evaluate(() => window.__svStalls.slice(-6))), 'bob:', JSON.stringify(await bob.page.evaluate(() => window.__svStalls.slice(-6))));
   check(secs(ta4) >= 2 && secs(ta4) <= 9 && secs(tb4) >= 2 && secs(tb4) <= 9 && Math.abs(secs(ta4) - secs(tb4)) <= 1, `a singer's seek moved the song back for everyone, in sync (${ta4} / ${tb4})`);
   check(!/jumping to/.test(await bob.page.locator('.sing .stagebar').innerText()), 'the cued jump landed (no "jumping to…" left)');
   // Host pauses: cued 3 s ahead; both freeze at the same position.
@@ -490,17 +501,15 @@ try {
   await alice.page.getByRole('button', { name: 'Let dave sing' }).click();
   await dave.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
   check(true, 'the host seats the wait-listed singer once the song is over');
-  // Next song: the host adds it again, everyone gets ready, the host starts it — a second act of the same karaoke event.
-  await addSong(alice.page, 'alice');
-  await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
-  await alice.page.getByRole('button', { name: /I'm ready/ }).click();
-  await alice.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
+  // Next song — a second act of the same karaoke event, run by the other singer: bob picks it and starts it (his
+  // device is made ready on the way); the host's device joins from the count-in by itself (her mic is open) — no tap.
+  await addSong(bob.page, 'bob');
   await bob.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
-  await bob.page.getByRole('button', { name: /I'm ready/ }).click();
-  await bob.page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
-  await alice.page.getByRole('button', { name: /Start the song/ }).click();
-  await alice.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
+  await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
+  await bob.page.getByRole('button', { name: /Start the song/ }).click();
   await bob.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
+  await alice.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
+  check(true, 'a singer (not the host) picked the next song and started it; the host joined from the count-in without a tap');
   await wait(6000);
   // The third link may take a heal round under load: wait for both stages to report 2/2 rather than a fixed moment.
   const t3 = Date.now();
@@ -525,15 +534,22 @@ try {
   const balance = await bob.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}'));
   check(balance.trackDb === 6 && balance.vocalDb === -3, `Track / Vocal volume move in 3 dB steps (±30 dB) and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
   await bob.page.getByRole('button', { name: 'Close the set list' }).click();
-  // A singer stops only their own take; the song goes on for the host — the singer stays on the live stage and may rejoin.
-  await bob.page.getByRole('button', { name: 'Stop my take' }).click();
+  // A singer may leave the song alone (their own take ends; the song goes on for the host) and join back in…
+  await bob.page.getByRole('button', { name: 'Leave the song' }).click();
   await bob.page.getByRole('button', { name: 'Join the song' }).waitFor({ timeout: 30000 });
-  check(await alice.page.locator('.sing .stagebar').isVisible(), "a singer's Stop ends only their take — the host keeps singing, the singer stays on the live stage");
-  // The host stops the song for everyone: everyone is back on the lobby stage; the takes save themselves.
-  await alice.page.getByRole('button', { name: 'Stop the song for everyone' }).click();
+  check(await alice.page.locator('.sing .stagebar').isVisible(), "a singer's Leave ends only their take — the host keeps singing, the singer stays on the live stage");
+  await bob.page.getByRole('button', { name: 'Join the song' }).click();
+  await bob.page.getByRole('button', { name: 'Stop the song for everyone' }).waitFor({ timeout: 30000 });
+  await wait(4000);
+  const rejoinA = await posOf(alice.page);
+  const rejoinB = await posOf(bob.page);
+  console.log('after rejoin:', JSON.stringify({ alice: rejoinA, bob: rejoinB }));
+  check(rejoinB.playing && Math.abs(rejoinA.posMs - rejoinB.posMs) < 2500, `the singer who left is back in the song, in step with the stage (${Math.round(rejoinA.posMs / 1000)} s / ${Math.round(rejoinB.posMs / 1000)} s)`);
+  // …or stop the song for everyone, like the host: everyone is back on the lobby stage; the takes save themselves.
+  await bob.page.getByRole('button', { name: 'Stop the song for everyone' }).click();
   await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
   await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
-  check(true, '"Stop song" on the host device wraps up the song for everyone — straight back to the lobby stage');
+  check(true, '"Stop song" on a singer\'s device wraps up the song for everyone — straight back to the lobby stage');
   await alice.page.locator('[data-save="done"][data-save-id]').nth(0).waitFor({ timeout: 60000 });
   await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 90000 });
   check((await alice.page.locator('[data-save="failed"]').count()) === 0, 'the second song saved itself too (nothing stuck)');

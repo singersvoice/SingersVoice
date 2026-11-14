@@ -594,7 +594,6 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const r = addSong(meet, p, { trackId: song.trackId ? String(song.trackId) : null, catalogTrackId: song.catalogTrackId ? String(song.catalogTrackId) : null, trackTitle: String(song.trackTitle ?? ''), durationMs: Number(song.durationMs ?? 0) }, Boolean(body.now));
     if (!r.ok) {
       if (r.reason === 'not_on_stage') return err(c, 403, 'not_on_stage', 'Step on stage (or host the meet) to pick songs');
-      if (r.reason === 'not_host') return err(c, 403, 'not_host', 'Only the host plays a song right away — it was not added');
       if (r.reason === 'song_in_progress') return err(c, 409, 'song_in_progress', 'A song is in progress — it is added to the set list instead');
       return err(c, 400, r.reason ?? 'bad_song', r.reason === 'meet_closed' ? 'This meet has ended' : 'Pick a track with a title');
     }
@@ -602,6 +601,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     touch(meet);
     await store.saveParticipant(p);
     await store.saveMeet(meet);
+    // The song was there already: nothing added, the snapshot says where it is (the room tells the singer).
+    if (r.duplicate) c.header('X-Song-Duplicate', r.duplicate);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -613,7 +614,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     ensureMeet(meet);
     const p = await participantFromBody(c, meet.meetId, body.resumeToken);
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
-    if (!isHost(meet, p)) return err(c, 403, 'not_host', 'Only the host ends the song');
+    if (!canTransport(meet, p)) return err(c, 403, 'not_on_stage', 'Only the singers on stage (or the host) end the song');
     tick(meet);
     const r = nextSong(meet);
     if (!r.ok) return err(c, 409, r.reason ?? 'song', 'This meet has ended');
@@ -633,7 +634,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     tick(meet);
     const r = songAction(meet, p, c.req.param('sid'), body.action);
     if (!r.ok) {
-      if (r.reason === 'not_host') return err(c, 403, 'not_host', 'Only the host orders the set list');
+      if (r.reason === 'not_on_stage') return err(c, 403, 'not_on_stage', 'Step on stage (or host the meet) to order the set list');
       if (r.reason === 'no_song') return err(c, 404, 'no_song', 'That song is no longer on the set list');
       if (r.reason === 'song_in_progress') return err(c, 409, 'song_in_progress', 'A song is in progress');
       return err(c, 409, r.reason ?? 'song', 'This meet has ended');
@@ -714,7 +715,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
     const p = await participantFromBody(c, meet.meetId, body.resumeToken);
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
-    if (!isHost(meet, p)) return err(c, 403, 'not_host', 'Only the host can start the song');
+    if (!canTransport(meet, p)) return err(c, 403, 'not_on_stage', 'Only the singers on stage (or the host) start the song');
     tick(meet);
     const r = start(meet, Number(body.leadMs ?? 5000));
     if (!r.ok) return err(c, 409, r.reason ?? 'start', r.reason === 'no_performers' ? 'Nobody is on stage yet' : r.reason === 'no_song' ? 'Pick a song first (set list)' : 'The meet is not in the lobby');

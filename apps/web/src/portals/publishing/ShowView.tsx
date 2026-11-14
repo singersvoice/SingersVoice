@@ -6,7 +6,7 @@
  * meet as its own kind of participant ("publisher": never on stage, never counted as audience),
  * receives every performer's video and vocal over the same mesh the singers use (receive-only), and
  * runs the broadcast from a bar that hides itself while the show plays. **Go live** makes this
- * browser the encoder (`broadcast.ts`): H.264 + AAC, two-second segments, delivered to the service,
+ * browser the encoder (`broadcast.ts`): H.264 + AAC, one-second segments, delivered to the service,
  * which keeps them for the watch page and forwards them to YouTube's HLS ingestion. Nothing here
  * touches the singers' rooms: they keep their lyrics and controls; the show view only listens to
  * the meet (stage, transport) and pulls media. The picture itself is `showStage.tsx`, shared with

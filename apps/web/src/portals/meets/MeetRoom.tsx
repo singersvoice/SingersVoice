@@ -140,8 +140,11 @@ export function MeetRoom(props: { id: string }) {
   };
 
   /** User-gesture pre-flight: audio context, mic (+camera on iOS), decode the track. Then "ready". */
-  const prepare = async () => {
-    if (!track?.loaded) return toast('The track is not available on this device yet', 'warn');
+  const prepare = async (): Promise<boolean> => {
+    if (!track?.loaded) {
+      toast('The track is not available on this device yet', 'warn');
+      return false;
+    }
     setPreparing(true);
     try {
       const audio = audioSettings.peek();
@@ -156,12 +159,27 @@ export function MeetRoom(props: { id: string }) {
       await keepAwake(true);
       setPrepared(true);
       await session.setReady(true);
+      return true;
     } catch (e) {
       toast(errorText(e), 'error', 8000);
+      return false;
     } finally {
       setPreparing(false);
     }
   };
+  // Whoever starts the song, every singer on stage whose mic is open joins it: no tap needed on the other devices
+  // (the mic and camera opened with the stage; the track is loaded) — from the count-in, or as soon as the track
+  // is in on a slower device. A singer who left the running song (Leave) is not pulled back in.
+  const songRunning = meet?.state === 'countdown' || meet?.state === 'live';
+  const leftSong = useRef(false);
+  const micIsOpen = engineRef.current?.micOpen.value ?? false;
+  useEffect(() => {
+    if (songRunning && !leftSong.current && onStageNow && !prepared && !preparing && track?.loaded && micIsOpen) void prepare();
+  }, [songRunning, onStageNow, prepared, preparing, track, micIsOpen]);
+  const inLobby = meet?.state === 'lobby';
+  useEffect(() => {
+    if (inLobby) leftSong.current = false; // the song is over (or a new one is up): everyone is in again
+  }, [inLobby, trackKey]);
 
   if (!controlConfigured.value)
     return (
@@ -205,6 +223,7 @@ export function MeetRoom(props: { id: string }) {
       participants={snap?.participants ?? []}
       onTake={(t, loaded, singers) => {
         // The take saves itself in the background; the singer is already back on the stage (ready again for the next song, or to rejoin this one).
+        if (meet.state === 'live' || meet.state === 'countdown') leftSong.current = true; // they stepped out of a running song: back in only by their own tap
         setPrepared(false);
         saveLiveTake({ take: t, loaded, slot: you.slot ?? 1, meet: { meetId: meet.meetId, title: meet.title, hostName: meet.hostName }, host: you.userId === meet.hostUserId, singers, resumeToken: session.resumeToken || undefined });
       }}
@@ -222,7 +241,7 @@ function Room(props: {
   engine: AudioEngine | null;
   prepared: boolean;
   preparing: boolean;
-  onPrepare: () => Promise<void>;
+  onPrepare: () => Promise<boolean>;
   onOpenMic: () => Promise<void>;
   micBusy: boolean;
   participants: Participant[];
@@ -268,7 +287,7 @@ function Lobby(props: {
   stage: RoomStage;
   prepared: boolean;
   preparing: boolean;
-  onPrepare: () => Promise<void>;
+  onPrepare: () => Promise<boolean>;
   onOpenMic: () => Promise<void>;
   micBusy: boolean;
   participants: Participant[];
@@ -375,8 +394,10 @@ function Lobby(props: {
     }
   };
   const hasSong = Boolean(meet.trackId || meet.catalogTrackId);
+  /** Anyone on stage starts the song for the stage; the one who starts is made ready on the way (mic, track) if not yet. */
   const start = async () => {
     try {
+      if (!props.prepared && !(await props.onPrepare())) return;
       await session.start(LEAD_MS);
     } catch (e) {
       toast(errorText(e), 'error');
@@ -578,7 +599,7 @@ function Lobby(props: {
                         {props.preparing ? <Spinner /> : <IcMic />} {live ? 'Join the song on stage' : "I'm ready (mic & camera check)"}
                       </button>
                     ) : (
-                      <span class="chip ok">{live ? 'Joining the song…' : 'Ready — stage will start automatically'}</span>
+                      <span class="chip ok">{live ? 'Joining the song…' : 'Ready — start the song when the stage is'}</span>
                     ))}
                   <button class="btn" onClick={() => void claim(null)}>
                     Leave stage
@@ -614,12 +635,12 @@ function Lobby(props: {
                   {askState === 'declined' && <span class="chip">The host said not now</span>}
                 </>
               )}
-              {host && !live && (
-                <button class="btn accent" disabled={meet.performerCount === 0 || !hasSong} title={!hasSong ? 'Pick a song first' : undefined} onClick={() => void start()}>
-                  <IcPlay /> Start the song (8 s count-in)
+              {onStage && !live && (
+                <button class="btn accent" disabled={meet.performerCount === 0 || !hasSong || !props.track?.loaded || props.preparing} title={!hasSong ? 'Pick a song first' : !props.track?.loaded ? 'Loading the song on this device…' : 'Starts the song for everyone on stage — an 8 s count-in, every device in step'} onClick={() => void start()}>
+                  {props.preparing ? <Spinner /> : <IcPlay />} Start the song (8 s count-in)
                 </button>
               )}
-              {host && live && (
+              {onStage && live && (
                 <button class="btn" onClick={() => void endSong()}>
                   <IcMusic size={16} /> End the song
                 </button>
@@ -803,7 +824,7 @@ function LiveStage(props: {
   stage: RoomStage;
   track: MeetTrack | null;
   prepared: boolean;
-  onPrepare: () => Promise<void>;
+  onPrepare: () => Promise<boolean>;
   onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>, singers: { slot: number; displayName: string; userId?: string }[]) => void;
   /** A take is in progress (from the first cue until it wraps up). */
   onSinging: (singing: boolean) => void;
@@ -910,7 +931,7 @@ function LiveStage(props: {
     // `started` became true and would return at once — a song nobody paused or seeked would never finish.
     player.onEnded = () => {
       (window as unknown as { __svEnded?: unknown }).__svEnded = Date.now(); // support / e2e
-      void finishRef.current();
+      void finishRef.current(true); // the track is over: the song is over for the stage (the first device to get there says so)
     };
     cancelAnimationFrame(raf.current);
     const tick = () => {
@@ -980,8 +1001,13 @@ function LiveStage(props: {
     if (started && (meet.state === 'lobby' || meet.state === 'ended' || meet.state === 'expired')) void finish();
   }, [meet.state]);
 
-  const finishRef = useRef<() => Promise<void>>(async () => undefined);
-  const finish = async () => {
+  const finishRef = useRef<(forEveryone?: boolean) => Promise<void>>(async () => undefined);
+  /**
+   * Wrap up this device's take — and, `forEveryone`, end the song for the whole stage (the next one on the set
+   * list comes up). The song's natural end on the host's device ends it for everyone as well; a singer who only
+   * leaves the song keeps the stage singing and may join back in.
+   */
+  const finish = async (forEveryone = host) => {
     (window as unknown as { __svFinish?: unknown }).__svFinish = { at: Date.now(), finishing, started, step: 'called' }; // support / e2e
     if (finishing || !started) return;
     setFinishing(true);
@@ -1008,8 +1034,8 @@ function LiveStage(props: {
       // The mic stays open: the singer is still on stage, and between songs the stage talks (talk-back); it closes when they step off.
       await keepAwake(false);
       (window as unknown as { __svFinish?: unknown }).__svFinish = { at: Date.now(), step: 'stopped', host, state: meet.state };
-      // The host's take ending ends the song for everyone: the meet goes back to the lobby, next song up.
-      if (host && (meet.state === 'live' || meet.state === 'countdown')) void session.nextSong().catch(() => undefined);
+      // Ending the song for everyone: the meet goes back to the lobby, next song up (the host's take ending always does).
+      if (forEveryone && (meet.state === 'live' || meet.state === 'countdown')) void session.nextSong().catch(() => undefined);
       props.onTake(
         {
           vocal,
@@ -1025,6 +1051,14 @@ function LiveStage(props: {
         singersRef.current,
       );
       props.onSinging(false);
+      // Back to a clean slate: a singer who left the running song joins it again with "Join the song" (a fresh take,
+      // cued from where the song is), and the next song starts from the top.
+      scheduledEpoch.current = 0;
+      pausedLocally.current = false;
+      takeOrigin.current = 0;
+      setStarted(false);
+      setCountdown(null);
+      setFinishing(false);
     } catch (e) {
       toast(errorText(e), 'error', 8000);
       setFinishing(false);
@@ -1138,9 +1172,14 @@ function LiveStage(props: {
                 <button class="btn" aria-label="Restart the song for everyone" title="Restart from the top — for everyone on stage" onClick={() => void transport('restart')}>
                   <IcSkipBack /> Restart
                 </button>
-                <button class="btn big accent" disabled={finishing} aria-label={host ? 'Stop the song for everyone' : 'Stop my take'} title={host ? 'Stops the song for everyone — the next one on the set list comes up' : 'Stops your take (the song goes on for the others)'} onClick={() => void finish()}>
-                  {finishing ? <Spinner /> : <IcStop />} {host ? 'Stop song' : 'Stop'}
+                <button class="btn big accent" disabled={finishing} aria-label="Stop the song for everyone" title="Stops the song for everyone on stage — the next one on the set list comes up" onClick={() => void finish(true)}>
+                  {finishing ? <Spinner /> : <IcStop />} Stop song
                 </button>
+                {!host && (
+                  <button class="btn" disabled={finishing} aria-label="Leave the song" title="Ends your own take — the song goes on for the others, and you can join back in" onClick={() => void finish(false)}>
+                    Leave
+                  </button>
+                )}
               </>
             ) : (
               <button class="btn big primary" disabled>

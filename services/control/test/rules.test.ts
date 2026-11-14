@@ -107,6 +107,10 @@ describe('meet rules', () => {
     expect(start(m, 5000, T0)).toEqual({ ok: false, reason: 'no_performers' });
     claimSlot(m, person('p1'), 1);
     expect(start(m, 5000, T0)).toEqual({ ok: true });
+    const cued = m.kickstartEpochMs;
+    expect(start(m, 5000, T0 + 1000)).toEqual({ ok: true }); // a second singer's tap during the count-in: nothing moves
+    expect(m.kickstartEpochMs).toBe(cued);
+    expect(m.playback.epoch).toBe(1);
     expect(m.state).toBe('countdown');
     expect(m.kickstartEpochMs).toBe(T0 + 5000);
     expect(claimSlot(m, person('p2'), 2)).toEqual({ ok: false, reason: 'song_in_progress' }); // the count-in has started: the stage is the singers' own
@@ -224,20 +228,27 @@ describe('meet rules', () => {
     expect(addSong(m, host, { trackId: null, catalogTrackId: 'c2', trackTitle: 'Two' }, false, T0 + 1).ok).toBe(true);
     expect(addSong(m, a, { trackId: 't3', catalogTrackId: null, trackTitle: 'Three' }, false, T0 + 2).ok).toBe(true);
     expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two', 'Three']);
-    // a singer may play now only through the host; the host swaps the current song, which goes back to the top
-    expect(addSong(m, a, { trackId: 't4', catalogTrackId: null, trackTitle: 'Four' }, true)).toMatchObject({ ok: false, reason: 'not_host' });
-    expect(addSong(m, host, { trackId: 't4', catalogTrackId: null, trackTitle: 'Four' }, true).ok).toBe(true);
+    // the same song twice is never listed twice: the ids meet, or the title and length do (a singer's own copy)
+    expect(addSong(m, host, { trackId: 'x-own', catalogTrackId: 'c2', trackTitle: 'Two (copy)' }, false, T0 + 3)).toMatchObject({ ok: true, duplicate: 'queued' });
+    expect(addSong(m, a, { trackId: 'own-1', catalogTrackId: null, trackTitle: ' one ', durationMs: 20_500 }, false, T0 + 3)).toMatchObject({ ok: true, duplicate: 'current' });
+    expect(addSong(m, a, { trackId: 'own-1', catalogTrackId: null, trackTitle: 'One', durationMs: 60_000 }, false, T0 + 3).ok).toBe(true); // a namesake of another length is its own song
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two', 'Three', 'One']);
+    expect(songAction(m, a, m.setList[2]!.id, 'remove').ok).toBe(true);
+    // the song belongs to the stage: any singer on stage plays a song now — the current one goes back to the top
+    expect(addSong(m, a, { trackId: 't4', catalogTrackId: null, trackTitle: 'Four' }, true).ok).toBe(true);
     expect(m.trackTitle).toBe('Four');
     expect(m.setList.map((e) => e.trackTitle)).toEqual(['One', 'Two', 'Three']);
-    // ordering: only the host; the picker may remove their own
+    // ordering: anyone on stage; the audience only their own pick (none here)
+    const fan = person('fan');
     const three = m.setList[2]!;
-    expect(songAction(m, a, three.id, 'up')).toMatchObject({ ok: false, reason: 'not_host' });
-    expect(songAction(m, host, three.id, 'up').ok).toBe(true);
+    expect(songAction(m, fan, three.id, 'up')).toMatchObject({ ok: false, reason: 'not_on_stage' });
+    expect(songAction(m, a, three.id, 'up').ok).toBe(true);
     expect(m.setList.map((e) => e.trackTitle)).toEqual(['One', 'Three', 'Two']);
-    expect(songAction(m, a, m.setList[0]!.id, 'remove')).toMatchObject({ ok: false, reason: 'not_host' }); // One was re-queued by the host
-    expect(songAction(m, a, three.id, 'remove').ok).toBe(true); // Three is hers
+    expect(songAction(m, fan, m.setList[0]!.id, 'remove')).toMatchObject({ ok: false, reason: 'not_on_stage' });
+    expect(songAction(m, a, three.id, 'remove').ok).toBe(true);
     expect(m.setList.map((e) => e.trackTitle)).toEqual(['One', 'Two']);
-    expect(songAction(m, host, m.setList[0]!.id, 'now').ok).toBe(true);
+    // "now" on a queued song that is picked again brings that entry up instead of adding a copy
+    expect(addSong(m, a, { trackId: null, catalogTrackId: 'c1', trackTitle: 'One' }, true)).toMatchObject({ ok: true, duplicate: 'queued' });
     expect(m.trackTitle).toBe('One');
     expect(m.setList.map((e) => e.trackTitle)).toEqual(['Four', 'Two']);
     // sing it: nothing may be swapped under a song in progress, and the wait list waits for the song to end

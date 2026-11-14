@@ -3,7 +3,7 @@
  *
  * Browsers cannot speak RTMP, and RTMP is what YouTube's ultra-low-latency ingestion, Facebook,
  * Instagram and Twitch take. The publisher's browser already produces H.264 + AAC MPEG-TS segments
- * (two seconds each) and sends them to sv-control; sv-control forwards each one here, and this
+ * (one second each) and sends them to sv-control; sv-control forwards each one here, and this
  * process pipes the bytes, unchanged, into one ffmpeg per show that writes them to every RTMP
  * target at once (`-c copy`: no transcoding, a sliver of a CPU per stream).
  *

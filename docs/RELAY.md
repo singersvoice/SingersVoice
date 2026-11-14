@@ -3,8 +3,8 @@
 ## Why it exists
 
 A browser cannot speak RTMP. Until now the publisher's browser pushed the show to YouTube through
-**HLS ingestion** (two-second segments uploaded one by one), and YouTube plays an HLS-ingested
-stream with its *normal* or *low* latency setting: the audience saw the stage **20–40 s** late.
+**HLS ingestion** (one-second segments uploaded one by one), and YouTube plays an HLS-ingested
+stream with its *normal* or *low* latency setting: the audience saw the stage **15–30 s** late.
 YouTube's **ultra-low-latency** setting — a few seconds — only exists for RTMP, and Facebook,
 Instagram and Twitch take nothing else.
 
@@ -12,8 +12,8 @@ Instagram and Twitch take nothing else.
 the browser sends to the relay, and the relay pipes the bytes — unchanged, no transcoding — into
 one `ffmpeg -c copy` per show that writes them to every RTMP target at once. Stream keys travel
 only between the two services (sv-control opens them from its sealed store), never through a
-browser. With the relay in place a YouTube viewer is typically **4–7 s** behind the stage
-(2 s segment + upload + YouTube's ultra-low-latency buffer); the in-house watch page stays as it is.
+browser. With the relay in place a YouTube viewer is typically **3–5 s** behind the stage
+(1 s segment + upload + YouTube's ultra-low-latency buffer); the in-house watch page is about 4 s behind.
 
 ```
 publisher's browser ──TS segments──▶ sv-control (Worker) ──▶ relay (ffmpeg -c copy) ──RTMP──▶ YouTube / Facebook / Instagram / Twitch
@@ -74,7 +74,7 @@ The relay removes our part of the delay; YouTube's own buffer is a setting on th
 YouTube Studio → Go live → Stream → **Stream settings → Stream latency → Ultra-low latency**.
 Keep the default stream key there (it does not change between broadcasts, so it is saved once on
 the Destinations page). Without the relay (HLS ingestion), choose **Low latency** — ultra-low is
-not offered for HLS — and expect 15–25 s.
+not offered for HLS — and expect 10–20 s.
 
 ## What the relay accepts
 

@@ -295,7 +295,7 @@ link; the first four tiles connect by themselves, the rest on request.
    bytes into one `ffmpeg -f mpegts -i pipe:0 -c copy -bsf:a aac_adtstoasc -f flv rtmps://…` per
    show (`-f tee` for several targets, `onfail=ignore` so one platform's refusal never ends the
    others), with back-pressure on stdin and a sweep of streams idle for a minute. YouTube then rides
-   RTMP (its *ultra-low latency* setting: 4–7 s behind the stage instead of 20–40 s on HLS
+   RTMP (its *ultra-low latency* setting: 3–5 s behind the stage instead of 15–30 s on HLS
    ingestion, which is skipped when the relay carries YouTube); Facebook, Instagram and Twitch go
    live at all. `live.relay` / `relayNote` on the job say how it goes: a 404 from the relay (it
    restarted, or swept the stream) starts the stream again at once and resends the segment; a relay

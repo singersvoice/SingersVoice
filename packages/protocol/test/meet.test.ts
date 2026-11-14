@@ -9,6 +9,8 @@ import {
   MAX_PERFORMERS,
   meetIsOpen,
   RELAY_KINDS,
+  sameSong,
+  songPlace,
   newJoinCode,
   localStamp,
   performanceFolderName,
@@ -66,6 +68,18 @@ describe('performance helpers', () => {
     expect(performanceVideoName({ createdAt: at, trackTitle: 'Ammo', meetId: 'meet-mwe8q644-onrv6m', meetTitle: 'Friday Meet' }, 'mp4')).toBe(`Ammo · Friday Meet [mwe8q644-onrv6m] · ${stamp}.mp4`);
     expect(performanceVideoName({ createdAt: at, trackTitle: 'A/B: "C"?', meetTitle: null }, 'webm')).toBe(`A B C · ${stamp}.webm`);
     expect(performanceVideoName({ createdAt: at, trackTitle: '   ' }, 'mp4')).toBe(`Performance · ${stamp}.mp4`);
+  });
+  it('the same song is told by its ids, or by title and length (a singer\'s own copy of a shared song)', () => {
+    const m = { trackId: 't1', catalogTrackId: 'c1', trackTitle: 'Ammo Ammaayena', currentDurationMs: 283_000, setList: [{ id: 's2', trackId: null, catalogTrackId: 'c2', trackTitle: 'Second', durationMs: 200_000, pickedBy: 'p', pickedByName: 'P', addedAt: '' }] };
+    expect(songPlace(m, { trackId: 'own', catalogTrackId: 'c1', trackTitle: 'x' })).toEqual({ place: 'current' });
+    expect(songPlace(m, { trackId: 'own', catalogTrackId: null, trackTitle: '  ammo   ammaayena ', durationMs: 283_900 })).toEqual({ place: 'current' });
+    expect(songPlace(m, { trackId: 'own', catalogTrackId: null, trackTitle: 'Ammo Ammaayena', durationMs: 240_000 })).toBeNull(); // a namesake of another length
+    expect(songPlace(m, { trackId: null, catalogTrackId: 'c2', trackTitle: 'whatever' })?.place).toBe('queued');
+    expect(songPlace(m, { trackId: 'own', catalogTrackId: null, trackTitle: 'Second' })?.place).toBe('queued'); // no length known: the title decides
+    expect(songPlace({ ...m, trackId: null, catalogTrackId: null, trackTitle: '' }, { trackId: 't1', catalogTrackId: null, trackTitle: 'Ammo Ammaayena' })).toBeNull();
+    expect(sameSong({ trackId: 'a', catalogTrackId: null, trackTitle: 'One' }, { trackId: 'b', catalogTrackId: null, trackTitle: 'Two' })).toBe(false);
+    expect(sameSong({ trackId: 'c9', catalogTrackId: null, trackTitle: 'One' }, { trackId: 'c9-copy-bob', catalogTrackId: null, trackTitle: 'Other title' })).toBe(true); // a pulled copy is its catalog entry
+    expect(sameSong({ trackId: 'c9-copy-al', catalogTrackId: null, trackTitle: 'One' }, { trackId: null, catalogTrackId: 'c9', trackTitle: 'x' })).toBe(true);
   });
   it('which destinations the publisher\'s browser can feed: the watch page and YouTube alone, every RTMP platform with the relay', () => {
     const all = ['youtube', 'facebook', 'instagram', 'twitch', 'inhouse'] as const;

@@ -4,7 +4,7 @@
  * library (Drive) in the background, so what the meet sang is theirs to sing again.
  */
 import type { CatalogTrack, Meet } from '@singersvoice/protocol';
-import { fetchCatalogTrack, getCatalogTrack, isSameTrack, keepCatalogCopy } from '../../lib/catalog.ts';
+import { catalogIdOfCopy, fetchCatalogTrack, getCatalogTrack, keepCatalogCopy, sameTrackEitherWay } from '../../lib/catalog.ts';
 import type { LoadedTrack } from '../../lib/storage/types.ts';
 import { toast } from '../../lib/toast.ts';
 import { withProvider } from '../../state/session.ts';
@@ -24,23 +24,25 @@ export function keepMeetTrack(t: MeetTrack): void {
 }
 
 export async function loadMeetTrack(meet: Pick<Meet, 'trackId' | 'catalogTrackId'>): Promise<MeetTrack> {
-  // 1. My library: the host's own track, or a copy pulled from the catalog.
-  const ids = [meet.trackId, meet.catalogTrackId].filter((x): x is string => Boolean(x));
+  // 1. My library: my own track, a copy pulled from the catalog — or my original when the pick was somebody's copy of it.
+  const ids = [meet.trackId, meet.catalogTrackId, meet.trackId ? catalogIdOfCopy(meet.trackId) : null].filter((x): x is string => Boolean(x));
   try {
     const mine = await withProvider(async (p) => {
       await p.ready();
       const list = await p.listTracks();
-      const hit = list.find((t) => ids.includes(t.trackId)) ?? list.find((t) => ids.some((id) => isSameTrack(t.trackId, id)));
+      const hit = list.find((t) => ids.includes(t.trackId)) ?? list.find((t) => ids.some((id) => sameTrackEitherWay(t.trackId, id)));
       return hit ? p.getTrack(hit.trackId) : null;
     });
     if (mine) return { loaded: mine, source: 'library' };
   } catch {
     /* fall through to the catalog */
   }
-  // 2. Public catalog (owner's Drive, anyone-with-link) — shared helper, same path as Tracks/Studio.
-  if (meet.catalogTrackId) {
+  // 2. Public catalog (owner's Drive, anyone-with-link) — shared helper, same path as Tracks/Studio. A pick that was
+  //    somebody's pulled copy names its catalog entry by its id.
+  const catalogId = meet.catalogTrackId ?? (meet.trackId ? catalogIdOfCopy(meet.trackId) : null);
+  if (catalogId) {
     try {
-      const entry = await getCatalogTrack(meet.catalogTrackId);
+      const entry = await getCatalogTrack(catalogId);
       return { loaded: await fetchCatalogTrack(entry), source: 'catalog', entry };
     } catch (e) {
       return { loaded: null, source: 'none', reason: `This song could not be loaded on this device (${e instanceof Error ? e.message : String(e)})` };

@@ -3,7 +3,7 @@
  * live stage: the song up next / now singing, its availability on this device, the queue, and the
  * picker (library or public catalog) for the host and everyone on stage.
  */
-import { formatMs, type Meet, type Participant, type SongPick } from '@singersvoice/protocol';
+import { formatMs, songPlace, type Meet, type Participant, type SongPick } from '@singersvoice/protocol';
 import { useState } from 'preact/hooks';
 import { IcMusic, IcPlay, IcX } from '../../components/icons.tsx';
 import { errorText, toast } from '../../lib/toast.ts';
@@ -17,6 +17,12 @@ export function SetListPanel(props: { session: MeetSession; meet: Meet; you: Par
   const canPick = host || props.onStage;
   const hasSong = Boolean(meet.trackId || meet.catalogTrackId);
   const addSong = async (song: SongPick, now = false) => {
+    // Already up, or already queued: nothing is added (the service never lists a song twice) — say so instead.
+    const already = songPlace(meet, song);
+    if (already?.place === 'current' || (already?.place === 'queued' && !now)) {
+      toast(already.place === 'current' ? `"${song.trackTitle}" is ${live ? 'playing now' : 'up next already'}` : `"${song.trackTitle}" is on the set list already`, 'warn');
+      return;
+    }
     await session.addSong(song, now);
     toast(now || !hasSong ? `"${song.trackTitle}" is up next — loading on every device` : `"${song.trackTitle}" is on the set list`, 'ok');
   };
@@ -48,7 +54,7 @@ export function SetListPanel(props: { session: MeetSession; meet: Meet; you: Par
           <IcMusic size={16} /> Pick your selection of song
         </button>
       )}
-      {host && hasSong && !live && (
+      {canPick && hasSong && !live && (
         <button class="btn sm" title="Skip this song; the next one on the set list comes up" onClick={() => void endSong()}>
           Skip
         </button>
@@ -56,7 +62,7 @@ export function SetListPanel(props: { session: MeetSession; meet: Meet; you: Par
     </div>
   </div>
   {hasSong && <TrackStatus track={props.track} host={host} />}
-  {picking && <SongPicker onPick={(song) => addSong(song)} canPlayNow={host && hasSong && !live} onPlayNow={(song) => addSong(song, true)} onClose={() => setPicking(false)} />}
+  {picking && <SongPicker onPick={(song) => addSong(song)} canPlayNow={canPick && hasSong && !live} onPlayNow={(song) => addSong(song, true)} placeOf={(song) => songPlace(meet, song)?.place ?? null} onClose={() => setPicking(false)} />}
   {meet.setList.length > 0 && (
     <ol class="setlist-queue">
       {meet.setList.map((e, i) => (
@@ -65,17 +71,17 @@ export function SetListPanel(props: { session: MeetSession; meet: Meet; you: Par
             <b>{e.trackTitle}</b> <span class="small muted">· picked by {e.pickedByName.split(' ')[0]}{e.durationMs ? ` · ${formatMs(e.durationMs)}` : ''}</span>
           </span>
           <span class="row monitor-chips">
-            {host && i > 0 && (
+            {canPick && i > 0 && (
               <button class="btn icon sm" aria-label={`Move ${e.trackTitle} up`} title="Move up" onClick={() => void songAction(e.id, 'up')}>
                 ▲
               </button>
             )}
-            {host && !live && (
+            {canPick && !live && (
               <button class="btn sm" aria-label={`Play ${e.trackTitle} now`} onClick={() => void songAction(e.id, 'now')}>
                 <IcPlay size={14} /> Now
               </button>
             )}
-            {(host || e.pickedBy === you.participantId) && (
+            {(canPick || e.pickedBy === you.participantId) && (
               <button class="btn icon sm" aria-label={`Remove ${e.trackTitle} from the set list`} title="Remove" onClick={() => void songAction(e.id, 'remove')}>
                 <IcX size={14} />
               </button>

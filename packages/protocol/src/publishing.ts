@@ -4,7 +4,7 @@
  * publish job is one broadcast of one meet.
  *
  * How the picture and sound travel today: the publisher's own browser (the show view) encodes the
- * show — H.264 + AAC, two-second MPEG-TS segments — and PUTs each segment to the service, which
+ * show — H.264 + AAC, one-second MPEG-TS segments — and PUTs each segment to the service, which
  * keeps a rolling window for the in-house portal (an HLS playlist anyone can play) and forwards it,
  * with a playlist, to YouTube's HLS ingestion. No media server. Facebook, Instagram and Twitch take
  * RTMP(S) only, which a browser cannot speak: with the RTMP relay deployed (services/relay,
@@ -30,12 +30,18 @@ export const fedDestinations = (wanted: DestinationKind[], relay: boolean): Dest
 
 /** YouTube's HLS ingestion endpoint; the stream key goes in `cid`, the file name is appended to `file=`. */
 export const YOUTUBE_HLS_INGEST = 'https://a.upload.youtube.com/http_upload_hls';
-/** Segments kept per job for the in-house portal (the playlist lists them all). */
-export const LIVE_KEEP = 8;
+/** Segments kept per job for the in-house portal (the playlist lists them all): a dozen seconds of show. */
+export const LIVE_KEEP = 12;
 /** A live job that has not received a segment for this long is no longer live (the publisher's tab is gone). */
 export const LIVE_STALE_MS = 20_000;
-/** The target segment length the publisher's browser cuts at (a keyframe every two seconds). */
-export const LIVE_SEGMENT_S = 2;
+/**
+ * The target segment length the publisher's browser cuts at — a keyframe every second. Latency is
+ * made of segments: one in the making, one on the way, a few in the viewer's buffer — one-second
+ * segments put the watch page about 4 s behind the stage and YouTube (RTMP through the relay,
+ * ultra-low latency) 3–5 s, at a little more bitrate for the extra keyframes. YouTube's HLS
+ * ingestion asks for 1–4 s segments.
+ */
+export const LIVE_SEGMENT_S = 1;
 
 export interface Destination {
   kind: DestinationKind;

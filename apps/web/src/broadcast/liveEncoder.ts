@@ -1,9 +1,10 @@
 /**
  * The publisher's browser as the broadcast encoder: the show canvas (1280×720) goes through
- * WebCodecs' VideoEncoder as H.264 (Annex B, a keyframe every two seconds, no B-frames — a
- * realtime encode), the show mix through AudioEncoder as AAC-LC (ADTS, 48 kHz stereo, 128 kbps),
- * and the two are cut at the keyframes into two-second MPEG-TS segments — what YouTube's HLS
- * ingestion and every HLS player take.
+ * WebCodecs' VideoEncoder as H.264 (Annex B, a keyframe every second, no B-frames — a realtime
+ * encode), the show mix through AudioEncoder as AAC-LC (ADTS, 48 kHz stereo, 128 kbps), and the
+ * two are cut at the keyframes into one-second MPEG-TS segments (LIVE_SEGMENT_S) — what YouTube's
+ * HLS ingestion, the RTMP relay and every HLS player take; short segments are what keeps the
+ * viewer a few seconds behind the stage rather than half a minute.
  *
  * Needs WebCodecs (Chrome, Edge, Safari 17+, Firefox 130+). AAC encoding comes from the platform:
  * Windows, macOS, iOS and Android have it; Chrome on Linux (and Firefox) do not — then the segments

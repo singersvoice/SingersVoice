@@ -16,7 +16,7 @@ import { formatMs, type CatalogTrack, type SongPick } from '@singersvoice/protoc
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { IcMusic, IcX } from '../../components/icons.tsx';
 import { Progress, Spinner } from '../../components/ui.tsx';
-import { canPublish, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, searchCatalog } from '../../lib/catalog.ts';
+import { canPublish, catalogIdOfCopy, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, searchCatalog } from '../../lib/catalog.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { listTracksFresh, readTrackCache } from '../../lib/trackCache.ts';
@@ -41,7 +41,14 @@ export function Highlight(props: { text: string; q: string }) {
   return <>{parts.map((part, i) => (i % 2 === 1 ? <mark key={i}>{part}</mark> : part))}</>;
 }
 
-export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; onClose: () => void; canPlayNow?: boolean; onPlayNow?: (song: SongPick) => Promise<void> }) {
+export function SongPicker(props: {
+  onPick: (song: SongPick) => Promise<void>;
+  onClose: () => void;
+  canPlayNow?: boolean;
+  onPlayNow?: (song: SongPick) => Promise<void>;
+  /** Where a song already is in the meet (up now, queued): the row says so instead of offering it again. */
+  placeOf?: (song: SongPick) => 'current' | 'queued' | null;
+}) {
   // The library as the device remembers it, at once; the fresh listing takes its place when Drive answers.
   const [tracks, setTracks] = useState<TrackSummary[] | null>(() => readTrackCache());
   const [fresh, setFresh] = useState(false);
@@ -95,7 +102,8 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
   };
 
   const items = catalog?.items ?? [];
-  const sharedId = (t: TrackSummary) => (published.has(t.trackId) ? t.trackId : (items.find((c) => isSameTrack(t.trackId, c.trackId))?.trackId ?? null));
+  // The catalog entry a song of mine is known by: published as is, found among the shared results, or the entry my copy was pulled from.
+  const sharedId = (t: TrackSummary) => (published.has(t.trackId) ? t.trackId : (items.find((c) => isSameTrack(t.trackId, c.trackId))?.trackId ?? catalogIdOfCopy(t.trackId)));
   const needle = q.trim();
   const mineAll = (tracks ?? []).filter((t) => !needle || matchesWords(`${t.title} ${t.artist}`, needle));
   const mine = mineAll.slice(0, mineShown);
@@ -140,18 +148,21 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
       setBusy(null);
     }
   };
-  /** Enter picks the top match (mine first). */
+  /** Enter picks the top match (mine first) — unless it is on the stage or the set list already. */
   const pickTop = () => {
     if (busy) return;
-    if (mine[0]) void pickMine(mine[0], false);
-    else if (others[0]) void pickShared(others[0], false);
+    const top = rows[0];
+    if (!top) return;
+    if (top.place) return toast(top.place === 'current' ? `"${top.title}" is up already` : `"${top.title}" is on the set list already`, 'warn');
+    void top.pick(false);
   };
 
-  type Row = { key: string; title: string; artist: string; sub: string; from: string; pick: (now: boolean) => Promise<void> };
+  type Row = { key: string; title: string; artist: string; sub: string; from: string; place: 'current' | 'queued' | null; pick: (now: boolean) => Promise<void> };
   // One list: my songs first, then the shared ones (never the same song twice), each saying where it comes from.
+  const placeOf = props.placeOf ?? (() => null);
   const rows: Row[] = [
-    ...mine.map((t) => ({ key: t.trackId, title: t.title, artist: t.artist || 'Unknown artist', sub: `${formatMs(t.durationMs)} · ${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`, from: 'Your library', pick: (now: boolean) => pickMine(t, now) })),
-    ...others.map((c) => ({ key: c.trackId, title: c.title, artist: c.artist || 'Unknown artist', sub: formatMs(c.durationMs), from: `Shared by ${c.ownerName}`, pick: (now: boolean) => pickShared(c, now) })),
+    ...mine.map((t) => ({ key: t.trackId, title: t.title, artist: t.artist || 'Unknown artist', sub: `${formatMs(t.durationMs)} · ${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`, from: 'Your library', place: placeOf({ trackId: t.trackId, catalogTrackId: sharedId(t), trackTitle: t.title, durationMs: t.durationMs }), pick: (now: boolean) => pickMine(t, now) })),
+    ...others.map((c) => ({ key: c.trackId, title: c.title, artist: c.artist || 'Unknown artist', sub: formatMs(c.durationMs), from: `Shared by ${c.ownerName}`, place: placeOf({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs }), pick: (now: boolean) => pickShared(c, now) })),
   ];
   const total = catalog?.total ?? 0;
   const loading = tracks === null && !fresh;
@@ -205,7 +216,7 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
       ) : (
         <div class="list">
           {rows.map((r) => (
-            <div class="item" key={r.key} data-from={r.from === 'Your library' ? 'mine' : 'shared'}>
+            <div class="item" key={r.key} data-from={r.from === 'Your library' ? 'mine' : 'shared'} data-place={r.place ?? ''}>
               <div class="thumb" aria-hidden="true">
                 {r.title.trim().charAt(0).toUpperCase() || '♪'}
               </div>
@@ -218,13 +229,28 @@ export function SongPicker(props: { onPick: (song: SongPick) => Promise<void>; o
                 </div>
               </div>
               <div class="row" style="gap:6px">
-                <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${r.title}`} onClick={() => void r.pick(false)}>
-                  {busy === r.key ? <Spinner /> : <IcMusic size={16} />} Pick
-                </button>
-                {props.canPlayNow && (
-                  <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${r.title} now`} onClick={() => void r.pick(true)}>
-                    Now
-                  </button>
+                {r.place === 'current' ? (
+                  <span class="chip ok" title="This song is up on the stage already">Up now</span>
+                ) : r.place === 'queued' ? (
+                  <>
+                    <span class="chip" title="This song is on the set list already">On the set list</span>
+                    {props.canPlayNow && (
+                      <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${r.title} now`} onClick={() => void r.pick(true)}>
+                        Now
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${r.title}`} onClick={() => void r.pick(false)}>
+                      {busy === r.key ? <Spinner /> : <IcMusic size={16} />} Pick
+                    </button>
+                    {props.canPlayNow && (
+                      <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${r.title} now`} onClick={() => void r.pick(true)}>
+                        Now
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>

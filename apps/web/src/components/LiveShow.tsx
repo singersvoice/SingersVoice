@@ -67,7 +67,8 @@ export function LiveShow(props: { meetId: string; status: LiveStatus | null; onS
         const { default: Hls } = await import('hls.js');
         if (cancelled) return;
         if (Hls.isSupported()) {
-          const hls = new Hls({ liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 8, enableWorker: true, lowLatencyMode: false, backBufferLength: 30 });
+          // One-second segments: play three behind the live edge (≈3 s of buffer), never fall more than eight behind.
+          const hls = new Hls({ liveSyncDurationCount: 3, liveMaxLatencyDurationCount: 8, maxBufferLength: 10, enableWorker: true, lowLatencyMode: false, backBufferLength: 20 });
           hlsRef.current = hls;
           hls.on(Hls.Events.ERROR, (_e, data) => {
             if (data.fatal) {

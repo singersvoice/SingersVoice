@@ -10,7 +10,7 @@ import type { PublishJob, PublishJobLive } from '@singersvoice/protocol';
 import { api, ApiError } from '../lib/api.ts';
 import type { LiveSegment } from './liveEncoder.ts';
 
-const MAX_QUEUE = 4;
+const MAX_QUEUE = 6; // six seconds of backlog at most: beyond that the viewer is better served by skipping ahead
 const RETRIES = 3;
 
 export interface SenderState {

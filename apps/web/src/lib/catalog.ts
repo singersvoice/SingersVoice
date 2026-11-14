@@ -136,6 +136,17 @@ export function isSameTrack(trackId: string, catalogTrackId: string): boolean {
   return trackId === catalogTrackId || trackId.startsWith(`${catalogTrackId}-copy-`);
 }
 
+/** The catalog entry a pulled copy came from (`<catalogId>-copy-<who>` → `<catalogId>`), or null for a track of my own making. */
+export function catalogIdOfCopy(trackId: string): string | null {
+  const i = trackId.lastIndexOf('-copy-');
+  return i > 0 ? trackId.slice(0, i) : null;
+}
+
+/** Either is the other, or a pulled copy of it — whichever way round (a singer's copy of my song is my song). */
+export function sameTrackEitherWay(a: string, b: string): boolean {
+  return isSameTrack(a, b) || isSameTrack(b, a);
+}
+
 /** Pull a published track into my own storage; returns the saved copy. */
 export async function pullCatalogTrack(entry: CatalogTrack, onProgress?: Progress): Promise<TrackSummary> {
   const loaded = await fetchCatalogTrack(entry, onProgress);

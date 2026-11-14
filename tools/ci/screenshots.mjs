@@ -149,7 +149,7 @@ for (const m of matrix) {
       await page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
       await shot('20-meet-lobby');
       await page.getByRole('button', { name: /I'm ready/ }).click();
-      await page.getByText(/Ready — stage will start/).waitFor({ timeout: 30000 });
+      await page.getByText(/Ready — start the song/).waitFor({ timeout: 30000 });
       await page.getByRole('radio', { name: /Chat/ }).click();
       await page.getByPlaceholder('Message everyone').fill('hello from CI');
       await page.getByRole('button', { name: 'Send' }).click();
@@ -161,7 +161,7 @@ for (const m of matrix) {
       await shot('22-meet-countdown');
       await wait(10000);
       await shot('23-meet-live');
-      // The host's "Stop song" ends the song for everyone (a singer's button is "Stop": their own take only).
+      // "Stop song" ends the song for everyone — the host's or any singer's (a singer also has "Leave": their own take only).
       await page.getByRole('button', { name: /Stop the song for everyone/ }).click();
       // Straight back to the lobby stage; the take saves itself in the background as the meet's performance.
       await page.getByRole('button', { name: 'End meet' }).waitFor({ timeout: 30000 });

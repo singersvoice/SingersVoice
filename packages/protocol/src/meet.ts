@@ -97,6 +97,30 @@ export interface SongPick {
   durationMs?: number;
 }
 
+/**
+ * The same song twice: the ids meet (a track and its shared copy carry the same id), or the title
+ * and length do (a singer's own copy of a song the meet shared). The set list never lists a song
+ * that is already up — a tap that lands twice, or a second singer picking what is already there,
+ * adds nothing.
+ */
+export function sameSong(a: { trackId: string | null; catalogTrackId: string | null; trackTitle: string; durationMs?: number }, b: SongPick): boolean {
+  // A pulled copy (`<catalogId>-copy-<who>`) is its catalog entry.
+  const root = (id: string) => (id.includes('-copy-') ? id.slice(0, id.lastIndexOf('-copy-')) : id);
+  const ids = (x: { trackId: string | null; catalogTrackId: string | null }) => [x.trackId, x.catalogTrackId].filter((id): id is string => Boolean(id)).map(root);
+  if (ids(a).some((id) => ids(b).includes(id))) return true;
+  const title = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+  const da = a.durationMs ?? 0;
+  const db = b.durationMs ?? 0;
+  return title(a.trackTitle) === title(b.trackTitle) && (!da || !db || Math.abs(da - db) < 1500);
+}
+
+/** Where a song already is in the meet: up now, on the queue (its entry), or nowhere. */
+export function songPlace(m: Pick<Meet, 'trackId' | 'catalogTrackId' | 'trackTitle' | 'currentDurationMs' | 'setList'>, song: SongPick): { place: 'current' } | { place: 'queued'; entry: SetListEntry } | null {
+  if ((m.trackId || m.catalogTrackId) && sameSong({ trackId: m.trackId, catalogTrackId: m.catalogTrackId, trackTitle: m.trackTitle, durationMs: m.currentDurationMs ?? 0 }, song)) return { place: 'current' };
+  const entry = m.setList.find((e) => sameSong(e, song));
+  return entry ? { place: 'queued', entry } : null;
+}
+
 export interface Meet {
   meetId: string;
   /** 6-letter join code shown next to the link. */
@@ -108,6 +132,8 @@ export interface Meet {
   trackTitle: string;
   /** Public catalog entry used to fetch lyrics/audio on every device (null = host's private track). */
   catalogTrackId: string | null;
+  /** The current song's length as picked (tells a song from a namesake; 0 when unknown). */
+  currentDurationMs?: number;
   state: MeetState;
   backgroundId: string;
   stage: StageSlot[];
