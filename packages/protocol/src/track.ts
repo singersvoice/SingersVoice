@@ -271,8 +271,49 @@ export interface LyricsWindow {
   msToNext: number;
 }
 
-export function lyricsWindow(lines: LyricLine[], tMs: number, before = 1, after = 3): LyricsWindow {
-  const active = activeLineIndex(lines, tMs);
+/** The characters of a line that are sung (no spaces, no punctuation) — what its pace is measured by. */
+export const sungChars = (text: string): number => text.replace(/[\s\p{P}]/gu, '').length;
+
+/** Pace bounds (ms per sung character): faster than a rap, slower than a held note per letter. */
+const PACE_MIN_MS = 40;
+const PACE_MAX_MS = 400;
+/** The pace assumed when the song has too few timed lines to measure one. */
+export const PACE_DEFAULT_MS = 120;
+
+/**
+ * How fast this song is sung: the median milliseconds per sung character over its timed lines. A
+ * line's timing spans from its start to the next line's start, so it includes the pause after it;
+ * the median line is a typical line, and the lines with a long pause are the ones the fill must not
+ * stretch across. Per song, so a Telugu line (a syllable a character) and an English one (two or
+ * three characters a syllable) each measure their own pace.
+ */
+export function lyricsPace(lines: LyricLine[]): number {
+  const rates: number[] = [];
+  for (const l of lines) {
+    const chars = sungChars(l.text);
+    const span = l.endMs - l.startMs;
+    if (chars >= 3 && span >= 300) rates.push(span / chars);
+  }
+  if (rates.length < 3) return PACE_DEFAULT_MS;
+  rates.sort((a, b) => a - b);
+  return Math.max(PACE_MIN_MS, Math.min(PACE_MAX_MS, rates[Math.floor(rates.length / 2)]!));
+}
+
+/** How long a line is actually sung: its characters at the song's pace, never past the line's own span. */
+export function sungSpanMs(line: LyricLine, paceMsPerChar: number): number {
+  const span = Math.max(1, line.endMs - line.startMs);
+  return Math.max(1, Math.min(span, Math.max(600, sungChars(line.text) * paceMsPerChar)));
+}
+
+export interface LyricsWindowOptions {
+  /** Lines light up this many ms before they start (a breath to read them), their fill still starting on time. */
+  leadMs?: number;
+  /** The song's pace (`lyricsPace`): the active line fills over the time its words take, not over the pause after them. */
+  paceMsPerChar?: number;
+}
+
+export function lyricsWindow(lines: LyricLine[], tMs: number, before = 1, after = 3, opts: LyricsWindowOptions = {}): LyricsWindow {
+  const active = activeLineIndex(lines, tMs + (opts.leadMs ?? 0));
   const items: LyricsWindow['items'] = [];
   const first = Math.max(0, active - before);
   const last = Math.min(lines.length - 1, (active < 0 ? -1 : active) + after);
@@ -283,7 +324,7 @@ export function lyricsWindow(lines: LyricLine[], tMs: number, before = 1, after 
   let progress = 0;
   if (active >= 0) {
     const l = lines[active]!;
-    const span = Math.max(1, l.endMs - l.startMs);
+    const span = opts.paceMsPerChar ? sungSpanMs(l, opts.paceMsPerChar) : Math.max(1, l.endMs - l.startMs);
     progress = Math.max(0, Math.min(1, (tMs - l.startMs) / span));
   }
   const next = lines[active + 1];

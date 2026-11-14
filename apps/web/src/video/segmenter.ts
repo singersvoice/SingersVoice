@@ -264,7 +264,7 @@ export class PersonSegmenter {
     const { width, height } = this.canvas;
     c.save();
     c.clearRect(0, 0, width, height);
-    c.drawImage(r.image, 0, 0, width, height);
+    drawCover(c, r.image, width, height); // the camera picture centre-cropped to the cut-out's 3:4 — never stretched
     c.globalCompositeOperation = 'destination-in';
     c.filter = 'blur(1.2px)'; // the mask's staircase (it is a fraction of the picture's size) becomes a soft edge
     c.drawImage(mask, 0, 0, width, height);
@@ -276,7 +276,7 @@ export class PersonSegmenter {
   private buildAlphaMask(source: CanvasImageSource): HTMLCanvasElement {
     const ctx = this.alphaCtx;
     ctx.clearRect(0, 0, MASK_W, MASK_H);
-    ctx.drawImage(source, 0, 0, MASK_W, MASK_H);
+    drawCover(ctx, source, MASK_W, MASK_H); // the same centre crop as the picture, so the mask lands on the person
     const img = ctx.getImageData(0, 0, MASK_W, MASK_H);
     const r = alphaFromMaskPixels(img.data);
     if (r.mode === 'unusable') return this.softCenterMask();
@@ -361,24 +361,25 @@ export class PersonSegmenter {
   }
 }
 
-/** Draw `source` covering a w×h box (centre crop). */
-export function drawCover(c: CanvasRenderingContext2D, source: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement, w: number, h: number): void {
-  const sw = (source as HTMLVideoElement).videoWidth || (source as HTMLCanvasElement).width || 1;
-  const sh = (source as HTMLVideoElement).videoHeight || (source as HTMLCanvasElement).height || 1;
+/** The part of a sw×sh picture that covers a w×h box (centre crop, the picture's proportions kept). */
+export function coverRect(sw: number, sh: number, w: number, h: number): { sx: number; sy: number; sw: number; sh: number } {
   const sr = sw / sh;
   const dr = w / h;
-  let sx = 0;
-  let sy = 0;
-  let cw = sw;
-  let ch = sh;
   if (sr > dr) {
-    cw = sh * dr;
-    sx = (sw - cw) / 2;
-  } else {
-    ch = sw / dr;
-    sy = (sh - ch) / 2;
+    const cw = sh * dr;
+    return { sx: (sw - cw) / 2, sy: 0, sw: cw, sh };
   }
-  c.drawImage(source, sx, sy, cw, ch, 0, 0, w, h);
+  const ch = sw / dr;
+  return { sx: 0, sy: (sh - ch) / 2, sw, sh: ch };
+}
+
+/** Draw `source` covering a w×h box (centre crop). */
+export function drawCover(c: CanvasRenderingContext2D, source: CanvasImageSource, w: number, h: number): void {
+  const el = source as { videoWidth?: number; videoHeight?: number; width?: number | SVGAnimatedLength; height?: number | SVGAnimatedLength };
+  const sw = el.videoWidth || (typeof el.width === 'number' ? el.width : 0) || 1;
+  const sh = el.videoHeight || (typeof el.height === 'number' ? el.height : 0) || 1;
+  const r = coverRect(sw, sh, w, h);
+  c.drawImage(source, r.sx, r.sy, r.sw, r.sh, 0, 0, w, h);
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {

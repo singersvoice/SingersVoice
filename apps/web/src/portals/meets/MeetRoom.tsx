@@ -114,7 +114,6 @@ export function MeetRoom(props: { id: string }) {
       });
       if (video) camera.adopt(video, app.cameraFacing);
       else if (app.cameraOn && !camera.on.value) await camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined }).catch(() => undefined);
-      camera.setPreset(app.zoomPreset);
       engine.applyFx(audio.params);
       engine.setMonitor(audio.monitor);
       const player = engine.player!;

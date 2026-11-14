@@ -6,7 +6,13 @@ that the code depends on.
 ## Principles
 
 1. **Lyrics first.** The stage is 16 % stage strip · 60 % lyrics · 24 % controls (portrait); 5 visible lines
-   (1 done grey, 1 active green with progress fill, 3 upcoming orange); singer-slot badges; personal cue deck.
+   (1 done grey, 1 active with a fill, 3 upcoming orange); singer-slot badges; personal cue deck. The
+   lyrics follow the sound, not the clock: the position is the player's minus the output latency.
+   A line lights up 150 ms before it starts (a breath to read it) and fills over the time its words
+   take — the song's own pace, the median ms per sung character over its timed lines
+   (`lyricsPace`) — never stretched over the pause after it, so the fill is at the word being sung.
+   Track Maker sets a mark 200 ms before the tap (hearing a line start, then tapping, takes that
+   long) and has *All earlier / All later* for a song that still lights up late.
 2. **Local-first, clock-anchored.** Every device plays the backing track from a scheduled `AudioContext` time
    (locally) or a shared wall-clock instant (meets — the *GMT kickstart*). The vocal is captured by an
    AudioWorklet that reports the exact clock time of its first frame, so vocal, video and lyrics align without
@@ -150,10 +156,14 @@ stretched arm never widens it), and crops 1.35 bodies wide in the frame's own pr
 top of the head a tenth of the way down — head to chest, like a news anchor, from wherever the
 singer sits; never past the camera frame (a singer already close gets the whole frame), never
 tighter than 0.3 of it (a far singer is brought up, not into a blur); deadbanded and eased so it
-never breathes. Wide (the whole frame), Mid and Close (fixed crops around the face) remain, and a
-vocal-driven auto zoom eases a little closer while a singer sings and back out when they fall
-silent. The sender crops its own stream at full resolution, so whoever takes the vocal comes closer
-on everyone's screen.
+never breathes. **Wide** is the whole camera frame (the camera sees no wider: for more room, move
+it back), **Mid** and **Close** are real zooms (1.5×, 2.2×) aimed at the singer's head where one is
+found (the same mask probe, so they work on every browser; around the frame's upper centre until
+then), and **Auto** eases any framing a fifth closer while the singer sings and back out when they
+fall silent — it tightens the chosen framing, it never replaces it. The sender crops its own stream
+at full resolution, so whoever takes the vocal comes closer on everyone's screen. The cut-out
+itself is the camera picture **centre-cropped to 3:4** (`drawCover` in the segmenter — a 16:9
+webcam loses its sides, a 9:16 phone its top and bottom), never stretched: a face is the shape it is.
 
 Other performers' video arrives over a WebRTC mesh (`video/peers.ts`, video only — singers never hear
 each other, by design): each device sends its cut-out **alpha-packed** (left half colour, right half

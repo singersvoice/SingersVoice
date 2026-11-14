@@ -220,7 +220,7 @@ export function Sing(props: { id: string }) {
   useEffect(() => {
     if (phase === 'loading' || phase === 'review') return;
     if (app.cameraOn && !camera.on.value) {
-      camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined }).then(() => camera.setPreset(app.zoomPreset)).catch(() => toast('Camera unavailable — singing without video', 'warn'));
+      camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined }).catch(() => toast('Camera unavailable — singing without video', 'warn'));
     } else if (!app.cameraOn && camera.on.value) camera.close();
   }, [app.cameraOn, app.cameraFacing, app.cameraDeviceId, phase]);
 
@@ -253,10 +253,7 @@ export function Sing(props: { id: string }) {
             : { facingMode: app.cameraFacing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
           : false,
       });
-      if (video) {
-        camera.adopt(video, app.cameraFacing);
-        camera.setPreset(app.zoomPreset);
-      }
+      if (video) camera.adopt(video, app.cameraFacing);
       engine.applyFx(audio.params);
       engine.setMonitor(audio.monitor);
       const player = engine.player!;
@@ -477,6 +474,9 @@ export function Sing(props: { id: string }) {
             <button class="btn icon" aria-label="Stage setup" onClick={() => setSetupOpen(true)} disabled={live}>
               <IcZoom />
             </button>
+            <button class="btn icon" aria-label="Stage background" title="Stage background" onClick={() => setBgOpen(true)}>
+              <IcImage />
+            </button>
             {live ? (
               <>
                 {phase === 'paused' ? (
@@ -552,7 +552,7 @@ export function Sing(props: { id: string }) {
               ))}
             </div>
           </Field>
-          <Field label="Stage framing (Chest follows you head-to-chest; Wide is the whole camera frame)">
+          <Field label="Stage framing (Chest follows you head-to-chest; Wide is the whole camera frame; Mid and Close zoom 1.5× / 2.2× onto your head)">
             <div class="row">
               <Seg<ZoomPreset>
                 value={app.zoomPreset}

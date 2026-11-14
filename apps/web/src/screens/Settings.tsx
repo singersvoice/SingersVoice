@@ -198,7 +198,7 @@ export function Settings() {
               ))}
             </select>
           </Field>
-          <Field label="Framing" hint="Chest keeps you head-to-chest from wherever you sit (the default); Wide is the whole camera frame; Mid and Close crop in around the face. This exact picture is you on every stage.">
+          <Field label="Framing" hint="Chest keeps you head-to-chest from wherever you sit (the default); Wide is the whole camera frame (for more room, move the camera back); Mid and Close zoom 1.5× and 2.2× onto your head; Auto comes a fifth closer while you sing. This exact picture is you on every stage.">
             <Seg<'chest' | 'wide' | 'mid' | 'close'>
               value={app.zoomPreset}
               onChange={(v) => updateApp({ zoomPreset: v })}

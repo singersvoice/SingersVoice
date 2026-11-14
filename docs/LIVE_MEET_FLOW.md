@@ -44,7 +44,7 @@ webcam bust shot fills the whole height), feet on the floor if your camera sees 
 fills the picture; ten make one even row across it, each as big as a tenth of the stage allows, heads
 level (someone whose camera sees them whole stands on the floor at the others' head height rather
 than towering over them). A stretched arm reaches past your slot instead of shrinking you. The
-*Framing* setting (wide / mid / close, auto zoom) only chooses how tight your camera's crop is.
+*Framing* setting (chest / wide / mid / close, Auto) only chooses how tight your camera's crop is.
 
 ### Who is who
 
@@ -88,7 +88,8 @@ deck shows who sings what in a duet) and the singers are small — each one's fr
 camera framed it, in the lower part under the lyrics, no zoom of any kind. That frame is the
 picture of you everywhere: the show and the audience get exactly what you see of yourself here, only
 bigger. Controls: camera on/off, **framing** (next to the camera button: **Chest** — the default,
-head to chest from wherever you sit — Wide, Mid, Close, and Auto, a little closer while you sing),
+head to chest from wherever you sit — Wide the whole camera frame, Mid and Close 1.5× / 2.2× on
+your head, and Auto, a fifth closer while you sing),
 hear myself, **Set
 list** (a drawer over the stage: what is playing, what is next, add a song — the song picker is at
 hand while singing too), FX presets with **Tweak** beside them (every control of the vocal chain in a

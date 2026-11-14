@@ -5,8 +5,8 @@
  * other performers receive. One instance per stage session.
  */
 import { AlphaPacker } from './alphaPack.ts';
-import { boxOfMask, chestCrop, CROP_DEAD, CROP_EASE, frameRect, presetLevel, SILENCE_HOLD_MS, SING_LEVEL, ZOOM_EASE, type FrameRect, type PersonBox, type ZoomPreset } from './framing.ts';
-import { PersonSegmenter, type SegmenterMode } from './segmenter.ts';
+import { boxOfMask, chestCrop, CROP_DEAD, CROP_EASE, fixedCrop, frameRect, presetCrop, SILENCE_HOLD_MS, SING_LEVEL, ZOOM_EASE, type FrameRect, type PersonBox, type ZoomPreset } from './framing.ts';
+import { coverRect, PersonSegmenter, type SegmenterMode } from './segmenter.ts';
 import type { PerformerSource } from './stage.ts';
 
 /** The cut-out's own size: computers work at 720×960 so a singer standing full-height in a 720p show is drawn near 1:1; phones at 480×640. */
@@ -32,14 +32,13 @@ export class LocalFeed {
   private lastSeg = -1;
   mode: SegmenterMode = 'off';
   onMode: ((m: SegmenterMode) => void) | null = null;
-  /** Framing state: current level eases towards the target (0 = wide … 1 = close; for chest: how much singing tightens). */
+  /** How much this singer is singing right now (0..1, eased): with Auto on it pulls the framing closer. */
   level = 0;
   private preset: ZoomPreset = 'chest';
-  private baseLevel = 0;
   private autoZoom = true;
   private lastLoudAt = 0;
   private origin = { x: 50, y: 42 };
-  /** Chest framing: the person last found in the mask, the crop aimed at and the crop drawn (eased). */
+  /** The person last found in the mask, the crop aimed at and the crop drawn (eased towards it). */
   private person: PersonBox | null = null;
   private cropTarget: FrameRect | null = null;
   private crop: FrameRect | null = null;
@@ -95,11 +94,11 @@ export class LocalFeed {
     this.timer = setInterval(() => this.tick(), 1000 / 15);
   }
 
-  /** The chosen framing (chest = framed from the person; wide / mid / close = fixed) and whether singing pulls it closer. */
+  /** The chosen framing (chest = framed from the person; wide / mid / close = fixed zooms) and whether singing pulls it closer. */
   setFraming(preset: ZoomPreset, autoZoom: boolean): void {
     this.preset = preset;
-    this.baseLevel = presetLevel(preset);
     this.autoZoom = autoZoom;
+    this.lastSeg = -1; // re-aim on the next tick
   }
 
   /** The person in the mask right now (fractions of the frame), measured a few times a second on a small probe. */
@@ -124,12 +123,13 @@ export class LocalFeed {
     return this.person;
   }
 
-  /** The crop to draw this tick: chest framing follows the person (deadbanded, eased); the fixed presets crop by level. */
+  /**
+   * The crop to draw this tick, eased towards what the framing wants (deadbanded, so mask noise never
+   * makes it breathe): chest is sized from the person; the fixed zooms are aimed at the person's head.
+   */
   private framing(): FrameRect {
-    if (this.preset !== 'chest') return frameRect(W, H, this.level, this.origin);
     const person = this.findPerson();
-    if (!person) return frameRect(W, H, 0, this.origin); // until someone is found: the whole frame
-    const wanted = chestCrop(W, H, person, this.level);
+    const wanted = this.preset === 'chest' ? (person ? chestCrop(W, H, person, this.level) : frameRect(W, H, 1, this.origin)) : fixedCrop(W, H, presetCrop(this.preset, this.level), person, this.origin);
     const moved = (a: FrameRect, b: FrameRect) => Math.max(Math.abs(a.sx - b.sx) / W, Math.abs(a.sy - b.sy) / H, Math.abs(a.sw - b.sw) / W, Math.abs(a.sh - b.sh) / H);
     if (!this.cropTarget || moved(this.cropTarget, wanted) > CROP_DEAD) this.cropTarget = wanted;
     const t = this.cropTarget;
@@ -143,9 +143,16 @@ export class LocalFeed {
     return this.crop!;
   }
 
-  /** Crop centre (0..100 %), e.g. from the face detector. */
+  /** Crop centre (0..100 % of the camera picture), e.g. from the face detector — mapped into the cut-out, which is the camera picture centre-cropped to 3:4. */
   setOrigin(o: { x: number; y: number }): void {
-    this.origin = o;
+    const vw = this.video.videoWidth;
+    const vh = this.video.videoHeight;
+    if (!vw || !vh) {
+      this.origin = o;
+      return;
+    }
+    const r = coverRect(vw, vh, W, H);
+    this.origin = { x: Math.max(0, Math.min(100, (((o.x / 100) * vw - r.sx) / r.sw) * 100)), y: Math.max(0, Math.min(100, (((o.y / 100) * vh - r.sy) / r.sh) * 100)) };
   }
 
   /** Feed the mic level (0..1) a few times a second; singing eases the framing towards "close". */
@@ -155,10 +162,10 @@ export class LocalFeed {
 
   private tick(): void {
     const singing = this.autoZoom && performance.now() - this.lastLoudAt < SILENCE_HOLD_MS;
-    const target = singing ? 1 : this.baseLevel;
+    const target = singing ? 1 : 0;
     this.level += (target - this.level) * ZOOM_EASE;
     if (Math.abs(target - this.level) < 0.002) this.level = target;
-    const settled = this.preset !== 'chest' || (this.crop !== null && this.cropTarget !== null && this.crop.sx === this.cropTarget.sx && this.crop.sh === this.cropTarget.sh);
+    const settled = this.crop !== null && this.cropTarget !== null && this.crop.sx === this.cropTarget.sx && this.crop.sy === this.cropTarget.sy && this.crop.sh === this.cropTarget.sh;
     if (this.segmenter.frame === this.lastSeg && this.level === target && settled) return; // nothing new to draw
     this.lastSeg = this.segmenter.frame;
     const r = this.framing();

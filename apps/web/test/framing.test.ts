@@ -1,30 +1,56 @@
 import { describe, expect, it } from 'vitest';
-import { boxOfMask, CHEST, chestCrop, FRAMING, frameRect, framingAt, presetLevel, type PersonBox } from '../src/video/framing.ts';
+import { boxOfMask, CHEST, chestCrop, fixedCrop, FRAMING, frameRect, presetCrop, SING_TIGHTEN, type PersonBox } from '../src/video/framing.ts';
+import { coverRect } from '../src/video/segmenter.ts';
 
 describe('stage framing', () => {
-  it('wide shows the whole frame; close crops in around the face — the crop always fills the frame sent', () => {
-    const wide = frameRect(480, 640, presetLevel('wide'));
+  it('wide shows the whole frame; mid and close are real zooms (1.5×, 2.2×) — the crop always fills the frame sent', () => {
+    const wide = frameRect(480, 640, presetCrop('wide'));
     expect([wide.sx, wide.sy, wide.sw, wide.sh]).toEqual([0, 0, 480, 640]); // no crop
     expect([wide.dx, wide.dy, wide.dw, wide.dh]).toEqual([0, 0, 480, 640]); // full resolution out
-    const close = frameRect(480, 640, presetLevel('close'));
-    expect(close.sw).toBeCloseTo(480 / FRAMING.close.crop, 5);
-    expect(close.sh).toBeCloseTo(640 / FRAMING.close.crop, 5);
+    expect(FRAMING.mid.crop).toBe(1.5);
+    expect(FRAMING.close.crop).toBe(2.2);
+    const close = frameRect(480, 640, presetCrop('close'));
+    expect(close.sw).toBeCloseTo(480 / 2.2, 5);
+    expect(close.sh).toBeCloseTo(640 / 2.2, 5);
     expect([close.dx, close.dy, close.dw, close.dh]).toEqual([0, 0, 480, 640]); // nobody stands small in their own frame
   });
   it('crops around the face origin and clamps to the frame', () => {
-    const r = frameRect(480, 640, 1, { x: 90, y: 10 });
+    const r = frameRect(480, 640, 2.2, { x: 90, y: 10 });
     expect(r.sx + r.sw).toBeLessThanOrEqual(480);
     expect(r.sy).toBe(0);
-    const l = frameRect(480, 640, 1, { x: 5, y: 95 });
+    const l = frameRect(480, 640, 2.2, { x: 5, y: 95 });
     expect(l.sx).toBe(0);
     expect(l.sy + l.sh).toBeLessThanOrEqual(640);
+    expect(frameRect(480, 640, 0.5).sw).toBe(480); // never wider than the camera sees
   });
-  it('interpolates smoothly between wide and close', () => {
-    const mid = framingAt(0.5);
-    expect(mid.crop).toBeGreaterThan(FRAMING.wide.crop);
-    expect(mid.crop).toBeLessThan(FRAMING.close.crop);
-    expect(framingAt(-1)).toEqual(framingAt(0));
-    expect(framingAt(2)).toEqual(framingAt(1));
+  it('Auto tightens the chosen framing a fifth while singing — it never turns Wide into Close', () => {
+    expect(presetCrop('wide', 1)).toBeCloseTo(1 * (1 + SING_TIGHTEN), 6);
+    expect(presetCrop('mid', 1)).toBeCloseTo(1.5 * (1 + SING_TIGHTEN), 6);
+    expect(presetCrop('close', 0.5)).toBeCloseTo(2.2 * (1 + SING_TIGHTEN / 2), 6);
+    expect(presetCrop('wide', 1)).toBeLessThan(presetCrop('mid', 0));
+    expect(presetCrop('close', 2)).toBe(presetCrop('close', 1));
+  });
+  it('mid and close aim at the singer: centred on the body with the head a tenth down, wherever they sit', () => {
+    const person: PersonBox = { x: 0.6, y: 0.3, w: 0.2, h: 0.6 }; // standing right of centre, head 30 % down
+    const r = fixedCrop(480, 640, 2.2, person);
+    expect(r.sw).toBeCloseTo(480 / 2.2, 5);
+    expect(r.sx + r.sw / 2).toBeCloseTo(0.7 * 480, 3); // on the body
+    expect(r.sy).toBeCloseTo(0.3 * 640 - r.sh * CHEST.headroom, 3); // the head a tenth down
+    const edge = fixedCrop(480, 640, 2.2, { x: 0.9, y: 0.02, w: 0.1, h: 0.5 });
+    expect(edge.sx + edge.sw).toBeLessThanOrEqual(480 + 0.01); // never past the frame
+    expect(edge.sy).toBe(0);
+    expect(fixedCrop(480, 640, 1.5, null, { x: 50, y: 42 })).toEqual(frameRect(480, 640, 1.5, { x: 50, y: 42 })); // nobody found: around the origin
+  });
+  it('the camera picture is centre-cropped to the cut-out, never stretched: a 16:9 webcam loses its sides, a 9:16 phone its top and bottom', () => {
+    const web = coverRect(1280, 720, 480, 640);
+    expect(web.sh).toBe(720);
+    expect(web.sw).toBeCloseTo(540, 5);
+    expect(web.sx).toBeCloseTo(370, 5);
+    const phone = coverRect(720, 1280, 480, 640);
+    expect(phone.sw).toBe(720);
+    expect(phone.sh).toBeCloseTo(960, 5);
+    expect(phone.sy).toBeCloseTo(160, 5);
+    expect(coverRect(480, 640, 480, 640)).toEqual({ sx: 0, sy: 0, sw: 480, sh: 640 });
   });
 });
 

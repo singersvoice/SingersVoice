@@ -9,8 +9,12 @@ import {
   cueDeck,
   importTrackV1,
   normalizeTrack,
+  lyricsPace,
   lyricsWindow,
   normalizeLyrics,
+  PACE_DEFAULT_MS,
+  sungChars,
+  sungSpanMs,
   parseLrc,
   toLrc,
   validateTrack,
@@ -47,6 +51,31 @@ describe('lyricsWindow', () => {
     const w = lyricsWindow(lines, 0);
     expect(w.active).toBe(-1);
     expect(w.items.map((i) => i.index)).toEqual([0, 1, 2]);
+  });
+  it('a lead lights the next line a breath early, its fill still starting on time', () => {
+    const w = lyricsWindow(lines, 2900, 1, 3, { leadMs: 150 });
+    expect(w.active).toBe(2); // "three" starts at 3000
+    expect(w.progress).toBe(0);
+    expect(lyricsWindow(lines, 2800, 1, 3, { leadMs: 150 }).active).toBe(1);
+  });
+  it('fills a line over the time its words take, not over the pause after it', () => {
+    const song: LyricLine[] = [
+      { startMs: 0, endMs: 2000, text: 'ten letters!', singerSlot: 1 }, // 10 sung chars in 2 s → 200 ms/char
+      { startMs: 2000, endMs: 4000, text: 'ten letters', singerSlot: 1 },
+      { startMs: 4000, endMs: 6000, text: 'ten letters', singerSlot: 1 },
+      { startMs: 6000, endMs: 12000, text: 'ten letters', singerSlot: 1 }, // then a 4 s instrumental
+      { startMs: 12000, endMs: 14000, text: 'fin', singerSlot: 1 },
+    ];
+    const pace = lyricsPace(song);
+    expect(pace).toBe(200);
+    expect(sungSpanMs(song[3]!, pace)).toBe(2000); // the words, not the six-second span
+    expect(sungSpanMs(song[0]!, pace)).toBe(2000); // never past the line's own span
+    const w = lyricsWindow(song, 7000, 1, 3, { paceMsPerChar: pace });
+    expect(w.progress).toBeCloseTo(0.5); // halfway through the words, not a sixth of the way through the span
+    expect(lyricsWindow(song, 9000, 1, 3, { paceMsPerChar: pace }).progress).toBe(1); // sung: the line stays lit
+    expect(lyricsWindow(song, 7000, 1, 3).progress).toBeCloseTo(1 / 6); // without a pace: the old stretch
+    expect(sungChars('అలా చూడకయ్యా, ok!')).toBe(13);
+    expect(lyricsPace(song.slice(0, 2))).toBe(PACE_DEFAULT_MS); // too few lines to measure
   });
 });
 

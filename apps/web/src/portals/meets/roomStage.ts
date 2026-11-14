@@ -74,7 +74,6 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     opening.current = (async () => {
       try {
         await camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined });
-        camera.setPreset(app.zoomPreset);
         setCamError(null);
       } catch (e) {
         setCamError(e instanceof Error ? e.message : String(e));

@@ -1,31 +1,30 @@
 /**
  * Stage framing = how much of the camera frame a singer's cut-out shows. The default, **chest**,
  * frames the singer itself — head to chest, like a news anchor — from where the person is in the
- * cut-out (the mask's bounding box), however near or far they sit; wide / mid / close are fixed
- * crops (the whole frame, 1.2×, 1.45× around the face) for those who want them. A vocal-driven auto
- * zoom eases a little closer while this singer sings and back when they are silent, so whoever
- * takes the vocal is the one who comes closer — on every device, since the sender frames its own
- * stream. This framing IS the picture of the singer: every stage (`stage.ts`) draws the frame
- * whole, exactly as cropped here, the live stage small under the lyrics and the show big — nothing
+ * cut-out (the mask's bounding box), however near or far they sit. **Wide** is the whole camera
+ * frame (the camera cannot see wider: for more room, move it back); **mid** and **close** are
+ * fixed zooms (1.5× and 2.2×) aimed at the singer's head where one is found. **Auto** eases any of
+ * them a fifth closer while this singer sings and back when they are silent, so whoever takes the
+ * vocal is the one who comes closer — on every device, since the sender frames its own stream.
+ * This framing IS the picture of the singer: every stage (`stage.ts`) draws the frame whole,
+ * exactly as cropped here, the live stage small under the lyrics and the show big — nothing
  * downstream finds a person and zooms in on its own.
  */
 export type ZoomPreset = 'chest' | 'wide' | 'mid' | 'close';
 
-/** Crop factor per fixed level (1 = the whole frame); chest is sized from the person instead. */
+/** Crop factor per fixed preset (1 = the whole frame, 2.2 = the middle 45 % of it); chest is sized from the person instead. */
 export const FRAMING: Record<ZoomPreset, { crop: number }> = {
   chest: { crop: 1 },
   wide: { crop: 1 },
-  mid: { crop: 1.2 },
-  close: { crop: 1.45 },
+  mid: { crop: 1.5 },
+  close: { crop: 2.2 },
 };
 
-/** Continuous framing value for the fixed presets: 0 = wide, 1 = close (presets map to 0 / 0.5 / 1). */
-export const presetLevel = (p: ZoomPreset): number => (p === 'wide' || p === 'chest' ? 0 : p === 'mid' ? 0.5 : 1);
+/** How much singing tightens a framing with Auto on: a fifth closer (the crop a fifth smaller). */
+export const SING_TIGHTEN = 0.2;
 
-export function framingAt(level: number): { crop: number } {
-  const t = Math.max(0, Math.min(1, level));
-  return { crop: FRAMING.wide.crop + (FRAMING.close.crop - FRAMING.wide.crop) * t };
-}
+/** The crop factor of a fixed preset, `sing` (0..1) closer when Auto has the singer singing. */
+export const presetCrop = (p: ZoomPreset, sing = 0): number => FRAMING[p].crop * (1 + SING_TIGHTEN * Math.max(0, Math.min(1, sing)));
 
 /** Where the person is in their cut-out frame, as fractions (0..1) of the frame. */
 export interface PersonBox {
@@ -94,15 +93,33 @@ export interface FrameRect {
 }
 
 /**
- * Where to copy the cut-out from (crop window around `origin`, 0..100 %, clamped to the frame) and
- * where to draw it: the whole canvas of the same size, so the crop fills the frame that goes out.
+ * Where to copy the cut-out from (a crop `crop` times smaller than the frame, around `origin`,
+ * 0..100 %, clamped to the frame) and where to draw it: the whole canvas of the same size, so the
+ * crop fills the frame that goes out.
  */
-export function frameRect(srcW: number, srcH: number, level: number, origin: { x: number; y: number } = { x: 50, y: 42 }): FrameRect {
-  const { crop } = framingAt(level);
-  const sw = srcW / crop;
-  const sh = srcH / crop;
+export function frameRect(srcW: number, srcH: number, crop: number, origin: { x: number; y: number } = { x: 50, y: 42 }): FrameRect {
+  const k = Math.max(1, crop);
+  const sw = srcW / k;
+  const sh = srcH / k;
   const sx = Math.max(0, Math.min(srcW - sw, (srcW * origin.x) / 100 - sw / 2));
   const sy = Math.max(0, Math.min(srcH - sh, (srcH * origin.y) / 100 - sh / 2));
+  return { sx, sy, sw, sh, dx: 0, dy: 0, dw: srcW, dh: srcH };
+}
+
+/**
+ * A fixed zoom (mid / close) aimed at the singer: the crop is centred on the body and has the top
+ * of the head a tenth of the way down, like the chest framing — so "close" is the face, wherever
+ * the singer sits — and falls back to the crop around `origin` while nobody is found.
+ */
+export function fixedCrop(srcW: number, srcH: number, crop: number, person: PersonBox | null, origin: { x: number; y: number } = { x: 50, y: 42 }): FrameRect {
+  if (!person) return frameRect(srcW, srcH, crop, origin);
+  const k = Math.max(1, crop);
+  const sw = srcW / k;
+  const sh = srcH / k;
+  const cx = (person.x + person.w / 2) * srcW;
+  const headTop = person.y * srcH;
+  const sx = Math.max(0, Math.min(srcW - sw, cx - sw / 2));
+  const sy = Math.max(0, Math.min(srcH - sh, headTop - sh * CHEST.headroom));
   return { sx, sy, sw, sh, dx: 0, dy: 0, dw: srcW, dh: srcH };
 }
 

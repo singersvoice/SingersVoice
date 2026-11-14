@@ -11,7 +11,7 @@ import type { ZoomPreset } from '../video/framing.ts';
 export function Framing(props: { compact?: boolean }) {
   const app = appSettings.value;
   return (
-    <span class={`row framing ${props.compact ? 'compact' : ''}`} style="pointer-events:auto" data-framing={app.zoomPreset} data-autozoom={app.autoZoom ? '1' : '0'} title="How your camera frames you — Chest keeps you head-to-chest from wherever you sit; this exact picture goes to the stage, the show and the audience">
+    <span class={`row framing ${props.compact ? 'compact' : ''}`} style="pointer-events:auto" data-framing={app.zoomPreset} data-autozoom={app.autoZoom ? '1' : '0'} title="How your camera frames you — Chest keeps you head-to-chest from wherever you sit, Wide is the whole camera frame, Mid and Close zoom 1.5× / 2.2× onto your head, Auto comes a fifth closer while you sing; this exact picture goes to the stage, the show and the audience">
       <Seg<ZoomPreset>
         value={app.zoomPreset}
         ariaLabel="Stage framing"

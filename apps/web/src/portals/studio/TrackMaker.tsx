@@ -417,6 +417,13 @@ function LyricsStep(props: { track: TrackPackageV2; onPatch: (p: Partial<TrackPa
 
 // ---------------- Step 3 ----------------
 
+/**
+ * A mark is tapped after the line is heard to start: hearing, deciding, tapping takes about this long,
+ * so every mark is set this much before the tap. A song timed this way lights each line as it starts,
+ * not a beat after (All earlier / All later fix a song timed before this, or a slow tapper).
+ */
+export const MARK_REACTION_MS = 200;
+
 function TimingStep(props: { track: TrackPackageV2; audio: Blob | null; audioUrl: string; onPatch: (p: Partial<TrackPackageV2>) => void; onNext: () => void; onBack: () => void }) {
   const t = props.track;
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -508,7 +515,8 @@ function TimingStep(props: { track: TrackPackageV2; audio: Blob | null; audioUrl
   const mark = () => {
     const a = audioRef.current;
     if (!a || cur >= t.lyrics.length) return;
-    const now = Math.round(a.currentTime * 1000);
+    // A tap lands after the line has started (hearing it, then tapping): the mark is set that much earlier.
+    const now = Math.max(cur > 0 ? t.lyrics[cur - 1]!.startMs + 200 : 0, Math.round(a.currentTime * 1000) - MARK_REACTION_MS);
     const lyrics = t.lyrics.map((l) => ({ ...l }));
     lyrics[cur]!.startMs = now;
     if (cur > 0 && lyrics[cur - 1]!.endMs <= lyrics[cur - 1]!.startMs) lyrics[cur - 1]!.endMs = now;
@@ -539,6 +547,11 @@ function TimingStep(props: { track: TrackPackageV2; audio: Blob | null; audioUrl
     const i = Math.min(cur, t.lyrics.length - 1);
     const lyrics = t.lyrics.map((l, j) => (j === i ? { ...l, startMs: Math.max(0, l.startMs + ms), endMs: Math.max(0, l.endMs + ms) } : l));
     setLyrics(lyrics);
+  };
+  /** Every timed line earlier or later: the fix for a whole song that lights up late (or early) on stage. */
+  const shiftAll = (ms: number) => {
+    setLyrics(t.lyrics.map((l) => (l.startMs || l.endMs ? { ...l, startMs: Math.max(0, l.startMs + ms), endMs: Math.max(0, l.endMs + ms) } : l)));
+    toast(`All lines ${ms < 0 ? 'earlier' : 'later'} by ${Math.abs(ms)} ms`, 'ok');
   };
   const spaceToNext = () => {
     // Evenly spread all un-timed lines between the last mark and the next timed line (or the end).
@@ -584,7 +597,7 @@ function TimingStep(props: { track: TrackPackageV2; audio: Blob | null; audioUrl
   return (
     <div class="stack">
       <div class="callout">
-        Play the song and tap <b>Mark</b> the moment each line starts (desktop: <span class="kbd">Space</span> mark · <span class="kbd">⌫</span> undo · <span class="kbd">←</span>/<span class="kbd">→</span> nudge 100 ms · <span class="kbd">P</span> play/pause). Lines end when the next one starts.
+        Play the song and tap <b>Mark</b> the moment each line starts (desktop: <span class="kbd">Space</span> mark · <span class="kbd">⌫</span> undo · <span class="kbd">←</span>/<span class="kbd">→</span> nudge 100 ms · <span class="kbd">P</span> play/pause). A mark lands {MARK_REACTION_MS} ms before your tap — the time it takes to hear a line and tap — and lines end when the next one starts. If the whole song lights up late on stage, <b>All earlier</b> moves every line.
       </div>
       <audio ref={audioRef} src={props.audioUrl} preload="auto" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
       <div class="lyric-rows" ref={listRef} style="max-height:38dvh;overflow:auto">
@@ -633,6 +646,12 @@ function TimingStep(props: { track: TrackPackageV2; audio: Blob | null; audioUrl
           </button>
           <button class="btn sm" onClick={spaceToNext} disabled={timed === t.lyrics.length}>
             Auto-space rest
+          </button>
+          <button class="btn sm" onClick={() => shiftAll(-100)} disabled={timed === 0} title="Every timed line 100 ms earlier">
+            All earlier
+          </button>
+          <button class="btn sm" onClick={() => shiftAll(100)} disabled={timed === 0} title="Every timed line 100 ms later">
+            All later
           </button>
         </div>
       </div>

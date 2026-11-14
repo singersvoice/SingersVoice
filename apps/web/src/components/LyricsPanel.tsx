@@ -1,4 +1,8 @@
-import { cueDeck, lyricsWindow, SLOT_COLORS, type LyricLine, type SingerSlot } from '@singersvoice/protocol';
+import { useMemo } from 'preact/hooks';
+import { cueDeck, lyricsPace, lyricsWindow, SLOT_COLORS, type LyricLine, type SingerSlot } from '@singersvoice/protocol';
+
+/** A line lights up this long before it starts: a breath to read it, as every karaoke screen gives. */
+export const LYRIC_LEAD_MS = 150;
 
 export function SlotBadge(props: { slot: SingerSlot; label?: string; class?: string }) {
   return (
@@ -9,11 +13,13 @@ export function SlotBadge(props: { slot: SingerSlot; label?: string; class?: str
 }
 
 /**
- * The lyrics-first stage centre: 1 done (grey) · 1 active (green, fills as the line plays) ·
- * 3 upcoming (orange). Lines sung by *your* slot carry a highlighted badge.
+ * The lyrics-first stage centre: 1 done (grey) · 1 active (fills white as its words are sung — at
+ * the song's own pace, so a line followed by a pause is lit by the time its last word is sung, not
+ * stretched over the pause) · 3 upcoming (orange). Lines sung by *your* slot carry a highlighted badge.
  */
 export function LyricsPanel(props: { lines: LyricLine[]; tMs: number; mySlot: number; countdown: number | null; showWho: boolean; title?: string }) {
-  const w = lyricsWindow(props.lines, props.tMs, 1, 3);
+  const pace = useMemo(() => lyricsPace(props.lines), [props.lines]);
+  const w = lyricsWindow(props.lines, props.tMs, 1, 3, { leadMs: LYRIC_LEAD_MS, paceMsPerChar: pace });
   if (props.countdown !== null && props.countdown > 0) {
     return (
       <section class="lyrics" aria-live="off">
@@ -36,7 +42,7 @@ export function LyricsPanel(props: { lines: LyricLine[]; tMs: number; mySlot: nu
       {w.items.map((it) => {
         const far = it.state === 'upcoming' && upcomingSeen++ >= 1;
         const mine = it.line.singerSlot === props.mySlot || it.line.singerSlot === 0;
-        const style = it.state === 'active' ? { '--p': `${Math.round(w.progress * 100)}%` } : undefined;
+        const style = it.state === 'active' ? { '--p': `${(w.progress * 100).toFixed(1)}%` } : undefined;
         return (
           <div key={it.index} class={`lyric ${it.state} ${far ? 'far' : ''} ${mine ? 'mine' : ''}`} style={style as unknown as string}>
             {props.showWho && (
