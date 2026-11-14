@@ -19,6 +19,8 @@ import { pickShowMime, SHOW_FPS, showSupported, type ShowRecorder } from './show
 
 /** How often a piece of the film goes to the upload (and how much a dying tab can lose). */
 const PIECE_MS = 10_000;
+/** The film's frame rate where the browser has no hardware H.264 (WebM, software): light on the stage's own device. */
+const SOFT_FPS = 15;
 export const FILM_TITLE = 'Full meet';
 
 export interface MeetFilmState {
@@ -129,13 +131,19 @@ export class MeetRecorder {
     const dest = engine.ctx.createMediaStreamDestination();
     tap.connect(dest);
     this.show.setTap(tap);
-    const media = new MediaStream([...this.show.canvas.captureStream(SHOW_FPS).getVideoTracks(), ...dest.stream.getAudioTracks()]);
+    // H.264 in MP4 is hardware-encoded wherever it is offered (Windows, Mac, iOS, Android): the film is the full
+    // 1280×720 show at 24 fps. A browser that only offers WebM encodes in software — the film then runs lighter
+    // (960×540, 15 fps, drawn from the show canvas) so the stage itself never slows down.
+    const soft = !mime.includes('mp4');
+    const source = soft ? this.scaledSource() : this.show.canvas;
+    const media = new MediaStream([...source.captureStream(soft ? SOFT_FPS : SHOW_FPS).getVideoTracks(), ...dest.stream.getAudioTracks()]);
     let mr: MediaRecorder;
     try {
-      mr = new MediaRecorder(media, { mimeType: mime, videoBitsPerSecond: 2_500_000, audioBitsPerSecond: 160_000 });
+      mr = new MediaRecorder(media, { mimeType: mime, videoBitsPerSecond: soft ? 1_200_000 : 2_500_000, audioBitsPerSecond: 160_000 });
     } catch (e) {
       this.show.setTap(null);
       this.show.keepDrawing = false;
+      this.stopScaling();
       void stream.abort();
       this.state.value = { ...this.state.value, note: `This browser cannot record the meet: ${e instanceof Error ? e.message : String(e)}` };
       return;
@@ -159,6 +167,7 @@ export class MeetRecorder {
       this.mr = null;
       this.show.setTap(null);
       this.show.keepDrawing = false;
+      this.stopScaling();
       void stream.abort();
       this.state.value = { ...this.state.value, note: `The recorder did not start: ${e instanceof Error ? e.message : String(e)}` };
       return;
@@ -166,6 +175,25 @@ export class MeetRecorder {
     this.state.value = { recording: true, seconds: 0, bytes: 0, stored: 0, note: null, saved: null };
     clearInterval(this.ticker);
     this.ticker = setInterval(() => this.tick(), 1000);
+  }
+
+  /** The lighter picture for software encoders: the show canvas scaled to 960×540, a few times a second. */
+  private scaled: { canvas: HTMLCanvasElement; timer: ReturnType<typeof setInterval> } | null = null;
+  private scaledSource(): HTMLCanvasElement {
+    this.stopScaling();
+    const canvas = document.createElement('canvas');
+    canvas.width = 960;
+    canvas.height = 540;
+    const c = canvas.getContext('2d', { alpha: false })!;
+    const draw = () => c.drawImage(this.show.canvas, 0, 0, canvas.width, canvas.height);
+    draw();
+    this.scaled = { canvas, timer: setInterval(draw, 1000 / SOFT_FPS) };
+    return canvas;
+  }
+  private stopScaling(): void {
+    if (!this.scaled) return;
+    clearInterval(this.scaled.timer);
+    this.scaled = null;
   }
 
   private tick(): void {

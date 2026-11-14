@@ -19,6 +19,7 @@
  */
 import http from 'node:http';
 import { spawn, execFile } from 'node:child_process';
+import { timingSafeEqual } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
 const SECRET = process.env.RELAY_SECRET || '';
@@ -140,6 +141,14 @@ const json = (res, status, body) => {
   res.end(JSON.stringify(body));
 };
 
+/** `Authorization: Bearer <RELAY_SECRET>`, compared in constant time. */
+function authorized(header) {
+  if (!SECRET || typeof header !== 'string') return false;
+  const given = Buffer.from(header);
+  const want = Buffer.from(`Bearer ${SECRET}`);
+  return given.length === want.length && timingSafeEqual(given, want);
+}
+
 let ffmpegVersion = null;
 execFile(FFMPEG, ['-version'], (e, out) => {
   ffmpegVersion = e ? `not found (${e.message})` : String(out).split('\n')[0];
@@ -148,7 +157,7 @@ execFile(FFMPEG, ['-version'], (e, out) => {
 export function handle(req, res) {
   const url = new URL(req.url, 'http://relay');
   if (url.pathname === '/health') return json(res, 200, { ok: true, ffmpeg: ffmpegVersion, streams: streams.size });
-  if (!SECRET || req.headers.authorization !== `Bearer ${SECRET}`) return json(res, 401, { error: 'unauthorized' });
+  if (!authorized(req.headers.authorization)) return json(res, 401, { error: 'unauthorized' });
   const m = /^\/streams\/([^/]+)(?:\/(start|segments|stop))?$/.exec(url.pathname);
   if (!m || !ID.test(m[1])) return json(res, 404, { error: 'not found' });
   const [, id, action] = m;

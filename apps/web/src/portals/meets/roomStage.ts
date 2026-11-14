@@ -16,6 +16,7 @@ import { meetIsOpen, SLOT_COLORS, type Meet, type Participant, type PerformanceS
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
+import { needsReconnect } from '../../state/session.ts';
 import { appSettings } from '../../state/settings.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
@@ -257,12 +258,13 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     if (!film.recording) return;
     for (const s of stagePerformers) filmSingers.current.set(s.slot, { slot: s.slot, displayName: s.displayName });
   }, [film.recording, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|')]);
+  const driveLinked = !needsReconnect.value; // a Drive session that lapsed and came back starts the film then
   useEffect(() => {
     const engine = opts.engine;
-    if (!host || !onStage || !engine || !filmWanted || !meetOpen) return;
+    if (!host || !onStage || !engine || !filmWanted || !meetOpen || !driveLinked) return;
     filmSingers.current = new Map(stagePerformers.map((s) => [s.slot, { slot: s.slot, displayName: s.displayName }]));
     void film.start(engine, { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot) });
-  }, [film, host, onStage, opts.engine, filmWanted, meetOpen]);
+  }, [film, host, onStage, opts.engine, filmWanted, meetOpen, driveLinked]);
   const endFilm = () => {
     const singers = [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot);
     void film.stop().then((saved) => saved && registerMeetFilm({ saved, meet: { meetId: meet.meetId, title: meet.title, hostName: meet.hostName }, singers, session }));

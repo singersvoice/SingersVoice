@@ -108,10 +108,12 @@ export class MeetSession {
       this.error.value = null;
     } catch (e) {
       if (e instanceof ApiError && e.code === 'not_participant' && this.lastRole !== 'publisher' && !this.rejoining) {
-        // The service forgot this device (asleep for a minute, a service restart): back in as a listener, quietly.
+        // The service forgot this device (asleep for a minute, a service restart): back in quietly — on a free
+        // slot again when it had one and the stage rules allow it right now, else as a listener.
         this.rejoining = true;
+        const wasOnStage = this.you.value?.slot != null;
         this.resumeToken = '';
-        this.join('audience')
+        this.join(wasOnStage ? 'performer' : 'audience')
           .catch(() => undefined)
           .finally(() => (this.rejoining = false));
       } else if (e instanceof ApiError && (e.status === 403 || e.status === 404 || e.status === 410)) {

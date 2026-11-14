@@ -306,8 +306,10 @@ link; the first four tiles connect by themselves, the rest on request.
    against a stub ffmpeg.
 4c. **The film of the meet** (`video/meetRecorder.ts`): on the host's device, from the host on
    stage with the mic open until the meet is over, one MediaRecorder on the room's ShowRecorder
-   canvas (drawn for the whole meet — `keepDrawing`) with a tap (`setTap`) on every mix bus the
-   device builds (the song's, the talk-back's), ten-second pieces into a `PerformanceStream` — the
+   canvas (drawn for the whole meet — `keepDrawing`; 1280×720 at 24 fps where the browser has
+   hardware H.264 in MP4 — Windows, Mac, iOS, Android — and a 960×540, 15 fps copy of it where it
+   only encodes WebM in software, so the stage itself never slows down) with a tap (`setTap`) on
+   every mix bus the device builds (the song's, the talk-back's), ten-second pieces into a `PerformanceStream` — the
    Drive provider's `beginPerformanceStream`: one resumable upload session fed in order, pieces in
    256 KiB multiples as 4 MiB fill, the last with the total; the session and the confirmed offset
    are remembered in localStorage, and a film whose tab died is completed by the next start
