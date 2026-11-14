@@ -51,3 +51,21 @@ Without a client ID the app still runs fully in **device mode** (IndexedDB), so 
 
 The PWA already runs installed on both platforms. If/when native shells (Capacitor) are added they get their own
 iOS/Android OAuth client IDs; the Drive layout and protocol stay the same.
+
+
+## "Failed to open popup window", or a blank Google page
+
+Two different things, both seen on phones:
+
+- **The first tap fails, the second works.** A browser lets a page open a window only during the
+  tap itself, and the first tap used to spend that moment downloading Google's sign-in library.
+  The app now loads the library as soon as the sign-in screen appears, and if it is somehow not
+  there yet it says "tap Continue with Google once more" instead of opening a window the browser
+  will block.
+- **The link was opened inside another app** (a message in WhatsApp, a mail in Gmail, a post on
+  Facebook or Instagram): those apps show pages in their own built-in browser, where the sign-in
+  window is blocked and Google refuses to show its sign-in page at all (a blank
+  accounts.google.com). The app recognises this and shows "You are inside …'s built-in browser"
+  with **Open in Safari / Open in Chrome** (and a copy-the-link button, and the menu way: ⋯ →
+  Open in browser). Once SingersVoice is open in the real browser, sign-in works and the installed
+  app (Add to Home Screen) never has the problem again.

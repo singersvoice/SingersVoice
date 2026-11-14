@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'preact/hooks';
-import { googleConfigured } from '../lib/google.ts';
+import { useEffect, useMemo, useState } from 'preact/hooks';
+import { inAppBrowser, openInBrowserUrl } from '../lib/browserEnv.ts';
+import { googleConfigured, loadGis } from '../lib/google.ts';
 import { asset, go } from '../lib/nav.ts';
 import { persistStorage, platformName } from '../lib/platform.ts';
 import { errorText, toast } from '../lib/toast.ts';
@@ -25,6 +26,16 @@ export function Welcome() {
     }
     go(next, true);
   }, [signedIn.value]);
+
+  // Have Google's sign-in library in hand before the first tap: the sign-in window has to open within the tap.
+  useEffect(() => {
+    if (googleConfigured) void loadGis().catch(() => undefined);
+  }, []);
+  const inApp = useMemo(() => inAppBrowser(), []);
+  const openOutside = () => {
+    const u = openInBrowserUrl(window.location.href);
+    if (u) window.location.href = u;
+  };
 
   const onGoogle = async () => {
     try {
@@ -53,6 +64,27 @@ export function Welcome() {
           {busy.value ? <Spinner /> : <IcDrive />}
           {busy.value ?? 'Continue with Google'}
         </button>
+        {inApp && (
+          <div class="callout warn" style="text-align:center" data-in-app-browser>
+            <b>You are inside {inApp}&rsquo;s built-in browser</b>, where Google sign-in cannot open. Open SingersVoice in your real browser:
+            <div class="row" style="justify-content:center;margin-top:8px;gap:8px">
+              {openInBrowserUrl(window.location.href) && (
+                <button class="btn" onClick={openOutside}>
+                  Open in {/iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'Safari' : 'Chrome'}
+                </button>
+              )}
+              <button
+                class="btn"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(window.location.href).then(() => toast('Link copied — paste it in Safari or Chrome', 'ok'));
+                }}
+              >
+                Copy the link
+              </button>
+            </div>
+            <div class="small muted" style="margin-top:6px">Or tap the ⋯ or share button and choose &ldquo;Open in browser&rdquo;.</div>
+          </div>
+        )}
         <p class="small muted" style="text-align:center">
           Google sign-in is required: your tracks, takes and settings are stored in <b>your</b> Google Drive (folder <span class="kbd">SingersVoice</span>), never on our servers.
         </p>

@@ -129,7 +129,16 @@ export function signInError(error?: string, description?: string): string {
  */
 export async function requestToken(opts: { prompt: '' | 'consent' | 'select_account'; hint?: string }): Promise<GoogleToken> {
   if (!googleConfigured) throw new Error('Google sign-in is not configured (VITE_GOOGLE_CLIENT_ID)');
-  const gis = await loadGis();
+  // The sign-in window must open from the tap itself: a browser allows a popup only within the
+  // user's gesture, and a script download in between is longer than that. The library is loaded
+  // when the sign-in screen appears (loadGis there), so here it is normally already in hand; when it
+  // is not, load it now and ask for one more tap rather than open a window the browser will block.
+  const ready = window.google?.accounts?.oauth2 ? window.google : null;
+  if (!ready) {
+    await loadGis();
+    throw new Error('Google sign-in is ready now — tap Continue with Google once more');
+  }
+  const gis = ready;
   return new Promise<GoogleToken>((resolve, reject) => {
     const client = gis.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
@@ -144,7 +153,16 @@ export async function requestToken(opts: { prompt: '' | 'consent' | 'select_acco
         storeToken(token);
         resolve(token);
       },
-      error_callback: (e) => reject(new Error(e.type === 'popup_closed' ? 'Sign-in window was closed' : e.message ?? e.type)),
+      error_callback: (e) =>
+        reject(
+          new Error(
+            e.type === 'popup_closed'
+              ? 'Sign-in window was closed'
+              : e.type === 'popup_failed_to_open'
+                ? 'The browser blocked the sign-in window. Tap Continue with Google again — or, if you opened this link inside another app, open SingersVoice in Safari or Chrome.'
+                : (e.message ?? e.type),
+          ),
+        ),
     });
     client.requestAccessToken({ prompt: opts.prompt, hint: opts.hint });
   });

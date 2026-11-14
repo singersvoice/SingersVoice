@@ -4,7 +4,7 @@ import { FxPanel } from '../components/FxPanel.tsx';
 import { IcDrive } from '../components/icons.tsx';
 import { Page } from '../components/Shell.tsx';
 import { Field, Seg, Switch } from '../components/ui.tsx';
-import { googleConfigured } from '../lib/google.ts';
+import { googleConfigured, loadGis } from '../lib/google.ts';
 import { idb, STORES } from '../lib/idb.ts';
 import { asset, go, href } from '../lib/nav.ts';
 import { bytes, isStandalone, platformName } from '../lib/platform.ts';
@@ -20,6 +20,9 @@ interface Version {
 }
 
 export function Settings() {
+  useEffect(() => {
+    if (googleConfigured) void loadGis().catch(() => undefined); // the sign-in window must open within the tap
+  }, []);
   const app = appSettings.value;
   const audio = audioSettings.value;
   const p = profile.value;
