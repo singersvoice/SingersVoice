@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, playbackPositionMs, type Participant } from '@singersvoice/protocol';
-import { addSong, claimSlot, decideRequest, ensureMeet, ensurePlayback, isBanned, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setStagePolicy, SNAPSHOT_AUDIENCE_NAMES, songAction, start, stop, tick, TOUCH_COALESCE_MS, touch, touchForHeartbeat, visibleParticipants, withdrawRequest } from '../src/meets.ts';
+import { addSong, choicePending, chooseSong, claimSlot, decideRequest, ensureMeet, ensurePlayback, isBanned, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setStagePolicy, SNAPSHOT_AUDIENCE_NAMES, songAction, start, stop, tick, TOUCH_COALESCE_MS, touch, touchForHeartbeat, visibleParticipants, withdrawRequest } from '../src/meets.ts';
 
 const T0 = Date.parse('2026-11-11T10:00:00Z');
 const person = (id: string, userId = `u-${id}`): Participant => ({
@@ -213,7 +213,7 @@ describe('meet rules', () => {
     expect(ensureMeet(legacy as typeof m)).toMatchObject({ stagePolicy: 'ask', requests: [] });
   });
 
-  it('set list: a karaoke event is many songs — pick, queue, play now, song over → lobby for the next one', () => {
+  it('the song of the stage: one at a time — picked is up; two picked, the stage chooses and the other is dropped; song over → the next', () => {
     const m = newMeet({ title: '', hostUserId: 'u-host', hostName: 'Host', trackId: null, trackTitle: '', catalogTrackId: null, backgroundId: 'bg' }, T0);
     const host = person('h', 'u-host');
     const a = person('a');
@@ -222,64 +222,106 @@ describe('meet rules', () => {
     expect(start(m, 5000, T0)).toEqual({ ok: false, reason: 'no_song' }); // nothing to sing yet
     expect(addSong(m, a, { trackId: 't1', catalogTrackId: 'c1', trackTitle: 'One' })).toMatchObject({ ok: false, reason: 'not_on_stage' }); // audience picks nothing
     decideRequest(m, a, true); // seated by the host
-    expect(addSong(m, a, { trackId: 't1', catalogTrackId: 'c1', trackTitle: 'One', durationMs: 20_000 }, false, T0).ok).toBe(true);
-    expect(m).toMatchObject({ trackId: 't1', catalogTrackId: 'c1', trackTitle: 'One' }); // first song plays next at once
+    // picked is up: the first pick is the song of the stage, nothing put forward, anyone on stage starts it
+    expect(addSong(m, a, { trackId: 't1', catalogTrackId: 'c1', trackTitle: 'One', durationMs: 20_000 }, T0).ok).toBe(true);
+    expect(m).toMatchObject({ trackId: 't1', catalogTrackId: 'c1', trackTitle: 'One', currentDurationMs: 20_000 });
     expect(m.setList).toHaveLength(0);
-    expect(addSong(m, host, { trackId: null, catalogTrackId: 'c2', trackTitle: 'Two' }, false, T0 + 1).ok).toBe(true);
-    expect(addSong(m, a, { trackId: 't3', catalogTrackId: null, trackTitle: 'Three' }, false, T0 + 2).ok).toBe(true);
-    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two', 'Three']);
-    // the same song twice is never listed twice: the ids meet, or the title and length do (a singer's own copy)
-    expect(addSong(m, host, { trackId: 'x-own', catalogTrackId: 'c2', trackTitle: 'Two (copy)' }, false, T0 + 3)).toMatchObject({ ok: true, duplicate: 'queued' });
-    expect(addSong(m, a, { trackId: 'own-1', catalogTrackId: null, trackTitle: ' one ', durationMs: 20_500 }, false, T0 + 3)).toMatchObject({ ok: true, duplicate: 'current' });
-    expect(addSong(m, a, { trackId: 'own-1', catalogTrackId: null, trackTitle: 'One', durationMs: 60_000 }, false, T0 + 3).ok).toBe(true); // a namesake of another length is its own song
-    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two', 'Three', 'One']);
-    expect(songAction(m, a, m.setList[2]!.id, 'remove').ok).toBe(true);
-    // the song belongs to the stage: any singer on stage plays a song now — the current one goes back to the top
-    expect(addSong(m, a, { trackId: 't4', catalogTrackId: null, trackTitle: 'Four' }, true).ok).toBe(true);
-    expect(m.trackTitle).toBe('Four');
-    expect(m.setList.map((e) => e.trackTitle)).toEqual(['One', 'Two', 'Three']);
-    // ordering: anyone on stage; the audience only their own pick (none here)
-    const fan = person('fan');
-    const three = m.setList[2]!;
-    expect(songAction(m, fan, three.id, 'up')).toMatchObject({ ok: false, reason: 'not_on_stage' });
-    expect(songAction(m, a, three.id, 'up').ok).toBe(true);
-    expect(m.setList.map((e) => e.trackTitle)).toEqual(['One', 'Three', 'Two']);
-    expect(songAction(m, fan, m.setList[0]!.id, 'remove')).toMatchObject({ ok: false, reason: 'not_on_stage' });
-    expect(songAction(m, a, three.id, 'remove').ok).toBe(true);
-    expect(m.setList.map((e) => e.trackTitle)).toEqual(['One', 'Two']);
-    // "now" on a queued song that is picked again brings that entry up instead of adding a copy
-    expect(addSong(m, a, { trackId: null, catalogTrackId: 'c1', trackTitle: 'One' }, true)).toMatchObject({ ok: true, duplicate: 'queued' });
+    expect(choicePending(m)).toBe(false);
+    // a second singer picks another song at the same time: both are listed, the stage must choose
+    expect(addSong(m, host, { trackId: null, catalogTrackId: 'c2', trackTitle: 'Two' }, T0 + 1).ok).toBe(true);
     expect(m.trackTitle).toBe('One');
-    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Four', 'Two']);
-    // sing it: nothing may be swapped under a song in progress, and the wait list waits for the song to end
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two']);
+    expect(choicePending(m)).toBe(true);
+    // the same song twice is never listed twice: the ids meet, or the title and length do (a singer's own copy)
+    expect(addSong(m, host, { trackId: 'x-own', catalogTrackId: 'c2', trackTitle: 'Two (copy)' }, T0 + 3)).toMatchObject({ ok: true, duplicate: 'proposed' });
+    expect(addSong(m, a, { trackId: 'own-1', catalogTrackId: null, trackTitle: ' one ', durationMs: 20_500 }, T0 + 3)).toMatchObject({ ok: true, duplicate: 'current' });
+    expect(addSong(m, a, { trackId: 'own-1', catalogTrackId: null, trackTitle: 'One', durationMs: 60_000 }, T0 + 3).ok).toBe(true); // a namesake of another length is its own song
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two', 'One']);
+    const fan = person('fan');
+    expect(songAction(m, fan, m.setList[1]!.id, 'remove')).toMatchObject({ ok: false, reason: 'not_on_stage' }); // the audience withdraws nothing
+    expect(songAction(m, a, m.setList[1]!.id, 'remove').ok).toBe(true); // a singer withdraws one
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two']);
+    // the stage chooses: one tap, any singer — the chosen song is up, every other song put forward is dropped (the one that was up included)
+    expect(chooseSong(m, fan, m.setList[0]!.id)).toMatchObject({ ok: false, reason: 'not_on_stage' });
+    expect(chooseSong(m, a, m.setList[0]!.id)).toEqual({ ok: true });
+    expect(m).toMatchObject({ trackTitle: 'Two', catalogTrackId: 'c2', trackId: null });
+    expect(m.setList).toHaveLength(0);
+    expect(chooseSong(m, a, 'song-gone')).toMatchObject({ ok: false, reason: 'no_song' });
+    // …or keeps the one that is up: 'current' drops the rest
+    addSong(m, host, { trackId: 't3', catalogTrackId: null, trackTitle: 'Three' }, T0 + 4);
+    addSong(m, a, { trackId: 't4', catalogTrackId: null, trackTitle: 'Four' }, T0 + 5);
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Three', 'Four']);
+    expect(chooseSong(m, host, 'current')).toEqual({ ok: true });
+    expect(m.trackTitle).toBe('Two');
+    expect(m.setList).toHaveLength(0);
+    // sing it: a song picked during the song waits for its end; the wait list waits for the song to end
     m.stage[0]!.ready = true;
     expect(start(m, 5000, T0 + 10).ok).toBe(true);
     const w = person('w');
     expect(requestStage(m, w, T0 + 11)).toEqual({ ok: true }); // asking is fine during a song…
     expect(decideRequest(m, w, true)).toEqual({ ok: false, reason: 'song_in_progress' }); // …seating waits
     expect(m.requests.map((r) => r.participantId)).toEqual(['w']);
-    expect(addSong(m, host, { trackId: 't5', catalogTrackId: null, trackTitle: 'Five' }, true)).toMatchObject({ ok: false, reason: 'song_in_progress' });
-    expect(songAction(m, host, m.setList[0]!.id, 'now')).toMatchObject({ ok: false, reason: 'song_in_progress' });
-    expect(addSong(m, host, { trackId: 't5', catalogTrackId: null, trackTitle: 'Five' }).ok).toBe(true); // queued instead
+    expect(addSong(m, host, { trackId: 't5', catalogTrackId: null, trackTitle: 'Five' }, T0 + 12).ok).toBe(true); // put forward for after the song
+    expect(addSong(m, a, { trackId: 't6', catalogTrackId: null, trackTitle: 'Six' }, T0 + 13).ok).toBe(true);
+    expect(m.trackTitle).toBe('Two'); // nothing is swapped under a running song
+    expect(choicePending(m)).toBe(false); // nothing to settle while the song plays
+    // choosing during the song keeps that one alone for after it
+    expect(chooseSong(m, a, m.setList[1]!.id)).toEqual({ ok: true });
+    expect(m.trackTitle).toBe('Two');
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Six']);
     tick(m, T0 + 6000);
     expect(m.state).toBe('live');
-    // song over → back to the lobby with the next song up; stage and slots untouched, ready reset; the wait list is served now
+    // song over → back to the lobby; the one song put forward is up by itself; stage and slots untouched, ready reset; the wait list is served now
     expect(nextSong(m, T0 + 30_000)).toEqual({ ok: true });
     expect(decideRequest(m, w, true)).toEqual({ ok: true });
     expect(w.slot).toBe(3);
-    expect(m).toMatchObject({ state: 'lobby', kickstartEpochMs: null, trackTitle: 'Four', songCount: 1 });
+    expect(m).toMatchObject({ state: 'lobby', kickstartEpochMs: null, trackTitle: 'Six', songCount: 1 });
     expect(m.playback.state).toBe('idle');
     expect(m.stage[0]!.participantId).toBe('h');
     expect(m.stage[0]!.ready).toBe(false);
-    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Two', 'Five']);
-    // the 15-minute cap ends the song, not the meet
+    expect(m.setList).toHaveLength(0);
+    // several put forward during a song: the song ends with nothing up and the choice open
+    addSong(m, host, { trackId: 't7', catalogTrackId: null, trackTitle: 'Seven' }, T0 + 31_000);
+    addSong(m, a, { trackId: 't8', catalogTrackId: null, trackTitle: 'Eight' }, T0 + 32_000);
+    expect(choicePending(m)).toBe(true);
+    expect(chooseSong(m, host, 'current')).toEqual({ ok: true }); // Six it is
     start(m, 5000, T0 + 40_000);
+    addSong(m, host, { trackId: 't7', catalogTrackId: null, trackTitle: 'Seven' }, T0 + 41_000);
+    addSong(m, a, { trackId: 't8', catalogTrackId: null, trackTitle: 'Eight' }, T0 + 42_000);
     tick(m, T0 + 45_000);
+    // the 15-minute cap ends the song, not the meet
     expect(tick(m, T0 + 45_000 + MAX_LIVE_TAKE_MS + 1)).toBe(true);
-    expect(m).toMatchObject({ state: 'lobby', trackTitle: 'Two', songCount: 2 });
-    // the queue runs dry: no song until somebody picks one
+    expect(m).toMatchObject({ state: 'lobby', trackId: null, songCount: 2 });
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Seven', 'Eight']);
+    expect(choicePending(m)).toBe(true);
+    expect(start(m, 5000, T0 + 46_000 + MAX_LIVE_TAKE_MS)).toEqual({ ok: false, reason: 'choice_pending' }); // nothing starts until the stage chooses
+    expect(chooseSong(m, a, m.setList[1]!.id)).toEqual({ ok: true });
+    expect(m).toMatchObject({ trackTitle: 'Eight' });
+    expect(m.setList).toHaveLength(0);
+    // a withdrawal that leaves one song put forward with nothing up ends the choice: that song is up
+    nextSong(m, T0 + 47_000 + MAX_LIVE_TAKE_MS);
+    addSong(m, host, { trackId: 't9', catalogTrackId: null, trackTitle: 'Nine' }, T0 + 48_000 + MAX_LIVE_TAKE_MS);
+    addSong(m, a, { trackId: 't10', catalogTrackId: null, trackTitle: 'Ten' }, T0 + 48_100 + MAX_LIVE_TAKE_MS);
+    expect(m).toMatchObject({ trackTitle: 'Nine' });
+    expect(m.setList.map((e) => e.trackTitle)).toEqual(['Ten']);
+    addSong(m, host, { trackId: 't11', catalogTrackId: null, trackTitle: 'Eleven' }, T0 + 48_200 + MAX_LIVE_TAKE_MS);
+    expect(choicePending(m)).toBe(true);
+    expect(chooseSong(m, a, m.setList[0]!.id)).toEqual({ ok: true }); // Ten
+    expect(start(m, 5000, T0 + 48_300 + MAX_LIVE_TAKE_MS).ok).toBe(true);
+    addSong(m, host, { trackId: 't12', catalogTrackId: null, trackTitle: 'Twelve' }, T0 + 48_400 + MAX_LIVE_TAKE_MS);
+    addSong(m, a, { trackId: 't13', catalogTrackId: null, trackTitle: 'Thirteen' }, T0 + 48_500 + MAX_LIVE_TAKE_MS);
+    nextSong(m, T0 + 49_000 + MAX_LIVE_TAKE_MS); // over with two put forward: nothing up, the choice open
+    expect(m.trackId).toBeNull();
+    expect(songAction(m, host, m.setList[0]!.id, 'remove')).toEqual({ ok: true }); // Twelve withdrawn → Thirteen is up by itself
+    expect(m).toMatchObject({ trackTitle: 'Thirteen', trackId: 't13' });
+    expect(m.setList).toHaveLength(0);
+    expect(choicePending(m)).toBe(false);
+    expect(start(m, 5000, T0 + 49_100 + MAX_LIVE_TAKE_MS).ok).toBe(true);
+    nextSong(m, T0 + 49_200 + MAX_LIVE_TAKE_MS);
+    addSong(m, host, { trackId: 't14', catalogTrackId: null, trackTitle: 'Fourteen' }, T0 + 49_300 + MAX_LIVE_TAKE_MS);
+    expect(m).toMatchObject({ trackTitle: 'Fourteen' });
+    // nothing put forward: the song ends with nothing up, no song until somebody picks one
     nextSong(m, T0 + 50_000);
-    nextSong(m, T0 + 51_000);
     expect(m.trackId).toBeNull();
     expect(start(m, 5000, T0 + 52_000)).toEqual({ ok: false, reason: 'no_song' });
     // rows from before the set list existed

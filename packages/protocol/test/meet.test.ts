@@ -74,8 +74,8 @@ describe('performance helpers', () => {
     expect(songPlace(m, { trackId: 'own', catalogTrackId: 'c1', trackTitle: 'x' })).toEqual({ place: 'current' });
     expect(songPlace(m, { trackId: 'own', catalogTrackId: null, trackTitle: '  ammo   ammaayena ', durationMs: 283_900 })).toEqual({ place: 'current' });
     expect(songPlace(m, { trackId: 'own', catalogTrackId: null, trackTitle: 'Ammo Ammaayena', durationMs: 240_000 })).toBeNull(); // a namesake of another length
-    expect(songPlace(m, { trackId: null, catalogTrackId: 'c2', trackTitle: 'whatever' })?.place).toBe('queued');
-    expect(songPlace(m, { trackId: 'own', catalogTrackId: null, trackTitle: 'Second' })?.place).toBe('queued'); // no length known: the title decides
+    expect(songPlace(m, { trackId: null, catalogTrackId: 'c2', trackTitle: 'whatever' })?.place).toBe('proposed');
+    expect(songPlace(m, { trackId: 'own', catalogTrackId: null, trackTitle: 'Second' })?.place).toBe('proposed'); // no length known: the title decides
     expect(songPlace({ ...m, trackId: null, catalogTrackId: null, trackTitle: '' }, { trackId: 't1', catalogTrackId: null, trackTitle: 'Ammo Ammaayena' })).toBeNull();
     expect(sameSong({ trackId: 'a', catalogTrackId: null, trackTitle: 'One' }, { trackId: 'b', catalogTrackId: null, trackTitle: 'Two' })).toBe(false);
     expect(sameSong({ trackId: 'c9', catalogTrackId: null, trackTitle: 'One' }, { trackId: 'c9-copy-bob', catalogTrackId: null, trackTitle: 'Other title' })).toBe(true); // a pulled copy is its catalog entry

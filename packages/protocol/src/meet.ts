@@ -77,7 +77,7 @@ export interface StageRequest {
   askedAt: string;
 }
 
-/** A song on the meet's set list — the karaoke queue (`trackId` = the picker's own copy, `catalogTrackId` = the public entry every device loads). */
+/** A song put forward for the stage (`trackId` = the picker's own copy, `catalogTrackId` = the public entry every device loads). */
 export interface SetListEntry {
   id: string;
   trackId: string | null;
@@ -99,9 +99,8 @@ export interface SongPick {
 
 /**
  * The same song twice: the ids meet (a track and its shared copy carry the same id), or the title
- * and length do (a singer's own copy of a song the meet shared). The set list never lists a song
- * that is already up — a tap that lands twice, or a second singer picking what is already there,
- * adds nothing.
+ * and length do (a singer's own copy of a song the meet shared). A song is never listed twice — a
+ * tap that lands twice, or a second singer picking what is already there, adds nothing.
  */
 export function sameSong(a: { trackId: string | null; catalogTrackId: string | null; trackTitle: string; durationMs?: number }, b: SongPick): boolean {
   // A pulled copy (`<catalogId>-copy-<who>`) is its catalog entry.
@@ -114,12 +113,15 @@ export function sameSong(a: { trackId: string | null; catalogTrackId: string | n
   return title(a.trackTitle) === title(b.trackTitle) && (!da || !db || Math.abs(da - db) < 1500);
 }
 
-/** Where a song already is in the meet: up now, on the queue (its entry), or nowhere. */
-export function songPlace(m: Pick<Meet, 'trackId' | 'catalogTrackId' | 'trackTitle' | 'currentDurationMs' | 'setList'>, song: SongPick): { place: 'current' } | { place: 'queued'; entry: SetListEntry } | null {
+/** Where a song already is in the meet: up now, put forward (its entry), or nowhere. */
+export function songPlace(m: Pick<Meet, 'trackId' | 'catalogTrackId' | 'trackTitle' | 'currentDurationMs' | 'setList'>, song: SongPick): { place: 'current' } | { place: 'proposed'; entry: SetListEntry } | null {
   if ((m.trackId || m.catalogTrackId) && sameSong({ trackId: m.trackId, catalogTrackId: m.catalogTrackId, trackTitle: m.trackTitle, durationMs: m.currentDurationMs ?? 0 }, song)) return { place: 'current' };
   const entry = m.setList.find((e) => sameSong(e, song));
-  return entry ? { place: 'queued', entry } : null;
+  return entry ? { place: 'proposed', entry } : null;
 }
+
+/** The stage has songs put forward and none running: it chooses one before anything starts. */
+export const songChoicePending = (m: Pick<Meet, 'state' | 'setList'>): boolean => m.setList.length > 0 && m.state === 'lobby';
 
 export interface Meet {
   meetId: string;
@@ -157,7 +159,11 @@ export interface Meet {
   bannedUserIds?: string[];
   /** Audience members waiting for the host's permission to sing. */
   requests: StageRequest[];
-  /** Songs queued after the current one (`trackId` / `catalogTrackId` / `trackTitle` above). */
+  /**
+   * Songs put forward while one was up (`trackId` / `catalogTrackId` / `trackTitle` above): the stage
+   * chooses one (`songs/:sid` choose) and the rest are dropped; while a song plays they wait for its
+   * end — one alone comes up by itself, several leave the choice to the stage. Never the same song twice.
+   */
   setList: SetListEntry[];
   /** Songs sung so far in this meet (the current one counts once it started). */
   songCount: number;

@@ -61,13 +61,21 @@ export function ensureMeet(m: Meet): Meet {
   return m;
 }
 
-// ---------- the set list: a karaoke event is many songs ----------
+// ---------- the song of the stage: one at a time ----------
+//
+// At most one song is up (or playing). A song picked while one is up is *put forward*: the stage then
+// chooses — every singer on stage sees every song put forward (the one up included, while it has not
+// started), one tap on any device settles it, and the others are dropped. While a song plays, songs
+// put forward wait for its end: one alone comes up by itself, several leave the choice to the stage.
+// A song is never listed twice (`songPlace`), and nobody has to pick a song twice: picked is up.
 
 export const hasSong = (m: Meet): boolean => Boolean(m.trackId || m.catalogTrackId);
 /** A song is in progress (count-in, playing or paused) — the current song cannot be swapped under it. */
 export const songInProgress = (m: Meet): boolean => m.state === 'countdown' || (m.state === 'live' && ensurePlayback(m).state !== 'idle');
 /** The host and everyone on stage pick songs. */
 export const canPickSong = (m: Meet, p: Participant): boolean => p.role !== 'publisher' && (p.userId === m.hostUserId || p.slot !== null);
+/** The stage has songs put forward and no song running: it must choose before anything starts. */
+export const choicePending = (m: Meet): boolean => m.setList.length > 0 && !songInProgress(m);
 
 function setCurrent(m: Meet, song: SongPick | null): void {
   m.trackId = song?.trackId ?? null;
@@ -77,19 +85,12 @@ function setCurrent(m: Meet, song: SongPick | null): void {
   for (const s of m.stage) s.ready = false; // a new song: everyone gets ready again (loads it)
 }
 
-/** The current song goes back to the top of the queue; `song` takes its place (nobody is singing). */
-function swapCurrent(m: Meet, song: SetListEntry | SongPick, at: number): void {
-  if (hasSong(m)) m.setList.unshift({ id: newId('song-'), trackId: m.trackId, catalogTrackId: m.catalogTrackId, trackTitle: m.trackTitle, durationMs: m.currentDurationMs ?? 0, pickedBy: m.hostUserId, pickedByName: m.hostName, addedAt: new Date(at).toISOString() });
-  setCurrent(m, song);
-}
-
 /**
- * Add a song — the host and anyone on stage pick: the first song of a meet (nothing current yet)
- * is up at once; otherwise it joins the queue — or, with `now`, takes the stage while no song is in
- * progress, the replaced one going back to the top of the queue. A song that is already up or
- * queued is not added again (`duplicate` says where it is; with `now`, a queued one is brought up).
+ * Pick a song — the host and anyone on stage. Nothing up: it is up at once, anyone on stage starts
+ * it. A song up already: the pick is put forward and the stage chooses (`chooseSong`). A song that
+ * is up or put forward already is not added again (`duplicate` says where it is).
  */
-export function addSong(m: Meet, p: Participant, song: SongPick, now = false, at = Date.now()): { ok: boolean; reason?: string; entry?: SetListEntry; duplicate?: 'current' | 'queued' } {
+export function addSong(m: Meet, p: Participant, song: SongPick, at = Date.now()): { ok: boolean; reason?: string; entry?: SetListEntry; duplicate?: 'current' | 'proposed' } {
   if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
   if (!canPickSong(m, p)) return { ok: false, reason: 'not_on_stage' };
   if (!song.trackId && !song.catalogTrackId) return { ok: false, reason: 'no_track' };
@@ -97,54 +98,62 @@ export function addSong(m: Meet, p: Participant, song: SongPick, now = false, at
   const pick: SongPick = { trackId: song.trackId ?? null, catalogTrackId: song.catalogTrackId ?? null, trackTitle: song.trackTitle.trim(), durationMs: Math.max(0, Math.round(song.durationMs ?? 0)) };
   const already = songPlace(m, pick);
   if (already?.place === 'current') return { ok: true, duplicate: 'current' };
-  if (already?.place === 'queued') {
-    if (!now) return { ok: true, duplicate: 'queued', entry: already.entry };
-    const r = songAction(m, p, already.entry.id, 'now', at);
-    return r.ok ? { ok: true, duplicate: 'queued', entry: already.entry } : r;
-  }
+  if (already?.place === 'proposed') return { ok: true, duplicate: 'proposed', entry: already.entry };
   const entry: SetListEntry = { id: newId('song-'), ...pick, durationMs: pick.durationMs ?? 0, pickedBy: p.participantId, pickedByName: p.displayName, addedAt: new Date(at).toISOString() };
   if (!hasSong(m)) {
     setCurrent(m, pick);
-    return { ok: true, entry };
-  }
-  if (now) {
-    if (songInProgress(m)) return { ok: false, reason: 'song_in_progress' };
-    swapCurrent(m, pick, at);
     return { ok: true, entry };
   }
   m.setList.push(entry);
   return { ok: true, entry };
 }
 
-/** The host and anyone on stage: remove / move up / play now a queued song (the song belongs to the stage). */
-export function songAction(m: Meet, p: Participant, songId: string, action: 'remove' | 'up' | 'now', at = Date.now()): { ok: boolean; reason?: string } {
+/**
+ * The stage settles on one song — any singer on stage, one tap: `songId` is a song put forward, or
+ * 'current' for the one up. No song running: the chosen one is up and every other song put forward
+ * is dropped (the one that was up included). A song running: the chosen one is the only song
+ * waiting for its end.
+ */
+export function chooseSong(m: Meet, p: Participant, songId: string): { ok: boolean; reason?: string } {
+  if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  if (!canPickSong(m, p)) return { ok: false, reason: 'not_on_stage' };
+  if (songId === 'current') {
+    if (!hasSong(m)) return { ok: false, reason: 'no_song' };
+    m.setList = [];
+    return { ok: true };
+  }
+  const entry = m.setList.find((e) => e.id === songId);
+  if (!entry) return { ok: false, reason: 'no_song' };
+  if (songInProgress(m)) {
+    m.setList = [entry];
+    return { ok: true };
+  }
+  m.setList = [];
+  setCurrent(m, entry);
+  return { ok: true };
+}
+
+/**
+ * Withdraw a song put forward — anyone on stage, or the one who put it forward. A withdrawal that
+ * leaves one song put forward with nothing up and nothing running ends the choice: that song is up.
+ */
+export function songAction(m: Meet, p: Participant, songId: string, action: 'remove' | 'choose'): { ok: boolean; reason?: string } {
+  if (action === 'choose') return chooseSong(m, p, songId);
   if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
   const i = m.setList.findIndex((e) => e.id === songId);
   if (i < 0) return { ok: false, reason: 'no_song' };
   const entry = m.setList[i]!;
   if (!canPickSong(m, p) && entry.pickedBy !== p.participantId) return { ok: false, reason: 'not_on_stage' };
-  if (action === 'remove') {
-    m.setList.splice(i, 1);
-    return { ok: true };
-  }
-  if (action === 'up') {
-    if (i > 0) {
-      m.setList.splice(i, 1);
-      m.setList.splice(i - 1, 0, entry);
-    }
-    return { ok: true };
-  }
-  // now: it becomes the current song; a current song that was waiting goes back to the top of the queue
-  if (songInProgress(m)) return { ok: false, reason: 'song_in_progress' };
   m.setList.splice(i, 1);
-  swapCurrent(m, entry, at);
+  if (!hasSong(m) && m.setList.length === 1 && !songInProgress(m)) setCurrent(m, m.setList.shift()!);
   return { ok: true };
 }
 
 /**
- * The current song is over (its track ended on the host's device, or the host ends it): the meet
- * goes back to the lobby — stage, slots and cameras untouched — with the next queued song up, or
- * nothing until somebody picks one. Playback and the kickstart are cleared; ready flags reset.
+ * The current song is over (its track ended, or a singer ended it — or the stage skips it): the meet
+ * goes back to the lobby — stage, slots and cameras untouched. One song put forward comes up by
+ * itself; several stay put forward with nothing up, for the stage to choose; none: nothing up until
+ * somebody picks. Playback and the kickstart are cleared; ready flags reset.
  */
 export function nextSong(m: Meet, now = Date.now()): { ok: boolean; reason?: string } {
   if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
@@ -156,7 +165,7 @@ export function nextSong(m: Meet, now = Date.now()): { ok: boolean; reason?: str
   pb.offsetMs = 0;
   pb.pausedAtMs = 0;
   pb.pauseAtEpochMs = null;
-  const next = m.setList.shift() ?? null;
+  const next = m.setList.length === 1 ? (m.setList.shift() ?? null) : null;
   setCurrent(m, next);
   touch(m, now);
   return { ok: true };
@@ -384,6 +393,7 @@ export function start(m: Meet, leadMs: number, now = Date.now()): { ok: boolean;
   if (m.state === 'countdown' && m.kickstartEpochMs !== null && m.kickstartEpochMs > now) return { ok: true }; // already counting in
   if (m.state !== 'lobby' && m.state !== 'countdown') return { ok: false, reason: 'not_in_lobby' };
   if (!m.stage.some((s) => s.participantId)) return { ok: false, reason: 'no_performers' };
+  if (choicePending(m)) return { ok: false, reason: 'choice_pending' }; // more than one song put forward: the stage chooses first
   if (!hasSong(m)) return { ok: false, reason: 'no_song' };
   m.kickstartEpochMs = now + Math.max(3000, Math.min(30000, leadMs));
   m.state = 'countdown';

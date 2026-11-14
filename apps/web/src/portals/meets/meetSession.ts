@@ -165,11 +165,15 @@ export class MeetSession {
   setStagePolicy(stagePolicy: StagePolicy): Promise<void> {
     return this.act('policy', { stagePolicy });
   }
-  /** The set list: anyone on stage adds a song (the host may play it now); the host orders it and ends the current song. */
-  addSong(song: SongPick, now = false): Promise<void> {
-    return this.act('songs', { song, now });
+  /**
+   * The song of the stage — anyone on stage: pick one (nothing up → it is up on every device; a song up → it is
+   * put forward and the stage chooses), choose one of the songs put forward ('current' keeps the one up; the rest
+   * are dropped), withdraw one, or end the current song (`nextSong`).
+   */
+  addSong(song: SongPick): Promise<void> {
+    return this.act('songs', { song });
   }
-  songAction(songId: string, action: 'remove' | 'up' | 'now'): Promise<void> {
+  songAction(songId: string, action: 'remove' | 'choose'): Promise<void> {
     return this.act(`songs/${encodeURIComponent(songId)}`, { action });
   }
   nextSong(): Promise<void> {

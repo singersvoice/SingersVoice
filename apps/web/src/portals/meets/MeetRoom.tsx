@@ -7,7 +7,7 @@
  * stage for the next song. The host's take of each song is the meet's saved performance, shared
  * with everyone who was in the meet. Nothing here ever waits for a review or an approval.
  */
-import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, type Meet, type Participant, type SingerSlot, type SongPick, type StageSlot } from '@singersvoice/protocol';
+import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, songChoicePending, type Meet, type Participant, type SingerSlot, type SongPick, type StageSlot } from '@singersvoice/protocol';
 import { activeRoomInfo } from './activeRoom.ts';
 import { useRoomStage, type RoomStage } from './roomStage.ts';
 import { SetListPanel } from './SetListPanel.tsx';
@@ -394,6 +394,8 @@ function Lobby(props: {
     }
   };
   const hasSong = Boolean(meet.trackId || meet.catalogTrackId);
+  /** Songs put forward and none running: the stage chooses one (on the song card) before anything starts. */
+  const choosing = songChoicePending(meet);
   /** Anyone on stage starts the song for the stage; the one who starts is made ready on the way (mic, track) if not yet. */
   const start = async () => {
     try {
@@ -594,6 +596,7 @@ function Lobby(props: {
               {onStage ? (
                 <>
                   {hasSong &&
+                    !choosing &&
                     (!props.prepared ? (
                       <button class="btn accent" disabled={props.preparing || !props.track?.loaded} title={props.track?.loaded ? undefined : 'Loading the song on this device…'} onClick={() => void props.onPrepare()}>
                         {props.preparing ? <Spinner /> : <IcMic />} {live ? 'Join the song on stage' : "I'm ready (mic & camera check)"}
@@ -636,7 +639,7 @@ function Lobby(props: {
                 </>
               )}
               {onStage && !live && (
-                <button class="btn accent" disabled={meet.performerCount === 0 || !hasSong || !props.track?.loaded || props.preparing} title={!hasSong ? 'Pick a song first' : !props.track?.loaded ? 'Loading the song on this device…' : 'Starts the song for everyone on stage — an 8 s count-in, every device in step'} onClick={() => void start()}>
+                <button class="btn accent" disabled={meet.performerCount === 0 || !hasSong || choosing || !props.track?.loaded || props.preparing} title={choosing ? 'Several songs are picked — choose one on the song card first' : !hasSong ? 'Pick a song first' : !props.track?.loaded ? 'Loading the song on this device…' : 'Starts the song for everyone on stage — an 8 s count-in, every device in step'} onClick={() => void start()}>
                   {props.preparing ? <Spinner /> : <IcPlay />} Start the song (8 s count-in)
                 </button>
               )}
@@ -1112,10 +1115,10 @@ function LiveStage(props: {
         </section>
         <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} countdown={countdown} showWho={track.singerCount > 1} title={track.title} />
         {songsOpen && (
-          <div class="drawer" role="dialog" aria-label="Set list">
+          <div class="drawer" role="dialog" aria-label="Songs">
             <div class="row between">
-              <b>Set list</b>
-              <button class="btn icon sm" aria-label="Close the set list" onClick={() => setSongsOpen(false)}>
+              <b>Songs</b>
+              <button class="btn icon sm" aria-label="Close the songs" onClick={() => setSongsOpen(false)}>
                 <IcX size={16} />
               </button>
             </div>
@@ -1151,7 +1154,7 @@ function LiveStage(props: {
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
             </button>
-            <button class={`btn icon ${songsOpen ? 'on' : ''}`} aria-label="Set list" title="Set list: what's next, add a song" aria-pressed={songsOpen} onClick={() => setSongsOpen((o) => !o)}>
+            <button class={`btn icon ${songsOpen ? 'on' : ''}`} aria-label="Songs" title="Songs: what is playing, what follows, pick the next one" aria-pressed={songsOpen} onClick={() => setSongsOpen((o) => !o)}>
               <IcMusic />
             </button>
             {!props.prepared ? (

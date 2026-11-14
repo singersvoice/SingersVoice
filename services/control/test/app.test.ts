@@ -177,12 +177,20 @@ describe('sv-control API', () => {
     expect(twice.headers.get('X-Song-Duplicate')).toBe('current');
     expect((await json<MeetSnapshot>(twice)).meet.setList).toHaveLength(0);
     const queued = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/songs`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, song: { trackId: 'trk-2', catalogTrackId: null, trackTitle: 'Next one' } }) }));
+    // Two songs picked: the second is put forward and the stage must choose; picking it again adds nothing either.
     expect(queued.meet.setList.map((e) => e.trackTitle)).toEqual(['Next one']);
+    expect(queued.meet.trackTitle).toBe('Amma');
     const repick = await app.request(`/meets/${meet.meetId}/songs`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, song: { trackId: 'trk-2', catalogTrackId: null, trackTitle: 'Next one' } }) });
-    expect(repick.headers.get('X-Song-Duplicate')).toBe('queued');
+    expect(repick.headers.get('X-Song-Duplicate')).toBe('proposed');
     expect((await json<MeetSnapshot>(repick)).meet.setList.map((e) => e.trackTitle)).toEqual(['Next one']);
-    expect((await app.request(`/meets/${meet.meetId}/songs/${queued.meet.setList[0]!.id}`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, action: 'up' }) })).status).toBe(200); // the stage orders its own set list
+    expect((await app.request(`/meets/${meet.meetId}/songs/${queued.meet.setList[0]!.id}`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, action: 'up' }) })).status).toBe(400); // no ordering: the stage chooses
     expect((await app.request(`/meets/${meet.meetId}/songs/nope`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, action: 'remove' }) })).status).toBe(404);
+    expect((await app.request(`/meets/${meet.meetId}/songs/nope`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, action: 'choose' }) })).status).toBe(404);
+    // Nothing starts while the stage has not settled on one song; one tap by any singer settles it and the other song is gone.
+    expect((await json<{ code: string }>(await app.request(`/meets/${meet.meetId}/start`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 5000 }) }))).code).toBe('choice_pending');
+    const chosen = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/songs/current`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, action: 'choose' }) }));
+    expect(chosen.meet.trackTitle).toBe('Amma');
+    expect(chosen.meet.setList).toHaveLength(0);
     const started = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/start`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, leadMs: 5000 }) }));
     expect(started.meet.state).toBe('countdown');
     expect(started.meet.kickstartEpochMs! - Date.now()).toBeGreaterThan(4000);
@@ -229,6 +237,10 @@ describe('sv-control API', () => {
     const fan = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('fan'), body: JSON.stringify({ role: 'audience' }) }));
     expect((await app.request(`/meets/${meet.meetId}/songs/next`, { method: 'POST', headers: as('fan'), body: JSON.stringify({ resumeToken: fan.resumeToken }) })).status).toBe(403);
     await app.request(`/meets/${meet.meetId}/leave`, { method: 'POST', headers: as('fan'), body: JSON.stringify({ resumeToken: fan.resumeToken }) });
+    // A song picked during the song waits for its end — alone, it is up by itself when the song is over.
+    const during = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/songs`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, song: { trackId: 'trk-2', catalogTrackId: null, trackTitle: 'Next one' } }) }));
+    expect(during.meet).toMatchObject({ trackTitle: 'Amma', state: 'live' });
+    expect(during.meet.setList.map((e) => e.trackTitle)).toEqual(['Next one']);
     const over = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/songs/next`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken }) }));
     expect(over.meet).toMatchObject({ state: 'lobby', trackTitle: 'Next one', songCount: 1, performerCount: 2 });
     expect(over.meet.setList).toHaveLength(0);

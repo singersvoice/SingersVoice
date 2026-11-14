@@ -28,12 +28,15 @@ const clip = path.join(tmpdir(), 'sv-fake-person.y4m');
 const SONG_S = 200;
 const longSong = path.join(tmpdir(), 'sv-e2e-song.mp3');
 const longTrack = path.join(tmpdir(), 'sv-e2e-song.track.json');
+// A second, distinct song (another title, the same audio) — bob's own, for the moment two singers pick two songs at once.
+const secondTrack = path.join(tmpdir(), 'sv-e2e-second.track.json');
 execFileSync('ffmpeg', ['-v', 'error', '-y', '-stream_loop', '10', '-i', 'apps/web/test/fixtures/sample.mp3', '-t', String(SONG_S), '-c:a', 'libmp3lame', '-b:a', '128k', longSong]);
 {
   const { readFileSync, writeFileSync } = await import('node:fs');
   const t = JSON.parse(readFileSync('apps/web/test/fixtures/sample.track.json', 'utf8'));
   t.durationMs = SONG_S * 1000;
   writeFileSync(longTrack, JSON.stringify(t));
+  writeFileSync(secondTrack, JSON.stringify({ ...t, trackId: 'trk-second-ci', title: 'CI Second Song' }));
 }
 execFileSync('node', [new URL('./fake-person.mjs', import.meta.url).pathname, clip], { stdio: 'inherit' });
 const browser = await pw.chromium.launch({ args: ['--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${clip}`, '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
@@ -58,21 +61,26 @@ async function person(name, viewport, { track = true } = {}) {
   await page.evaluate((n) => localStorage.setItem('sv.profile', JSON.stringify({ sub: n, name: n, email: '', picture: '', mode: 'local' })), name);
   await page.evaluate(() => { localStorage.setItem('sv.mode', 'local'); localStorage.setItem('sv.settings.app', JSON.stringify({ onboarded: true })); });
   if (!track) return { ctx, page, trackId: null };
+  await importTrack(page, longTrack);
+  const trackId = await page.evaluate(() => new Promise((res) => { const r = indexedDB.open('singersvoice'); r.onsuccess = () => { const db = r.result; const tx = db.transaction('tracks'); const q = tx.objectStore('tracks').getAllKeys(); q.onsuccess = () => res(q.result[0]); }; }));
+  return { ctx, page, trackId };
+}
+/** Import a song (its track.json + the audio) into this device's library through the Tracks portal. */
+async function importTrack(page, meta) {
   await page.goto(base + 'tracks?' + control, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: 'Import' }).first().click();
-  await page.locator('input[type=file][accept*=".json"]').setInputFiles(longTrack);
+  await page.locator('input[type=file][accept*=".json"]').setInputFiles(meta);
   await page.locator('input[type=file][accept*="audio"]').setInputFiles(longSong);
   await page.getByRole('button', { name: /^Import$/ }).last().click();
   await page.getByText(/^Imported/).waitFor({ timeout: 30000 });
   await wait(500);
-  const trackId = await page.evaluate(() => new Promise((res) => { const r = indexedDB.open('singersvoice'); r.onsuccess = () => { const db = r.result; const tx = db.transaction('tracks'); const q = tx.objectStore('tracks').getAllKeys(); q.onsuccess = () => res(q.result[0]); }; }));
-  return { ctx, page, trackId };
 }
 
 const alice = await person('alice', { width: 1280, height: 800 });
 const bob = await person('bob', { width: 390, height: 844 });
 // Bob's copy must be recognisable as the host's track: rename his record to "<hostId>-copy-bob"
 await bob.page.evaluate(([from, to]) => new Promise((res) => { const r = indexedDB.open('singersvoice'); r.onsuccess = () => { const db = r.result; const tx = db.transaction('tracks', 'readwrite'); const st = tx.objectStore('tracks'); const g = st.get(from); g.onsuccess = () => { const rec = g.result; rec.track.trackId = to; st.put(rec, to); st.delete(from); }; tx.oncomplete = () => res(); }; }), [bob.trackId, `${alice.trackId}-copy-bob`]);
+await importTrack(bob.page, secondTrack); // bob's own second song: nobody else holds it
 
 try {
   // Host creates the meet with her track.
@@ -83,22 +91,22 @@ try {
   const meetUrl = alice.page.url();
   const meetId = /\/meet\/([^/?#]+)/.exec(meetUrl)[1];
   await alice.page.locator('.setlist[data-current="0"]').waitFor({ timeout: 15000 });
-  check(true, 'a new meet starts with an empty set list');
-  // The host adds the first song from her library (private → "add anyway": her guest holds his own copy).
-  const addSong = async (p, who) => {
+  check(true, 'a new meet starts with no song up');
+  // The host picks the first song from her library (private → "add anyway": her guest holds his own copy).
+  const addSong = async (p, who, { q = 'sAMPLE', word = 'sample', title = 'CI Sample Song' } = {}) => {
     await p.getByRole('button', { name: 'Pick your selection of song' }).click();
     // Search as you type: a partial word, in the wrong case, finds the song in the library at once, marked where it matched.
-    await p.getByLabel('Search songs').fill('sAMPLE');
+    await p.getByLabel('Search songs').fill(q);
     await p.locator('.songpicker .item[data-from="mine"]').waitFor({ timeout: 10000 });
     const marked = await p.locator('.songpicker .item .t mark').first().innerText().catch(() => '');
     const counts = (await p.locator('[data-picker-counts]').innerText()).replace(/\s+/g, ' ');
-    check(/sample/i.test(marked) && /1 match in your library/.test(counts), `${who}'s library is searched as she types: "${marked}" marked, ${counts}`);
-    await p.getByLabel('Search songs').fill('sAMPLE zzz');
+    check(new RegExp(word, 'i').test(marked) && /1 match in your library/.test(counts), `${who}'s library is searched as they type: "${marked}" marked, ${counts}`);
+    await p.getByLabel('Search songs').fill(`${q} zzz`);
     await p.locator('[data-picker-empty]').waitFor({ timeout: 10000 });
-    await p.getByLabel('Search songs').fill('sample');
-    await p.getByRole('button', { name: 'Pick CI Sample Song' }).click();
-    await p.getByText(/is up next|is on the set list/).waitFor({ timeout: 15000 });
-    console.log(`${who} picked the song`);
+    await p.getByLabel('Search songs').fill(word);
+    await p.getByRole('button', { name: `Pick ${title}` }).click();
+    await p.getByText(/is up —|is put forward/).waitFor({ timeout: 15000 });
+    console.log(`${who} picked ${title}`);
   };
   await addSong(alice.page, 'alice');
   await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
@@ -494,16 +502,44 @@ try {
   check(/Saved “CI Sample Song”/.test(saveB) && !/shared/.test(saveB), "a singer's take saved itself to their own performances");
   const meshAfterSong = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   check(meshAfterSong === meshBefore, 'the same video mesh carries on after the song (stage never left)');
-  check(/No song picked yet/.test(await alice.page.locator('.setlist').innerText()), 'the set list is empty again after the only song');
+  check(/No song picked yet/.test(await alice.page.locator('.setlist').innerText()), 'nothing is up after the only song');
   // Between songs the wait list is served: the host seats dave; he is on stage with his camera at once.
   console.log('dave requests:', daveLog.join(' | '));
   console.log('dave page:', (await dave.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300));
   await alice.page.getByRole('button', { name: 'Let dave sing' }).click();
   await dave.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
   check(true, 'the host seats the wait-listed singer once the song is over');
-  // Next song — a second act of the same karaoke event, run by the other singer: bob picks it and starts it (his
-  // device is made ready on the way); the host's device joins from the count-in by itself (her mic is open) — no tap.
-  await addSong(bob.page, 'bob');
+  // Next song — one song at a time, and the stage chooses when two singers pick two songs at once. Bob picks a song
+  // of his own: picked is up (the song of the stage at once — his alone, so the host's device cannot load it). Alice
+  // picks the shared song a moment later: it neither replaces his nor queues behind it — every singer on stage
+  // (alice, bob, dave) sees the same choice card with both songs, nothing can start, and one tap by any of them
+  // settles it: the chosen song is up on every device, the other is gone.
+  await addSong(bob.page, 'bob', { q: 'sECOND', word: 'second', title: 'CI Second Song' });
+  await bob.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
+  check(/Up next/.test(await bob.page.locator('.setlist').innerText()) && /CI Second Song/.test(await bob.page.locator('.setlist').innerText()), "picked is up: a singer's pick is the song of the stage at once (no second tap, no queue)");
+  await addSong(alice.page, 'alice');
+  for (const [who, p] of [['alice', alice.page], ['bob', bob.page], ['dave', dave.page]]) {
+    await p.locator('.setlist[data-choice="2"]').waitFor({ timeout: 15000 });
+    const card = (await p.locator('.setlist').innerText()).replace(/\s+/g, ' ');
+    check(/CI Second Song · picked first/.test(card) && /CI Sample Song · picked by alice/.test(card) && (await p.getByRole('button', { name: 'Sing CI Sample Song' }).count()) === 1 && (await p.getByRole('button', { name: 'Sing CI Second Song' }).count()) === 1, `${who} sees the same choice card: both songs, who picked what, a "Sing this one" for each`);
+  }
+  check((await bob.page.getByRole('button', { name: /Start the song/ }).isDisabled()) && /choose one/.test(await bob.page.getByRole('button', { name: /Start the song/ }).getAttribute('title')), 'nothing starts while the choice is open (Start says to choose first)');
+  // The picker offers neither song again while they are on the card (bob's library holds both: his own, and his copy of the shared one).
+  await bob.page.getByRole('button', { name: 'Pick your selection of song' }).click();
+  await bob.page.getByLabel('Search songs').fill('CI');
+  await bob.page.locator('.songpicker .item[data-place="proposed"]').waitFor({ timeout: 15000 });
+  await bob.page.locator('.songpicker .item[data-place="current"]').waitFor({ timeout: 15000 });
+  check((await bob.page.getByRole('button', { name: /^Pick CI/ }).count()) === 0 && /Put forward/.test(await bob.page.locator('.songpicker .item[data-place="proposed"]').innerText()), 'neither song on the card is offered again in the picker (it says "Up now" / "Put forward")');
+  await bob.page.getByRole('button', { name: 'Close the song picker' }).click();
+  // Bob — not the one who put the shared song forward — settles it with one tap.
+  await bob.page.getByRole('button', { name: 'Sing CI Sample Song' }).click();
+  for (const [who, p] of [['alice', alice.page], ['bob', bob.page], ['dave', dave.page]]) {
+    await p.locator('.setlist[data-choice="0"][data-songs="0"][data-current="1"]').waitFor({ timeout: 15000 });
+    const settled = (await p.locator('.setlist').innerText()).replace(/\s+/g, ' ');
+    check(/Up next/.test(settled) && /CI Sample Song/.test(settled) && !/CI Second Song/.test(settled), `${who}: one tap settled it — the chosen song is up, the other is gone`);
+  }
+  // …and the second act runs: bob starts it (his device is made ready on the way); the host's device joins from the
+  // count-in by itself (her mic is open) — no tap.
   await bob.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
   await alice.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
   await bob.page.getByRole('button', { name: /Start the song/ }).click();
@@ -522,10 +558,10 @@ try {
   }
   check(a3.performers === '3' && b3.performers === '3' && /2\/2 video linked/.test(a3.text) && /2\/2 video linked/.test(b3.text), `the second song runs on the same stage, now with three singers (${a3.text} / ${b3.text}, ${Math.round((Date.now() - t3) / 1000)} s)`);
   check(/Up next|Now singing/.test(await carol.page.locator('.show-top').innerText().catch(() => '')) || (await carol.page.locator('.show[data-state="live"]').isVisible()), 'the show view follows the second song');
-  // The set list is at hand on the live stage: the drawer shows what is playing and lets anyone add a song.
-  await bob.page.getByRole('button', { name: 'Set list' }).click();
+  // The songs are at hand on the live stage: the drawer shows what is playing and lets anyone pick the next one.
+  await bob.page.getByRole('button', { name: 'Songs' }).click();
   await bob.page.locator('.sing .drawer .setlist').waitFor({ timeout: 10000 });
-  check(/Now singing/.test(await bob.page.locator('.sing .drawer').innerText()), 'the live stage has a set list drawer (song picker) for the singers');
+  check(/Now singing/.test(await bob.page.locator('.sing .drawer').innerText()), 'the live stage has a Songs drawer (song picker) for the singers');
   // Every singer has the stage's own controls: Restart, and the Track / Vocal volume of their mix.
   check((await bob.page.getByRole('button', { name: /Restart the song for everyone/ }).count()) === 1, 'a singer (not the host) has the Restart button');
   await bob.page.locator('.sing [data-mix="trackDb"] button[aria-label="Track volume up"]').click();
@@ -533,7 +569,7 @@ try {
   await bob.page.locator('.sing [data-mix="vocalDb"] button[aria-label="Vocal volume down"]').click();
   const balance = await bob.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}'));
   check(balance.trackDb === 6 && balance.vocalDb === -3, `Track / Vocal volume move in 3 dB steps (±30 dB) and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
-  await bob.page.getByRole('button', { name: 'Close the set list' }).click();
+  await bob.page.getByRole('button', { name: 'Close the songs' }).click();
   // A singer may leave the song alone (their own take ends; the song goes on for the host) and join back in…
   await bob.page.getByRole('button', { name: 'Leave the song' }).click();
   await bob.page.getByRole('button', { name: 'Join the song' }).waitFor({ timeout: 30000 });

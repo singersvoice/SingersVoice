@@ -173,10 +173,15 @@ export interface Routes {
   /** The host removes someone from the meet altogether (stage or audience); they cannot come back in. */
   'POST /meets/:id/participants/:pid/kick': { req: { resumeToken: string }; res: MeetSnapshot };
   'POST /meets/:id/policy': { req: { resumeToken: string; stagePolicy: StagePolicy }; res: MeetSnapshot };
-  /** The set list (karaoke queue): anyone on stage adds a song; the host orders it, plays one now, or ends the current song. */
-  'POST /meets/:id/songs': { req: { resumeToken: string; song: SongPick; now?: boolean }; res: MeetSnapshot };
+  /**
+   * The song of the stage: anyone on stage picks (nothing up → it is up; a song up → it is put forward and the stage
+   * chooses), chooses one of the songs put forward ('current' keeps the one up; the rest are dropped), withdraws one,
+   * or ends / skips the current song (`songs/next`). The answer carries `X-Song-Duplicate: current | proposed` when the
+   * pick was there already and nothing was added.
+   */
+  'POST /meets/:id/songs': { req: { resumeToken: string; song: SongPick }; res: MeetSnapshot };
   'POST /meets/:id/songs/next': { req: { resumeToken: string }; res: MeetSnapshot };
-  'POST /meets/:id/songs/:sid': { req: { resumeToken: string; action: 'remove' | 'up' | 'now' }; res: MeetSnapshot };
+  'POST /meets/:id/songs/:sid': { req: { resumeToken: string; action: 'remove' | 'choose' }; res: MeetSnapshot };
   'POST /meets/:id/ready': { req: ReadyRequest; res: MeetSnapshot };
   'POST /meets/:id/chat': { req: ChatRequest; res: { message: ChatMessage } };
   'POST /meets/:id/start': { req: StartMeetRequest; res: MeetSnapshot };

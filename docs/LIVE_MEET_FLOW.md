@@ -11,7 +11,7 @@ first moment.
 | Option | What it does |
 | --- | --- |
 | **Create a meet** — Title | The event's name (defaults to "<your name>'s meet"). |
-| Track | Optional. Pick one of your tracks or a public one now, or leave **Pick later** and build the set list in the room. A private track shows a *Publish it* button so every singer can load it. |
+| Track | Optional. Pick one of your tracks or a public one now, or leave **Pick later** and pick the songs in the room, one at a time. A private track shows a *Publish it* button so every singer can load it. |
 | Background | The stage background (from your settings' picker). |
 | *open meets N/3* | You may host **at most 3 open meets** (lobby / countdown / live) at a time; at the limit, Create is off until you end one below. |
 | **Join by code** | 6-letter code → the room. A shared link does the same. |
@@ -55,12 +55,17 @@ than towering over them). A stretched arm reaches past your slot instead of shri
   the meet** (the **out** button on a slot, × on a name in the
   audience list): the person is off the stage and out of the room, their device says *"<host>
   removed you from this meet"*, and the link no longer lets that account back in.
-- **The song belongs to the stage.** Every singer on stage — the host included, nobody more than
-  anyone else — picks songs, orders the set list, plays one now, **starts** the song (count-in),
-  pauses, resumes, restarts, seeks, and **stops it for everyone**; the same buttons on every device.
-  A song picked twice is listed once: the picker says *Up now* / *On the set list* instead of
-  offering it again, and the service never queues a song that is already up or queued. Whoever
-  starts, every singer on stage whose mic is open joins from the count-in by themselves.
+- **The song belongs to the stage — one song at a time.** Every singer on stage — the host
+  included, nobody more than anyone else — picks the song, **starts** it (count-in), pauses,
+  resumes, restarts, seeks, and **stops it for everyone**; the same buttons on every device.
+  **Picked is up**: the first pick is the song of the stage, loading on every device at once — no
+  second tap, no queue. When a second singer picks another song while one is up, neither replaces
+  the other and nothing queues: every singer on stage sees the **same choice card** (the song up and
+  every song put forward, who picked what), nothing can start, and **one tap by any singer settles
+  it** — the chosen song is up on every device and the others are gone. A song picked twice is
+  listed once: the picker says *Up now* / *Put forward* instead of offering it again, and the
+  service never lists a song that is already up or put forward. Whoever starts, every singer on
+  stage whose mic is open joins from the count-in by themselves.
 - A **singer** is anyone on a slot (up to 10). **A new meet has an open stage**: whoever has the
   link takes a free slot with **Take a stage slot** — no permission needed (the three friends you
   sent the link to are meant to sing). The host can switch **Open stage** off; then audience ask
@@ -81,15 +86,14 @@ than towering over them). A stretched arm reaches past your slot instead of shri
   and an open stage's *Take a stage slot* comes back between songs. Share the link with a hundred
   people: they all arrive as audience at the bottom, and the stage changes only between songs.
 
-### The set list (karaoke queue)
+### The song of the stage (one at a time)
 
 | Option | Who | What it does |
 | --- | --- | --- |
-| **Pick your selection of song** | host, singers | Opens the picker: **one list** — your own songs first (tagged *Your library*), then the songs other singers share (tagged *Shared by …*), never the same song twice — under one search box built for thousands: every word you type must match, in any order, in the title, artist, genre, language or the singer who shared it; your library is filtered on the spot, the shared ones are searched in the catalog a page at a time; the counts say *3 of your 120 · 14 of 9,800 shared*; Enter picks the top match. One answer when nothing fits: *No song matches "…" — in your library or among the shared songs* (a song of yours that matches is never "no match"). Picking is all you do: the song loads on every device in the meet, so all the singers sing the same lines at the same time. A song of yours that other devices cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission — needs a Google sign-in; otherwise only your own devices can play it, and the others say so) — and every singer on stage gets a copy of it in their own Drive library, in the background. The first song picked becomes the current one; later picks queue up. |
-| **Now** (in the picker / on a queued song) | host, singers | Makes that song the current one (the previous current goes back to the top of the queue). Only between songs. |
-| ▲ / × on a queued song | host, singers (× also the one who added it) | Move up / remove. |
-| **Skip** | host, singers | Drops the current song; the next one comes up. |
-| *Up now* / *On the set list* (in the picker) | everyone | The song is there already: it is not offered again (a tap that lands twice adds nothing either — the service lists a song once, told by its ids or by title and length). |
+| **Pick your selection of song** | host, singers | Opens the picker: **one list** — your own songs first (tagged *Your library*), then the songs other singers share (tagged *Shared by …*), never the same song twice — under one search box built for thousands: every word you type must match, in any order, in the title, artist, genre, language or the singer who shared it; your library is filtered on the spot, the shared ones are searched in the catalog a page at a time; the counts say *3 of your 120 · 14 of 9,800 shared*; Enter picks the top match. One answer when nothing fits: *No song matches "…" — in your library or among the shared songs* (a song of yours that matches is never "no match"). Picking is all you do: **picked is up** — the song loads on every device in the meet (*"… is up — loading on every device"*), so all the singers sing the same lines at the same time, and any singer on stage starts it. A song of yours that other devices cannot reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission — needs a Google sign-in; otherwise only your own devices can play it, and the others say so) — and every singer on stage gets a copy of it in their own Drive library, in the background. |
+| **The choice card** — *N songs picked — one song at a time on this stage* | everyone sees it; host and singers settle it | When a song is picked while another is up (two singers picking at the same time, or one changing their mind), the pick is **put forward** (*"… is put forward — the stage chooses"*): the card lists the song up (*picked first*) and every song put forward (*picked by …*), the same on every device in the meet; **Start** is off until it is settled. **Sing this one** on any of them, by any singer on stage, settles it with one tap: that song is up on every device, every other song on the card is dropped (removed from the meet — not queued, not remembered). × withdraws a song put forward (the singer who put it forward, or anyone on stage); a withdrawal that leaves a single song put forward with nothing up makes that song the one up. The audience sees the card without the buttons. |
+| *After this song* (while a song runs) | host, singers (× also the one who put it forward) | A song picked during a song does not interrupt it: it is put forward for after the song. One alone comes up by itself when the song ends; several stay on the card with **Sing this one** — the singers may settle it during the song, or the choice card is waiting in the lobby when the song ends, nothing up until it is settled. |
+| *Up now* / *Put forward* (in the picker) | everyone | The song is there already: it is not offered again (a tap that lands twice adds nothing either — the service lists a song once, told by its ids or by title and length). |
 | *Track ready on this device* / warning | everyone | Each device loads the current song itself: from its own library, else from the public catalog. A private track of the host only works on the host's devices — the warning says so and the host can publish it from Tracks. |
 
 ### Getting ready and starting
@@ -98,9 +102,9 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 | --- | --- | --- |
 | **Turn my mic on** | singers | On stage without a mic yet (the host is seated by the meet itself; a browser refused the first tap): opens the mic for talk-back. |
 | **Film the whole meet into my Drive** | host | On by default. From the moment the host's mic is open on stage until **End meet** (or the host steps off), the host's device records the whole meet as **one video** — the show picture (everyone on stage over the background, no lyrics) with the stage mix (the songs, the talk between them) — and writes it into their Drive *as it goes* (ten seconds at a time, a resumable upload): a two-hour meet never has to fit in memory, and a tab that dies loses seconds, not the meet (the next start of the app completes the file with what Drive already holds). The switch shows what it is doing (*Filming · 12:34 · 210 MB in Drive*). The finished film is a performance of the meet, **Full meet**, listed on the ended screen and under Performances, shared with everyone who was in the meet like a song's show. |
-| **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS) if it is not open yet, decodes the current song, marks you *ready*. Shown once there is a song; ready resets whenever the set list moves on. Under it the **Mic** line says what the microphone really gives: its name, its sample rate, the automatic level — and warns in red when it is a *phone-call quality* line (a Bluetooth headset's mic: 8–16 kHz, thin and muffled), with a menu to sing into another microphone; **I'm on speakers** turns echo cancellation on (only needed when the track plays out of speakers; with headphones it stays off for the cleanest voice — a hint appears when the sound is going out through speakers). |
-| **Start the song (8 s count-in)** | host, singers | Needs a song on the stage. Whoever taps it is made ready on the way (mic, track) if not yet; every device starts the backing track at the same server instant (the GMT kickstart), and every other singer on stage whose mic is open joins from the count-in without a tap. A singer whose mic is not open yet can still **Join the song on stage** afterwards and starts mid-song. |
-| **End the song** (lobby, while a song runs) | host, singers | Ends the song for everyone; the next one on the set list comes up. |
+| **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS) if it is not open yet, decodes the current song, marks you *ready*. Shown once there is a song (and no choice open); ready resets whenever another song comes up. Under it the **Mic** line says what the microphone really gives: its name, its sample rate, the automatic level — and warns in red when it is a *phone-call quality* line (a Bluetooth headset's mic: 8–16 kHz, thin and muffled), with a menu to sing into another microphone; **I'm on speakers** turns echo cancellation on (only needed when the track plays out of speakers; with headphones it stays off for the cleanest voice — a hint appears when the sound is going out through speakers). |
+| **Start the song (8 s count-in)** | host, singers | Needs a song on the stage and no choice open (*Several songs are picked — choose one on the song card first*). Whoever taps it is made ready on the way (mic, track) if not yet; every device starts the backing track at the same server instant (the GMT kickstart), and every other singer on stage whose mic is open joins from the count-in without a tap. A singer whose mic is not open yet can still **Join the song on stage** afterwards and starts mid-song. |
+| **End the song** (lobby, while a song runs) | host, singers | Ends the song for everyone; a song put forward during it comes up (several: the choice card). |
 | **End meet** | host | Ends the event for everyone (after a confirmation). |
 
 ## 3 · The room — live stage (singers) — Performer mode
@@ -120,8 +124,9 @@ move back or forth in the song**. Transport belongs to the stage: every singer o
 **Pause** (cued 3 s ahead, everyone freezes at the same position), **Resume**, and **seek** — a
 jump is cued too (*jumping to 1:23…*), so the song keeps playing and every device jumps at the
 same instant; while paused the paused position simply moves for everyone. **Restart** (from the
-top) and **Stop song** — which stops the song for everyone, the next one on the set list up — are
-every singer's as well. A singer who is not the host also has **Leave**: their own take ends, the
+top) and **Stop song** — which stops the song for everyone, a song put forward during it up — are
+every singer's as well. The **Songs** drawer shows what is playing and what was put forward for
+after it, and holds the picker. A singer who is not the host also has **Leave**: their own take ends, the
 song goes on for the others, and they can **Join the song** again. The backing track ending on any
 device ends the song for everyone too. Whoever plays, pauses or seeks, the devices stay in sync:
 every cue is a shared GMT instant, never "when the message arrives". A take follows every pause and
@@ -174,7 +179,7 @@ takes save, the meet moves on (a stale callback used to leave it hanging unless 
 ## 4 · The room — audience
 
 Audience see the stage (performers' placeholders — video is private to the stage and the
-publisher), the set list, who is on stage, **Ask to sing**, chat, and **the show** when a publisher
+publisher), the song of the stage (and the choice card, without its buttons), who is on stage, **Ask to sing**, chat, and **the show** when a publisher
 is on air — the publisher's broadcast, every singer on the stage background with the track and
 their voices blended (section 6), played a few seconds behind behind a *Watch the show* tap — and
 otherwise the stage background with who is on it, plus **Hear the stage — the singers and the
@@ -198,8 +203,8 @@ never grows with the audience (docs/ARCHITECTURE.md, "A hundred in a meet").
 ## 5 · Between songs and the end
 
 When a song is over the meet is back in the **lobby**: stage, slots and cameras untouched, ready
-flags cleared, the next queued song up (or nothing until somebody adds one). Any number of songs
-follow. **End meet** → the *Meet ended* screen: **the performances of this meet** (one saved show
+flags cleared, a song put forward during the song up (several: the choice card, nothing up until the
+singers settle it; none: nothing until somebody picks one). Any number of songs follow. **End meet** → the *Meet ended* screen: **the performances of this meet** (one saved show
 per song — Watch, Share), every singer's registered take (links to their Drive), *Create another
 meet*, *All performances*, and for the host with Publishing, *Publish this meet*. A meet that
 nobody touched for 5 minutes expires the same way.
@@ -309,7 +314,7 @@ page keeps playing throughout. Without a relay, YouTube keeps working through HL
 | Process | Owns | Depends on |
 | --- | --- | --- |
 | Stage (room) | cameras, cut-outs, performer video mesh | the meet's slot list only |
-| Set list | which song is current / queued | `lib/catalog.ts` + your Drive to resolve a song |
+| Songs | which song is up / put forward (the choice card) | `lib/catalog.ts` + your Drive to resolve a song |
 | Song transport | kickstart, pause/resume/restart, takes | the current song being loadable on each device |
 | Audience | the show (when on air) or the stage, hearing the stage, chat, asking to sing | the meet snapshot; the publisher's segments; the host's mix batches (falls back to the backing track alone) |
 | Publishing show / Preview | the broadcast picture, jobs | the meet's slot list + the performers' video |

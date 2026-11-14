@@ -580,10 +580,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json((await snapshot(c, meet.meetId, host))!);
   });
 
-  // ---- the set list: a karaoke event is many songs ----
+  // ---- the song of the stage: one at a time (meets.ts has the rules) ----
   app.post('/meets/:id/songs', async (c) => {
     const { store } = c.get('deps');
-    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; song?: Partial<SongPick>; now?: boolean };
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; song?: Partial<SongPick> };
     const meet = await store.getMeet(c.req.param('id'));
     if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
     ensureMeet(meet);
@@ -591,10 +591,9 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
     tick(meet);
     const song = body.song ?? {};
-    const r = addSong(meet, p, { trackId: song.trackId ? String(song.trackId) : null, catalogTrackId: song.catalogTrackId ? String(song.catalogTrackId) : null, trackTitle: String(song.trackTitle ?? ''), durationMs: Number(song.durationMs ?? 0) }, Boolean(body.now));
+    const r = addSong(meet, p, { trackId: song.trackId ? String(song.trackId) : null, catalogTrackId: song.catalogTrackId ? String(song.catalogTrackId) : null, trackTitle: String(song.trackTitle ?? ''), durationMs: Number(song.durationMs ?? 0) });
     if (!r.ok) {
       if (r.reason === 'not_on_stage') return err(c, 403, 'not_on_stage', 'Step on stage (or host the meet) to pick songs');
-      if (r.reason === 'song_in_progress') return err(c, 409, 'song_in_progress', 'A song is in progress — it is added to the set list instead');
       return err(c, 400, r.reason ?? 'bad_song', r.reason === 'meet_closed' ? 'This meet has ended' : 'Pick a track with a title');
     }
     p.lastSeenAt = new Date().toISOString();
@@ -630,13 +629,12 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     ensureMeet(meet);
     const p = await participantFromBody(c, meet.meetId, body.resumeToken);
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
-    if (body.action !== 'remove' && body.action !== 'up' && body.action !== 'now') return err(c, 400, 'bad_action', 'action must be remove, up or now');
+    if (body.action !== 'remove' && body.action !== 'choose') return err(c, 400, 'bad_action', 'action must be remove or choose');
     tick(meet);
     const r = songAction(meet, p, c.req.param('sid'), body.action);
     if (!r.ok) {
-      if (r.reason === 'not_on_stage') return err(c, 403, 'not_on_stage', 'Step on stage (or host the meet) to order the set list');
-      if (r.reason === 'no_song') return err(c, 404, 'no_song', 'That song is no longer on the set list');
-      if (r.reason === 'song_in_progress') return err(c, 409, 'song_in_progress', 'A song is in progress');
+      if (r.reason === 'not_on_stage') return err(c, 403, 'not_on_stage', 'Step on stage (or host the meet) to choose the song');
+      if (r.reason === 'no_song') return err(c, 404, 'no_song', 'That song is no longer put forward — the stage settled on another one');
       return err(c, 409, r.reason ?? 'song', 'This meet has ended');
     }
     touch(meet);
@@ -718,7 +716,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!canTransport(meet, p)) return err(c, 403, 'not_on_stage', 'Only the singers on stage (or the host) start the song');
     tick(meet);
     const r = start(meet, Number(body.leadMs ?? 5000));
-    if (!r.ok) return err(c, 409, r.reason ?? 'start', r.reason === 'no_performers' ? 'Nobody is on stage yet' : r.reason === 'no_song' ? 'Pick a song first (set list)' : 'The meet is not in the lobby');
+    if (!r.ok) return err(c, 409, r.reason ?? 'start', r.reason === 'no_performers' ? 'Nobody is on stage yet' : r.reason === 'no_song' ? 'Pick a song first' : r.reason === 'choice_pending' ? 'More than one song is put forward — the stage chooses one first' : 'The meet is not in the lobby');
     await store.saveMeet(meet);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });

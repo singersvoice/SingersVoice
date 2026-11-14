@@ -44,10 +44,8 @@ export function Highlight(props: { text: string; q: string }) {
 export function SongPicker(props: {
   onPick: (song: SongPick) => Promise<void>;
   onClose: () => void;
-  canPlayNow?: boolean;
-  onPlayNow?: (song: SongPick) => Promise<void>;
-  /** Where a song already is in the meet (up now, queued): the row says so instead of offering it again. */
-  placeOf?: (song: SongPick) => 'current' | 'queued' | null;
+  /** Where a song already is in the meet (up now, put forward): the row says so instead of offering it again. */
+  placeOf?: (song: SongPick) => 'current' | 'proposed' | null;
 }) {
   // The library as the device remembers it, at once; the fresh listing takes its place when Drive answers.
   const [tracks, setTracks] = useState<TrackSummary[] | null>(() => readTrackCache());
@@ -110,12 +108,12 @@ export function SongPicker(props: {
   const me = myCatalogUserId();
   const others = items.filter((c) => c.ownerUserId !== me && !(tracks ?? []).some((t) => isSameTrack(t.trackId, c.trackId)));
 
-  const deliver = async (song: SongPick, now: boolean) => {
-    await (now && props.onPlayNow ? props.onPlayNow(song) : props.onPick(song));
+  const deliver = async (song: SongPick) => {
+    await props.onPick(song);
     props.onClose();
   };
   /** My track: share it on the way if other devices cannot reach it yet (quietly; a failure still seats the song for my own devices). */
-  const pickMine = async (t: TrackSummary, now: boolean) => {
+  const pickMine = async (t: TrackSummary) => {
     setBusy(t.trackId);
     try {
       let catalogTrackId = sharedId(t);
@@ -131,38 +129,38 @@ export function SongPicker(props: {
           setSharing(null);
         }
       }
-      await deliver({ trackId: t.trackId, catalogTrackId, trackTitle: t.title, durationMs: t.durationMs }, now);
+      await deliver({ trackId: t.trackId, catalogTrackId, trackTitle: t.title, durationMs: t.durationMs });
     } catch (e) {
       toast(errorText(e), 'error', 7000);
     } finally {
       setBusy(null);
     }
   };
-  const pickShared = async (c: CatalogTrack, now: boolean) => {
+  const pickShared = async (c: CatalogTrack) => {
     setBusy(c.trackId);
     try {
-      await deliver({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs }, now);
+      await deliver({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs });
     } catch (e) {
       toast(errorText(e), 'error', 7000);
     } finally {
       setBusy(null);
     }
   };
-  /** Enter picks the top match (mine first) — unless it is on the stage or the set list already. */
+  /** Enter picks the top match (mine first) — unless it is up or put forward already. */
   const pickTop = () => {
     if (busy) return;
     const top = rows[0];
     if (!top) return;
-    if (top.place) return toast(top.place === 'current' ? `"${top.title}" is up already` : `"${top.title}" is on the set list already`, 'warn');
-    void top.pick(false);
+    if (top.place) return toast(top.place === 'current' ? `"${top.title}" is up already` : `"${top.title}" is put forward already`, 'warn');
+    void top.pick();
   };
 
-  type Row = { key: string; title: string; artist: string; sub: string; from: string; place: 'current' | 'queued' | null; pick: (now: boolean) => Promise<void> };
+  type Row = { key: string; title: string; artist: string; sub: string; from: string; place: 'current' | 'proposed' | null; pick: () => Promise<void> };
   // One list: my songs first, then the shared ones (never the same song twice), each saying where it comes from.
   const placeOf = props.placeOf ?? (() => null);
   const rows: Row[] = [
-    ...mine.map((t) => ({ key: t.trackId, title: t.title, artist: t.artist || 'Unknown artist', sub: `${formatMs(t.durationMs)} · ${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`, from: 'Your library', place: placeOf({ trackId: t.trackId, catalogTrackId: sharedId(t), trackTitle: t.title, durationMs: t.durationMs }), pick: (now: boolean) => pickMine(t, now) })),
-    ...others.map((c) => ({ key: c.trackId, title: c.title, artist: c.artist || 'Unknown artist', sub: formatMs(c.durationMs), from: `Shared by ${c.ownerName}`, place: placeOf({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs }), pick: (now: boolean) => pickShared(c, now) })),
+    ...mine.map((t) => ({ key: t.trackId, title: t.title, artist: t.artist || 'Unknown artist', sub: `${formatMs(t.durationMs)} · ${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`, from: 'Your library', place: placeOf({ trackId: t.trackId, catalogTrackId: sharedId(t), trackTitle: t.title, durationMs: t.durationMs }), pick: () => pickMine(t) })),
+    ...others.map((c) => ({ key: c.trackId, title: c.title, artist: c.artist || 'Unknown artist', sub: formatMs(c.durationMs), from: `Shared by ${c.ownerName}`, place: placeOf({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs }), pick: () => pickShared(c) })),
   ];
   const total = catalog?.total ?? 0;
   const loading = tracks === null && !fresh;
@@ -231,26 +229,12 @@ export function SongPicker(props: {
               <div class="row" style="gap:6px">
                 {r.place === 'current' ? (
                   <span class="chip ok" title="This song is up on the stage already">Up now</span>
-                ) : r.place === 'queued' ? (
-                  <>
-                    <span class="chip" title="This song is on the set list already">On the set list</span>
-                    {props.canPlayNow && (
-                      <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${r.title} now`} onClick={() => void r.pick(true)}>
-                        Now
-                      </button>
-                    )}
-                  </>
+                ) : r.place === 'proposed' ? (
+                  <span class="chip" title="This song is put forward already — the stage chooses it on the song card">Put forward</span>
                 ) : (
-                  <>
-                    <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${r.title}`} onClick={() => void r.pick(false)}>
-                      {busy === r.key ? <Spinner /> : <IcMusic size={16} />} Pick
-                    </button>
-                    {props.canPlayNow && (
-                      <button class="btn sm" disabled={busy !== null} aria-label={`Sing ${r.title} now`} onClick={() => void r.pick(true)}>
-                        Now
-                      </button>
-                    )}
-                  </>
+                  <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${r.title}`} onClick={() => void r.pick()}>
+                    {busy === r.key ? <Spinner /> : <IcMusic size={16} />} Pick
+                  </button>
                 )}
               </div>
             </div>
@@ -267,7 +251,7 @@ export function SongPicker(props: {
           More shared songs
         </button>
       )}
-      <div class="small faint">The song you pick loads on every device in the meet, so all the singers on stage sing the same lines at the same time — and lands in every singer's own Drive library.</div>
+      <div class="small faint">The song you pick loads on every device in the meet, so all the singers on stage sing the same lines at the same time — and lands in every singer's own Drive library. One song at a time: a pick while another song is up goes on the stage's choice card, and the singers settle it with one tap.</div>
     </div>
   );
 }

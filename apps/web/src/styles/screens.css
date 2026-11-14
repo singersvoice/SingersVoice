@@ -1216,9 +1216,13 @@
   }
 }
 
-/* The set list (karaoke queue) in the lobby */
+/* The song of the stage in the lobby — and its choice card when two songs are picked */
 .setlist .min0 {
   min-width: 0;
+}
+.setlist[data-choice]:not([data-choice='0']) {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 45%, transparent);
 }
 .setlist-title {
   display: block;

@@ -79,7 +79,12 @@ show plays, *Go live* queues a publish job (in-house destination), the pause sho
 *Stop publishing* ends the job — and the singers' own stage is unaffected. A second tab of the same
 account opens Publishing › Preview while the show view stays up: the live meet's monitor tile
 receives both performers, draws the exact 16:9 broadcast picture without lyrics, reports the publish
-state, and the show view keeps its own links. After the second song the host removes a listener
+state, and the show view keeps its own links. The second song is picked twice at once: the guest
+picks a song of his own (up at once — *picked is up*), the host picks the shared song a moment
+later, and the test asserts the same choice card on every singer's device (both songs, who picked
+what, a *Sing this one* for each, on the third singer's phone too), that Start is off while it is
+open, that the picker offers neither song again (*Up now* / *Put forward*), and that one tap by the
+guest settles it everywhere — the shared song up, his own gone. After the second song the host removes a listener
 (his device says so; the link no longer lets him in) and ends the meet: the ended page lists the
 two songs' shows and the film of the whole meet (long enough to span both songs), and the guest
 finds all three under Performances. Runs in CI after the viewport screenshots:
