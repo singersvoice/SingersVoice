@@ -151,32 +151,35 @@ MediaPipe Selfie Segmentation (bundled under `/mediapipe`, ~6 MB, cached by the 
 the first use; CDN fallback). The model's mask comes back either in the alpha channel or only as
 brightness with opaque alpha depending on the browser/GPU path, so — as in the original SingersVoice
 app — `alphaFromMaskPixels` uses whichever channel varies, normalises and feathers it, and falls back
-to a soft head-and-shoulders silhouette when the mask is unusable (never a rectangle). `video/stage.ts` draws every
-performer, left to right by stage slot, evenly spaced over the stage background — one shared stage
+to a soft head-and-shoulders silhouette when the mask is unusable (never a rectangle). `video/stage.ts` seats every
+performer in **one row of chairs**: slots of one size, evenly spaced by stage slot along a shallow
+arc (`arcLift`: the middle nearest, the ends up to 7 % up the picture), each standing on the row's
+floor behind a **riser** drawn in front of them (`drawRiser`: a curved band from its lit edge to the
+bottom of the picture, a pool of each singer's colour, the names on it) that hides the lower 40 % of
+every frame (`RISER_COVER`) — the way a chair's front hides a seated coach's lap. One shared stage
 whether there is 1 singer or 10, on every device — under **one rule: a singer is drawn exactly as
-their own camera frames them.** The frame a device sends (the cut-out with the singer's own framing)
-is drawn whole, the same crop and proportions, on every stage: what a singer sees of themselves in
-Performer mode is what the audience gets, only bigger. The stage never finds a person and zooms in
-on its own (an earlier version did — it filled the slot with whatever the mask found, and a singer
-close to the camera went out to YouTube as a head three times the size of the stage). The two modes
-differ in the slots alone: **Publisher mode** ('show': Publishing, the lobby stage, the saved
-performance) — slots as tall as the picture, the frame's bottom edge (the camera's cut) on the
-picture's bottom edge like a TV shot, ten in one even row; **Performer mode** ('stage': the live
-stage, Studio) — the lyrics are the picture, big, and each frame sits small in the lower ~45 %.
-A frame that arrived small (a weak link) is never blown up past 2.5× its pixels. Framing
-(`video/framing.ts`) is the singer's choice, on the live stage next to the camera button (and in
-Studio / Settings). The default, **Chest**, frames the singer from the person: the feed reads its
-own mask a few times a second (a 96×128 probe; the body width is the width most rows have, so a
-stretched arm never widens it), and crops 1.35 bodies wide in the frame's own proportions with the
-top of the head a tenth of the way down — head to chest, like a news anchor, from wherever the
-singer sits; never past the camera frame (a singer already close gets the whole frame), never
-tighter than 0.3 of it (a far singer is brought up, not into a blur); deadbanded and eased so it
-never breathes. **Wide** is the whole camera frame (the camera sees no wider: for more room, move
-it back), **Mid** and **Close** are real zooms (1.5×, 2.2×) aimed at the singer's head where one is
-found (the same mask probe, so they work on every browser; around the frame's upper centre until
-then), and **Auto** eases any framing a fifth closer while the singer sings and back out when they
-fall silent — it tightens the chosen framing, it never replaces it. The sender crops its own stream
-at full resolution, so whoever takes the vocal comes closer on everyone's screen. The cut-out
+their own device frames them, and every device frames its singer the same way.** That framing is
+the **stage frame** (`video/framing.ts`, applied by `video/localFeed.ts` before the cut-out leaves
+the device): the feed measures its own mask a few times a second on a 120×160 probe
+(`measureMask`: the body as the width most rows have, so a stretched arm never counts; the head from
+the top of the figure down its middle — its width tops out at the ears and it ends where the figure
+narrows to the neck or widens to the shoulders, always 1.1–1.6× as tall as wide) and crops
+(`stageCrop`) in the frame's own proportions so the head is 22 % of the frame tall with its top 8 %
+down, centred on the head — brought up for a singer sitting back (never past 3.3×), brought back
+for one sitting close (up to 2.4×; the crop then reaches past the camera picture and that part is
+transparent, `visiblePart`; the camera's bottom edge is feathered when it would show above the
+riser). The crop is deadbanded and eased so it never breathes; a distance note (`distanceNote`:
+*sit back* past 1.3×, *come closer* under 0.4×) reaches the stage strip once it has held a second.
+So every frame carries a head of one size at one place, every slot is one size, and every singer
+comes out one size — the stage never finds a person and zooms in on its own, and nobody chooses a
+framing (the Chest / Wide / Mid / Close / Auto presets are gone). The two modes differ in the slots
+alone: **Publisher mode** ('show': Publishing, the lobby stage, the saved performance) — slots
+taller than the picture (1.2×, width permitting), their lower part behind the riser and below the
+picture, the heads from a tenth down, the riser band bounded to 9–40 % of the picture so ten small
+slots sit lower rather than behind a wall; **Performer mode** ('stage': the live stage, Studio) —
+the lyrics are the picture, big, and each frame sits small in the lower part over a slim riser.
+A frame that arrived tiny (a weak link) is never blown up past 4.5× its pixels — the packed stream
+itself is never capped, so a phone's frame is as big as a computer's. The cut-out
 itself is the camera picture **centre-cropped to 3:4** (`drawCover` in the segmenter — a 16:9
 webcam loses its sides, a 9:16 phone its top and bottom), never stretched: a face is the shape it is.
 
@@ -227,8 +230,8 @@ singer did not ask for, i.e. a show view or Preview tile — is the broadcast's 
 own 2 Mbps at 24 fps, resolution kept. The cut-out itself is 720×960 on computers (480×640 on
 phones; the packed frame twice as wide), so a singer standing full-height in a 720p show is drawn
 near 1:1; the general selfie model (256×256) replaces the landscape one (256×144) on computers and
-the mask is drawn with a 1.2 px blur — a soft edge instead of a staircase. The show layout never
-blows a cut-out up past 2.5× its own pixels, and gives one or two singers a little stage around them. The show view plays the vocals (hidden audio elements) and the backing track a quarter
+the mask is drawn with a 1.2 px blur — a soft edge instead of a staircase. The show layout is the
+chaired row above: one or two singers stand big in the middle, ten make one even row. The show view plays the vocals (hidden audio elements) and the backing track a quarter
 second behind the shared clock to meet them; Preview tiles are muted unless asked to listen.
 
 **The saved performance (`video/showRecorder.ts`).** Every singer's device records the show while

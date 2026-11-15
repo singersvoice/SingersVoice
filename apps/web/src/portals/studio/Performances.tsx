@@ -6,6 +6,9 @@
  *   showed it. The host's device recorded it; it lives in the host's Drive, shared with everyone
  *   who was in the meet, and anyone with its link can watch it.
  * - Your takes: your own takes (Studio, or your personal take of a meet song), Temp or kept.
+ *
+ * Deleting is plain: a Delete on every row, and Delete all for a whole section — the files go from
+ * your Drive for good (never the trash), and a meet performance is unlisted for everyone in the meet.
  */
 import { formatMs, type MeetPerformance } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -26,7 +29,6 @@ export function Performances() {
   const [shows, setShows] = useState<MeetPerformance[] | null>(null);
   const [filter, setFilter] = useState<'all' | 'kept' | 'temp'>('all');
   const [open, setOpen] = useState<PerformanceSummary | null>(null);
-  const [openShow, setOpenShow] = useState<MeetPerformance | null>(null);
 
   const reload = () => {
     void withProvider(async (p) => {
@@ -65,6 +67,34 @@ export function Performances() {
     if (doneCount) reload();
   }, [doneCount]);
 
+  /** Deleting, one after the other: which row is going, and how far through a Delete all we are. */
+  const [deleting, setDeleting] = useState<{ id: string | null; done: number; total: number } | null>(null);
+  /** Gone for good: the file out of Drive (not the trash); a meet performance unlisted for the whole meet. */
+  const deleteOne = async (performanceId: string, show: boolean) => {
+    await withProvider((p) => p.deletePerformance(performanceId));
+    if (show && controlConfigured.value) await api.del('DELETE /performances/:id', `/performances/${encodeURIComponent(performanceId)}`).catch(() => undefined);
+  };
+  const deleteRows = async (rows: { id: string; show: boolean }[], what: string) => {
+    if (!rows.length) return;
+    const one = rows.length === 1;
+    if (!confirm(one ? `Delete ${what} permanently? The file is removed from your Drive — this cannot be undone.` : `Delete all ${rows.length} ${what} permanently? The files are removed from your Drive — this cannot be undone.`)) return;
+    setDeleting({ id: null, done: 0, total: rows.length });
+    let failed = 0;
+    for (const [i, r] of rows.entries()) {
+      setDeleting({ id: r.id, done: i, total: rows.length });
+      try {
+        await deleteOne(r.id, r.show);
+      } catch (e) {
+        failed++;
+        toast(errorText(e), 'error', 6000);
+      }
+    }
+    setDeleting(null);
+    toast(failed ? `${rows.length - failed} deleted, ${failed} could not be` : one ? 'Deleted' : `${rows.length} deleted`, failed ? 'warn' : 'ok');
+    reload();
+  };
+  const hostedShows = (shows ?? []).filter((s) => s.hostUserId === me);
+
   return (
     <Page title="Performances">
       <div class="stack">
@@ -75,12 +105,24 @@ export function Performances() {
             <SaveStatus />
           </section>
         )}
-        <section class="card stack pad-sm">
+        <section class="card stack pad-sm" data-section="shows">
           <div class="row between">
             <h3 style="margin:0">Meet performances</h3>
-            <span class="chip">{shows?.length ?? '…'}</span>
+            <span class="row" style="gap:8px">
+              {hostedShows.length > 1 && (
+                <button class="btn sm danger" disabled={deleting !== null} aria-label="Delete all the meet performances you hosted" onClick={() => void deleteRows(hostedShows.map((x) => ({ id: x.performanceId, show: true })), 'meet performances you hosted')}>
+                  <IcTrash size={14} /> Delete all ({hostedShows.length})
+                </button>
+              )}
+              <span class="chip">{shows?.length ?? '…'}</span>
+            </span>
           </div>
-          <div class="muted small">One saved show per song of every meet you hosted or were in: everyone on stage over the stage background, with the whole mix — what Publisher mode showed. One file each, straight under Performances in the host's Drive, shared with everyone who was in the meet; anyone with the link can watch. Delete removes the file for good.</div>
+          <div class="muted small">One saved show per song of every meet you hosted or were in: everyone on stage over the stage background, with the whole mix — what Publisher mode showed. One file each, straight under Performances in the host's Drive, shared with everyone who was in the meet; anyone with the link can watch. Delete removes the file from your Drive for good (the host deletes; a performance in another host's Drive is theirs to delete).</div>
+          {deleting && deleting.total > 1 && (
+            <div class="row small muted">
+              <Spinner /> Deleting {deleting.done + 1} of {deleting.total}…
+            </div>
+          )}
           {shows === null && (
             <div class="row">
               <Spinner /> Loading…
@@ -122,8 +164,8 @@ export function Performances() {
                       <IcShare size={14} /> Share
                     </button>
                     {hosted && (
-                      <button class="btn sm" onClick={() => setOpenShow(s)}>
-                        …
+                      <button class="btn sm danger" disabled={deleting !== null} aria-label={`Delete ${s.songTitle || 'this performance'}`} title="Delete permanently from your Drive (everyone in the meet loses it)" onClick={() => void deleteRows([{ id: s.performanceId, show: true }], `"${s.songTitle || 'this performance'}"`)}>
+                        {deleting?.id === s.performanceId ? <Spinner /> : <IcTrash size={14} />} Delete
                       </button>
                     )}
                   </div>
@@ -133,18 +175,25 @@ export function Performances() {
           </div>
         </section>
 
-        <section class="card stack pad-sm">
+        <section class="card stack pad-sm" data-section="takes">
           <div class="row between">
             <h3 style="margin:0">Your takes</h3>
-            <Seg<'all' | 'kept' | 'temp'>
-              value={filter}
-              onChange={setFilter}
-              options={[
-                { v: 'all', label: 'All' },
-                { v: 'kept', label: 'Kept' },
-                { v: 'temp', label: 'Temp (7 days)' },
-              ]}
-            />
+            <span class="row" style="gap:8px">
+              {takes.length > 1 && (
+                <button class="btn sm danger" disabled={deleting !== null} aria-label={`Delete all ${takes.length} takes shown`} onClick={() => void deleteRows(takes.map((x) => ({ id: x.performanceId, show: false })), filter === 'all' ? 'takes' : filter === 'kept' ? 'kept takes' : 'Temp takes')}>
+                  <IcTrash size={14} /> Delete all ({takes.length})
+                </button>
+              )}
+              <Seg<'all' | 'kept' | 'temp'>
+                value={filter}
+                onChange={setFilter}
+                options={[
+                  { v: 'all', label: 'All' },
+                  { v: 'kept', label: 'Kept' },
+                  { v: 'temp', label: 'Temp (7 days)' },
+                ]}
+              />
+            </span>
           </div>
           {list === null && (
             <div class="row">
@@ -160,11 +209,11 @@ export function Performances() {
           )}
           <div class="list">
             {takes.map((p) => (
-              <button class="item" key={p.performanceId} style="text-align:left;cursor:pointer" onClick={() => setOpen(p)}>
-                <div class="thumb" style={{ background: p.state === 'temp' ? 'linear-gradient(135deg,#5a3a10,#8a5a1a)' : undefined }}>
+              <div class="item wide-actions" key={p.performanceId} data-take={p.performanceId}>
+                <button class="thumb" style={{ cursor: 'pointer', border: 0, color: 'inherit', background: p.state === 'temp' ? 'linear-gradient(135deg,#5a3a10,#8a5a1a)' : undefined }} aria-label={`Play ${p.trackTitle}`} onClick={() => setOpen(p)}>
                   <IcPlay size={20} />
-                </div>
-                <div class="meta">
+                </button>
+                <div class="meta" style="cursor:pointer" onClick={() => setOpen(p)}>
                   <div class="t">
                     {p.meetTitle ? `${p.meetTitle} · ` : ''}
                     {p.trackTitle}
@@ -174,25 +223,19 @@ export function Performances() {
                     {p.hasVideo ? (p.kind === 'show' ? ' · show video' : ' · video') : ''}
                   </div>
                 </div>
-                <span class={`chip ${p.state === 'temp' ? 'warn' : 'ok'}`}>{p.state === 'temp' ? `Temp · ${daysLeft(p.expiresAt)}` : 'Kept'}</span>
-              </button>
+                <div class="actions">
+                  <span class={`chip ${p.state === 'temp' ? 'warn' : 'ok'}`}>{p.state === 'temp' ? `Temp · ${daysLeft(p.expiresAt)}` : 'Kept'}</span>
+                  <button class="btn sm danger" disabled={deleting !== null} aria-label={`Delete ${p.trackTitle}`} title="Delete permanently from your Drive" onClick={() => void deleteRows([{ id: p.performanceId, show: false }], `"${p.trackTitle}"`)}>
+                    {deleting?.id === p.performanceId ? <Spinner /> : <IcTrash size={14} />} Delete
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         </section>
       </div>
       <Sheet open={open !== null} onClose={() => setOpen(null)} title={open ? `${open.meetTitle ? `${open.meetTitle} · ` : ''}${open.trackTitle}` : ''}>
         {open && <PerformanceDetail summary={open} show={(shows ?? []).find((s) => s.performanceId === open.performanceId) ?? null} onChanged={() => (setOpen(null), void reload())} />}
-      </Sheet>
-      <Sheet open={openShow !== null} onClose={() => setOpenShow(null)} title={openShow ? `${openShow.meetTitle} · ${openShow.songTitle}` : ''}>
-        {openShow && (
-          <ShowActions
-            show={openShow}
-            onChanged={() => {
-              setOpenShow(null);
-              reload();
-            }}
-          />
-        )}
       </Sheet>
     </Page>
   );
@@ -202,26 +245,6 @@ function daysLeft(expiresAt: string | null): string {
   if (!expiresAt) return '';
   const d = Math.max(0, Math.ceil((Date.parse(expiresAt) - Date.now()) / 86400000));
   return d === 0 ? 'expires today' : `${d}d left`;
-}
-
-/** A meet performance that lives in someone else's Drive: it opens there, and that is all (its owner deletes it). */
-function ShowActions(props: { show: MeetPerformance; onChanged: () => void }) {
-  const s = props.show;
-  const url = s.videoLink ?? s.link;
-  return (
-    <div class="stack">
-      <div class="muted small">
-        {new Date(s.createdAt).toLocaleString()} · {formatMs(s.durationMs)} · {s.singers.map((x) => `S${x.slot} ${x.displayName}`).join(' · ')} · in {s.hostName}'s Drive
-      </div>
-      <div class="row">
-        {url && (
-          <a class="btn" href={url} target="_blank" rel="noopener">
-            <IcPlay /> Open
-          </a>
-        )}
-      </div>
-    </div>
-  );
 }
 
 function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerformance | null; onChanged: () => void }) {

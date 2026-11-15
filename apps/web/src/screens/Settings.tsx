@@ -205,19 +205,7 @@ export function Settings() {
               ))}
             </select>
           </Field>
-          <Field label="Framing" hint="Chest keeps you head-to-chest from wherever you sit (the default); Wide is the whole camera frame (for more room, move the camera back); Mid and Close zoom 1.5× and 2.2× onto your head; Auto comes a fifth closer while you sing. This exact picture is you on every stage.">
-            <Seg<'chest' | 'wide' | 'mid' | 'close'>
-              value={app.zoomPreset}
-              onChange={(v) => updateApp({ zoomPreset: v })}
-              options={[
-                { v: 'chest', label: 'Chest' },
-                { v: 'wide', label: 'Wide' },
-                { v: 'mid', label: 'Mid' },
-                { v: 'close', label: 'Close' },
-              ]}
-            />
-          </Field>
-          <Switch checked={app.autoZoom} onChange={(v) => updateApp({ autoZoom: v })} label="Auto zoom while singing" hint="Eases a little closer while you sing and back out when you're silent — on everyone's screen." />
+          <div class="muted small">On every stage you are framed the same way as every other singer — head the same size, at the same place — however near or far you sit from the camera; the stage tells you when to sit back or come closer.</div>
           <Switch checked={app.cutout} onChange={(v) => updateApp({ cutout: v })} label="Person cut-out" hint="Segmentation model, loaded on demand." />
         </section>
 

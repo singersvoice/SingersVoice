@@ -1,19 +1,19 @@
 /**
- * The virtual stage: every performer (1..10) is cut out of their camera and drawn side by side
- * over the shared stage background, evenly spaced from left to right by stage slot — as if all
- * of them stood on the same stage, wherever they really are.
+ * The virtual stage: every performer (1..10) is cut out of their camera and seated in one row over
+ * the shared stage background — the same size, evenly spaced by stage slot along a shallow arc,
+ * behind a lit riser that hides everything below the chest — like a row of chairs on a TV stage,
+ * wherever each of them really is.
  *
- * One rule, every stage: a singer is drawn exactly as their own camera frames them. The frame a
- * device sends (its cut-out, with the singer's own framing: wide / mid / close and the vocal-driven
- * auto zoom, `framing.ts`) is drawn whole — the same crop, the same proportions — on the live stage
- * under the lyrics, on the lobby stage, in the show view, in the broadcast and in the saved
- * performance. Nothing here finds a person and zooms in on its own: what a singer sees of themselves
- * in Performer mode is what the audience gets, only bigger. Two modes differ in the slots alone:
+ * One rule, every stage: a singer is drawn exactly as their own device frames them, and every
+ * device frames its singer the same way (the stage frame, `framing.ts`: the head the same size at
+ * the same place), so the slots can be one size and the singers come out one size. The frame a
+ * device sends is drawn whole — the same crop, the same proportions — on the live stage under the
+ * lyrics, on the lobby stage, in the show view, in the broadcast and in the saved performance.
+ * Nothing here finds a person and zooms in on its own. Two modes differ in the slot size alone:
  *
  * - 'show' (Publisher mode: the broadcast picture, the lobby stage, the saved performance): the
- *   singers are the picture — slots as tall as the frame, the frame's bottom edge (the camera's cut)
- *   on the picture's bottom edge, ten in one even row.
- * - 'stage' (Performer mode: the live stage, Studio): the lyrics are the picture — small 3:4 tiles
+ *   singers are the picture — slots as tall as the frame allows, one even row of ten at most.
+ * - 'stage' (Performer mode: the live stage, Studio): the lyrics are the picture — small 3:4 slots
  *   in the lower part under the lyrics.
  *
  * The canvas is transparent: the background itself is the stage's CSS background (image or
@@ -62,32 +62,76 @@ export interface PersonFit {
 
 const FPS = 24;
 /**
+ * The row of slots curves like a row of chairs facing the audience: the middle nearest, the ends
+ * this far up the picture (fraction of its height). Every slot is the same size all along it.
+ */
+export const ARC_LIFT: Record<StageMode, number> = { show: 0.07, stage: 0.05 };
+/**
+ * The riser in front of the row hides this much of every frame from the bottom: the singers show
+ * head and shoulders above its edge, whatever their camera's bottom edge cut — the way a chair's
+ * front hides a seated coach's lap. The hidden part of a frame may run on below the picture.
+ */
+export const RISER_COVER = 0.4;
+/** The riser band itself, above the picture's bottom edge: never slimmer than this (the names sit on it)… */
+const RISER_MIN = 0.09;
+/** …and never taller than this in 'show' mode (small slots, a crowd of ten, sit lower rather than behind a wall). */
+const RISER_MAX = 0.4;
+/** 'show': the row's slots start about here from the top when they are big (one or two singers): the heads a little under. */
+const ROW_TOP = 0.08;
+/**
  * A stage with nobody's picture on it (the audience's view: no video reaches them; a lobby before the
  * cameras are on) is a still: it is redrawn only now and then, to catch a change — a frame arriving, an
  * avatar loaded, a feed gone quiet — so a hundred phones in the room spend nothing on it.
  */
 const IDLE_FPS = 2;
 const MAX_WIDTH = 1600;
-/** The frame may fill this much of the slot's width (room for the tag). */
+/** A slot is this much of its share of the width ('show'): a little air between neighbours. */
 const FILL_W = 0.94;
 /** Headroom above the frame, as a fraction of the slot height. */
-const HEADROOM = 0.045;
+export const HEADROOM = 0.045;
 /**
  * A cut-out is never blown up past this many times its own pixels (at a 720-tall picture; scaled
  * with the picture): a frame that arrived small (a weak link) stays a sharp figure with stage
  * around it rather than a blur filling the frame. Computers send their cut-out at 720×960, so a
  * full-height frame in a 720p show is drawn near 1:1.
  */
-const MAX_UPSCALE = 2.5;
+const MAX_UPSCALE = 4.5;
 
 export type StageMode = 'stage' | 'show';
 
+/** How far up the picture the row's floor is at `x` (0 in the middle, `ARC_LIFT` at the ends): the chairs' arc. */
+export function arcLift(width: number, height: number, x: number, mode: StageMode): number {
+  const u = 2 * (x / Math.max(1, width) - 0.5); // -1..1 across the picture
+  return height * ARC_LIFT[mode] * u * u;
+}
+
 /**
- * Pure layout: N slots evenly spaced across the width, bottom-anchored on the floor line; fewer
- * performers → wider slots. 'stage' (Performer mode) leaves the top ~55 % to the lyrics — small
- * 3:4 tiles, the singers' own camera framing; 'show' (Publisher mode, the lobby stage) has no
- * lyrics: every slot is as tall as the frame, so the performers stand huge, like a televised stage
- * show, in one even row whether there are 1 or 10.
+ * How tall the riser band is (above the picture's bottom edge, in the middle) for slots `slotH` tall:
+ * 'show' puts the row's heads near the top of the picture and the riser takes the rest, within
+ * bounds; 'stage' (lyrics above) keeps the riser slim at the bottom.
+ */
+export function riserBand(height: number, slotH: number, mode: StageMode): number {
+  if (mode !== 'show') return height * RISER_MIN;
+  return Math.max(height * RISER_MIN, Math.min(height * RISER_MAX, height - height * ROW_TOP - slotH * (1 - RISER_COVER)));
+}
+
+/** The top edge of the riser at `x`: the band's height up from the picture's bottom edge, lifted along the arc. */
+export function riserTop(width: number, height: number, x: number, slotH: number, mode: StageMode): number {
+  return height - riserBand(height, slotH, mode) - arcLift(width, height, x, mode);
+}
+
+/** The floor line of the row at `x` — where a slot's bottom edge is: `RISER_COVER` of the slot below the riser's top edge (often below the picture). */
+export function floorAt(width: number, height: number, x: number, slotH: number, mode: StageMode): number {
+  return riserTop(width, height, x, slotH, mode) + slotH * RISER_COVER;
+}
+
+/**
+ * Pure layout: N slots of ONE size, evenly spaced across the width, each standing on the row's
+ * floor where it is (the ends a little up the picture: the arc). Fewer performers → bigger slots,
+ * never different sizes within a row. 'stage' (Performer mode) leaves the top ~55 % to the lyrics —
+ * small 3:4 slots; 'show' (Publisher mode, the lobby stage) has no lyrics: every slot is as tall
+ * as the picture allows, so the performers stand big, like a televised stage show, one even row
+ * whether there are 1 or 10.
  */
 export function layoutStage(width: number, height: number, count: number, mode: StageMode = 'stage'): StageTile[] {
   const n = Math.max(1, count);
@@ -95,11 +139,16 @@ export function layoutStage(width: number, height: number, count: number, mode: 
   let h: number;
   let w: number;
   if (mode === 'show') {
-    // One or two singers get a little stage around them; a fuller row stands as tall as the frame allows.
-    h = height * (n <= 2 ? 0.93 : 0.96);
-    w = Math.min(slotW * FILL_W, h * 0.9);
+    // The singers are the picture: a slot taller than it (its lower part hides behind the riser and runs on below the
+    // picture), so one or two singers stand big; a fuller row is as wide as its slots allow.
+    h = height * 1.2;
+    w = h * 0.75;
+    if (w > slotW * FILL_W) {
+      w = slotW * FILL_W;
+      h = w / 0.75;
+    }
   } else {
-    const hFrac = n === 1 ? 0.44 : n === 2 ? 0.42 : n <= 4 ? 0.4 : n <= 6 ? 0.36 : 0.32;
+    const hFrac = n === 1 ? 0.5 : n === 2 ? 0.48 : n <= 4 ? 0.45 : n <= 6 ? 0.4 : 0.36;
     h = height * hFrac;
     w = h * 0.75;
     if (w > slotW * 0.96) {
@@ -107,27 +156,30 @@ export function layoutStage(width: number, height: number, count: number, mode: 
       h = w / 0.75;
     }
   }
-  const y = height - h - height * 0.015;
-  return Array.from({ length: n }, (_, i) => ({ id: String(i), x: slotW * i + (slotW - w) / 2, y, w, h }));
+  return Array.from({ length: n }, (_, i) => {
+    const cx = slotW * (i + 0.5);
+    return { id: String(i), x: cx - w / 2, y: floorAt(width, height, cx, h, mode) - h, w, h };
+  });
 }
 
 /**
- * Pure framing: the whole frame, as the singer's camera framed it, as large as the slot allows — as
- * wide as the slot, as tall as the room between the headroom and the picture's bottom edge — its
- * bottom edge (the camera's cut) on the picture's bottom edge like a TV shot, centred in the slot.
- * The same frame keeps the same proportions in every mode; only the slot size differs.
+ * Pure framing: the whole frame, as the singer's device framed it, as large as the slot allows — as
+ * wide as the slot, as tall as the room between the headroom and the slot's floor — its bottom edge
+ * on the slot's floor, centred in the slot. Every frame is the stage frame (the same proportions,
+ * the head at the same place), so equal slots give equal singers.
  */
 export function fitPerson(t: StageTile, srcW: number, srcH: number, mode: StageMode, canvasH: number): PersonFit {
   const fw = Math.max(1, srcW);
   const fh = Math.max(1, srcH);
-  const floor = Math.max(canvasH, t.y + t.h);
+  const floor = t.y + t.h;
   const top = t.y + t.h * HEADROOM;
   const room = Math.max(1, floor - top);
-  const scale = Math.min((t.w * FILL_W) / fw, room / fh, mode === 'show' ? MAX_UPSCALE * Math.max(0.5, canvasH / 720) : Infinity);
+  const scale = Math.min(t.w / fw, room / fh, mode === 'show' ? MAX_UPSCALE * Math.max(0.5, canvasH / 720) : Infinity);
   const w = fw * scale;
   const h = fh * scale;
   return { scale, x: t.x + (t.w - w) / 2, y: floor - h, w, h };
 }
+
 
 export class StageCompositor {
   readonly canvas: HTMLCanvasElement;
@@ -222,7 +274,7 @@ export class StageCompositor {
     }
     const tiles = layoutStage(W, H, this.performers.length, this.mode);
     this.tiles = tiles.map((t, i) => ({ ...t, id: this.performers[i]!.id, performer: this.performers[i]! }));
-    // Every singer's frame, whole, as their own camera framed it — the same picture in every mode.
+    // Every singer's frame, whole, as their own device framed it — the same picture in every mode.
     for (const t of this.tiles) {
       const p = t.performer;
       const src = this.sourceCanvas(p);
@@ -232,11 +284,12 @@ export class StageCompositor {
         this.drawPerson(c, src, p, t.fit, t);
       } else {
         t.fit = undefined;
-        this.drawShadow(c, t.x + t.w / 2, t.y + t.h, t.w);
         this.drawPlaceholder(c, p, t);
       }
-      this.drawTag(c, p, t);
     }
+    // The riser in front of the row, then every singer's name on it.
+    this.drawRiser(c, W, H, tiles[0]!.h);
+    for (const t of this.tiles) this.drawTag(c, t.performer, t, W, H);
   }
 
   /** The RGBA person image for a performer (local person canvas, or the unpacked remote frame). */
@@ -257,16 +310,59 @@ export class StageCompositor {
     return null;
   }
 
-  /** A soft ellipse of shadow on the floor line, `w` wide (the gradient is made inside the squashed space so it lands there). */
-  private drawShadow(c: CanvasRenderingContext2D, cx: number, floor: number, w: number): void {
+  /**
+   * The riser: a curved band from its lit top edge (following the arc) to the bottom of the picture,
+   * in front of the row — deep stage purple, a glowing edge, a soft pool of each singer's colour
+   * where they stand. It hides whatever is below the chest in every frame (a camera's bottom edge,
+   * a table), so the row reads as one line of performers.
+   */
+  private drawRiser(c: CanvasRenderingContext2D, W: number, H: number, slotH: number): void {
+    const top = (x: number) => riserTop(W, H, x, slotH, this.mode);
+    const edge = () => {
+      c.beginPath();
+      c.moveTo(0, top(0));
+      for (let x = 16; x < W; x += 16) c.lineTo(x, top(x));
+      c.lineTo(W, top(W));
+    };
     c.save();
-    c.translate(0, floor);
-    c.scale(1, 0.18);
-    const g = c.createRadialGradient(cx, 0, 0, cx, 0, w * 0.5);
-    g.addColorStop(0, 'rgba(0,0,0,0.45)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
+    edge();
+    c.lineTo(W, H);
+    c.lineTo(0, H);
+    c.closePath();
+    const g = c.createLinearGradient(0, top(W / 2), 0, H);
+    g.addColorStop(0, 'rgba(26, 12, 48, 0.9)');
+    g.addColorStop(0.35, 'rgba(14, 7, 28, 0.94)');
+    g.addColorStop(1, 'rgba(6, 3, 12, 0.97)');
     c.fillStyle = g;
-    c.fillRect(cx - w * 0.7, -w * 0.5, w * 1.4, w);
+    c.fill();
+    // Each singer's spot on the riser: a soft pool of their colour below their name.
+    c.clip();
+    for (const t of this.tiles) {
+      const cx = t.x + t.w / 2;
+      const y = top(cx);
+      const r = t.w * 0.55;
+      const pool = c.createRadialGradient(cx, y, 0, cx, y, r);
+      pool.addColorStop(0, hexAlpha(t.performer.color ?? '#b388ff', 0.28));
+      pool.addColorStop(1, hexAlpha(t.performer.color ?? '#b388ff', 0));
+      c.fillStyle = pool;
+      c.fillRect(cx - r, y, r * 2, r);
+    }
+    c.restore();
+    // The lit edge: a glowing strip along the top of the riser, and its reflection just under it.
+    c.save();
+    edge();
+    c.lineWidth = Math.max(2, slotH * 0.012);
+    c.strokeStyle = 'rgba(236, 224, 255, 0.95)';
+    c.shadowColor = 'rgba(179, 136, 255, 0.9)';
+    c.shadowBlur = Math.max(6, slotH * 0.04);
+    c.stroke();
+    c.restore();
+    c.save();
+    c.translate(0, Math.max(3, slotH * 0.02));
+    edge();
+    c.lineWidth = Math.max(1, slotH * 0.006);
+    c.strokeStyle = 'rgba(179, 136, 255, 0.35)';
+    c.stroke();
     c.restore();
   }
 
@@ -314,7 +410,8 @@ export class StageCompositor {
     c.restore();
   }
 
-  private drawTag(c: CanvasRenderingContext2D, p: StagePerformer, t: StageTile): void {
+  /** The singer's name on the riser, under their spot. */
+  private drawTag(c: CanvasRenderingContext2D, p: StagePerformer, t: StageTile, W: number, H: number): void {
     const fontPx = this.mode === 'show' ? Math.max(14, Math.min(26, t.w * 0.1)) : Math.max(11, Math.min(16, t.w * 0.09));
     c.save();
     c.font = `600 ${fontPx}px system-ui, -apple-system, sans-serif`;
@@ -324,7 +421,7 @@ export class StageCompositor {
     const tw = c.measureText(text).width + fontPx * 1.6;
     const th = fontPx * 1.7;
     const x = t.x + t.w / 2 - tw / 2;
-    const y = t.y + t.h - th - 4;
+    const y = Math.min(H - th - 2, riserTop(W, H, t.x + t.w / 2, t.h, this.mode) + th * 0.5);
     c.fillStyle = 'rgba(12, 6, 24, 0.72)';
     roundRect(c, x, y, tw, th, th / 2);
     c.fill();
@@ -336,6 +433,14 @@ export class StageCompositor {
     c.fillText(text, x + tw / 2 + fontPx * 0.25, y + th / 2 + 0.5);
     c.restore();
   }
+}
+
+/** `#rrggbb` (or any CSS colour, passed through at full alpha) with the given alpha. */
+function hexAlpha(color: string, alpha: number): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(color.trim());
+  if (!m) return alpha <= 0 ? 'rgba(0,0,0,0)' : color;
+  const n = parseInt(m[1]!, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
 function roundRect(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {

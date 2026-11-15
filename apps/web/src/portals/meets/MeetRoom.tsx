@@ -7,7 +7,7 @@
  * stage for the next song. The host's take of each song is the meet's saved performance, shared
  * with everyone who was in the meet. Nothing here ever waits for a review or an approval.
  */
-import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, songChoicePending, type Meet, type Participant, type SingerSlot, type SongPick, type StageSlot } from '@singersvoice/protocol';
+import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, songChoicePending, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
 import { activeRoomInfo } from './activeRoom.ts';
 import { useRoomStage, type RoomStage } from './roomStage.ts';
 import { SetListPanel } from './SetListPanel.tsx';
@@ -17,14 +17,13 @@ import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { Framing } from '../../components/Framing.tsx';
-import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcMusic, IcPause, IcPlay, IcPlus, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { audienceLine } from './audience.ts';
 import { Page } from '../../components/Shell.tsx';
-import { Progress, Seg, Spinner, Switch } from '../../components/ui.tsx';
+import { Seg, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, serverNow } from '../../lib/api.ts';
 import { shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
@@ -127,24 +126,47 @@ export function MeetRoom(props: { id: string }) {
     return engine;
   };
   const [micBusy, setMicBusy] = useState(false);
-  const openMicForStage = async () => {
+  /**
+   * On iOS the mic and the camera are one capture: opening the mic re-opens the camera with it, which only a tap
+   * may do — so the device never tries that by itself there (one tap, "Turn my mic on" / "Join the song", remains).
+   */
+  const needsTapForMic = () => isIOS && appSettings.peek().cameraOn && camera.on.value;
+  /** `quiet`: an attempt the device makes by itself — no toast when the browser wants a tap first; the button stays. */
+  const openMicForStage = async (quiet = false) => {
     if (engineRef.current?.micOpen.value) return;
+    if (quiet && needsTapForMic()) return;
     setMicBusy(true);
     try {
       await openMic();
     } catch (e) {
-      toast(errorText(e), 'warn', 6000);
+      if (!quiet) toast(errorText(e), 'warn', 6000);
     } finally {
       setMicBusy(false);
     }
   };
+  // The mic is part of being on stage: it opens by itself the moment you are seated (talk-back, the vocal in the
+  // song), with no tap — a browser that wants a tap first (a permission not given yet) leaves the "Turn my mic on"
+  // button, nothing else. One quiet try per seating.
+  const micTriedFor = useRef<string | null>(null);
+  const seatKey = onStageNow && !meetOver ? `${you?.participantId}:${you?.slot}` : null;
+  useEffect(() => {
+    if (!seatKey || micTriedFor.current === seatKey || engineRef.current?.micOpen.value) return;
+    // A moment after the seat: the camera, the cut-out model and the video links start with the seat — the mic (and
+    // the audio engine behind it) comes right after, not in the same breath, so a phone is not asked for everything at once.
+    const t = setTimeout(() => {
+      micTriedFor.current = seatKey;
+      void openMicForStage(true);
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [seatKey]);
 
-  /** User-gesture pre-flight: audio context, mic (+camera on iOS), decode the track. Then "ready". */
-  const prepare = async (): Promise<boolean> => {
+  /** Pre-flight: audio context, mic (+camera on iOS), decode the track. Then "ready". `quiet`: by the device itself. */
+  const prepare = async (quiet = false): Promise<boolean> => {
     if (!track?.loaded) {
-      toast('The track is not available on this device yet', 'warn');
+      if (!quiet) toast('The track is not available on this device yet', 'warn');
       return false;
     }
+    if (quiet && !engineRef.current?.micOpen.value && needsTapForMic()) return false;
     setPreparing(true);
     try {
       const audio = audioSettings.peek();
@@ -161,21 +183,29 @@ export function MeetRoom(props: { id: string }) {
       await session.setReady(true);
       return true;
     } catch (e) {
-      toast(errorText(e), 'error', 8000);
+      if (!quiet) toast(errorText(e), 'error', 8000);
       return false;
     } finally {
       setPreparing(false);
     }
   };
-  // Whoever starts the song, every singer on stage whose mic is open joins it: no tap needed on the other devices
-  // (the mic and camera opened with the stage; the track is loaded) — from the count-in, or as soon as the track
-  // is in on a slower device. A singer who left the running song (Leave) is not pulled back in.
+  // Whoever starts the song, EVERY singer on stage is in it: each device goes to the singing screen the moment the
+  // song runs and joins the song by itself — mic opened or not yet (it opens on the way; the track is loaded) — from
+  // the count-in, or as soon as the track is in on a slower device. Only a browser that insists on a tap for the mic
+  // leaves one tap, "Join the song", on the singing screen itself. A singer who left the running song (Leave) is
+  // not pulled back in. One quiet try per song start (the kickstart), so a refusal never loops.
   const songRunning = meet?.state === 'countdown' || meet?.state === 'live';
   const leftSong = useRef(false);
-  const micIsOpen = engineRef.current?.micOpen.value ?? false;
+  const joinTriedFor = useRef<string | null>(null);
+  const songKey = songRunning ? `${trackKey}|${meet?.kickstartEpochMs ?? ''}|${meet?.songCount ?? 0}` : null;
   useEffect(() => {
-    if (songRunning && !leftSong.current && onStageNow && !prepared && !preparing && track?.loaded && micIsOpen) void prepare();
-  }, [songRunning, onStageNow, prepared, preparing, track, micIsOpen]);
+    if (!songKey || leftSong.current || !onStageNow || prepared || preparing || !track?.loaded) return;
+    if (joinTriedFor.current === songKey) return;
+    joinTriedFor.current = songKey;
+    void prepare(true);
+  }, [songKey, onStageNow, prepared, preparing, track]);
+  // The singing screen needs the audio engine; it exists from the moment the song runs (the mic may come after).
+  if (songRunning && onStageNow && !engineRef.current) engineRef.current = getEngine();
   const inLobby = meet?.state === 'lobby';
   useEffect(() => {
     if (inLobby) leftSong.current = false; // the song is over (or a new one is up): everyone is in again
@@ -217,8 +247,8 @@ export function MeetRoom(props: { id: string }) {
       engine={engineRef.current}
       prepared={prepared}
       preparing={preparing}
-      onPrepare={prepare}
-      onOpenMic={openMicForStage}
+      onPrepare={() => prepare()}
+      onOpenMic={() => openMicForStage()}
       micBusy={micBusy}
       participants={snap?.participants ?? []}
       onTake={(t, loaded, singers) => {
@@ -248,7 +278,7 @@ function Room(props: {
   onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>, singers: { slot: number; displayName: string; userId?: string }[]) => void;
 }) {
   const { session, meet, you, track, camera, engine } = props;
-  const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, level: () => engine?.recorder?.level.value ?? 0, engine });
+  const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, engine });
   const onStage = you.slot !== null;
   const live = meet.state === 'countdown' || meet.state === 'live';
   // A take in progress keeps the live stage mounted until it wraps up, even once the meet is back in
@@ -772,7 +802,11 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
             {app.cameraOn ? <IcCameraOff size={16} /> : <IcCamera size={16} />}
           </button>
         )}
-        {props.onStage && app.cameraOn && stage.camOn && <Framing compact />}
+        {props.onStage && stage.distance && (
+          <span class="chip warn" style="pointer-events:none" data-distance={stage.distance}>
+            {stage.distance === 'close' ? 'Sit back a little — the stage shows what your camera sees' : 'Come a little closer to the camera'}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -1150,7 +1184,6 @@ function LiveStage(props: {
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
               {app.cameraOn ? <IcCamera /> : <IcCameraOff />}
             </button>
-            {app.cameraOn && <Framing />}
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
             </button>

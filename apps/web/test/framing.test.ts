@@ -1,67 +1,37 @@
+/**
+ * The stage frame: every singer's head the same size at the same place in the frame their device
+ * sends — so every stage draws every singer the same size — wherever they sit from their camera.
+ */
 import { describe, expect, it } from 'vitest';
-import { boxOfMask, CHEST, chestCrop, fixedCrop, FRAMING, frameRect, presetCrop, SING_TIGHTEN, type PersonBox } from '../src/video/framing.ts';
+import { boxOfMask, cropFactor, distanceNote, frameRect, measureMask, STAGE_FRAME, stageCrop, visiblePart, type PersonBox } from '../src/video/framing.ts';
 import { coverRect } from '../src/video/segmenter.ts';
 
-describe('stage framing', () => {
-  it('wide shows the whole frame; mid and close are real zooms (1.5×, 2.2×) — the crop always fills the frame sent', () => {
-    const wide = frameRect(480, 640, presetCrop('wide'));
-    expect([wide.sx, wide.sy, wide.sw, wide.sh]).toEqual([0, 0, 480, 640]); // no crop
-    expect([wide.dx, wide.dy, wide.dw, wide.dh]).toEqual([0, 0, 480, 640]); // full resolution out
-    expect(FRAMING.mid.crop).toBe(1.5);
-    expect(FRAMING.close.crop).toBe(2.2);
-    const close = frameRect(480, 640, presetCrop('close'));
-    expect(close.sw).toBeCloseTo(480 / 2.2, 5);
-    expect(close.sh).toBeCloseTo(640 / 2.2, 5);
-    expect([close.dx, close.dy, close.dw, close.dh]).toEqual([0, 0, 480, 640]); // nobody stands small in their own frame
-  });
-  it('crops around the face origin and clamps to the frame', () => {
-    const r = frameRect(480, 640, 2.2, { x: 90, y: 10 });
-    expect(r.sx + r.sw).toBeLessThanOrEqual(480);
-    expect(r.sy).toBe(0);
-    const l = frameRect(480, 640, 2.2, { x: 5, y: 95 });
-    expect(l.sx).toBe(0);
-    expect(l.sy + l.sh).toBeLessThanOrEqual(640);
-    expect(frameRect(480, 640, 0.5).sw).toBe(480); // never wider than the camera sees
-  });
-  it('Auto tightens the chosen framing a fifth while singing — it never turns Wide into Close', () => {
-    expect(presetCrop('wide', 1)).toBeCloseTo(1 * (1 + SING_TIGHTEN), 6);
-    expect(presetCrop('mid', 1)).toBeCloseTo(1.5 * (1 + SING_TIGHTEN), 6);
-    expect(presetCrop('close', 0.5)).toBeCloseTo(2.2 * (1 + SING_TIGHTEN / 2), 6);
-    expect(presetCrop('wide', 1)).toBeLessThan(presetCrop('mid', 0));
-    expect(presetCrop('close', 2)).toBe(presetCrop('close', 1));
-  });
-  it('mid and close aim at the singer: centred on the body with the head a tenth down, wherever they sit', () => {
-    const person: PersonBox = { x: 0.6, y: 0.3, w: 0.2, h: 0.6 }; // standing right of centre, head 30 % down
-    const r = fixedCrop(480, 640, 2.2, person);
-    expect(r.sw).toBeCloseTo(480 / 2.2, 5);
-    expect(r.sx + r.sw / 2).toBeCloseTo(0.7 * 480, 3); // on the body
-    expect(r.sy).toBeCloseTo(0.3 * 640 - r.sh * CHEST.headroom, 3); // the head a tenth down
-    const edge = fixedCrop(480, 640, 2.2, { x: 0.9, y: 0.02, w: 0.1, h: 0.5 });
-    expect(edge.sx + edge.sw).toBeLessThanOrEqual(480 + 0.01); // never past the frame
-    expect(edge.sy).toBe(0);
-    expect(fixedCrop(480, 640, 1.5, null, { x: 50, y: 42 })).toEqual(frameRect(480, 640, 1.5, { x: 50, y: 42 })); // nobody found: around the origin
-  });
-  it('the camera picture is centre-cropped to the cut-out, never stretched: a 16:9 webcam loses its sides, a 9:16 phone its top and bottom', () => {
-    const web = coverRect(1280, 720, 480, 640);
-    expect(web.sh).toBe(720);
-    expect(web.sw).toBeCloseTo(540, 5);
-    expect(web.sx).toBeCloseTo(370, 5);
-    const phone = coverRect(720, 1280, 480, 640);
-    expect(phone.sw).toBe(720);
-    expect(phone.sh).toBeCloseTo(960, 5);
-    expect(phone.sy).toBeCloseTo(160, 5);
-    expect(coverRect(480, 640, 480, 640)).toEqual({ sx: 0, sy: 0, sw: 480, sh: 640 });
-  });
-});
-
-describe('chest framing — the default: head to chest, from wherever the singer sits', () => {
-  const grey = (w: number, h: number, person: (x: number, y: number) => boolean) => {
-    const d = new Uint8ClampedArray(w * h * 4);
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) d[(y * w + x) * 4] = person(x, y) ? 255 : 0;
-    return d;
+/** A grey mask w×h: bright where `person(x, y)`. */
+const grey = (w: number, h: number, person: (x: number, y: number) => boolean) => {
+  const d = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) d[(y * w + x) * 4] = person(x, y) ? 255 : 0;
+  return d;
+};
+/** A figure: a head (ellipse) on a neck on shoulders, scaled by `k` (1 = a head 24 px wide in a 120×160 probe), centred at `cx`, head top at `top`. */
+const figure = (k: number, cx: number, top: number) => {
+  const hw = 12 * k; // half the head width
+  const hh = 16 * k; // half the head height
+  const neckW = 7 * k;
+  const neckLen = 7 * k;
+  const shoulderW = 30 * k;
+  const headCy = top + hh;
+  const neckTop = headCy + hh * 0.85;
+  const shoulderTop = neckTop + neckLen;
+  return (x: number, y: number) => {
+    if (((x - cx) / hw) ** 2 + ((y - headCy) / hh) ** 2 <= 1) return true;
+    if (y >= neckTop && y < shoulderTop && Math.abs(x - cx) < neckW) return true;
+    if (y >= shoulderTop && Math.abs(x - cx) < shoulderW) return true;
+    return false;
   };
+};
 
-  it('finds the person in a mask: head top to the bottom of the body, the body width, not a stretched arm', () => {
+describe('measuring the singer in the mask', () => {
+  it('finds the person: head top to the bottom of the body, the body width, not a stretched arm', () => {
     // A figure 20 wide standing in the middle of a 96×128 mask, one arm out to the side for a few rows.
     const box = boxOfMask(grey(96, 128, (x, y) => (y >= 30 && y < 120 && x >= 38 && x < 58) || (y >= 60 && y < 64 && x >= 58 && x < 90)), 96, 128)!;
     expect(box).not.toBeNull();
@@ -71,40 +41,96 @@ describe('chest framing — the default: head to chest, from wherever the singer
     expect(boxOfMask(grey(96, 128, () => false), 96, 128)).toBeNull();
   });
 
-  it('a singer sitting back is brought up to head-and-chest: the crop is 1.35 bodies wide with the head a tenth down', () => {
-    const far: PersonBox = { x: 0.44, y: 0.3, w: 0.12, h: 0.55 }; // small, standing in the middle of a 720×960 frame
-    const r = chestCrop(720, 960, far);
-    expect(r.sw / r.sh).toBeCloseTo(0.75, 5); // the frame's own proportions
-    expect(r.sh).toBeGreaterThanOrEqual(960 * CHEST.minCrop - 0.01); // never tighter than a third of the frame
-    expect(r.sw).toBeLessThan(720 * 0.5); // a third of the frame: the figure now fills a good part of it
-    expect(r.sx + r.sw / 2).toBeCloseTo(0.5 * 720, 0); // centred on the body
-    // the head sits a tenth down from the top of the crop (or the crop top is the frame top)
-    expect(r.sy).toBeCloseTo(Math.max(0, 0.3 * 960 - r.sh * CHEST.headroom), 3);
-    expect(r.dw).toBe(720); // the crop fills the frame that goes out
-  });
-
-  it('a singer already close gets the whole frame — the camera cannot zoom out', () => {
-    const close: PersonBox = { x: 0.1, y: 0.05, w: 0.8, h: 0.95 };
-    const r = chestCrop(720, 960, close);
-    expect(r.sw).toBe(720);
-    expect(r.sh).toBe(960);
-    expect(r.sx).toBe(0);
-    expect(r.sy).toBe(0);
-  });
-
-  it('singing tightens the chest framing by up to a fifth, and the crop stays inside the frame', () => {
-    const mid: PersonBox = { x: 0.3, y: 0.2, w: 0.4, h: 0.8 };
-    const still = chestCrop(720, 960, mid, 0);
-    const singing = chestCrop(720, 960, mid, 1);
-    expect(singing.sw).toBeCloseTo(still.sw * (1 - CHEST.singTighten), 3);
-    for (const r of [still, singing]) {
-      expect(r.sx).toBeGreaterThanOrEqual(0);
-      expect(r.sy).toBeGreaterThanOrEqual(0);
-      expect(r.sx + r.sw).toBeLessThanOrEqual(720 + 0.01);
-      expect(r.sy + r.sh).toBeLessThanOrEqual(960 + 0.01);
+  it('finds the head: crown to the neck, ear to ear — whether the singer is near (big) or far (small)', () => {
+    for (const [k, top] of [
+      [1, 20],
+      [2, 10],
+      [0.5, 40],
+    ] as const) {
+      const m = measureMask(grey(120, 160, figure(k, 60, top)), 120, 160)!;
+      expect(m, `k=${k}`).not.toBeNull();
+      expect(m.head.y * 160, `head top k=${k}`).toBeCloseTo(top, -0.5);
+      expect(m.head.w * 120, `head width k=${k}`).toBeCloseTo(24 * k, -0.6); // ear to ear
+      expect(m.head.h * 160, `head height k=${k}`).toBeGreaterThan(24 * k * 1.1 - 0.01); // taller than wide…
+      expect(m.head.h * 160, `head height k=${k}`).toBeLessThan(24 * k * 1.6 + 0.01); // …but a head, not the whole figure
+      expect(m.head.x + m.head.w / 2, `head centre k=${k}`).toBeCloseTo(0.5, 1);
+      expect(m.body.w * 120, `body k=${k}`).toBeGreaterThan(24 * k * 2); // the shoulders are the body, not the head
     }
-    // a singer at the edge of the frame: the crop slides, never leaves the frame
-    const edge = chestCrop(720, 960, { x: 0.85, y: 0.4, w: 0.15, h: 0.6 });
-    expect(edge.sx + edge.sw).toBeLessThanOrEqual(720 + 0.01);
+  });
+
+  it('a head cut by the top of the frame, or a singer sitting to one side, is still found where it is', () => {
+    const m = measureMask(grey(120, 160, figure(2, 36, -14)), 120, 160)!; // the crown is out of the picture
+    expect(m.head.y).toBe(0);
+    expect(m.head.x + m.head.w / 2).toBeCloseTo(36 / 120, 1);
+    expect(m.head.h * 160).toBeGreaterThan(48 * 1.1 - 0.01); // never shorter than a head can be
+  });
+});
+
+describe('the stage frame — one framing for everyone', () => {
+  it('puts the head at the standard size and place, from a singer sitting back (brought up) or close (brought back)', () => {
+    const far: PersonBox = { x: 0.46, y: 0.3, w: 0.08, h: 0.1 }; // a small head in a 720×960 frame
+    const r = stageCrop(720, 960, far);
+    expect(r.sw / r.sh).toBeCloseTo(0.75, 5); // the frame's own proportions
+    expect(r.sh).toBeCloseTo((0.1 * 960) / STAGE_FRAME.headHeight, 3); // the head 22 % of the frame
+    expect(r.sy).toBeCloseTo(0.3 * 960 - r.sh * STAGE_FRAME.headroom, 3); // the top of the head 8 % down
+    expect(r.sx + r.sw / 2).toBeCloseTo(0.5 * 720, 3); // centred on the head
+    expect([r.dx, r.dy, r.dw, r.dh]).toEqual([0, 0, 720, 960]); // the crop fills the frame that goes out
+    const close: PersonBox = { x: 0.2, y: 0.05, w: 0.6, h: 0.5 }; // a head half the frame tall
+    const c = stageCrop(720, 960, close);
+    expect(c.sh).toBeCloseTo((0.5 * 960) / STAGE_FRAME.headHeight, 3); // bigger than the camera frame: the singer is brought back
+    expect(c.sh).toBeGreaterThan(960);
+    expect(c.sx).toBeLessThan(0); // transparent room either side of what the camera saw
+    expect(c.sx + c.sw / 2).toBeCloseTo(360, 3);
+    expect(c.sy).toBeLessThanOrEqual(0);
+    expect(c.sy + c.sh).toBeGreaterThanOrEqual(960); // the whole camera picture stays inside the frame
+    // the same head size on both: that is the point
+    expect(far.h * 960 / r.sh).toBeCloseTo(close.h * 960 / c.sh, 6);
+  });
+
+  it('never brings a singer up more than 3.3× or back more than 2.4×, and slides inside the frame rather than pad it', () => {
+    const tiny = stageCrop(720, 960, { x: 0.48, y: 0.4, w: 0.02, h: 0.03 });
+    expect(tiny.sh).toBeCloseTo(960 * STAGE_FRAME.minCrop, 5);
+    expect(tiny.sx).toBeGreaterThanOrEqual(0);
+    expect(tiny.sx + tiny.sw).toBeLessThanOrEqual(720 + 0.01);
+    const huge = stageCrop(720, 960, { x: 0, y: 0, w: 1, h: 1 });
+    expect(huge.sh).toBeCloseTo(960 * STAGE_FRAME.maxOut, 5);
+    const edge = stageCrop(720, 960, { x: 0.86, y: 0.02, w: 0.12, h: 0.16 }); // a head in the top-right corner, brought up 1.4×
+    expect(edge.sx + edge.sw).toBeLessThanOrEqual(720 + 0.01); // slid left, not padded
+    expect(edge.sy).toBe(0);
+  });
+
+  it('says when to sit back or come closer, once the frame has to reach well past the camera or bring the singer up a lot', () => {
+    expect(distanceNote(cropFactor(stageCrop(720, 960, { x: 0.4, y: 0.1, w: 0.2, h: 0.22 }), 960))).toBeNull(); // the standard: nothing to say
+    expect(distanceNote(cropFactor(stageCrop(720, 960, { x: 0.2, y: 0.05, w: 0.6, h: 0.5 }), 960))).toBe('close');
+    expect(distanceNote(cropFactor(stageCrop(720, 960, { x: 0.47, y: 0.4, w: 0.05, h: 0.07 }), 960))).toBe('far');
+    expect(distanceNote(1.1)).toBeNull();
+  });
+
+  it('the part of a padded crop the camera saw lands where it belongs in the frame', () => {
+    const c = stageCrop(720, 960, { x: 0.2, y: 0.05, w: 0.6, h: 0.5 });
+    const v = visiblePart(c, 720, 960)!;
+    expect([v.sx, v.sy, v.sw, v.sh]).toEqual([0, 0, 720, 960]); // the whole camera picture
+    const k = 720 / c.sw;
+    expect(v.dw).toBeCloseTo(720 * k, 5); // smaller in the frame: brought back
+    expect(v.dx).toBeCloseTo(-c.sx * k, 5);
+    expect(v.dx + v.dw / 2).toBeCloseTo(360, 3); // centred
+    expect(visiblePart({ sx: 800, sy: 0, sw: 100, sh: 100, dx: 0, dy: 0, dw: 100, dh: 100 }, 720, 960)).toBeNull();
+    const inside = frameRect(480, 640, 1);
+    expect(visiblePart(inside, 480, 640)).toEqual(inside); // a crop inside the frame is itself
+  });
+
+  it('the whole camera frame until a person is found; the camera picture is centre-cropped to the cut-out, never stretched', () => {
+    const wide = frameRect(480, 640, 1);
+    expect([wide.sx, wide.sy, wide.sw, wide.sh]).toEqual([0, 0, 480, 640]);
+    expect(frameRect(480, 640, 0.5).sw).toBe(480); // never wider than the camera sees by itself
+    const web = coverRect(1280, 720, 480, 640);
+    expect(web.sh).toBe(720);
+    expect(web.sw).toBeCloseTo(540, 5);
+    expect(web.sx).toBeCloseTo(370, 5);
+    const phone = coverRect(720, 1280, 480, 640);
+    expect(phone.sw).toBe(720);
+    expect(phone.sh).toBeCloseTo(960, 5);
+    expect(phone.sy).toBeCloseTo(160, 5);
+    expect(coverRect(480, 640, 480, 640)).toEqual({ sx: 0, sy: 0, sw: 480, sh: 640 });
   });
 });

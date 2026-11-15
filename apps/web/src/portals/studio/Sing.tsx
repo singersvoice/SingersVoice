@@ -4,14 +4,13 @@ import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { Framing } from '../../components/Framing.tsx';
 import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { MicStatus } from '../../components/MicStatus.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { Page } from '../../components/Shell.tsx';
-import { Empty, Field, Progress, Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
+import { Empty, Field, Progress, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { catalogAvailable, isSameTrack, myCatalogUserId, pullCatalogTrack, searchCatalog } from '../../lib/catalog.ts';
 import { go, href } from '../../lib/nav.ts';
 import { headphonesLikely, isIOS, keepAwake } from '../../lib/platform.ts';
@@ -21,7 +20,6 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { isDrive, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
-import type { ZoomPreset } from '../../video/framing.ts';
 import { LocalFeed } from '../../video/localFeed.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
 import { StageCompositor } from '../../video/stage.ts';
@@ -181,16 +179,10 @@ export function Sing(props: { id: string }) {
     if (camOn && camStream) camera.startAutoFrame(feed.video);
     else camera.stopAutoFrame();
   }, [camStream, camOn]);
-  useEffect(() => feed.setFraming(app.zoomPreset, app.autoZoom), [app.zoomPreset, app.autoZoom]);
   // The Track / Vocal volume of the recorded mix (the same controls as the live stage; kept on the device).
   useEffect(() => show.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
   const origin = camera.origin.value;
   useEffect(() => feed.setOrigin(origin), [origin.x, origin.y]);
-  // Vocal-driven auto zoom: the mic meter decides when I'm singing.
-  useEffect(() => {
-    const t = setInterval(() => feed.reportLevel(engineRef.current?.recorder?.level.value ?? 0), 100);
-    return () => clearInterval(t);
-  }, []);
   const facing = camera.facing.value;
   useEffect(() => {
     const me = { id: 'me', slot: mySlot, label: `You · S${mySlot}`, color: SLOT_COLORS[mySlot], source: feed.source, mirror: facing === 'user', isMe: true } as const;
@@ -464,7 +456,6 @@ export function Sing(props: { id: string }) {
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })} disabled={busy}>
               {app.cameraOn ? <IcCamera /> : <IcCameraOff />}
             </button>
-            {app.cameraOn && <Framing />}
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" title="Hear myself (use headphones)" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
             </button>
@@ -552,24 +543,13 @@ export function Sing(props: { id: string }) {
               ))}
             </div>
           </Field>
-          <Field label="Stage framing (Chest follows you head-to-chest; Wide is the whole camera frame; Mid and Close zoom 1.5× / 2.2× onto your head)">
+          <Field label="Camera" hint="You are framed the same way as every singer on every stage — head the same size, at the same place — however near or far you sit.">
             <div class="row">
-              <Seg<ZoomPreset>
-                value={app.zoomPreset}
-                onChange={(v) => updateApp({ zoomPreset: v })}
-                options={[
-                  { v: 'chest', label: 'Chest' },
-                  { v: 'wide', label: 'Wide' },
-                  { v: 'mid', label: 'Mid' },
-                  { v: 'close', label: 'Close' },
-                ]}
-              />
               <button class="btn sm" onClick={() => void camera.flip().then(() => updateApp({ cameraFacing: camera.facing.value })).catch(() => toast('Only one camera here', 'warn'))}>
                 <IcFlip size={18} /> Flip
               </button>
             </div>
           </Field>
-          <Switch checked={app.autoZoom} onChange={(v) => updateApp({ autoZoom: v })} label="Auto zoom" hint="Eases closer while you sing and back out when you're silent — on everyone's screen." />
           <Switch checked={app.countIn} onChange={(v) => updateApp({ countIn: v })} label="3-2-1 count-in" />
           <Switch checked={app.showCueDeck} onChange={(v) => updateApp({ showCueDeck: v })} label="Cue deck (my next lines)" />
           <Field label="Stage background">

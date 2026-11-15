@@ -1,8 +1,9 @@
 /**
  * Camera for the "you" tile: device selection, front/back flip and face-centred auto-framing
  * (the FaceDetector API where available — Chrome/Android — else the upper-centre of the frame).
- * The framing itself (chest / wide / mid / close, Auto) is `video/framing.ts`, applied by the
- * local feed to the cut-out it sends.
+ * The framing itself (the stage frame: the head the same size at the same place for every singer)
+ * is `video/framing.ts`, applied by the local feed to the cut-out it sends; the face origin here is
+ * only the fallback while nobody is found in the mask.
  */
 import { signal } from '@preact/signals';
 

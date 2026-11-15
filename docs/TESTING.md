@@ -32,7 +32,7 @@ Live build: **https://singersvoice.github.io/SingersVoice/**
 
 `node tools/ci/screenshots.mjs` walks the app at 320×568, 360×640, 390×844, 412×915, 820×1180 and 1280×800, and
 on three of them (phone, tablet, desktop) imports a track, sings 9 s with a fake microphone, finishes, keeps the
-take, opens Track Maker, runs a meet and the publishing setup — every control a singer has (framing, Track / Vocal
+take, opens Track Maker, runs a meet and the publishing setup — every control a singer has (Track / Vocal
 volume, Voice FX) is in those pictures on every size. `SV_SHOT_ONLY=ipad,desktop` walks only the viewports named.
 CI uploads the screenshots as an artifact on every PR.
 
@@ -79,7 +79,8 @@ show plays, *Go live* queues a publish job (in-house destination), the pause sho
 *Stop publishing* ends the job — and the singers' own stage is unaffected. A second tab of the same
 account opens Publishing › Preview while the show view stays up: the live meet's monitor tile
 receives both performers, draws the exact 16:9 broadcast picture without lyrics, reports the publish
-state, and the show view keeps its own links. The second song is picked twice at once: the guest
+state, and the show view keeps its own links. Between the songs the host seats the wait-listed third singer, whose mic opens by itself (talk-back on, no
+tap). The second song is picked twice at once: the guest
 picks a song of his own (up at once — *picked is up*), the host picks the shared song a moment
 later, and the test asserts the same choice card on every singer's device (both songs, who picked
 what, a *Sing this one* for each, on the third singer's phone too), that Start is off while it is

@@ -140,7 +140,9 @@ try {
   await bob.page.getByText(/Track ready on this device/).waitFor({ timeout: 30000 });
   await bob.page.getByRole('button', { name: 'Take a stage slot' }).waitFor({ timeout: 15000 });
   check(true, 'a new meet has an open stage: whoever has the link can take a slot, no permission needed');
-  await alice.page.getByLabel(/Open stage: anyone may take a free slot/).uncheck();
+  // The switch follows the meet (the service answers, the snapshot flips it): click, then wait for it to turn off.
+  await alice.page.getByLabel(/Open stage: anyone may take a free slot/).click();
+  await alice.page.waitForFunction(() => { const el = [...document.querySelectorAll('input[type=checkbox]')].find((x) => /Open stage/.test(x.closest('label')?.innerText || '')); return el && !el.checked; }, null, { timeout: 15000 });
   await bob.page.getByRole('button', { name: 'Ask to sing' }).waitFor({ timeout: 15000 });
   check(!(await bob.page.getByRole('button', { name: 'Take a stage slot' }).isVisible().catch(() => false)), 'the host closed the stage: an audience member now asks, and the host decides');
   await bob.page.getByRole('button', { name: 'Ask to sing' }).click();
@@ -509,6 +511,9 @@ try {
   await alice.page.getByRole('button', { name: 'Let dave sing' }).click();
   await dave.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 15000 });
   check(true, 'the host seats the wait-listed singer once the song is over');
+  // Being seated opens the mic by itself: talk-back is on for dave without a tap on "Turn my mic on".
+  await dave.page.locator('[data-talkback="1"]').waitFor({ timeout: 15000 }).catch(() => undefined);
+  check((await dave.page.locator('[data-talkback="1"]').count()) === 1 && (await dave.page.getByRole('button', { name: 'Turn my mic on' }).count()) === 0, "a seated singer's mic opens by itself (talk-back on, no tap)");
   // Next song — one song at a time, and the stage chooses when two singers pick two songs at once. Bob picks a song
   // of his own: picked is up (the song of the stage at once — his alone, so the host's device cannot load it). Alice
   // picks the shared song a moment later: it neither replaces his nor queues behind it — every singer on stage

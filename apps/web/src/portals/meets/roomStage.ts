@@ -40,6 +40,8 @@ export interface RoomStage {
   peerStates: Record<string, PeerState>;
   /** How my cut-out is made right now (model / soft-focus oval / loading / off). */
   blend: SegmenterMode;
+  /** The stage frame's word on my distance to the camera: 'close' — sit back; 'far' — come closer; null — fine. */
+  distance: 'close' | 'far' | null;
   camOn: boolean;
   camStream: MediaStream | null;
   /** Why the camera did not open by itself (permission); the UI offers a button then. */
@@ -51,7 +53,7 @@ export interface RoomStage {
   others: number;
 }
 
-export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; level: () => number; engine: AudioEngine | null }): RoomStage {
+export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; engine: AudioEngine | null }): RoomStage {
   const feed = useMemo(() => new LocalFeed(), []);
   const compositor = useMemo(() => new StageCompositor('show'), []);
   const show = useMemo(() => new ShowRecorder(), []);
@@ -116,15 +118,15 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       mesh?.setLocalStream(null);
     }
   }, [camStream, camOn, onStage]);
-  useEffect(() => feed.setFraming(app.zoomPreset, app.autoZoom), [app.zoomPreset, app.autoZoom]);
   const origin = camera.origin.value;
   useEffect(() => feed.setOrigin(origin), [origin.x, origin.y]);
-  // Vocal-driven auto zoom: whoever sings comes closer, and everyone sees it (the sender frames its own stream).
-  const levelRef = useRef(opts.level);
-  levelRef.current = opts.level; // the audio engine only exists once the singer got ready
+  // The stage frame's word on my distance to the camera (sit back / come closer), for the stage strip.
+  const [distance, setDistance] = useState<'close' | 'far' | null>(null);
   useEffect(() => {
-    const t = setInterval(() => feed.reportLevel(levelRef.current()), 100);
-    return () => clearInterval(t);
+    feed.onNote = setDistance;
+    return () => {
+      feed.onNote = null;
+    };
   }, []);
 
   // ---- the performer mesh (video only; singers never hear each other), while I am on stage ----
@@ -276,5 +278,5 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, show, film, peerStates, blend, camOn, camStream, camError, openCamera, linked, others };
+  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, linked, others };
 }

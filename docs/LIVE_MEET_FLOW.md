@@ -34,18 +34,24 @@ code, **Share link**, the idle countdown and, for Publisher-plan (or admin) acco
 
 ### The stage (always on)
 
-The strip at the top is the virtual stage: every performer cut out of their camera, side by side by
-slot, over the stage background. It is live from the first slot taken — there is no "start" for the
-stage itself. Chips on it: *N on stage · x/y video linked*, *blending you into the stage…* while the
-model loads, a camera on/off button for you.
+The strip at the top is the virtual stage: every performer cut out of their camera and seated in
+**one row of chairs** — the same size, evenly spaced by slot along a shallow arc, behind a lit riser
+that hides everything below the chest — over the stage background. It is live from the first slot
+taken — there is no "start" for the stage itself. Chips on it: *N on stage · x/y video linked*,
+*blending you into the stage…* while the model loads, a camera on/off button for you, and the
+stage's word on your distance to the camera (*Sit back a little* / *Come a little closer*).
 
-**How big you stand.** The stage frames every singer itself: it finds you in your cut-out and fills
-your slot with you — head near the top, the camera's cut edge on the picture's bottom edge (a
-webcam bust shot fills the whole height), feet on the floor if your camera sees them. One singer
-fills the picture; ten make one even row across it, each as big as a tenth of the stage allows, heads
-level (someone whose camera sees them whole stands on the floor at the others' head height rather
-than towering over them). A stretched arm reaches past your slot instead of shrinking you. The
-*Framing* setting (chest / wide / mid / close, Auto) only chooses how tight your camera's crop is.
+**Everyone the same size — strictly.** Your own device frames you before anything leaves it (the
+*stage frame*): it finds your head in your cut-out and sends a frame with the head the same size at
+the same place — the top of the head 8 % down, the head 22 % of the frame tall, centred — however
+near or far you sit. Sitting back, you are brought up (never more than 3.3×, a blur helps nobody);
+sitting close, you are brought back — the frame then has room around what the camera could see,
+and the chip asks you to sit back, because the stage can only show what the camera sees (the
+camera's bottom edge fades out rather than cutting across you). Every stage draws that frame
+whole, in slots of one size: so the host on a laptop a foot from the webcam and a friend across the
+room from a phone come out as two performers of one size, heads level, on one line. There is no
+framing setting any more — nobody is bigger than anybody. Ten singers make one even row across the
+stage, two stand big in the middle; the names sit on the riser under each singer.
 
 ### Who is who
 
@@ -64,8 +70,12 @@ than towering over them). A stretched arm reaches past your slot instead of shri
   every song put forward, who picked what), nothing can start, and **one tap by any singer settles
   it** — the chosen song is up on every device and the others are gone. A song picked twice is
   listed once: the picker says *Up now* / *Put forward* instead of offering it again, and the
-  service never lists a song that is already up or put forward. Whoever starts, every singer on
-  stage whose mic is open joins from the count-in by themselves.
+  service never lists a song that is already up or put forward. **Whoever starts, every singer on
+  stage sings**: the moment the song runs, every singer's device — the host's included, mic opened
+  or not yet — goes to the singing screen and joins the song by itself (the mic opens on the way),
+  from the count-in; every vocal is in the mix in its part. Only a browser that insists on a tap for
+  the mic (iOS, where the mic and camera are one capture) leaves one tap, **Join the song**, on the
+  singing screen itself.
 - A **singer** is anyone on a slot (up to 10). **A new meet has an open stage**: whoever has the
   link takes a free slot with **Take a stage slot** — no permission needed (the three friends you
   sent the link to are meant to sing). The host can switch **Open stage** off; then audience ask
@@ -100,10 +110,10 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 
 | Option | Who | What it does |
 | --- | --- | --- |
-| **Turn my mic on** | singers | On stage without a mic yet (the host is seated by the meet itself; a browser refused the first tap): opens the mic for talk-back. |
+| **Turn my mic on** | singers | The mic opens by itself the moment you are seated (talk-back, your vocal in the song); this button only appears when the browser wanted a tap first (a permission not given yet, or iOS with the camera on) — one tap opens it. |
 | **Film the whole meet into my Drive** | host | On by default. From the moment the host's mic is open on stage until **End meet** (or the host steps off), the host's device records the whole meet as **one video** — the show picture (everyone on stage over the background, no lyrics) with the stage mix (the songs, the talk between them) — and writes it into their Drive *as it goes* (ten seconds at a time, a resumable upload): a two-hour meet never has to fit in memory, and a tab that dies loses seconds, not the meet (the next start of the app completes the file with what Drive already holds). The switch shows what it is doing (*Filming · 12:34 · 210 MB in Drive*). The finished film is a performance of the meet, **Full meet**, listed on the ended screen and under Performances, shared with everyone who was in the meet like a song's show. |
 | **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS) if it is not open yet, decodes the current song, marks you *ready*. Shown once there is a song (and no choice open); ready resets whenever another song comes up. Under it the **Mic** line says what the microphone really gives: its name, its sample rate, the automatic level — and warns in red when it is a *phone-call quality* line (a Bluetooth headset's mic: 8–16 kHz, thin and muffled), with a menu to sing into another microphone; **I'm on speakers** turns echo cancellation on (only needed when the track plays out of speakers; with headphones it stays off for the cleanest voice — a hint appears when the sound is going out through speakers). |
-| **Start the song (8 s count-in)** | host, singers | Needs a song on the stage and no choice open (*Several songs are picked — choose one on the song card first*). Whoever taps it is made ready on the way (mic, track) if not yet; every device starts the backing track at the same server instant (the GMT kickstart), and every other singer on stage whose mic is open joins from the count-in without a tap. A singer whose mic is not open yet can still **Join the song on stage** afterwards and starts mid-song. |
+| **Start the song (8 s count-in)** | host, singers | Needs a song on the stage and no choice open (*Several songs are picked — choose one on the song card first*). Whoever taps it is made ready on the way (mic, track) if not yet; every device starts the backing track at the same server instant (the GMT kickstart), and every other singer on stage goes to the singing screen and joins from the count-in without a tap — mic open or not yet (it opens on the way). A singer whose browser insisted on a tap for the mic sees **Join the song** on the singing screen and starts mid-song with that tap. |
 | **End the song** (lobby, while a song runs) | host, singers | Ends the song for everyone; a song put forward during it comes up (several: the choice card). |
 | **End meet** | host | Ends the event for everyone (after a confirmation). |
 
@@ -113,11 +123,8 @@ than towering over them). A stretched arm reaches past your slot instead of shri
 deck shows who sings what in a duet) and the singers are small — each one's frame as their own
 camera framed it, in the lower part under the lyrics, no zoom of any kind. That frame is the
 picture of you everywhere: the show and the audience get exactly what you see of yourself here, only
-bigger. Controls: camera on/off, **framing** (next to the camera button: **Chest** — the default,
-head to chest from wherever you sit — Wide the whole camera frame, Mid and Close 1.5× / 2.2× on
-your head, and Auto, a fifth closer while you sing),
-hear myself, **Set
-list** (a drawer over the stage: what is playing, what is next, add a song — the song picker is at
+bigger. Controls: camera on/off,
+hear myself, **Songs** (a drawer over the stage: what is playing, what is next, pick a song — the song picker is at
 hand while singing too), FX presets with **Tweak** beside them (every control of the vocal chain in a
 drawer, live on your voice), and the **timeline — drag it (or use the arrow keys on it) to
 move back or forth in the song**. Transport belongs to the stage: every singer on stage may
@@ -215,8 +222,8 @@ Everything you ever sang, by date and name:
 
 | Section | What is in it |
 | --- | --- |
-| **Meet performances** | One saved show per song of every meet you hosted or were in: *meet · song*, date and time, length, who sang, who hosted. **Play** (your own: in the app) / **Open** (the host's Drive link — anyone with it can watch), **Share** (copies the link, or the phone's share sheet). The host's own: **Delete** — permanently; the file leaves their Drive and the meet's list. Nothing in between. |
-| **Your takes** | Your own takes: every take of a meet song (kept by itself) and Studio takes (Temp for 7 days unless kept). Open one to play it, keep it, download it, **Share link** (shares the file anyone-with-the-link and copies it), or **Delete** it — permanently. |
+| **Meet performances** | One saved show per song of every meet you hosted or were in: *meet · song*, date and time, length, who sang, who hosted. **Play** (your own: in the app) / **Watch** (the host's Drive link — anyone with it can watch), **Share** (copies the link, or the phone's share sheet). The host's own rows have a **Delete** button right there, and the section a **Delete all (N)** for every performance you hosted — permanently (one confirmation): the files leave your Drive for good (not the trash) and the meet's list. A performance in another host's Drive is theirs to delete. |
+| **Your takes** | Your own takes: every take of a meet song (kept by itself) and Studio takes (Temp for 7 days unless kept). Tap a row to play it, keep it, download it, **Share link** (shares the file anyone-with-the-link and copies it). Every row has a **Delete** button, and the section a **Delete all (N)** for every take shown (the filter — All / Kept / Temp — decides which) — permanently, out of your Drive, after one confirmation; a progress line counts them down. |
 | **Saving now** | Whatever the background saver is still on (with Retry when something is stuck). |
 
 In Drive: **one level, one file per performance** — `SingersVoice/Performances/<song · meet [meet

@@ -1,11 +1,12 @@
 /**
  * My own camera on the virtual stage: a hidden <video> for the camera stream, the person segmenter
- * that cuts me out of it, the framing (wide / mid / close + vocal-driven auto zoom) applied to the
- * cut-out, and — in a live meet — the alpha packer that turns the framed cut-out into the stream
- * other performers receive. One instance per stage session.
+ * that cuts me out of it, the stage frame (`framing.ts`: my head the standard size at the standard
+ * place, so I am the same size as everyone else on every stage) applied to the cut-out, and — in a
+ * live meet — the alpha packer that turns the framed cut-out into the stream other performers
+ * receive. One instance per stage session.
  */
 import { AlphaPacker } from './alphaPack.ts';
-import { boxOfMask, chestCrop, CROP_DEAD, CROP_EASE, fixedCrop, frameRect, presetCrop, SILENCE_HOLD_MS, SING_LEVEL, ZOOM_EASE, type FrameRect, type PersonBox, type ZoomPreset } from './framing.ts';
+import { CROP_DEAD, CROP_EASE, cropFactor, distanceNote, frameRect, measureMask, stageCrop, visiblePart, type FrameRect, type PersonMeasure } from './framing.ts';
 import { coverRect, PersonSegmenter, type SegmenterMode } from './segmenter.ts';
 import type { PerformerSource } from './stage.ts';
 
@@ -13,9 +14,31 @@ import type { PerformerSource } from './stage.ts';
 const COMPUTER = typeof navigator !== 'undefined' && (navigator.hardwareConcurrency ?? 2) >= 4 && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 const W = COMPUTER ? 720 : 480;
 const H = COMPUTER ? 960 : 640;
-/** The person probe: the mask at this size, a few times a second. */
-const PROBE_W = 96;
-const PROBE_H = 128;
+/** The person probe: the mask at this size, a few times a second (the head of a singer sitting back is still a dozen pixels wide). */
+const PROBE_W = 120;
+const PROBE_H = 160;
+
+/** A camera picture whose bottom edge lands above this much of the frame (the riser hides the rest) gets its bottom feathered… */
+const FEATHER_BELOW = 0.62;
+/** …over this much of its height. */
+const FEATHER = 0.14;
+
+/** Fade the bottom of the drawn camera region: on the colour canvas by erasing (destination-out), on the grey mask by darkening (multiply). */
+function feather(c: CanvasRenderingContext2D, x: number, w: number, from: number, to: number, op: GlobalCompositeOperation): void {
+  const g = c.createLinearGradient(0, from, 0, to);
+  if (op === 'destination-out') {
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,1)');
+  } else {
+    g.addColorStop(0, '#fff');
+    g.addColorStop(1, '#000');
+  }
+  c.save();
+  c.globalCompositeOperation = op;
+  c.fillStyle = g;
+  c.fillRect(x, from, w, to - from + 1);
+  c.restore();
+}
 
 export class LocalFeed {
   readonly video: HTMLVideoElement;
@@ -32,18 +55,21 @@ export class LocalFeed {
   private lastSeg = -1;
   mode: SegmenterMode = 'off';
   onMode: ((m: SegmenterMode) => void) | null = null;
-  /** How much this singer is singing right now (0..1, eased): with Auto on it pulls the framing closer. */
-  level = 0;
-  private preset: ZoomPreset = 'chest';
-  private autoZoom = true;
-  private lastLoudAt = 0;
+  /**
+   * What this singer should do about their distance to the camera: 'close' — the stage frame had to
+   * reach well past the camera picture (sit back: the stage can only show what the camera sees);
+   * 'far' — they are small in the picture (come closer); null — fine.
+   */
+  note: 'close' | 'far' | null = null;
+  onNote: ((n: 'close' | 'far' | null) => void) | null = null;
   private origin = { x: 50, y: 42 };
   /** The person last found in the mask, the crop aimed at and the crop drawn (eased towards it). */
-  private person: PersonBox | null = null;
+  private person: PersonMeasure | null = null;
   private cropTarget: FrameRect | null = null;
   private crop: FrameRect | null = null;
   private probe: CanvasRenderingContext2D | null = null;
   private lastProbe = 0;
+  private noteSince = 0;
   /** Increments on every framed frame (compositor redraws only when it changed). */
   frame = 0;
 
@@ -94,15 +120,8 @@ export class LocalFeed {
     this.timer = setInterval(() => this.tick(), 1000 / 15);
   }
 
-  /** The chosen framing (chest = framed from the person; wide / mid / close = fixed zooms) and whether singing pulls it closer. */
-  setFraming(preset: ZoomPreset, autoZoom: boolean): void {
-    this.preset = preset;
-    this.autoZoom = autoZoom;
-    this.lastSeg = -1; // re-aim on the next tick
-  }
-
-  /** The person in the mask right now (fractions of the frame), measured a few times a second on a small probe. */
-  private findPerson(): PersonBox | null {
+  /** The person (and their head) in the mask right now, measured a few times a second on a small probe. */
+  private findPerson(): PersonMeasure | null {
     const now = performance.now();
     if (now - this.lastProbe < 150) return this.person;
     this.lastProbe = now;
@@ -115,7 +134,7 @@ export class LocalFeed {
     }
     try {
       this.probe.drawImage(this.segmenter.maskCanvas, 0, 0, PROBE_W, PROBE_H);
-      const found = boxOfMask(this.probe.getImageData(0, 0, PROBE_W, PROBE_H).data, PROBE_W, PROBE_H);
+      const found = measureMask(this.probe.getImageData(0, 0, PROBE_W, PROBE_H).data, PROBE_W, PROBE_H);
       if (found) this.person = found; // nobody in frame: keep the last framing rather than jump
     } catch {
       /* a lost context: keep what we had */
@@ -124,12 +143,13 @@ export class LocalFeed {
   }
 
   /**
-   * The crop to draw this tick, eased towards what the framing wants (deadbanded, so mask noise never
-   * makes it breathe): chest is sized from the person; the fixed zooms are aimed at the person's head.
+   * The crop to draw this tick: the stage frame around the head (the whole camera frame until a
+   * person is found), eased towards where it should be and deadbanded, so mask noise never makes it
+   * breathe. The distance note follows the crop the stage frame asks for, once it has held a second.
    */
   private framing(): FrameRect {
     const person = this.findPerson();
-    const wanted = this.preset === 'chest' ? (person ? chestCrop(W, H, person, this.level) : frameRect(W, H, 1, this.origin)) : fixedCrop(W, H, presetCrop(this.preset, this.level), person, this.origin);
+    const wanted = person ? stageCrop(W, H, person.head) : frameRect(W, H, 1, this.origin);
     const moved = (a: FrameRect, b: FrameRect) => Math.max(Math.abs(a.sx - b.sx) / W, Math.abs(a.sy - b.sy) / H, Math.abs(a.sw - b.sw) / W, Math.abs(a.sh - b.sh) / H);
     if (!this.cropTarget || moved(this.cropTarget, wanted) > CROP_DEAD) this.cropTarget = wanted;
     const t = this.cropTarget;
@@ -140,6 +160,16 @@ export class LocalFeed {
       const next = { ...t, sx: c.sx + (t.sx - c.sx) * k, sy: c.sy + (t.sy - c.sy) * k, sw: c.sw + (t.sw - c.sw) * k, sh: c.sh + (t.sh - c.sh) * k };
       this.crop = moved(next, t) < 0.0005 ? { ...t } : next;
     }
+    const note = person ? distanceNote(cropFactor(t, H)) : null;
+    const now = performance.now();
+    if (note !== this.note) {
+      if (!this.noteSince) this.noteSince = now;
+      else if (now - this.noteSince > 1000) {
+        this.note = note;
+        this.noteSince = 0;
+        this.onNote?.(note);
+      }
+    } else this.noteSince = 0;
     return this.crop!;
   }
 
@@ -155,27 +185,28 @@ export class LocalFeed {
     this.origin = { x: Math.max(0, Math.min(100, (((o.x / 100) * vw - r.sx) / r.sw) * 100)), y: Math.max(0, Math.min(100, (((o.y / 100) * vh - r.sy) / r.sh) * 100)) };
   }
 
-  /** Feed the mic level (0..1) a few times a second; singing eases the framing towards "close". */
-  reportLevel(level: number): void {
-    if (level >= SING_LEVEL) this.lastLoudAt = performance.now();
-  }
-
   private tick(): void {
-    const singing = this.autoZoom && performance.now() - this.lastLoudAt < SILENCE_HOLD_MS;
-    const target = singing ? 1 : 0;
-    this.level += (target - this.level) * ZOOM_EASE;
-    if (Math.abs(target - this.level) < 0.002) this.level = target;
     const settled = this.crop !== null && this.cropTarget !== null && this.crop.sx === this.cropTarget.sx && this.crop.sy === this.cropTarget.sy && this.crop.sh === this.cropTarget.sh;
-    if (this.segmenter.frame === this.lastSeg && this.level === target && settled) return; // nothing new to draw
+    if (this.segmenter.frame === this.lastSeg && settled) return; // nothing new to draw
     this.lastSeg = this.segmenter.frame;
-    const r = this.framing();
+    const r = visiblePart(this.framing(), W, H); // the crop may reach past the camera picture: that part stays transparent
     const c = this.ctx;
     c.clearRect(0, 0, W, H);
-    c.drawImage(this.segmenter.canvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
     const m = this.maskCtx;
     m.fillStyle = '#000';
     m.fillRect(0, 0, W, H);
-    m.drawImage(this.segmenter.maskCanvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+    if (r) {
+      c.drawImage(this.segmenter.canvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+      m.drawImage(this.segmenter.maskCanvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+      // A camera that sees little of the singer (close up) ends above the stage's riser: its bottom edge is
+      // feathered, so the figure fades out instead of ending in a straight cut across the chest.
+      const bottom = r.dy + r.dh;
+      if (bottom < H * FEATHER_BELOW) {
+        const from = bottom - r.dh * FEATHER;
+        feather(c, r.dx, r.dw, from, bottom, 'destination-out');
+        feather(m, r.dx, r.dw, from, bottom, 'multiply');
+      }
+    }
     this.frame++;
   }
 

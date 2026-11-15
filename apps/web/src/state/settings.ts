@@ -14,10 +14,6 @@ export interface AppSettings {
   cameraOn: boolean;
   cameraFacing: 'user' | 'environment';
   cameraDeviceId: string;
-  /** Base framing on the virtual stage: chest (default) frames the singer head to chest from wherever they sit; wide / mid / close are fixed crops. */
-  zoomPreset: 'chest' | 'wide' | 'mid' | 'close';
-  /** Vocal-driven auto zoom: ease closer while this singer sings, back to the preset when silent. */
-  autoZoom: boolean;
   /** Kept for older saves; the stage always blends the singer (the model is the only mode). */
   cutout: boolean;
   /** One-time migration markers for the virtual-stage defaults. */
@@ -44,8 +40,6 @@ export const APP_DEFAULTS: AppSettings = {
   cameraOn: true,
   cameraFacing: 'user',
   cameraDeviceId: '',
-  zoomPreset: 'chest',
-  autoZoom: true,
   cutout: true,
   stageV3: true,
   stageV4: true,
@@ -74,17 +68,19 @@ function read<T>(key: string, fallback: T): T {
 }
 
 function migrateApp(v: AppSettings): AppSettings {
-  // Saves from before the virtual stage carried the old defaults (mid framing, cut-out off):
-  // reset those once so every device starts wide, blended, with vocal-driven auto zoom.
+  // Saves from before the virtual stage carried the old defaults (cut-out off): reset those once so
+  // every device starts blended.
   let stored: Partial<AppSettings> = {};
   try {
     stored = JSON.parse(localStorage.getItem(APP_KEY) ?? '{}') as Partial<AppSettings>;
   } catch {
     /* fresh */
   }
-  if (stored.stageV3 !== true) v = { ...v, zoomPreset: 'wide', autoZoom: true, cutout: true, stageV3: true };
-  // The chest framing (head to chest, from the person) became the default: every device starts there once.
-  if (stored.stageV4 !== true) v = { ...v, zoomPreset: 'chest', stageV4: true };
+  if (stored.stageV3 !== true) v = { ...v, cutout: true, stageV3: true };
+  if (stored.stageV4 !== true) v = { ...v, stageV4: true };
+  // The framing presets (chest / wide / mid / close, Auto) are gone: every singer is framed the same way (the stage frame).
+  delete (v as Partial<Record<'zoomPreset' | 'autoZoom', unknown>>).zoomPreset;
+  delete (v as Partial<Record<'zoomPreset' | 'autoZoom', unknown>>).autoZoom;
   return v;
 }
 
