@@ -7,7 +7,7 @@
  * stage for the next song. The host's take of each song is the meet's saved performance, shared
  * with everyone who was in the meet. Nothing here ever waits for a review or an approval.
  */
-import { formatMs, MAX_PERFORMERS, playbackPositionMs, SLOT_COLORS, songChoicePending, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
+import { clampSlot, formatMs, MAX_PERFORMERS, planParts, playbackPositionMs, SLOT_COLORS, songChoicePending, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
 import { activeRoomInfo } from './activeRoom.ts';
 import { useRoomStage, type RoomStage } from './roomStage.ts';
 import { SetListPanel } from './SetListPanel.tsx';
@@ -42,6 +42,8 @@ import { MeetSession } from './meetSession.ts';
 import { keepMeetTrack, loadMeetTrack, type MeetTrack } from './trackSource.ts';
 
 const LEAD_MS = 8000;
+/** A singer joining a song that is further in than this restarts it for everyone: the song is divided again, one more singer. */
+const LATE_JOIN_RESTART_MS = 6000;
 
 export function MeetRoom(props: { id: string }) {
   const session = useMemo(() => new MeetSession(props.id), [props.id]);
@@ -180,7 +182,16 @@ export function MeetRoom(props: { id: string }) {
       player.setGain(audio.backingGain);
       await keepAwake(true);
       setPrepared(true);
+      const m = session.snapshot.peek()?.meet;
+      const wasInSong = Boolean(m?.stage.find((s) => s.participantId === session.you.peek()?.participantId)?.ready);
       await session.setReady(true);
+      // A new singer in a song well under way (not one coming back after Leave): the song restarts from the top for
+      // everyone, divided again among one more singer — every line in its singer's colour (planParts).
+      if (!wasInSong && m?.state === 'live' && (playbackPositionMs(m, serverNow()) ?? 0) > LATE_JOIN_RESTART_MS) {
+        const n = m.stage.filter((s) => s.participantId && s.ready).length + 1;
+        await session.restart(3000, 0).catch(() => undefined);
+        toast(`You joined — the song restarts from the top, divided for ${n} singers`, 'ok', 6000);
+      }
       return true;
     } catch (e) {
       if (!quiet) toast(errorText(e), 'error', 8000);
@@ -890,7 +901,24 @@ function LiveStage(props: {
   const app = appSettings.value;
   const audio = audioSettings.value;
   const track = loaded.track;
-  const mySlot = Math.max(1, Math.min(track.singerCount, props.you.slot ?? 1)) as SingerSlot;
+  // Who sings what: the song's parts divided among the singers in the song (everyone on stage who joined it, by slot) — two
+  // singers, two colours for the whole song; ten on a five-part song, 1 and 6 share a part. A singer who joins later restarts
+  // the song, divided again (MeetRoom.prepare).
+  const mySlot = Math.max(1, props.you.slot ?? 1) as SingerSlot;
+  const inSong = meet.stage.filter((s) => s.participantId && s.ready).map((s) => s.slot);
+  const inSongKey = inSong.join(',');
+  const plan = useMemo(() => planParts(track.singerCount, inSong), [track.singerCount, inSongKey]);
+  // Somebody joined the running song: say so — the song is divided again (and restarts from the top when it was well under way; the joiner's device cues that).
+  const prevInSong = useRef(inSongKey);
+  useEffect(() => {
+    const before = prevInSong.current.split(',').filter(Boolean).map(Number);
+    prevInSong.current = inSongKey;
+    if (!started) return;
+    const added = inSong.filter((s) => !before.includes(s));
+    if (!added.length || inSong.length <= before.length) return;
+    const names = added.map((slot) => meet.stage.find((s) => s.slot === slot)?.displayName.split(' ')[0] ?? `S${slot}`).join(', ');
+    toast(tMs > LATE_JOIN_RESTART_MS ? `${names} joined the song — it restarts from the top, divided for ${inSong.length} singers` : `${names} joined the song — divided for ${inSong.length} singers`, 'info', 6000);
+  }, [inSongKey, started]);
   const host = props.you.userId === meet.hostUserId;
   const pb = meet.playback ?? { state: 'idle' as const, offsetMs: 0, pausedAtMs: 0, pauseAtEpochMs: null, epoch: 0 };
   const pauseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -1147,7 +1175,7 @@ function LiveStage(props: {
           {host && meet.requests.length > 0 && <span class="chip">wait list · {meet.requests.length} — seated when the song is over</span>}
           <SaveStatus compact />
         </section>
-        <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} countdown={countdown} showWho={track.singerCount > 1} title={track.title} />
+        <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={plan} countdown={countdown} showWho={track.singerCount > 1 || plan.singers.length > 1} title={track.title} />
         {songsOpen && (
           <div class="drawer" role="dialog" aria-label="Songs">
             <div class="row between">
@@ -1159,7 +1187,7 @@ function LiveStage(props: {
             <SetListPanel session={session} meet={meet} you={props.you} track={props.track} host={host} onStage live compact />
           </div>
         )}
-        {app.showCueDeck && track.singerCount > 1 && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} />}
+        {app.showCueDeck && (track.singerCount > 1 || plan.singers.length > 1) && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={plan} />}
         {fxOpen && (
           <div class="drawer" role="dialog" aria-label="Voice FX">
             <div class="row between">
@@ -1225,7 +1253,9 @@ function LiveStage(props: {
             <span class="pitch-pill">
               <span class="dot" style={{ background: level > 0.9 ? 'var(--danger)' : 'var(--ok)', opacity: 0.4 + level * 0.6 }} /> ±{Math.round(clock.value.rttMs / 2)} ms
             </span>
-            <span class="chip" style={{ borderColor: SLOT_COLORS[mySlot] }}>S{mySlot}</span>
+            <span class="chip" style={{ borderColor: SLOT_COLORS[clampSlot(mySlot)] }} title={`Your lines are in this colour${plan.singers.length > 1 ? ` — the song is divided among ${plan.singers.length} singers` : ''}`}>
+              S{mySlot}
+            </span>
             {canPublishSignal.value && (
               <a class="btn sm" href={href(`/publishing/show/${encodeURIComponent(meet.meetId)}`)} target="_blank" rel="noopener" data-publish title="Publishing mode, in a new tab: the show view and Go live with your saved destinations">
                 Publish

@@ -7,7 +7,14 @@ import {
   cleanV1Text,
   createTrack,
   cueDeck,
+  cueDeckFor,
   importTrackV1,
+  isMyLine,
+  partColor,
+  partLabel,
+  partSingers,
+  planParts,
+  SLOT_COLORS,
   normalizeTrack,
   lyricsPace,
   lyricsWindow,
@@ -19,6 +26,7 @@ import {
   toLrc,
   validateTrack,
   type LyricLine,
+  type SingerSlot,
   type TrackMakerV1,
 } from '../src/index.ts';
 
@@ -172,6 +180,63 @@ describe('slots & spacing', () => {
     expect(spaced.slice(1, 4).map((l) => l.startMs)).toEqual([1500, 2300, 3100]);
     expect(spaced[3]!.endMs).toBe(3900);
     expect(spaced[4]!.startMs).toBe(5000);
+  });
+});
+
+describe('who sings what — the song divided among the singers in the song, one colour each', () => {
+  it('two singers take a four-part song 1,2,1,2 — two colours for the whole song', () => {
+    const plan = planParts(4, [1, 2]);
+    expect([1, 2, 3, 4].map((p) => partSingers(plan, p))).toEqual([[1], [2], [1], [2]]);
+    expect([1, 2, 3, 4].map((p) => partColor(plan, p))).toEqual([SLOT_COLORS[1], SLOT_COLORS[2], SLOT_COLORS[1], SLOT_COLORS[2]]);
+    expect([1, 2, 3, 4].map((p) => partLabel(plan, p))).toEqual(['S1', 'S2', 'S1', 'S2']);
+    expect(new Set([1, 2, 3, 4].map((p) => partColor(plan, p))).size).toBe(2);
+    expect(isMyLine(plan, 3, 1)).toBe(true);
+    expect(isMyLine(plan, 3, 2)).toBe(false);
+    expect(isMyLine(plan, 0, 2)).toBe(true); // a chorus line is everyone's
+    expect(partLabel(plan, 0)).toBe('ALL');
+    expect(partColor(plan, 0)).toBe(SLOT_COLORS[0]);
+  });
+  it('a third singer joins: the same song is divided for three, three colours', () => {
+    const plan = planParts(4, [1, 2, 3]);
+    expect([1, 2, 3, 4].map((p) => partSingers(plan, p))).toEqual([[1], [2], [3], [1]]);
+    expect(new Set([1, 2, 3, 4].map((p) => partColor(plan, p))).size).toBe(3);
+  });
+  it('ten singers on a five-part song: 1 and 6 share a part and a colour, 2 and 7, 3 and 8, 4 and 9, 5 and 10', () => {
+    const plan = planParts(5, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect([1, 2, 3, 4, 5].map((p) => partSingers(plan, p))).toEqual([
+      [1, 6],
+      [2, 7],
+      [3, 8],
+      [4, 9],
+      [5, 10],
+    ]);
+    expect(partLabel(plan, 1)).toBe('S1·S6');
+    expect(partColor(plan, 1)).toBe(SLOT_COLORS[1]);
+    expect(isMyLine(plan, 1, 6)).toBe(true);
+    expect(isMyLine(plan, 2, 6)).toBe(false);
+    expect(new Set([1, 2, 3, 4, 5].map((p) => partColor(plan, p))).size).toBe(5); // five colours, evenly shared
+  });
+  it('the singers are whoever is in the song, by stage slot — gaps and order do not matter; a line marked past the parts wraps round', () => {
+    const plan = planParts(2, [7, 3, 3]);
+    expect(plan.singers).toEqual([3, 7]);
+    expect(partSingers(plan, 1)).toEqual([3]);
+    expect(partSingers(plan, 2)).toEqual([7]);
+    expect(partSingers(plan, 5)).toEqual([3]); // part 5 of a two-part song = part 1
+    expect(partColor(plan, 2)).toBe(SLOT_COLORS[7]);
+    expect(partSingers(plan, 0)).toEqual([3, 7]);
+  });
+  it('nobody in the song yet (the Studio, the count-in): a part is sung by the slot of its number', () => {
+    const plan = planParts(3, []);
+    expect([1, 2, 3].map((p) => partSingers(plan, p))).toEqual([[1], [2], [3]]);
+    expect(partLabel(plan, 2)).toBe('S2');
+    expect(isMyLine(plan, 2, 2)).toBe(true);
+    expect(planParts(0, []).parts).toBe(1);
+  });
+  it('the cue deck follows the plan: my next lines are the lines of my parts', () => {
+    const lines = [1, 2, 3, 4, 0, 1].map((slot, i) => ({ startMs: i * 1000, endMs: i * 1000 + 900, text: `L${i + 1}`, singerSlot: slot as SingerSlot }));
+    const plan = planParts(4, [1, 2]);
+    expect(cueDeckFor(lines, 0, (l) => isMyLine(plan, l.singerSlot, 2), 3).map((l) => l.text)).toEqual(['L2', 'L4', 'L5']);
+    expect(cueDeckFor(lines, 1500, (l) => isMyLine(plan, l.singerSlot, 1), 3).map((l) => l.text)).toEqual(['L3', 'L5', 'L6']);
   });
 });
 

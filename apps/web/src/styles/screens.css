@@ -310,16 +310,16 @@
   font-weight: 700;
 }
 .lyric.active {
-  color: var(--lyric-active);
+  color: var(--c, var(--lyric-active));
   font-size: calc(var(--lyric-size) * 1.18);
-  /* the fill's edge is a soft 3 % so it glides rather than steps */
-  background: linear-gradient(90deg, #fff 0%, #fff calc(var(--p, 0%) - 1.5%), var(--lyric-active) calc(var(--p, 0%) + 1.5%));
+  /* the whole line in its singer's colour; the words sung so far turn white — the fill's edge is a soft 3 % so it glides rather than steps */
+  background: linear-gradient(90deg, #fff 0%, #fff calc(var(--p, 0%) - 1.5%), var(--c, var(--lyric-active)) calc(var(--p, 0%) + 1.5%));
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 .lyric.upcoming {
-  color: var(--lyric-next);
+  color: var(--c, var(--lyric-next));
 }
 .lyric.upcoming.far {
   opacity: 0.75;

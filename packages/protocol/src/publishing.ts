@@ -14,13 +14,52 @@
  */
 export type DestinationKind = 'youtube' | 'facebook' | 'instagram' | 'twitch' | 'inhouse';
 
-export const DESTINATIONS: { kind: DestinationKind; label: string; ingestHint: string; keyLabel: string; needsKey: boolean; /** The browser alone can feed it (YouTube's HLS ingestion, the watch page); the others need the relay (services/relay), which also gives YouTube its low-latency RTMP path. */ browserLive: boolean }[] = [
-  { kind: 'youtube', label: 'YouTube Live', ingestHint: 'rtmps://a.rtmps.youtube.com:443/live2', keyLabel: 'Stream key (YouTube Studio → Go live → Stream key)', needsKey: true, browserLive: true },
-  { kind: 'facebook', label: 'Facebook Live', ingestHint: 'rtmps://live-api-s.facebook.com:443/rtmp/', keyLabel: 'Stream key (Live Producer → Streaming software)', needsKey: true, browserLive: false },
-  { kind: 'instagram', label: 'Instagram Live', ingestHint: 'rtmps://edgetee-upload-…instagram.com:443/rtmp/', keyLabel: 'Stream key (Instagram Live Producer, professional accounts)', needsKey: true, browserLive: false },
-  { kind: 'twitch', label: 'Twitch', ingestHint: 'rtmps://live.twitch.tv/app', keyLabel: 'Primary stream key (Creator Dashboard → Settings → Stream)', needsKey: true, browserLive: false },
-  { kind: 'inhouse', label: 'In-house portal', ingestHint: 'The watch page — no key needed', keyLabel: '', needsKey: false, browserLive: true },
+export const DESTINATIONS: {
+  kind: DestinationKind;
+  label: string;
+  /** The platform's short name, for buttons ("YouTube link"). */
+  short: string;
+  ingestHint: string;
+  keyLabel: string;
+  needsKey: boolean;
+  /** The browser alone can feed it (YouTube's HLS ingestion, the watch page); the others need the relay (services/relay), which also gives YouTube its low-latency RTMP path. */
+  browserLive: boolean;
+  /** What the live link looks like there — the page viewers open to watch you (the in-house watch page is made by the service). */
+  watchHint: string;
+}[] = [
+  { kind: 'youtube', label: 'YouTube Live', short: 'YouTube', ingestHint: 'rtmps://a.rtmps.youtube.com:443/live2', keyLabel: 'Stream key (YouTube Studio → Go live → Stream key)', needsKey: true, browserLive: true, watchHint: 'https://www.youtube.com/@YourChannel/live' },
+  { kind: 'facebook', label: 'Facebook Live', short: 'Facebook', ingestHint: 'rtmps://live-api-s.facebook.com:443/rtmp/', keyLabel: 'Stream key (Live Producer → Streaming software)', needsKey: true, browserLive: false, watchHint: 'https://www.facebook.com/YourPage/live' },
+  { kind: 'instagram', label: 'Instagram Live', short: 'Instagram', ingestHint: 'rtmps://edgetee-upload-…instagram.com:443/rtmp/', keyLabel: 'Stream key (Instagram Live Producer, professional accounts)', needsKey: true, browserLive: false, watchHint: 'https://www.instagram.com/yourname/live/' },
+  { kind: 'twitch', label: 'Twitch', short: 'Twitch', ingestHint: 'rtmps://live.twitch.tv/app', keyLabel: 'Primary stream key (Creator Dashboard → Settings → Stream)', needsKey: true, browserLive: false, watchHint: 'https://www.twitch.tv/yourchannel' },
+  { kind: 'inhouse', label: 'In-house portal', short: 'Watch page', ingestHint: 'The watch page — no key needed', keyLabel: '', needsKey: false, browserLive: true, watchHint: '' },
 ];
+
+/**
+ * A platform's live link as the publisher typed it → the https page viewers open, '' when empty,
+ * null when it is not a link: a bare YouTube handle (`@channel`, or the channel name) becomes its
+ * `/live` page (always the channel's current live stream), a bare Twitch channel its page, a bare
+ * Facebook page / Instagram name its live page; anything else must be an https URL.
+ */
+export function normalizeWatchUrl(kind: DestinationKind, input: string): string | null {
+  const v = input.trim();
+  if (!v) return '';
+  if (/^https?:\/\/\S+$/i.test(v)) return v.replace(/^http:\/\//i, 'https://');
+  if (/[\s/?#]/.test(v)) return null;
+  const name = v.replace(/^@/, '');
+  if (!/^[\w.-]{1,64}$/.test(name)) return null;
+  switch (kind) {
+    case 'youtube':
+      return `https://www.youtube.com/@${name}/live`;
+    case 'twitch':
+      return `https://www.twitch.tv/${name}`;
+    case 'facebook':
+      return `https://www.facebook.com/${name}/live`;
+    case 'instagram':
+      return `https://www.instagram.com/${name}/live/`;
+    default:
+      return null;
+  }
+}
 
 /** The destinations the RTMP relay (services/relay) carries — everything that takes RTMP(S). With a relay configured, YouTube goes this way too (its ultra-low-latency setting is RTMP only). */
 export const RELAY_KINDS: DestinationKind[] = ['youtube', 'facebook', 'instagram', 'twitch'];
@@ -50,6 +89,8 @@ export interface Destination {
   ingestUrl: string;
   /** Never returned in full by the API: only the last 4 characters. */
   keyHint: string;
+  /** Where viewers watch you on this platform (your channel's live page): the live-link button of a show on air. Absent on the in-house portal (the service makes its watch page). */
+  watchUrl?: string;
   updatedAt: string;
 }
 
@@ -59,6 +100,8 @@ export interface DestinationUpdate {
   /** Full key; stored encrypted server-side, omitted to keep the existing one. */
   streamKey?: string;
   label?: string;
+  /** The live link (see `normalizeWatchUrl`); omitted to keep the existing one, '' to clear it. */
+  watchUrl?: string;
 }
 
 export type PublishJobState = 'requested' | 'starting' | 'live' | 'stopping' | 'stopped' | 'failed';

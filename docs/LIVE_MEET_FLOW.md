@@ -119,9 +119,22 @@ stage, two stand big in the middle; the names sit on the riser under each singer
 
 ## 3 · The room — live stage (singers) — Performer mode
 
-**Performer mode is for singing**: the lyrics are the picture (big, your line highlighted; the cue
-deck shows who sings what in a duet) and the singers are small — each one's frame as their own
-camera framed it, in the lower part under the lyrics, no zoom of any kind. That frame is the
+**Performer mode is for singing**: the lyrics are the picture (big; the cue deck shows your next
+lines) and the singers are small — each one's frame as their own camera framed it, in the lower
+part under the lyrics, no zoom of any kind.
+
+**Every line in its singer's colour, whole.** The song's parts are divided among the singers who
+are in the song — everyone on stage who joined it, by stage slot — and each singer has one colour
+(their stage colour: S1 green, S2 blue, S3 purple…): every line they sing is in that colour from the
+first word to the last, with a chip naming the slot, so each singer finds their lines at a glance
+on every device. Two singers on a four-part song: two colours, 1-2-1-2 through the whole song.
+Three singers: three colours. Ten singers on a five-part song: singers 1 and 6 share part 1 and its
+colour, 2 and 7, 3 and 8, 4 and 9, 5 and 10 — evenly, always (`planParts` in the protocol). A
+chorus line (ALL) is light for everyone. **A singer who joins a song that is well under way restarts
+it from the top for everyone**, divided again for one more singer (everyone's screen says so: *Dave
+joined the song — it restarts from the top, divided for 3 singers*); a singer coming back after
+Leave does not restart it (their part was theirs all along). In the Studio (solo) you pick the part
+you practise. That frame is the
 picture of you everywhere: the show and the audience get exactly what you see of yourself here, only
 bigger. Controls: camera on/off,
 hear myself, **Songs** (a drawer over the stage: what is playing, what is next, pick a song — the song picker is at
@@ -252,10 +265,13 @@ their Drive's *Shared with me*).
 
 `/publishing`: **Publish a meet** (pick a meet you host or joined, or any by link/code; switch on
 the destinations — a platform that has no stream key yet opens its setup right there: ingest URL
-filled in, paste the key, **Save & enable**, and the switch comes on; *Change key* later; the
-in-house portal needs nothing; **Publish** → the show view), **Preview** (every open eligible meet
-as a 16:9 monitor tile with the exact broadcast picture), **Destinations** (the same keys, managed
-in one place: YouTube, Facebook, Instagram, Twitch ingest + stream key, Enable / Disable; keys are
+filled in, paste the key, **your live link** (the page viewers open to watch you there — paste the
+link or just your channel name: YouTube's `@handle` becomes `youtube.com/@handle/live`, which always
+points at your current live stream; `twitch.tv/<channel>`; a Facebook page's `/live`),
+**Save & enable**, and the switch comes on; *Change key* later; the in-house portal needs nothing;
+**Publish** → the show view), **Preview** (every open eligible meet as a 16:9 monitor tile with the
+exact broadcast picture), **Destinations** (the same keys and live links, managed in one place:
+YouTube, Facebook, Instagram, Twitch ingest + stream key + live link, Enable / Disable; keys are
 stored encrypted on the service and only their last 4 characters ever shown again), **History**.
 
 The **show view** (`/publishing/show/:id`) joins the meet as a *publisher* — never on stage, never
@@ -295,7 +311,12 @@ and forwards each segment, then a fresh playlist, to **YouTube's HLS ingestion**
 stream key (`https://a.upload.youtube.com/http_upload_hls?cid=<key>&copy=0&file=…`): the key
 never leaves the service. The broadcast bar says *LIVE · 1:23 · 3100 kbps · 41 segments ·
 YouTube: YouTube is receiving the show*; a wrong key reads *YouTube rejected the stream key
-(401)*. Stop, or leaving the show view, ends the job; a job whose segments stop for 20 s is off
+(401)*. Under it, while the show is on air, **the live links**: one button per platform the show
+goes to — **YouTube link**, **Facebook link**, **Twitch link**… — that hands you the page viewers
+open there (copied to the clipboard, or the phone's share sheet, ready to paste into a chat or a
+post), and **Watch page link** for the in-house page; a platform whose live link you have not set
+shows *add your YouTube link* instead, which opens Destinations. The same buttons sit on the active
+job in History. Stop, or leaving the show view, ends the job; a job whose segments stop for 20 s is off
 air. What a browser needs: WebCodecs (Chrome, Edge, Safari 17+, Firefox 130+) and an AAC encoder
 for sound — Windows, macOS, iOS and Android have one; Chrome on Linux and Firefox do not and go
 out **video only** (the bar says so; the audience then hears the stage mix for sound).

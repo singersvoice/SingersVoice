@@ -30,6 +30,7 @@ import { appSettings } from '../../state/settings.ts';
 import { blobLoudness } from '../../audio/loudness.ts';
 import { VOCAL_LAG_MS } from '../../video/showRecorder.ts';
 import { Broadcast } from './broadcast.ts';
+import { LiveLinks } from './LiveLinks.tsx';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
 
 const IDLE_MS = 3000;
@@ -481,6 +482,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
             {support && !support.ok && <span class="danger"> · {support.reason}</span>}
           </div>
         )}
+        {job && activeJob(job) && <LiveLinks title={job.title || meet.title} destinations={job.destinations} dests={dests ?? []} watchPage={job.watchUrl} />}
       </footer>
     </div>
   );

@@ -15,6 +15,7 @@ import {
   MAX_OPEN_MEETS,
   meetIsOpen,
   newId,
+  normalizeWatchUrl,
   type CatalogPublishRequest,
   type CatalogTrack,
   type ChatMessage,
@@ -1080,12 +1081,20 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const keyEnc = streamKey ? await secrets.seal(streamKey) : (existing?.keyEnc ?? '');
     const keyHint = streamKey ? `…${streamKey.slice(-4)}` : (existing?.keyHint ?? '');
     if (body.enabled && def.needsKey && !keyEnc) return err(c, 400, 'missing_key', `${def.label} needs a stream key before it can be enabled`);
+    // The live link — where viewers watch on the platform — is public and optional; a bare channel name becomes its page.
+    let watchUrl = existing?.watchUrl ?? '';
+    if (typeof body.watchUrl === 'string') {
+      const norm = normalizeWatchUrl(kind, body.watchUrl.slice(0, 300));
+      if (norm === null) return err(c, 400, 'bad_watch_url', `The ${def.label} live link must be an https:// link (or just your channel name)`);
+      watchUrl = norm;
+    }
     const dest = {
       kind,
       label: String(body.label ?? existing?.label ?? def.label).slice(0, 60),
       enabled: Boolean(body.enabled),
       ingestUrl: String(body.ingestUrl ?? existing?.ingestUrl ?? (def.needsKey ? def.ingestHint : '')).slice(0, 300),
       keyHint,
+      ...(watchUrl ? { watchUrl } : {}),
       updatedAt: new Date().toISOString(),
       keyEnc,
     };

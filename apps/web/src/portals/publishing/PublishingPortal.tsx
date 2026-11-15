@@ -19,6 +19,7 @@ import { api, ApiError, controlConfigured, refreshAccount } from '../../lib/api.
 import { go, href } from '../../lib/nav.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { canPublish } from '../../state/session.ts';
+import { LiveLinks } from './LiveLinks.tsx';
 import { resolveMeet } from './meetLookup.ts';
 import { Preview } from './Preview.tsx';
 
@@ -93,14 +94,25 @@ export function PublishingPortal() {
 const usableIngest = (u: string): string => (u && !u.includes('…') ? u : '');
 const looksLikeIngest = (u: string): boolean => /^rtmps?:\/\/\S+/i.test(u.trim());
 
-/** Save a platform's ingest URL / stream key (an empty key keeps the saved one) and its enabled flag. */
-async function saveDestination(kind: DestinationKind, patch: { enabled: boolean; ingestUrl: string; streamKey?: string }): Promise<Destination> {
+/** Save a platform's ingest URL / stream key (an empty key keeps the saved one), its live link and its enabled flag. */
+async function saveDestination(kind: DestinationKind, patch: { enabled: boolean; ingestUrl: string; streamKey?: string; watchUrl?: string }): Promise<Destination> {
   const r = await api.put('PUT /publishing/destinations/:kind', `/publishing/destinations/${kind}`, {
     enabled: patch.enabled,
     ingestUrl: patch.ingestUrl.trim(),
     ...(patch.streamKey?.trim() ? { streamKey: patch.streamKey.trim() } : {}),
+    ...(patch.watchUrl !== undefined ? { watchUrl: patch.watchUrl.trim() } : {}),
   });
   return r.destination;
+}
+
+/** The live-link field of a platform: the page viewers open to watch you there — a link, or just the channel name. */
+function WatchLinkField(props: { kind: DestinationKind; value: string; onInput: (v: string) => void }) {
+  const def = DESTINATIONS.find((x) => x.kind === props.kind)!;
+  return (
+    <Field label={`Your ${def.short} live link`} hint={`The page viewers open to watch you on ${def.short} — paste the link, or just your channel name${props.kind === 'youtube' ? ' (your @handle: the link then always points at your current live stream)' : ''}. It is the "${def.short} link" button while you are on air.`}>
+      <input class="input mono" value={props.value} placeholder={def.watchHint} aria-label={`${def.label} live link`} autocomplete="off" spellcheck={false} onInput={(ev) => props.onInput((ev.currentTarget as HTMLInputElement).value)} />
+    </Field>
+  );
 }
 
 /**
@@ -111,6 +123,7 @@ function DestinationSetup(props: { dest: Destination; onSaved: (d: Destination) 
   const def = DESTINATIONS.find((x) => x.kind === props.dest.kind)!;
   const [ingestUrl, setIngestUrl] = useState(() => usableIngest(props.dest.ingestUrl) || usableIngest(def.ingestHint));
   const [streamKey, setStreamKey] = useState('');
+  const [watchUrl, setWatchUrl] = useState(props.dest.watchUrl ?? '');
   const [busy, setBusy] = useState(false);
   const canSave = looksLikeIngest(ingestUrl) && (streamKey.trim().length > 0 || Boolean(props.dest.keyHint));
   const save = async () => {
@@ -118,7 +131,7 @@ function DestinationSetup(props: { dest: Destination; onSaved: (d: Destination) 
     if (!streamKey.trim() && !props.dest.keyHint) return toast(`Paste the ${def.label} stream key first`, 'warn');
     setBusy(true);
     try {
-      const d = await saveDestination(props.dest.kind, { enabled: true, ingestUrl, streamKey });
+      const d = await saveDestination(props.dest.kind, { enabled: true, ingestUrl, streamKey, watchUrl });
       toast(`${def.label} is set up — key ends with ${d.keyHint}`, 'ok');
       props.onSaved(d);
     } catch (e) {
@@ -144,6 +157,7 @@ function DestinationSetup(props: { dest: Destination; onSaved: (d: Destination) 
           onKeyDown={(ev) => ev.key === 'Enter' && canSave && void save()}
         />
       </Field>
+      <WatchLinkField kind={props.dest.kind} value={watchUrl} onInput={setWatchUrl} />
       <div class="row">
         <button class="btn accent" disabled={busy || !canSave} onClick={() => void save()}>
           {busy ? <Spinner /> : <IcCheck />} {props.dest.enabled ? 'Save' : 'Save & enable'}
@@ -161,7 +175,7 @@ function DestinationSetup(props: { dest: Destination; onSaved: (d: Destination) 
 function Destinations() {
   const [list, setList] = useState<Destination[] | null>(null);
   const [relay, setRelay] = useState(false);
-  const [edit, setEdit] = useState<Record<string, { ingestUrl: string; streamKey: string }>>({});
+  const [edit, setEdit] = useState<Record<string, { ingestUrl: string; streamKey: string; watchUrl: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = () =>
@@ -180,12 +194,12 @@ function Destinations() {
   const save = async (d: Destination, enabled: boolean) => {
     setBusy(d.kind);
     try {
-      const e = edit[d.kind] ?? { ingestUrl: usableIngest(d.ingestUrl), streamKey: '' };
+      const e = edit[d.kind] ?? { ingestUrl: usableIngest(d.ingestUrl), streamKey: '', watchUrl: d.watchUrl ?? '' };
       const def = DESTINATIONS.find((x) => x.kind === d.kind)!;
       if (def.needsKey && enabled && !looksLikeIngest(e.ingestUrl)) throw new ApiError(400, 'bad_ingest', 'The ingest URL must start with rtmps:// (or rtmp://)');
-      const destination = await saveDestination(d.kind, { enabled, ingestUrl: e.ingestUrl, streamKey: e.streamKey });
+      const destination = await saveDestination(d.kind, { enabled, ingestUrl: e.ingestUrl, streamKey: e.streamKey, ...(def.needsKey ? { watchUrl: e.watchUrl } : {}) });
       setList((l) => (l ?? []).map((x) => (x.kind === d.kind ? destination : x)));
-      setEdit((m) => ({ ...m, [d.kind]: { ingestUrl: destination.ingestUrl, streamKey: '' } }));
+      setEdit((m) => ({ ...m, [d.kind]: { ingestUrl: destination.ingestUrl, streamKey: '', watchUrl: destination.watchUrl ?? '' } }));
       toast(enabled !== d.enabled ? `${d.label} ${enabled ? 'enabled' : 'disabled'}` : `${d.label} saved`, 'ok');
     } catch (e) {
       toast(e instanceof ApiError ? e.message : errorText(e), 'error', 7000);
@@ -216,7 +230,7 @@ function Destinations() {
       </p>
       {list.map((d) => {
         const def = DESTINATIONS.find((x) => x.kind === d.kind)!;
-        const e = edit[d.kind] ?? { ingestUrl: usableIngest(d.ingestUrl), streamKey: '' };
+        const e = edit[d.kind] ?? { ingestUrl: usableIngest(d.ingestUrl), streamKey: '', watchUrl: d.watchUrl ?? '' };
         return (
           <section class="card stack" key={d.kind} data-destination={d.kind}>
             <div class="row between">
@@ -231,6 +245,7 @@ function Destinations() {
                 <Field label={def.keyLabel} hint={d.keyHint ? `Saved key ends with ${d.keyHint}` : 'No key saved yet'}>
                   <input class="input mono" type="password" autocomplete="off" value={e.streamKey} aria-label={`${d.label} stream key`} onInput={(ev) => setEdit((m) => ({ ...m, [d.kind]: { ...e, streamKey: (ev.currentTarget as HTMLInputElement).value } }))} placeholder={d.keyHint ? 'Leave empty to keep the saved key' : 'Paste the stream key'} />
                 </Field>
+                <WatchLinkField kind={d.kind} value={e.watchUrl} onInput={(v) => setEdit((m) => ({ ...m, [d.kind]: { ...e, watchUrl: v } }))} />
               </>
             ) : (
               <div class="muted small">{def.ingestHint}. Viewers open the watch link; chat and lyrics follow the meet.</div>
@@ -434,7 +449,7 @@ function Publish(props: { onDone: () => void }) {
   );
 }
 
-function JobCard(props: { job: PublishJob; onStop?: () => void }) {
+function JobCard(props: { job: PublishJob; dests: Destination[]; onStop?: () => void }) {
   const j = props.job;
   const active = j.state === 'requested' || j.state === 'starting' || j.state === 'live';
   return (
@@ -452,6 +467,7 @@ function JobCard(props: { job: PublishJob; onStop?: () => void }) {
           </>
         )}
       </div>
+      {active && <LiveLinks title={j.title} destinations={j.destinations} dests={props.dests} watchPage={j.watchUrl} />}
       <div class="small">
         {j.events.map((e, i) => (
           <div key={i}>
@@ -480,8 +496,15 @@ function JobCard(props: { job: PublishJob; onStop?: () => void }) {
 
 function History() {
   const [jobs, setJobs] = useState<PublishJob[] | null>(null);
+  const [dests, setDests] = useState<Destination[]>([]);
   const load = () => api.get('GET /publishing/jobs', '/publishing/jobs').then((r) => setJobs(r.jobs)).catch(() => setJobs([]));
-  useEffect(() => void load(), []);
+  useEffect(() => {
+    void load();
+    void api
+      .get('GET /publishing/destinations', '/publishing/destinations')
+      .then((r) => setDests(r.destinations))
+      .catch(() => undefined);
+  }, []);
   const stop = async (j: PublishJob) => {
     try {
       await api.post('POST /publishing/jobs/:id/stop', `/publishing/jobs/${encodeURIComponent(j.jobId)}/stop`);
@@ -495,7 +518,7 @@ function History() {
   return (
     <div class="stack">
       {jobs.map((j) => (
-        <JobCard key={j.jobId} job={j} onStop={() => void stop(j)} />
+        <JobCard key={j.jobId} job={j} dests={dests} onStop={() => void stop(j)} />
       ))}
     </div>
   );

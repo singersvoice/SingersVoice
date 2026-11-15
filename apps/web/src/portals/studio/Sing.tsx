@@ -1,4 +1,4 @@
-import { formatMs, SLOT_COLORS, type CatalogTrack, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
+import { formatMs, planParts, SLOT_COLORS, type CatalogTrack, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
@@ -432,8 +432,8 @@ export function Sing(props: { id: string }) {
           {camOn && blend === 'oval' && app.cutout && <span class="chip warn">soft-focus mode (cut-out model unavailable)</span>}
           {!camOn && <span class="chip">camera off</span>}
         </section>
-        <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} countdown={phase === 'countdown' ? countdown : null} showWho={track.singerCount > 1} title={track.title} />
-        {app.showCueDeck && track.singerCount > 1 && phase === 'playing' && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} />}
+        <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={planParts(track.singerCount, [])} countdown={phase === 'countdown' ? countdown : null} showWho={track.singerCount > 1} title={track.title} />
+        {app.showCueDeck && track.singerCount > 1 && phase === 'playing' && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={planParts(track.singerCount, [])} />}
         <section class="controls">
           <PresetChips value={audio} onChange={updateAudio} />
           <MicStatus

@@ -7,6 +7,7 @@ import {
   emptyStage,
   fedDestinations,
   MAX_PERFORMERS,
+  normalizeWatchUrl,
   meetIsOpen,
   RELAY_KINDS,
   sameSong,
@@ -80,6 +81,18 @@ describe('performance helpers', () => {
     expect(sameSong({ trackId: 'a', catalogTrackId: null, trackTitle: 'One' }, { trackId: 'b', catalogTrackId: null, trackTitle: 'Two' })).toBe(false);
     expect(sameSong({ trackId: 'c9', catalogTrackId: null, trackTitle: 'One' }, { trackId: 'c9-copy-bob', catalogTrackId: null, trackTitle: 'Other title' })).toBe(true); // a pulled copy is its catalog entry
     expect(sameSong({ trackId: 'c9-copy-al', catalogTrackId: null, trackTitle: 'One' }, { trackId: null, catalogTrackId: 'c9', trackTitle: 'x' })).toBe(true);
+  });
+  it('a live link as typed becomes the page viewers open: a handle → the channel\'s live page, a link kept as is, nonsense refused', () => {
+    expect(normalizeWatchUrl('youtube', '@AliceSings')).toBe('https://www.youtube.com/@AliceSings/live');
+    expect(normalizeWatchUrl('youtube', 'AliceSings')).toBe('https://www.youtube.com/@AliceSings/live');
+    expect(normalizeWatchUrl('twitch', 'alicesings')).toBe('https://www.twitch.tv/alicesings');
+    expect(normalizeWatchUrl('facebook', 'AliceSingsPage')).toBe('https://www.facebook.com/AliceSingsPage/live');
+    expect(normalizeWatchUrl('instagram', 'alice.sings')).toBe('https://www.instagram.com/alice.sings/live/');
+    expect(normalizeWatchUrl('youtube', ' https://youtube.com/watch?v=abc123 ')).toBe('https://youtube.com/watch?v=abc123');
+    expect(normalizeWatchUrl('youtube', 'http://youtu.be/abc')).toBe('https://youtu.be/abc');
+    expect(normalizeWatchUrl('youtube', '')).toBe('');
+    expect(normalizeWatchUrl('youtube', 'not a link')).toBeNull();
+    expect(normalizeWatchUrl('inhouse', 'whatever')).toBeNull();
   });
   it('which destinations the publisher\'s browser can feed: the watch page and YouTube alone, every RTMP platform with the relay', () => {
     const all = ['youtube', 'facebook', 'instagram', 'twitch', 'inhouse'] as const;

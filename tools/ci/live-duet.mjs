@@ -196,11 +196,13 @@ try {
   check(meshBack !== undefined && meshBack === (await alice.page.evaluate(() => window.__svMeshId)), `back in the room: the same mesh, nothing reconnected (${meshBack})`);
 
   // Carol's YouTube key (the Publish tab sets it up in the screenshot flow; here straight through the API), so her show goes to YouTube too.
-  const ytSetup = await fetch(`${servers.controlUrl}/publishing/destinations/youtube`, { method: 'PUT', headers: { 'X-Dev-User': 'carol', 'X-Dev-Name': 'carol', 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, streamKey: 'test-key-0001' }) });
-  check(ytSetup.status === 200, `carol's YouTube stream key is saved (${ytSetup.status})`);
+  const ytSetup = await fetch(`${servers.controlUrl}/publishing/destinations/youtube`, { method: 'PUT', headers: { 'X-Dev-User': 'carol', 'X-Dev-Name': 'carol', 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: true, streamKey: 'test-key-0001', watchUrl: '@carolsings' }) });
+  const ytDest = await ytSetup.json().catch(() => ({}));
+  check(ytSetup.status === 200 && ytDest.destination?.watchUrl === 'https://www.youtube.com/@carolsings/live', `carol's YouTube stream key and live link are saved (${ytSetup.status}, ${ytDest.destination?.watchUrl})`);
   // Publishing: the show is its own process — carol's show view gets both performers while the song has not started.
   const carol = await person('carol', { width: 1920, height: 1080 }, { track: false });
   extraPages.carol = carol.page;
+  await carol.ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin }); // the live-link button copies
   await carol.page.goto(`${base}publishing/show/${meetId}?${control}`, { waitUntil: 'networkidle' });
   await carol.page.locator('.show[data-state="lobby"]').waitFor({ timeout: 30000 });
   const tShowLobby = Date.now();
@@ -237,6 +239,13 @@ try {
   // Both land on the live stage; wait for the kickstart (8 s lead).
   await alice.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
   await bob.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
+  // Every lyric line is in the colour of the singer who sings it, whole: the song divided between the two singers in it
+  // (S1 green, S2 blue, ALL light) — read off the first lines, right after the kickstart.
+  await bob.page.locator('.sing .lyric[data-who="S2"]').first().waitFor({ timeout: 30000 });
+  const lyricColors = await bob.page.evaluate(() => [...document.querySelectorAll('.sing .lyric')].map((el) => ({ who: el.dataset.who, c: el.style.getPropertyValue('--c').trim().toUpperCase(), mine: el.classList.contains('mine') })));
+  console.log('lyric colours (bob, S2):', JSON.stringify(lyricColors));
+  const colourOf = { S1: '#38D39F', S2: '#4EA8FF', ALL: '#E6E1F0' };
+  check(lyricColors.length >= 3 && lyricColors.every((l) => colourOf[l.who] === l.c) && lyricColors.every((l) => l.mine === (l.who !== 'S1')), "every lyric line carries its singer's colour, whole — S1 green, S2 blue, chorus light — and S2 knows which lines are his");
   await wait(9000);
   const soloA = await vocalEls(alice.page);
   check(soloA.length >= 1 && soloA.every((a) => a.muted === true), 'once the song runs nobody on stage hears anyone else (Solo foldback) — the vocal still feeds the mix');
@@ -357,6 +366,15 @@ try {
   check((await carol.page.locator('.showpic[data-mirror="1"] video').count()) === 1, 'the publisher watches the broadcast itself (the encoder canvas mirrored) while on air');
   check((await carol.page.locator('.showbar [data-mix="trackDb"]').count()) === 1 && (await carol.page.locator('.showbar [data-mix="vocalDb"]').count()) === 1, 'the show view has Track volume and Vocal volume controls for the broadcast');
   check((await carol.page.locator('.showbar .jobline').getAttribute('data-live-youtube')) === 'ok' && /YouTube is receiving the show/.test(jobline), 'YouTube accepted the segments and the playlist');
+  // On air: one button per platform hands the publisher the live link viewers open (YouTube here), and the watch page's.
+  // (The chrome hides itself while the show plays: a pointer move brings it back before the tap.)
+  await carol.page.mouse.move(600, 600);
+  await carol.page.mouse.move(640, 660);
+  await carol.page.locator('[data-live-link="youtube"]').waitFor({ state: 'visible', timeout: 10000 });
+  await carol.page.locator('[data-live-link="youtube"]').click();
+  await wait(500);
+  const copied = await carol.page.evaluate(() => navigator.clipboard.readText().catch(() => ''));
+  check(copied === 'https://www.youtube.com/@carolsings/live' && (await carol.page.locator('[data-live-link="inhouse"]').count()) === 1, `the "YouTube link" button gives the live link (${copied}); the watch page has its button too`);
   const ytFiles = readdirSync(fakeYoutubeDir);
   const ytSegs = ytFiles.filter((f) => f.endsWith('.ts')).sort();
   check(ytSegs.length >= 3 && ytFiles.includes('live.m3u8'), `the fake YouTube received ${ytSegs.length} segments and the playlist`);

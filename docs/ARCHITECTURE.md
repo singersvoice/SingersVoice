@@ -6,7 +6,9 @@ that the code depends on.
 ## Principles
 
 1. **Lyrics first.** The stage is 16 % stage strip · 60 % lyrics · 24 % controls (portrait); 5 visible lines
-   (1 done grey, 1 active with a fill, 3 upcoming orange); singer-slot badges; personal cue deck. The
+   (1 done grey, 1 active with a fill, 3 upcoming), every line in its singer's colour, whole — the song's
+   parts divided among the singers in the song (`planParts`: two singers, two colours; ten on five parts,
+   1 and 6 share), a chip per line naming the slot(s); personal cue deck. The
    lyrics follow the sound, not the clock: the position is the player's minus the output latency.
    A line lights up 150 ms before it starts (a breath to read it) and fills over the time its words
    take — the song's own pace, the median ms per sung character over its timed lines

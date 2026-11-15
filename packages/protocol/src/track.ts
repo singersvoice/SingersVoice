@@ -334,13 +334,72 @@ export function lyricsWindow(lines: LyricLine[], tMs: number, before = 1, after 
 
 /** Lines sung by `slot` (or everyone) that start after `tMs` — the personal cue deck. */
 export function cueDeck(lines: LyricLine[], tMs: number, slot: SingerSlot, count = 3): LyricLine[] {
+  return cueDeckFor(lines, tMs, (l) => l.singerSlot === slot || l.singerSlot === 0, count);
+}
+
+/** The next `count` lines that are `mine` from `tMs` on. */
+export function cueDeckFor(lines: LyricLine[], tMs: number, mine: (l: LyricLine) => boolean, count = 3): LyricLine[] {
   const out: LyricLine[] = [];
   for (const l of lines) {
     if (l.startMs < tMs) continue;
-    if (l.singerSlot === slot || l.singerSlot === 0) out.push(l);
+    if (mine(l)) out.push(l);
     if (out.length >= count) break;
   }
   return out;
+}
+
+// ---------- who sings what: the song's parts shared by the singers in the song ----------
+
+/**
+ * How a song's parts are shared by the singers who are in the song. A track writes its lines for
+ * `parts` singers (a line's `singerSlot` 1..P; 0 = everyone). On a stage the singers in the song
+ * are whoever joined it, by stage slot — two, three, ten — and the whole song is divided among
+ * exactly them, one colour each: with fewer singers than parts the parts go round the singers (two
+ * singers take a four-part song 1,2,1,2), with more singers than parts the singers go round the
+ * parts (singers 1 and 6 share part 1 of a five-part song, 2 and 7 part 2…) — evenly, always. A
+ * line's colour is the stage colour of the first singer who sings it, so every line a singer owns
+ * is in their one colour, whole, and nobody else's line is. With no singers (the Studio, a song
+ * nobody has joined yet) a part is sung by the stage slot of its number.
+ */
+export interface PartPlan {
+  /** The song's parts, P ≥ 1. */
+  parts: number;
+  /** The stage slots of the singers in the song, in stage order. */
+  singers: number[];
+}
+
+export function planParts(parts: number, singers: number[]): PartPlan {
+  return { parts: Math.max(1, Math.floor(parts) || 1), singers: [...new Set(singers.filter((s) => s >= 1))].sort((a, b) => a - b) };
+}
+
+/** The part (1..P) a line is written for; lines marked beyond the song's parts wrap round. */
+export const partOf = (plan: PartPlan, singerSlot: number): number => ((Math.max(1, Math.floor(singerSlot) || 1) - 1) % plan.parts) + 1;
+
+/** The stage slots that sing a line — everyone for a chorus line (`singerSlot` 0), else the owners of its part. */
+export function partSingers(plan: PartPlan, singerSlot: number): number[] {
+  if (singerSlot === 0) return plan.singers;
+  const p = partOf(plan, singerSlot);
+  const n = plan.singers.length;
+  if (n === 0) return [p];
+  if (n <= plan.parts) return [plan.singers[(p - 1) % n]!];
+  return plan.singers.filter((_, i) => i % plan.parts === p - 1);
+}
+
+/** The colour of a line: its part's — the first singer who sings it; a chorus line is everyone's colour. */
+export function partColor(plan: PartPlan, singerSlot: number): string {
+  if (singerSlot === 0) return SLOT_COLORS[0];
+  return SLOT_COLORS[clampSlot(partSingers(plan, singerSlot)[0] ?? 0)];
+}
+
+/** The chip of a line: ALL, or the slots that sing it — S1, or S1·S6 when two share a part. */
+export function partLabel(plan: PartPlan, singerSlot: number): string {
+  if (singerSlot === 0) return 'ALL';
+  return partSingers(plan, singerSlot).map((s) => `S${s}`).join('·');
+}
+
+/** Whether the singer on stage slot `mySlot` sings this line. */
+export function isMyLine(plan: PartPlan, singerSlot: number, mySlot: number): boolean {
+  return singerSlot === 0 || partSingers(plan, singerSlot).includes(mySlot);
 }
 
 // ---------- LRC ----------

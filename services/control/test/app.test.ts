@@ -431,6 +431,19 @@ describe('sv-control API', () => {
     );
     expect(yt.destination.keyHint).toBe('…1234');
     expect(JSON.stringify(yt)).not.toContain('abcd-efgh');
+    // The live link — where viewers watch on the platform: a bare handle becomes the channel's live page; kept across saves; cleared with ''.
+    const linked = await json<{ destination: { watchUrl?: string; keyHint: string } }>(
+      await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, watchUrl: '@AliceSings' }) }),
+    );
+    expect(linked.destination.watchUrl).toBe('https://www.youtube.com/@AliceSings/live');
+    expect(linked.destination.keyHint).toBe('…1234'); // the key stays
+    const kept = await json<{ destination: { watchUrl?: string } }>(await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true }) }));
+    expect(kept.destination.watchUrl).toBe('https://www.youtube.com/@AliceSings/live');
+    expect((await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, watchUrl: 'not a link' }) })).status).toBe(400);
+    const listed = await json<{ destinations: { kind: string; watchUrl?: string }[] }>(await app.request('/publishing/destinations', { headers: as('alice') }));
+    expect(listed.destinations.find((d) => d.kind === 'youtube')?.watchUrl).toBe('https://www.youtube.com/@AliceSings/live');
+    const cleared = await json<{ destination: { watchUrl?: string } }>(await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, watchUrl: '' }) }));
+    expect(cleared.destination.watchUrl).toBeUndefined();
     const meet = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Show' }) }));
     const bad = await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: meet.meet.meetId, destinations: ['twitch'] }) });
     expect(bad.status).toBe(400);
