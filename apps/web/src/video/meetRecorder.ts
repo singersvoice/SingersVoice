@@ -15,6 +15,7 @@ import { platformName } from '../lib/platform.ts';
 import type { PerformanceStream, PerformanceSummary } from '../lib/storage/types.ts';
 import { audioSettings } from '../state/settings.ts';
 import { withProvider } from '../state/session.ts';
+import { CanvasTrack } from './canvasTrack.ts';
 import { pickShowMime, SHOW_FPS, showSupported, type ShowRecorder } from './showRecorder.ts';
 
 /** How often a piece of the film goes to the upload (and how much a dying tab can lose). */
@@ -135,8 +136,10 @@ export class MeetRecorder {
     // 1280×720 show at 24 fps. A browser that only offers WebM encodes in software — the film then runs lighter
     // (960×540, 15 fps, drawn from the show canvas) so the stage itself never slows down.
     const soft = !mime.includes('mp4');
-    const source = soft ? this.scaledSource() : this.show.canvas;
-    const media = new MediaStream([...source.captureStream(soft ? SOFT_FPS : SHOW_FPS).getVideoTracks(), ...dest.stream.getAudioTracks()]);
+    // The picture's track is fed frame by frame (CanvasTrack): the film goes on while the host's tab is hidden.
+    const track = soft ? this.scaledSource() : this.show.takeTrack(SHOW_FPS);
+    this.track = track;
+    const media = new MediaStream([track.track, ...dest.stream.getAudioTracks()]);
     let mr: MediaRecorder;
     try {
       mr = new MediaRecorder(media, { mimeType: mime, videoBitsPerSecond: soft ? 1_200_000 : 2_500_000, audioBitsPerSecond: 160_000 });
@@ -177,22 +180,34 @@ export class MeetRecorder {
     this.ticker = setInterval(() => this.tick(), 1000);
   }
 
-  /** The lighter picture for software encoders: the show canvas scaled to 960×540, a few times a second. */
-  private scaled: { canvas: HTMLCanvasElement; timer: ReturnType<typeof setInterval> } | null = null;
-  private scaledSource(): HTMLCanvasElement {
+  /** The picture's track: the show's own (full size) or the scaled copy's; released when the film ends. */
+  private track: CanvasTrack | null = null;
+  /** The lighter picture for software encoders: the show canvas scaled to 960×540, a few times a second, down its own track. */
+  private scaled: { canvas: HTMLCanvasElement; track: CanvasTrack; timer: ReturnType<typeof setInterval> } | null = null;
+  private scaledSource(): CanvasTrack {
     this.stopScaling();
     const canvas = document.createElement('canvas');
     canvas.width = 960;
     canvas.height = 540;
     const c = canvas.getContext('2d', { alpha: false })!;
-    const draw = () => c.drawImage(this.show.canvas, 0, 0, canvas.width, canvas.height);
+    const track = new CanvasTrack(canvas, SOFT_FPS);
+    const draw = () => {
+      c.drawImage(this.show.canvas, 0, 0, canvas.width, canvas.height);
+      track.push();
+    };
     draw();
-    this.scaled = { canvas, timer: setInterval(draw, 1000 / SOFT_FPS) };
-    return canvas;
+    this.scaled = { canvas, track, timer: setInterval(draw, 1000 / SOFT_FPS) };
+    return track;
   }
   private stopScaling(): void {
+    if (this.track) {
+      if (this.scaled?.track === this.track) this.track.stop();
+      else this.show.releaseTrack(this.track);
+      this.track = null;
+    }
     if (!this.scaled) return;
     clearInterval(this.scaled.timer);
+    this.scaled.track.stop();
     this.scaled = null;
   }
 
@@ -229,6 +244,7 @@ export class MeetRecorder {
       this.show.setTap(null);
       this.tap?.disconnect();
       this.tap = null;
+      this.stopScaling(); // the picture's track goes with the recorder
       this.show.keepDrawing = false;
       this.show.stopDrawing();
       this.stream = null;

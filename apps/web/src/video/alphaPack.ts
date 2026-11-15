@@ -1,3 +1,5 @@
+import { CanvasTrack } from './canvasTrack.ts';
+
 /**
  * Performer video travels between devices as an "alpha-packed" frame: the left half is the
  * person over black, the right half is the alpha mask as grey. Video codecs carry no alpha, and
@@ -9,6 +11,7 @@ export class AlphaPacker {
   private ctx: CanvasRenderingContext2D;
   private timer: ReturnType<typeof setInterval> | undefined;
   private stream: MediaStream | null = null;
+  private track: CanvasTrack | null = null;
 
   constructor(
     readonly width = 320,
@@ -22,26 +25,35 @@ export class AlphaPacker {
     this.ctx.fillRect(0, 0, width * 2, height);
   }
 
-  /** Repack from the person canvas + grey mask at `fps`; returns the stream to send. */
+  /**
+   * Repack from the person canvas + grey mask at `fps`; returns the stream to send. The track is fed
+   * frame by frame (CanvasTrack), so the other singers keep getting this one's picture while the tab
+   * is hidden (a canvas capture would freeze on the last rendered frame).
+   */
   start(person: HTMLCanvasElement, mask: HTMLCanvasElement, fps = 15): MediaStream {
     this.stop();
     const c = this.ctx;
     const { width, height } = this;
+    const track = new CanvasTrack(this.canvas, fps);
+    this.track = track;
     const draw = () => {
       c.fillStyle = '#000';
       c.fillRect(0, 0, width * 2, height);
       c.drawImage(person, 0, 0, width, height);
       c.drawImage(mask, width, 0, width, height);
+      track.push();
     };
     draw();
     this.timer = setInterval(draw, 1000 / fps);
-    this.stream = this.canvas.captureStream(fps);
+    this.stream = new MediaStream([track.track]);
     return this.stream;
   }
 
   stop(): void {
     clearInterval(this.timer);
     this.timer = undefined;
+    this.track?.stop();
+    this.track = null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
   }

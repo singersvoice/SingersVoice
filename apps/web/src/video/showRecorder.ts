@@ -15,6 +15,7 @@ import type { BackgroundItem, MixBatch } from '@singersvoice/protocol';
 import type { AudioEngine } from '../audio/engine.ts';
 import { MixBroadcaster } from '../audio/mixBroadcast.ts';
 import { MixBus } from '../audio/mixBus.ts';
+import { CanvasTrack, canvasTracks } from './canvasTrack.ts';
 import { StageCompositor, type StagePerformer } from './stage.ts';
 
 export { dbToGain, MIX_DB_MAX, MIX_DB_MIN } from '../audio/gain.ts';
@@ -57,7 +58,7 @@ export function pickShowMime(): string {
   return candidates.find((c) => MediaRecorder.isTypeSupported(c)) ?? '';
 }
 
-export const showSupported = (): boolean => pickShowMime() !== '' && typeof HTMLCanvasElement !== 'undefined' && 'captureStream' in HTMLCanvasElement.prototype;
+export const showSupported = (): boolean => pickShowMime() !== '' && canvasTracks();
 
 /** A cut-out held back by a few frames: this device's singer as the others see them, in step with their vocal. */
 class DelayedCanvas {
@@ -118,6 +119,19 @@ export class ShowRecorder {
   private mr: MediaRecorder | null = null;
   private chunks: Blob[] = [];
   private startCtx: number | null = null;
+  /** Every track made from the picture (the recording's, the film's): each drawn frame is pushed down all of them, visible tab or not. */
+  private readonly tracks = new Set<CanvasTrack>();
+  private recTrack: CanvasTrack | null = null;
+  /** A track of the picture for another recorder (the film of the meet): fed with every frame drawn here until `releaseTrack`. */
+  takeTrack(fps = SHOW_FPS): CanvasTrack {
+    const t = new CanvasTrack(this.canvas, fps);
+    this.tracks.add(t);
+    return t;
+  }
+  releaseTrack(t: CanvasTrack): void {
+    this.tracks.delete(t);
+    t.stop();
+  }
   private timer: ReturnType<typeof setInterval> | undefined;
   private startTimer: ReturnType<typeof setTimeout> | undefined;
   private engine: AudioEngine | null = null;
@@ -319,13 +333,16 @@ export class ShowRecorder {
     this.ensureDrawing();
     const mime = pickShowMime();
     if (!mime || !this.audio) return;
-    const stream = new MediaStream([...this.canvas.captureStream(SHOW_FPS).getVideoTracks(), ...this.audio.dest.stream.getAudioTracks()]);
+    const recTrack = this.takeTrack();
+    const stream = new MediaStream([recTrack.track, ...this.audio.dest.stream.getAudioTracks()]);
     let mr: MediaRecorder;
     try {
       mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2_500_000, audioBitsPerSecond: 192_000 });
     } catch {
+      this.releaseTrack(recTrack);
       return;
     }
+    this.recTrack = recTrack;
     mr.ondataavailable = (e) => e.data.size && this.chunks.push(e.data);
     mr.onstart = () => {
       this.startCtx = engine.ctx.currentTime;
@@ -375,6 +392,10 @@ export class ShowRecorder {
       });
       const video = new Blob(this.chunks, { type: mr.mimeType });
       if (video.size && this.startCtx !== null) out = { video, mimeType: mr.mimeType, startCtxTime: this.startCtx, lagMs: this.lagMs };
+    }
+    if (this.recTrack) {
+      this.releaseTrack(this.recTrack);
+      this.recTrack = null;
     }
     this.chunks = [];
     if (!this.keepDrawing) {
@@ -478,6 +499,7 @@ export class ShowRecorder {
     } catch (e) {
       console.warn('show frame', e); // one bad frame never stops the recording
     }
+    for (const t of this.tracks) t.push(); // the frame goes down every track by hand: a hidden tab records and streams on
   }
 
   private drawBackground(c: CanvasRenderingContext2D, W: number, H: number): void {

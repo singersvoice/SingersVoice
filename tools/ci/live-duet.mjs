@@ -668,6 +668,16 @@ try {
     return btoa(bin);
   });
   if (showB64) await writeFile(`${out}/show-alice.webm`, Buffer.from(showB64, 'base64'));
+  // The saved show is a moving picture for its whole length, not one frame with a song behind it: the picture's track is fed
+  // frame by frame (CanvasTrack), so it holds whether or not the tab was in front.
+  if (showB64) {
+    const probe = (args) => { try { return execFileSync('ffprobe', ['-v', 'error', ...args, `${out}/show-alice.webm`]).toString().trim(); } catch { return ''; } };
+    const packets = Number(probe(['-select_streams', 'v:0', '-count_packets', '-show_entries', 'stream=nb_read_packets', '-of', 'csv=p=0']));
+    const lastVideoS = Number(probe(['-select_streams', 'v:0', '-show_entries', 'packet=pts_time', '-of', 'csv=p=0']).split('\n').filter(Boolean).pop() ?? 0);
+    const audioS = Number(probe(['-select_streams', 'a:0', '-show_entries', 'packet=pts_time', '-of', 'csv=p=0']).split('\n').filter(Boolean).pop() ?? 0);
+    console.log('saved show:', { packets, lastVideoS, audioS });
+    check(packets > 20 && lastVideoS > 20 && lastVideoS > audioS * 0.8, `the saved show's picture runs the whole song (${packets} frames, picture to ${lastVideoS.toFixed(1)} s of ${audioS.toFixed(1)} s)`);
+  }
   await alice.page.screenshot({ path: `${out}/performances-alice.png` });
   // Meets list maintenance: the ended meet is listed with Delete; open meets are counted against the limit of 3.
   await navigate(alice.page, `${new URL(base).pathname}meets`);

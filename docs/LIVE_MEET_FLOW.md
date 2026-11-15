@@ -162,7 +162,10 @@ When the song is over (or you stop your take) **nothing asks you anything**: you
 back on the stage — the lobby with the next song up, or, after your own Stop mid-song, the live
 stage with *Join the song* — your mic stays open (talk-back is back on: the stage hears each
 other again), and the take saves itself in the background, kept at once in your
-Drive `Performances` (never Temp). A chip in the room says *Saving "song"… · 40 %* → *Saved
+Drive `Performances` (never Temp). The picture is recorded frame by frame by the room itself, so
+it runs the whole song even when the room's tab is not in front (the host over in the show view, a
+window behind another) — the same for the film of the meet and the video the other singers get.
+A chip in the room says *Saving "song"… · 40 %* → *Saved
 "song"* (→ Performances), or *Could not save — Retry*; the saver keeps going when you change page,
 leave the room or the meet ends, retries by itself, and the app never reloads under it. **The
 host's take of a song is the meet's saved performance**: registered with the meet and shared with

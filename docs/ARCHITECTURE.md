@@ -242,7 +242,13 @@ a 'show' compositor over the same cut-outs the stage draws — the remote frames
 and shared, `UnpackedFrame`), its own audio bus on the engine's context (backing track + own vocal
 after FX, held back by the same quarter second through a DelayNode — and this device's own cut-out
 through a frame ring, so its picture is in step with its sound — plus every other singer's vocal as
-it arrives — through the shared **mix bus** (`audio/mixBus.ts`, below), one MediaRecorder — **MP4
+it arrives — through the shared **mix bus** (`audio/mixBus.ts`, below), one MediaRecorder on a
+**hand-fed video track** (`video/canvasTrack.ts`: a `MediaStreamTrackGenerator` that gets every
+frame the drawing loop draws, as a VideoFrame, where the browser has it — Chrome, Edge — the canvas
+capture elsewhere; `canvas.captureStream()` alone hands out a frame only when the page renders one,
+and a hidden tab — the host over in the show view, a window covered by another — renders nothing,
+which once left a saved show with one picture and five minutes of song; the film of the meet and
+the alpha-packed video the other singers get go down the same kind of track) — **MP4
 first** (`pickShowMime`: H.264 + AAC where the browser has an AAC encoder — Windows, Mac, iOS —
 else H.264 + Opus in MP4, WebM only where MP4 is not offered, i.e. Firefox; audio at 192 kbps) so
 a saved show plays wherever its Drive link is opened; the Drive file is named *song · meet ·
