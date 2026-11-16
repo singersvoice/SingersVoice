@@ -981,7 +981,7 @@ try {
   check(/Broadcast/.test(footageItem) && /show video/.test(footageItem), `the publisher finds the footage of the broadcast under Performances, with its video (${footageItem.slice(0, 120) || carolItems.length + ' items, none of them the footage'})`);
   await carolPerf.screenshot({ path: `${out}/performances-carol.png` });
   // The footage carries the song and the voices, exactly as the broadcast did (the moment measured on the bus, where the footage's clock has it).
-  await carolPerf.locator('[data-show]', { hasText: 'Broadcast' }).first().getByRole('button', { name: 'Play' }).click();
+  await carolPerf.locator('.list .item', { hasText: 'Broadcast' }).first().getByRole('button', { name: /^Play/ }).click(); // the publisher's own list: the thumb opens it
   const footageB64 = await sheetVideo(carolPerf);
   if (footageB64) await writeFile(`${out}/footage-carol.webm`, Buffer.from(footageB64, 'base64'));
   if (footageB64) {
