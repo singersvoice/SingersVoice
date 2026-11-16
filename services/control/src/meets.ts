@@ -371,6 +371,16 @@ export function setStagePolicy(m: Meet, policy: StagePolicy): void {
   if (policy === 'open') m.requests = []; // nothing to wait for any more
 }
 
+/** The stage background: the host or anyone on stage (not a publisher) switches it, whenever — the stage is theirs. */
+export function setBackground(m: Meet, p: Participant, backgroundId: string): { ok: boolean; reason?: string } {
+  if (!meetIsOpen(m)) return { ok: false, reason: 'meet_closed' };
+  if (!canPickSong(m, p)) return { ok: false, reason: 'not_on_stage' };
+  const id = backgroundId.trim();
+  if (!/^[\w-]{1,64}$/.test(id)) return { ok: false, reason: 'bad_background' };
+  m.backgroundId = id;
+  return { ok: true };
+}
+
 export function setReady(m: Meet, p: Participant, ready: boolean): void {
   const s = m.stage.find((x) => x.participantId === p.participantId);
   if (s) s.ready = ready;

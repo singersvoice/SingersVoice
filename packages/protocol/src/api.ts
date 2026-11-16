@@ -173,6 +173,8 @@ export interface Routes {
   /** The host removes someone from the meet altogether (stage or audience); they cannot come back in. */
   'POST /meets/:id/participants/:pid/kick': { req: { resumeToken: string }; res: MeetSnapshot };
   'POST /meets/:id/policy': { req: { resumeToken: string; stagePolicy: StagePolicy }; res: MeetSnapshot };
+  /** The stage background — any singer on stage (or the host) switches it, mid-song too; every device and the show follow at the next poll. */
+  'POST /meets/:id/background': { req: { resumeToken: string; backgroundId: string }; res: MeetSnapshot };
   /**
    * The song of the stage: anyone on stage picks (nothing up → it is up; a song up → it is put forward and the stage
    * chooses), chooses one of the songs put forward ('current' keeps the one up; the rest are dropped), withdraws one,

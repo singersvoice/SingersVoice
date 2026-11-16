@@ -14,16 +14,16 @@ import { SetListPanel } from './SetListPanel.tsx';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, type AudioEngine } from '../../audio/engine.ts';
 import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
-import { StageBackground } from '../../components/BackgroundPicker.tsx';
+import { StageBackground, StageBackgroundChoice } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { audienceLine } from './audience.ts';
 import { Page } from '../../components/Shell.tsx';
-import { Seg, Spinner, Switch } from '../../components/ui.tsx';
+import { Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, serverNow } from '../../lib/api.ts';
 import { shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
@@ -435,6 +435,16 @@ function Lobby(props: {
     }
   };
   const hasSong = Boolean(meet.trackId || meet.catalogTrackId);
+  const [bgOpen, setBgOpen] = useState(false);
+  /** The stage background for everyone: a tap by the host or any singer on stage; every device in the room and the show follow at once. */
+  const pickBackground = async (id: string) => {
+    try {
+      await session.setBackground(id);
+      toast('Stage background switched for everyone', 'ok');
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
   /** Songs put forward and none running: the stage chooses one (on the song card) before anything starts. */
   const choosing = songChoicePending(meet);
   /** Anyone on stage starts the song for the stage; the one who starts is made ready on the way (mic, track) if not yet. */
@@ -476,12 +486,14 @@ function Lobby(props: {
     }
     const mp = new MixPlayer(e.ctx, e.master, (since) => session.fetchMix(since));
     mixRef.current = mp;
+    (window as unknown as { __svMix?: MixPlayer | null }).__svMix = mp; // support / e2e: the sound the audience hears
     mp.start();
     const t = setInterval(() => setMixState({ ...mp.state.value }), 500);
     return () => {
       clearInterval(t);
       mp.stop();
       mixRef.current = null;
+      (window as unknown as { __svMix?: MixPlayer | null }).__svMix = null;
     };
   }, [listen, props.engine, onStage, showHasSound]);
   const fallbackTrack = listen && mixState.silent && !showHasSound;
@@ -601,6 +613,16 @@ function Lobby(props: {
           <section class="stack">
             {/* The stage is live from the start: whoever steps on appears here at once (own cut-out; other performers' video on stage devices). */}
             <StageStrip stage={stage} meet={meet} onStage={onStage} />
+            {(host || onStage) && (
+              <div class="row" style="justify-content:flex-end">
+                <button class="btn sm" aria-label="Stage background" title="Switch the stage background for everyone — every device and the show follow at once" onClick={() => setBgOpen(true)}>
+                  <IcImage size={16} /> Stage background
+                </button>
+              </div>
+            )}
+            <Sheet open={bgOpen} onClose={() => setBgOpen(false)} title="Stage background">
+              <StageBackgroundChoice value={meet.backgroundId} onPick={(id) => pickBackground(id)} />
+            </Sheet>
             <SetListPanel session={session} meet={meet} you={you} track={props.track} host={host} onStage={onStage} live={live} />
             {host && meet.requests.length > 0 && (
               <div class="card stack pad-sm requests" data-requests={meet.requests.length}>
@@ -886,6 +908,15 @@ function LiveStage(props: {
   const [finishing, setFinishing] = useState(false);
   /** The set list drawer over the stage: see what is next, add a song, (host) end the song. */
   const [songsOpen, setSongsOpen] = useState(false);
+  const [bgOpen, setBgOpen] = useState(false);
+  const pickBackground = async (id: string) => {
+    try {
+      await session.setBackground(id);
+      toast('Stage background switched for everyone', 'ok');
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
   const [fxOpen, setFxOpen] = useState(false);
   /** Who was on stage during this take (the manifest and the meet's performance name them). */
   const singersRef = useRef<{ slot: number; displayName: string; userId?: string }[]>([]);
@@ -1187,6 +1218,17 @@ function LiveStage(props: {
             <SetListPanel session={session} meet={meet} you={props.you} track={props.track} host={host} onStage live compact />
           </div>
         )}
+        {bgOpen && (
+          <div class="drawer" role="dialog" aria-label="Stage background">
+            <div class="row between">
+              <b>Stage background — for everyone, at once</b>
+              <button class="btn icon sm" aria-label="Close the stage background" onClick={() => setBgOpen(false)}>
+                <IcX size={16} />
+              </button>
+            </div>
+            <StageBackgroundChoice value={meet.backgroundId} onPick={(id) => pickBackground(id)} compact />
+          </div>
+        )}
         {app.showCueDeck && (track.singerCount > 1 || plan.singers.length > 1) && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={plan} />}
         {fxOpen && (
           <div class="drawer" role="dialog" aria-label="Voice FX">
@@ -1217,6 +1259,9 @@ function LiveStage(props: {
             </button>
             <button class={`btn icon ${songsOpen ? 'on' : ''}`} aria-label="Songs" title="Songs: what is playing, what follows, pick the next one" aria-pressed={songsOpen} onClick={() => setSongsOpen((o) => !o)}>
               <IcMusic />
+            </button>
+            <button class={`btn icon ${bgOpen ? 'on' : ''}`} aria-label="Stage background" title="Switch the stage background for everyone — every device and the show follow at once" aria-pressed={bgOpen} onClick={() => setBgOpen((o) => !o)}>
+              <IcImage />
             </button>
             {!props.prepared ? (
               <button class="btn big primary" onClick={() => void props.onPrepare()}>

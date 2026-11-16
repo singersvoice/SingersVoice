@@ -144,7 +144,13 @@ mounted until it wraps up, even once the meet is back in the lobby. The full wal
    again replaces the old one), so a personal take stays on the track timeline across any number of
    pauses and jumps; its alignment is anchored to the timeline origin captured at the first cue. The
    show recording runs on in wall time (the song simply jumps in it). Performers poll every 1.5 s while
-   live; the audience's lyrics and "listen" player follow `playbackPositionMs()`.
+   live, the audience every 2 s — and every link of the mesh carries a small negotiated data channel
+   (`sv`, id 1, made on both sides before the first offer so it never renegotiates): after any
+   action of a device (`MeetSession.onActed`) it says *changed* to every linked peer, and each one
+   fetches the snapshot at once (`MeetSession.poke`) — the singers and the show view follow a
+   background switch, a song pick or a transport cue within a few hundred milliseconds, the poll
+   remaining the safety net (the channel carries the word only, never state). The audience's lyrics
+   and "listen" player follow `playbackPositionMs()` (the mix player's own clock when the mix plays).
 
 ## The virtual stage
 
@@ -278,13 +284,28 @@ link; the first four tiles connect by themselves, the rest on request.
    (`audio/mixBroadcast.ts` → `/meets/:id/mix` → `audio/mixPlayer.ts`): on the host's device an
    AudioWorklet (`sv-mix-tap`) taps the show recorder's limiter output in 20 ms blocks, a WebCodecs
    `AudioEncoder` (Opus, 48 kHz mono, 64 kbps) encodes them, and one batch a second is POSTed to the
-   relay (host by account; each batch tagged with the track position of its first frame, a rolling
-   window of 40 batches per meet in the `mix` table). Audience devices in the room and the public
+   relay (host by account; each batch tagged with the track position of its first frame — taken
+   from the block that frame arrived in, so the tag is the sound's own even when the encoder runs
+   behind on a starved device; the service numbers the batches, one past the newest, so a listener
+   never waits for a device's restarted count to catch up; a rolling window of 40 batches per meet
+   in the `mix` table). An encoder that cannot keep up (a starved device) is never allowed to queue
+   sound without end: past two seconds of backlog the broadcaster leaves blocks out — the audience
+   hears a skip and stays near, instead of drifting ever further behind (`MixBroadcaster.dropped`
+   counts them; the broadcast's AAC encoder is bounded the same way, `LiveEncoder.stats.audioDropped`). The host's device keeps one mix bus from the moment its mic opens on stage
+   through the talk, the count-in and every song (the song's recording hooks onto the same bus), so
+   the audience's sound never breaks off at a song's start. Audience devices in the room and the public
    watch page poll it every second through the public `/watch/:id/mix` route (cached at the edge for
-   a second — a hundred listeners cost the relay one answer), decode with `AudioDecoder` and schedule
-   the packets back to back on the audio clock 2 s behind the newest batch (a jitter buffer with room
-   for a batch that comes a poll late), so the sound runs ~2–3 s behind the stage; the position of
-   what is being heard drives the lyrics. Needs
+   a second — a hundred listeners cost the relay one answer), decode with `AudioDecoder` and hand
+   the PCM to one AudioWorklet, `sv-mix-out` (`public/worklets/mix-out.js`), which plays it as a
+   single continuous stream on the audio clock: a resampler that carries its place across every
+   block (the mix is 48 kHz; the device may run at 44.1), so there is never a seam between packets,
+   behind a 3 s cushion (room for a batch that comes a poll late, and for the host's main thread holding its breath for a couple of seconds) and silent — never noisy — when it
+   runs dry until the cushion is back. It reports how far it has played a few times a second, so the
+   track position of what is being heard (`MixPlayer.positionMs`) drives the lyrics. An earlier
+   version scheduled fifty `AudioBufferSourceNode`s a second back to back and clicked at every seam
+   on a 44.1 kHz device. The host's tap resamples the same way (`audio/resample.ts`,
+   `LinearResampler`: stateful, one curve across blocks) when the engine does not run at 48 kHz,
+   and the engine asks the browser for 48 kHz in the first place (`ENGINE_RATE`). Needs
    WebCodecs on both ends (Chrome, Edge, Safari 16.4+, Firefox 130+); otherwise — or when no batch
    has arrived for 6 s — the device plays the backing track alone, in sync.
 5. **The show to the audience and to YouTube — from the publisher's browser.** The show view
@@ -292,8 +313,12 @@ link; the first four tiles connect by themselves, the rest on request.
    the mesh through the same mix bus; two monitor switches that never touch the broadcast — the
    monitor has a guard and a safety stage of its own), draws the show on a `ShowRecorder` canvas, and `broadcast/liveEncoder.ts` turns it
    into a stream: `VideoEncoder` (H.264 Annex B, `avc1.4d401f`, 3 Mbps, 30 fps backing off to 15
-   when the encoder falls behind, a keyframe every 2 s by time) and `AudioEncoder` (AAC-LC ADTS,
-   48 kHz stereo, 128 kbps; absent on Linux Chrome / Firefox → video only), cut at the keyframes
+   when the encoder falls behind, a keyframe every second by time (`LIVE_SEGMENT_S`)) and `AudioEncoder` (AAC-LC ADTS,
+   48 kHz stereo, 128 kbps — the bus runs at 48 kHz itself, so nothing is resampled on the way,
+   and a bus at another rate goes through the same stateful resampler as the host's tap; absent on
+   Linux Chrome / Firefox → video only), cut at the keyframes (each segment declared as the whole
+   span it covers, its first frame to the next keyframe — a slow machine that skipped frames before
+   the keyframe still hands the player a steady second, never a shorter one and a jump)
    and muxed by `broadcast/tsMuxer.ts` (PAT/PMT first, PES with PTS, PCR on video, AUDs, continuity
    across segments — unit-tested against ffmpeg-made streams and decoded back by ffmpeg).
    `broadcast/liveSender.ts` PUTs each segment to `PUT /publishing/jobs/:id/live/:name` (raw body,
@@ -306,9 +331,16 @@ link; the first four tiles connect by themselves, the rest on request.
    rejected, 400 refused, 5xx error — recorded on the job (`live.youtube`, `youtubeNote`). The job
    goes `live` on the first segment and is off air 20 s after the last. The audience plays the
    playlist with hls.js (lazy chunk; Safari natively) in `components/LiveShow.tsx`, on the watch
-   page and in the room's audience view — no lyrics there. Tests: `SV_FAKE_YOUTUBE_DIR` makes the
+   page and in the room's audience view — no lyrics there. Beside the encoder, the broadcast films
+   itself: `Broadcast.film` is a `MeetRecorder` (`video/meetRecorder.ts`, the same recorder as the
+   host's film of the meet, with `busSound(bus)` as its sound instead of the stage mix) on the
+   encoder's own canvas, from Go live to Stop — the footage goes into the publisher's Drive as it
+   is recorded (`PerformanceStream`, ten-second pieces, a resumable upload) and is listed under the
+   publisher's Performances as *Broadcast*. Tests: `SV_FAKE_YOUTUBE_DIR` makes the
    Node service serve a stand-in at `/fake/youtube/http_upload_hls`; the live e2e goes live from
-   the show view, ffprobes a segment the fake received and watches the show on both pages.
+   the show view, ffprobes a segment the fake received, watches the show on both pages, records six
+   seconds of the bus and of an audience device's output and measures them (`tools/ci/audio-measure.mjs`),
+   and finds the footage under the publisher's Performances.
 4b. **The RTMP relay** (`services/relay`, docs/RELAY.md) is the low-latency road: with
    `RELAY_URL` + `RELAY_SECRET` set, the service (`src/relay.ts`) starts one stream per job on the
    relay with the job's RTMP targets (ingest url + key, opened from the sealed store — the only

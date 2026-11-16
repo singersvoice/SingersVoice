@@ -1,6 +1,6 @@
 import { signal } from '@preact/signals';
 import type { BackgroundItem, BackgroundsIndex } from '@singersvoice/protocol';
-import { useEffect } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { asset } from '../lib/nav.ts';
 
 export const backgrounds = signal<BackgroundItem[]>([]);
@@ -46,17 +46,40 @@ export function BackgroundPicker(props: { value: string; onChange: (id: string) 
   );
 }
 
+/**
+ * The stage background of a running meet, for the host and the singers on stage: a tap switches it
+ * for everyone — every device in the room and the show (Publisher mode) follow at once (the mesh carries the word, the service the state).
+ */
+export function StageBackgroundChoice(props: { value: string; onPick: (id: string) => Promise<void>; compact?: boolean }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const pick = async (id: string) => {
+    if (id === props.value || busy) return;
+    setBusy(id);
+    try {
+      await props.onPick(id);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div class={`stack ${props.compact ? 'compact' : ''}`} data-stage-background={props.value}>
+      {!props.compact && <div class="small muted">The background of the stage, for everyone in the meet — on every device and in the show at once. Any singer on stage may switch it.</div>}
+      <BackgroundPicker value={busy ?? props.value} onChange={(id) => void pick(id)} />
+    </div>
+  );
+}
+
 /** Full-bleed stage background (image or looping video). */
 export function StageBackground(props: { id: string }) {
   useEffect(() => void loadBackgrounds(), []);
   const b = backgroundById(props.id);
-  if (!b) return <div class="bg" />;
+  if (!b) return <div class="bg" data-bg="" />;
   if (b.kind === 'video') {
     return (
-      <div class="bg">
+      <div class="bg" data-bg={b.id}>
         <video src={backgroundSrc(b)} poster={b.poster ? asset(`backgrounds/${b.poster}`) : undefined} muted loop autoPlay playsInline />
       </div>
     );
   }
-  return <div class="bg" style={{ backgroundImage: `url(${backgroundSrc(b)})` }} />;
+  return <div class="bg" data-bg={b.id} style={{ backgroundImage: `url(${backgroundSrc(b)})` }} />;
 }

@@ -66,7 +66,10 @@ jobs:
           npx playwright install --with-deps chromium
           node tools/ci/screenshots.mjs screenshots
 
-      - name: Live meet with two performers on one stage (cut-outs, WebRTC relay, cued pause/resume)
+      - name: The audience's player, measured (Opus batches → one continuous sound at 48 and 44.1 kHz)
+        run: node tools/ci/mix-lab.mjs
+
+      - name: Live meet with two performers on one stage (cut-outs, WebRTC relay, cued pause/resume, the sound measured)
         env:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/live-duet.mjs screenshots

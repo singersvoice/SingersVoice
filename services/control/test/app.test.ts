@@ -157,6 +157,15 @@ describe('sv-control API', () => {
     const reseated = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, slot: 2 }) }));
     expect(reseated.meet.performerCount).toBe(2);
 
+    // The stage background is the stage's: bob, on stage, switches it for everyone; a listener cannot; a name that is not a background is refused.
+    const bg = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/background`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, backgroundId: 'neon-arena' }) }));
+    expect(bg.meet.backgroundId).toBe('neon-arena');
+    const fanInRoom = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('erin'), body: JSON.stringify({ role: 'audience' }) }));
+    expect((await app.request(`/meets/${meet.meetId}/background`, { method: 'POST', headers: as('erin'), body: JSON.stringify({ resumeToken: fanInRoom.resumeToken, backgroundId: 'mytestbg1' }) })).status).toBe(403);
+    expect((await app.request(`/meets/${meet.meetId}/background`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, backgroundId: '../etc' }) })).status).toBe(400);
+    expect((await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/heartbeat`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken }) }))).meet.backgroundId).toBe('neon-arena'); // the host's device sees it at its next poll
+    await app.request(`/meets/${meet.meetId}/leave`, { method: 'POST', headers: as('erin'), body: JSON.stringify({ resumeToken: fanInRoom.resumeToken }) });
+
     await app.request(`/meets/${meet.meetId}/chat`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, text: 'ready!' }) });
     const hb = await json<MeetSnapshot>(await app.request(`/meets/${meet.meetId}/heartbeat`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, chatSince: 0, driftMs: 12, rttMs: 80 }) }));
     expect(hb.chat.map((m) => m.text)).toEqual(['ready!']);
@@ -232,6 +241,13 @@ describe('sv-control API', () => {
     expect(mix.batches[0]!.packets).toHaveLength(2);
     const publicMix = await json<{ batches: { seq: number }[] }>(await app.request(`/watch/${meet.meetId}/mix?since=0`));
     expect(publicMix.batches.map((b) => b.seq)).toEqual([1, 2]); // the public watch page hears it too
+    // The service numbers the batches: the host's device starts its own count again when it rebuilds its mix (the next
+    // song, a reload) — a listener who has heard batch 2 keeps hearing, never waits for the new count to pass 2.
+    const renumbered = await json<{ seq: number }>(await app.request(`/meets/${meet.meetId}/mix`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...batch, seq: 1, atMs: 0 }) }));
+    expect(renumbered.seq).toBe(3);
+    const after = await json<{ batches: { seq: number; atMs: number }[]; latest: number }>(await app.request(`/meets/${meet.meetId}/mix?since=2`, { headers: as('bob') }));
+    expect(after.latest).toBe(3);
+    expect(after.batches.map((b) => [b.seq, b.atMs])).toEqual([[3, 0]]);
 
     // Song over — any singer on stage ends it (the audience cannot): back to the lobby with the next song up; the stage stays as it was.
     const fan = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('fan'), body: JSON.stringify({ role: 'audience' }) }));

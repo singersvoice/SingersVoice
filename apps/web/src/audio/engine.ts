@@ -23,7 +23,10 @@ export function noteName(midi: number): string {
 }
 
 /** Every AudioWorklet module the engine's context runs (the mix buses load the same files on theirs). */
-export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'dynamics.js', 'leveler.js'] as const;
+export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'mix-out.js', 'dynamics.js', 'leveler.js'] as const;
+
+/** Every stream in the app runs at 48 kHz (Opus, AAC, the mix): the context asks for it, so nothing is resampled block by block on the way. */
+export const ENGINE_RATE = 48000;
 
 /** The leveller: a raw peak under this is room noise, not singing — never lifted; a gained peak under QUIET is lifted, over HOT pulled down. */
 const LEVEL_SINGING = 0.02; // −34 dBFS
@@ -61,7 +64,13 @@ export class AudioEngine {
 
   constructor() {
     const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.ctx = new Ctor({ latencyHint: 'interactive' });
+    let ctx: AudioContext;
+    try {
+      ctx = new Ctor({ latencyHint: 'interactive', sampleRate: ENGINE_RATE });
+    } catch {
+      ctx = new Ctor({ latencyHint: 'interactive' }); // a browser that cannot run at 48 kHz: its own rate, and the block resamplers do the rest
+    }
+    this.ctx = ctx;
     this.master = this.ctx.createGain();
     this.master.connect(this.ctx.destination);
     this.monitor = this.ctx.createGain();

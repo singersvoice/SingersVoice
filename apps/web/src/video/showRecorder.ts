@@ -155,6 +155,11 @@ export class ShowRecorder {
     return this.mr?.state === 'recording' || this.mr?.state === 'paused';
   }
 
+  /** The background being drawn (its id; '' for none). */
+  get backgroundId(): string {
+    return this.background?.item.id ?? '';
+  }
+
   /** The stage background behind the singers (same-origin image or looping video, as the show view draws it). */
   setBackground(item: BackgroundItem | null | undefined, src: string): void {
     if (!item || !src) {

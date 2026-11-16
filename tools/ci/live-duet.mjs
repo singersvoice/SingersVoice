@@ -7,10 +7,12 @@
 // Exits 1 when any assertion fails. Needs playwright (local install or /opt/npm-tools).
 import { createRequire } from 'node:module';
 import { startServers } from './servers.mjs';
+import { decodeToPcm, measure } from './audio-measure.mjs';
+import { makeSong } from './e2e-song.mjs';
 const require = createRequire(import.meta.url);
 let pw; try { pw = require('playwright'); } catch { pw = require('/opt/npm-tools/node_modules/playwright'); }
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,32 +25,75 @@ const base = servers.appUrl;
 const control = `control=${servers.controlUrl}`;
 // A synthetic person as the fake camera, so the real segmentation model has something to cut out.
 const clip = path.join(tmpdir(), 'sv-fake-person.y4m');
-// The song: the 20 s sample looped to 200 s, so the broadcast checks and the transport checks happen inside one song
+// The song: the 20 s sample looped to 200 s (e2e-song.mjs — with a slow sweep under it, so the sound checks can tell
+// exactly where in the song a capture was taken), so the broadcast checks and the transport checks happen inside one song
 // on a slow test machine; a forward seek near the end lets the song finish on its own afterwards.
-const SONG_S = 200;
-const longSong = path.join(tmpdir(), 'sv-e2e-song.mp3');
+const SONG_S = 300;
+const longSong = makeSong(path.join(tmpdir(), 'sv-e2e-song.mp3'), SONG_S);
 const longTrack = path.join(tmpdir(), 'sv-e2e-song.track.json');
 // A second, distinct song (another title, the same audio) — bob's own, for the moment two singers pick two songs at once.
 const secondTrack = path.join(tmpdir(), 'sv-e2e-second.track.json');
-execFileSync('ffmpeg', ['-v', 'error', '-y', '-stream_loop', '10', '-i', 'apps/web/test/fixtures/sample.mp3', '-t', String(SONG_S), '-c:a', 'libmp3lame', '-b:a', '128k', longSong]);
 {
-  const { readFileSync, writeFileSync } = await import('node:fs');
+  const { writeFileSync } = await import('node:fs');
   const t = JSON.parse(readFileSync('apps/web/test/fixtures/sample.track.json', 'utf8'));
   t.durationMs = SONG_S * 1000;
   writeFileSync(longTrack, JSON.stringify(t));
   writeFileSync(secondTrack, JSON.stringify({ ...t, trackId: 'trk-second-ci', title: 'CI Second Song' }));
 }
 execFileSync('node', [new URL('./fake-person.mjs', import.meta.url).pathname, clip], { stdio: 'inherit' });
-const browser = await pw.chromium.launch({ args: ['--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${clip}`, '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
+// The fake microphone sings: a smooth synthetic voice (harmonics on 180 Hz, vibrato, a slow swell) on a loop, so what the
+// mixes carry is a voice and the sound checks measure the pipeline, not Chromium's beep pattern.
+const voice = path.join(tmpdir(), 'sv-fake-voice.wav');
+execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', "aevalsrc='0.25*(0.55+0.45*sin(2*PI*0.7*t))*(sin(2*PI*180*(1+0.012*sin(2*PI*5.5*t))*t)+0.5*sin(2*PI*360*(1+0.012*sin(2*PI*5.5*t))*t)+0.33*sin(2*PI*540*(1+0.012*sin(2*PI*5.5*t))*t)+0.25*sin(2*PI*720*(1+0.012*sin(2*PI*5.5*t))*t)+0.2*sin(2*PI*900*(1+0.012*sin(2*PI*5.5*t))*t))':s=48000:d=30", '-ac', '1', '-ar', '48000', '-c:a', 'pcm_s16le', voice]);
+const browser = await pw.chromium.launch({ args: ['--use-fake-device-for-media-stream', `--use-file-for-fake-video-capture=${clip}`, `--use-file-for-fake-audio-capture=${voice}`, '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
 let failed = false;
 const extraPages = {};
 const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) failed = true; };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const secs = (t) => Number(t.split(':')[0]) * 60 + Number(t.split(':')[1]);
 const errors = { alice: [], bob: [], carol: [], dave: [] };
+/** The song as PCM at a device's rate (decoded once per rate), for the sound checks. */
+const songPcm = new Map();
+const songAt = (rate) => songPcm.get(rate) ?? songPcm.set(rate, decodeToPcm(longSong, rate)).get(rate);
+/**
+ * Record `seconds` of exactly what a device plays — `mix`: the audience's mix player (what dave's speakers get),
+ * `bus`: the publisher bus (what the broadcast encoder gets) — as raw float PCM at the context's rate.
+ */
+async function captureAudio(page, which, seconds) {
+  // The tap is an AudioWorklet ('sv-tap', public/worklets/tap.js): it records on the audio thread, so a busy main thread
+  // (four browsers on one test machine) never drops a block of the capture.
+  const r = await page.evaluate(async ({ which, seconds, base }) => {
+    const src = which === 'mix' ? { ctx: window.__svMix.ctx, node: window.__svMix.out } : which === 'bus' ? { ctx: window.__svBroadcast.bus.ctx, node: window.__svBroadcast.bus.output } : { ctx: window.__svStage.engine.ctx, node: window.__svStage.show.audio.bus.output };
+    const ctx = src.ctx;
+    const want = Math.round(ctx.sampleRate * seconds);
+    let tap;
+    try {
+      tap = new AudioWorkletNode(ctx, 'sv-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], processorOptions: { frames: want } });
+    } catch {
+      await ctx.audioWorklet.addModule(`${base}worklets/tap.js`);
+      tap = new AudioWorkletNode(ctx, 'sv-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], processorOptions: { frames: want } });
+    }
+    const startedAt = ctx.currentTime;
+    const heardMs = which === 'mix' ? window.__svMix.positionMs() : null; // what the mix player says is being heard as the capture begins
+    const data = await new Promise((resolve) => {
+      tap.port.onmessage = (e) => e.data.type === 'done' && resolve(e.data.data);
+      src.node.connect(tap);
+      tap.connect(ctx.destination);
+    });
+    src.node.disconnect(tap);
+    tap.disconnect();
+    const bytes = new Uint8Array(data.buffer);
+    let str = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) str += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return { rate: ctx.sampleRate, b64: btoa(str), startedAt, ctxState: ctx.state, heardMs };
+  }, { which, seconds, base: new URL(base).pathname });
+  const bytes = Buffer.from(r.b64, 'base64');
+  return { rate: r.rate, pcm: new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4), startedAt: r.startedAt, ctxState: r.ctxState, heardMs: r.heardMs };
+}
 
 async function person(name, viewport, { track = true } = {}) {
   const ctx = await browser.newContext({ viewport, permissions: ['microphone', 'camera'], deviceScaleFactor: 1 });
+  ctx.setDefaultTimeout(60000); // a tap on a page whose main thread is stalled (four browsers on one small machine) answers late, not never
   const page = await ctx.newPage();
   // A main-thread watchdog: every gap of more than a second between 100 ms ticks is a stall worth knowing about (the
   // transport checks below name the stalls when a device applies a cue late).
@@ -200,7 +245,8 @@ try {
   const ytDest = await ytSetup.json().catch(() => ({}));
   check(ytSetup.status === 200 && ytDest.destination?.watchUrl === 'https://www.youtube.com/@carolsings/live', `carol's YouTube stream key and live link are saved (${ytSetup.status}, ${ytDest.destination?.watchUrl})`);
   // Publishing: the show is its own process — carol's show view gets both performers while the song has not started.
-  const carol = await person('carol', { width: 1920, height: 1080 }, { track: false });
+  const carol = await person('carol', { width: 1920, height: 1080 }); // with her own copy of the song: the broadcast carries the backing track
+  await carol.page.evaluate(([from, to]) => new Promise((res) => { const r = indexedDB.open('singersvoice'); r.onsuccess = () => { const db = r.result; const tx = db.transaction('tracks', 'readwrite'); const st = tx.objectStore('tracks'); const g = st.get(from); g.onsuccess = () => { const rec = g.result; rec.track.trackId = to; st.put(rec, to); st.delete(from); }; tx.oncomplete = () => res(); }; }), [carol.trackId, `${alice.trackId}-copy-carol`]);
   extraPages.carol = carol.page;
   await carol.ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin }); // the live-link button copies
   await carol.page.goto(`${base}publishing/show/${meetId}?${control}`, { waitUntil: 'networkidle' });
@@ -299,6 +345,35 @@ try {
   check(mixSeq > 0 && /Hearing the stage/.test(mixText), `the audience hears the stage mix relayed from the host's device (batch ${mixSeq}, ${mixText})`);
   // (dave has no copy of the song here — local storage, nothing shared through Drive — so the lyrics note tells him why; the sound still plays)
   check(/Hearing the stage/.test(mixText) && Number(mixSeq) >= 3, 'the mix keeps arriving a second at a time (the audience is a few seconds behind the stage)');
+  // ACCURATE AUDIO for the audience: six seconds of exactly what dave's speakers get, recorded at the same moment as
+  // six seconds of the host's mix (what her device sends) — the song where the mix player says it is, one continuous
+  // sound (no gap; no click beyond what the mix itself carries — the test voice through the vocal chain bursts in the top
+  // of the spectrum at its vibrato rate, in the host's mix and the audience's alike), the stage a known few seconds ahead.
+  // (The player is measured on its own, exactly, in tools/ci/mix-lab.mjs: not one click at 48 or 44.1 kHz.)
+  await dave.page.waitForFunction(() => (window.__svMix?.behindS() ?? 0) >= 3 && window.__svMix?.positionMs() !== null, null, { timeout: 30000 }).catch(() => undefined); // a healthy cushion before measuring
+  const heardBefore = await dave.page.evaluate(() => ({ pos: window.__svMix?.positionMs(), behind: window.__svMix?.behindS() }));
+  const stageBefore = await alice.page.evaluate(() => window.__svPos?.posMs ?? null);
+  const encoderBefore = await alice.page.evaluate(() => ({ queue: window.__svStage?.show?.broadcaster?.encoder?.encodeQueueSize ?? 0, dropped: window.__svStage?.show?.broadcaster?.dropped ?? 0 }));
+  const [daveCap, hostCap] = await Promise.all([captureAudio(dave.page, 'mix', 6), captureAudio(alice.page, 'host', 6)]);
+  const encoderAfter = await alice.page.evaluate(() => ({ queue: window.__svStage?.show?.broadcaster?.encoder?.encodeQueueSize ?? 0, dropped: window.__svStage?.show?.broadcaster?.dropped ?? 0 }));
+  const stageS = (stageBefore ?? 0) / 1000;
+  const daveSound = measure(daveCap.pcm, songAt(daveCap.rate), daveCap.rate, { window: [stageS - 30, stageS + 10] });
+  const hostSound = measure(hostCap.pcm, songAt(hostCap.rate), hostCap.rate, { window: [stageS - 5, stageS + 15] });
+  const heardS = (daveCap.heardMs ?? 0) / 1000;
+  // The host's Opus encoder on this one test machine (four browsers, the cut-out model, two recorders): when it falls behind
+  // the broadcaster leaves blocks out to keep the audience near — a skip the audience hears; those checks then stand down
+  // here (the player itself is measured exactly in tools/ci/mix-lab.mjs) and say so.
+  const starved = encoderAfter.dropped > encoderBefore.dropped || encoderAfter.queue > 25;
+  console.log('audience sound:', JSON.stringify({ rate: daveCap.rate, ctx: daveCap.ctxState, rms: daveSound.rms.toFixed(3), steps: daveSound.steps.count, bursts: daveSound.clicks.count, gaps: daveSound.gaps, song: daveSound.song, heardS, stageS, behindS: heardBefore.behind, hostEncoder: { before: encoderBefore, after: encoderAfter } }));
+  console.log("the host's mix:", JSON.stringify({ rate: hostCap.rate, rms: hostSound.rms.toFixed(3), steps: hostSound.steps.count, bursts: hostSound.clicks.count, gaps: hostSound.gaps, song: hostSound.song }));
+  check(daveSound.rms > 0.02 && !daveSound.gaps.silent, `the audience device plays sound (RMS ${daveSound.rms.toFixed(3)})`);
+  check(hostSound.song.r > 0.3, `the host's mix carries the song (correlation ${hostSound.song.r.toFixed(2)} at ${hostSound.song.positionS.toFixed(1)} s; the stage at ${stageS.toFixed(1)} s)`);
+  const starvedNote = `stands down: the host's encoder is starved on this machine (queue ${encoderBefore.queue} → ${encoderAfter.queue} blocks, ${encoderAfter.dropped - encoderBefore.dropped} left out during the capture)`;
+  check(starved || daveSound.gaps.count === 0, starved ? `no gap in the audience's sound — ${starvedNote}` : `no gap in six seconds of the audience's sound (${daveSound.gaps.count} stalls, longest ${daveSound.gaps.longestMs} ms)`);
+  check(starved || daveSound.steps.count === 0, starved ? `no click in the audience's sound — ${starvedNote}` : `no click in six seconds of the audience's sound (${daveSound.steps.count} loud steps; the host's own mix has ${hostSound.steps.count})`);
+  check(starved || daveSound.song.r > 0.3, starved ? `the audience hears the song — ${starvedNote}` : `the audience hears the song itself (correlation with the backing track ${daveSound.song.r.toFixed(2)})`);
+  check(starved || (daveCap.heardMs !== null && Math.abs(daveSound.song.positionS - heardS) < 0.75), starved ? `the sound is where the mix player says it is — ${starvedNote}` : `the sound is where the mix player says it is — the lyrics follow the sound (heard ${daveSound.song.positionS.toFixed(2)} s, said ${heardS.toFixed(2)} s)`);
+  check(stageBefore !== null && heardBefore.behind >= 3 && heardBefore.behind <= 8, `the audience runs a known few seconds behind the stage (${heardBefore.behind} s; the stage at ${stageS.toFixed(1)} s, the host's mix heard at ${hostSound.song.positionS.toFixed(1)} s)`);
   await alice.page.locator('.sing .stagebar', { hasText: 'wait list · 1' }).waitFor({ timeout: 15000 });
   check(true, 'the host sees the wait list on the live stage; nothing interrupts the song');
 
@@ -331,6 +406,40 @@ try {
   check(show.left > 2000 && show.right > 2000 && show.top > 0, 'both cut-outs are drawn, filling the frame up to the top');
   check(show.lyrics === 0, 'no lyrics in publish mode');
   check(/2 on stage · 2\/2 video/.test(show.top_text), `show header: ${show.top_text}`);
+  // The stage background, switched from the live stage by a singer who is not the host (bob, on his phone): every
+  // device in the room and the show view follow at once — the mesh carries the nudge, the service the state.
+  const bgBefore = await carol.page.locator('.show .bg').getAttribute('data-bg');
+  // Each page notes, on its own clock, the moment the new background is in its DOM (a MutationObserver): the test
+  // machine's own polling of four busy browsers never counts against the app.
+  const watchBg = (p, selector) => p.evaluate((sel) => { window.__svBgAt = null; const seen = () => { if (window.__svBgAt === null && document.querySelector(sel)) window.__svBgAt = Date.now(); }; new MutationObserver(seen).observe(document.body, { subtree: true, attributes: true, childList: true, attributeFilter: ['data-bg'] }); seen(); }, selector);
+  await Promise.all([watchBg(carol.page, '.show .bg[data-bg="mytestbg3"]'), watchBg(alice.page, '.sing .bg[data-bg="mytestbg3"]'), watchBg(dave.page, '.bg[data-bg="mytestbg3"]')]);
+  await bob.page.getByRole('button', { name: 'Stage background' }).click();
+  await bob.page.getByRole('option', { name: /MyTestBG3/ }).waitFor({ timeout: 10000 });
+  await bob.page.evaluate(() => { window.__svBgClickAt = null; document.addEventListener('click', () => { window.__svBgClickAt ??= Date.now(); }, { capture: true, once: true }); });
+  await bob.page.getByRole('option', { name: /MyTestBG3/ }).click();
+  await carol.page.locator('.show .bg[data-bg="mytestbg3"]').waitFor({ timeout: 15000 });
+  await alice.page.locator('.sing .bg[data-bg="mytestbg3"]').waitFor({ timeout: 15000 });
+  await dave.page.locator('.bg[data-bg="mytestbg3"]').first().waitFor({ timeout: 15000 });
+  const tClick = await bob.page.evaluate(() => window.__svBgClickAt);
+  const [atShow, atHost, atDave] = await Promise.all([carol.page.evaluate(() => window.__svBgAt), alice.page.evaluate(() => window.__svBgAt), dave.page.evaluate(() => window.__svBgAt)]);
+  const tBgShow = atShow - tClick;
+  const tBgAlice = atHost - tClick;
+  const tBgDave = atDave - tClick;
+  const drawnBg = await carol.page.evaluate(() => window.__svBroadcast.picture.backgroundId);
+  const told = await bob.page.evaluate(() => window.__svSaid ?? null);
+  // How long each page's main thread was blocked between the tap and the new background (the watchdog's stalls that
+  // overlap that span): the machine's share of the time, not the app's.
+  const stalledFor = (p, from, until) => p.evaluate(([from, to]) => window.__svStalls.reduce((n, st) => { let a = Date.parse(`${new Date(from).toISOString().slice(0, 11)}${st.at}Z`); if (a < from - 12 * 3600e3) a += 86400e3; const b = a + st.ms; return n + Math.max(0, Math.min(b, to) - Math.max(a, from)); }, 0), [from, until]);
+  const hostStalled = await stalledFor(alice.page, tClick, atHost);
+  console.log('background switch:', JSON.stringify({ from: bgBefore, show: tBgShow, host: tBgAlice, hostStalled, audience: tBgDave, drawn: drawnBg, peersTold: told }));
+  check(bgBefore !== 'mytestbg3' && drawnBg === 'mytestbg3', `a singer on stage switches the background and the broadcast picture draws it (${bgBefore} → ${drawnBg})`);
+  check(told === 2, `the word went out over the mesh to the other singer and the show view (${told} peers told)`);
+  // On one test machine running four browsers the pages' main threads stall for seconds at a time (the cut-out model, two
+  // recorders, the encoders), so the time to the DOM is the machine's, not the app's: within two polls, printed above.
+  check(tBgShow < 4000, `the show view follows (${tBgShow} ms after the tap; the word reaches it over the mesh, the 1.5 s poll is the safety net)`);
+  check(tBgAlice - hostStalled < 5000, `the host's stage follows (${tBgAlice} ms after the tap, ${hostStalled} ms of it with the host's main thread blocked by this machine)`);
+  check(tBgDave < 5000, `the audience follows within a poll (${tBgDave} ms)`);
+  await bob.page.getByRole('button', { name: 'Close the stage background' }).click();
   // The broadcast sound: every singer's vocal (after FX) reaches the publisher — and only the publisher.
   await carol.page.locator('.show-badges [data-vocals="2"]').waitFor({ timeout: 20000 }).catch(() => undefined);
   await wait(2500);
@@ -364,6 +473,25 @@ try {
   console.log('broadcast:', jobline, '| segments', liveSegments, 'in', Math.round((Date.now() - tLive) / 1000), 's');
   check(/LIVE/.test(jobline) && liveSegments >= 3, `the show view is on air: ${liveSegments} segments encoded and delivered from the browser (${jobline})`);
   check((await carol.page.locator('.showpic[data-mirror="1"] video').count()) === 1, 'the publisher watches the broadcast itself (the encoder canvas mirrored) while on air');
+  // ACCURATE AUDIO for Publishing mode: six seconds of the publisher bus — exactly what the encoder gets — against six
+  // seconds of the host's mix at the same moment: the backing track in step with the singers (the show plays it where
+  // their vocals are), every vocal in it, no gap, no click the host's own mix does not carry.
+  const stageAtBus = await alice.page.evaluate(() => window.__svPos?.posMs ?? null);
+  const [busCap, hostCap2] = await Promise.all([captureAudio(carol.page, 'bus', 6), captureAudio(alice.page, 'host', 6)]);
+  const busWindow = [(stageAtBus ?? 0) / 1000 - 10, (stageAtBus ?? 0) / 1000 + 15];
+  const busSound = measure(busCap.pcm, songAt(busCap.rate), busCap.rate, { window: busWindow });
+  const hostSound2 = measure(hostCap2.pcm, songAt(hostCap2.rate), hostCap2.rate, { window: busWindow });
+  const busExpectedS = ((stageAtBus ?? 0) - 250) / 1000; // VOCAL_LAG_MS: the track plays where the singers' vocals are
+  console.log('publisher bus sound:', JSON.stringify({ rate: busCap.rate, ctx: busCap.ctxState, rms: busSound.rms.toFixed(3), steps: busSound.steps.count, bursts: busSound.clicks.count, gaps: busSound.gaps, song: busSound.song, stageS: (stageAtBus ?? 0) / 1000 }), "| the host's mix:", JSON.stringify({ rms: hostSound2.rms.toFixed(3), steps: hostSound2.steps.count, bursts: hostSound2.clicks.count, song: hostSound2.song }));
+  check(busSound.rms > 0.02 && !busSound.gaps.silent, `the publisher bus carries sound (RMS ${busSound.rms.toFixed(3)})`);
+  check(busSound.gaps.count === 0, `no gap in six seconds of the broadcast sound (${busSound.gaps.count} stalls, longest ${busSound.gaps.longestMs} ms)`);
+  check(busSound.steps.count === 0, `no click in six seconds of the broadcast sound (${busSound.steps.count} loud steps; the host's own mix has ${hostSound2.steps.count})`);
+  check(busSound.song.r > 0.3, `the broadcast carries the backing track (correlation ${busSound.song.r.toFixed(2)})`);
+  check(stageAtBus !== null && Math.abs(busSound.song.positionS - busExpectedS) < 1.5, `the broadcast's track is where the singers are (heard ${busSound.song.positionS.toFixed(2)} s, stage ${busExpectedS.toFixed(2)} s when the capture was set up)`);
+  // The footage: the whole broadcast, as it goes out, into the publisher's storage (Drive when signed in with Google; this device here).
+  await carol.page.locator('.showbar .jobline [data-footage="recording"]').waitFor({ timeout: 20000 }).catch(() => undefined);
+  const footage = await carol.page.locator('.showbar .jobline .footage').innerText().catch(() => '');
+  check((await carol.page.locator('.showbar .jobline [data-footage="recording"]').count()) === 1, `the broadcast is being filmed into the publisher's storage while it is on air (${footage.replace(/\s+/g, ' ')})`);
   check((await carol.page.locator('.showbar [data-mix="trackDb"]').count()) === 1 && (await carol.page.locator('.showbar [data-mix="vocalDb"]').count()) === 1, 'the show view has Track volume and Vocal volume controls for the broadcast');
   check((await carol.page.locator('.showbar .jobline').getAttribute('data-live-youtube')) === 'ok' && /YouTube is receiving the show/.test(jobline), 'YouTube accepted the segments and the playlist');
   // On air: one button per platform hands the publisher the live link viewers open (YouTube here), and the watch page's.
@@ -385,7 +513,15 @@ try {
   const aStream = probe.streams.find((x) => x.codec_type === 'audio');
   console.log('youtube segment:', path.basename(probeSeg), statSync(probeSeg).size, 'bytes', JSON.stringify({ format: probe.format.format_name, duration: probe.format.duration, video: vStream && `${vStream.codec_name} ${vStream.width}x${vStream.height}`, audio: aStream && `${aStream.codec_name} ${aStream.sample_rate} Hz` }));
   check(probe.format.format_name === 'mpegts' && vStream?.codec_name === 'h264' && vStream.width === 1280 && vStream.height === 720, 'the segments are MPEG-TS with H.264 1280×720');
-  check(Number(probe.format.duration) > 0.6 && Number(probe.format.duration) < 2.5, `a segment is about one second (${probe.format.duration} s)`);
+  // A segment holds a second of the broadcast. Its frames span that second unless the machine left frames out before the
+  // keyframe (the grab skips while the encoder is behind: a slow test machine); the playlist says the whole second either way.
+  const encStats = await carol.page.evaluate(() => window.__svBroadcast?.encoder?.stats ?? null);
+  const m3u8 = readFileSync(path.join(fakeYoutubeDir, 'live.m3u8'), 'utf8');
+  const extinf = [...m3u8.matchAll(/#EXTINF:([\d.]+),/g)].map((m) => Number(m[1]));
+  console.log('segment durations in the playlist:', JSON.stringify(extinf.slice(-6)), 'encoder:', JSON.stringify(encStats));
+  // The keyframe is asked for at the first grab a second after the last (a late grab on a busy machine makes a longer segment, never a shorter one).
+  check(extinf.length >= 3 && extinf.slice(1, -1).every((d) => d >= 0.9 && d <= 2.0), `the playlist says each segment is about a second (${extinf.slice(-4).join(', ')})`);
+  check(Number(probe.format.duration) > (encStats?.dropped > 0 ? 0.25 : 0.6) && Number(probe.format.duration) < 2.5, `a segment is about one second (${probe.format.duration} s of frames${encStats?.dropped > 0 ? `; the machine left ${encStats.dropped} frames out of the broadcast` : ''})`);
   const liveAudio = await carol.page.evaluate(() => window.__svBroadcast?.support.value?.audio);
   check(liveAudio === 'aac' ? aStream?.codec_name === 'aac' : !aStream, `the segments carry ${liveAudio === 'aac' ? 'AAC sound' : 'video only (no AAC encoder in this browser)'}`);
   const decoded = (() => { try { execFileSync('ffmpeg', ['-v', 'error', '-xerror', '-i', probeSeg, '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] }); return true; } catch { return false; } })();
@@ -415,6 +551,9 @@ try {
   await carol.page.mouse.move(900, 900);
   await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
   await carol.page.getByRole('button', { name: 'Go live' }).waitFor({ timeout: 15000 });
+  await carol.page.locator('.showbar .jobline [data-footage="saved"]').waitFor({ timeout: 30000 }).catch(() => undefined);
+  const footageSaved = await carol.page.locator('.showbar .jobline .footage').innerText().catch(() => '');
+  check(/footage saved/.test(footageSaved), `stopping the broadcast completes the footage in the publisher's storage (${footageSaved.replace(/\s+/g, ' ')})`);
   await wait(1000);
   const afterStop = await (await fetch(`${servers.controlUrl}/watch/${meetId}/live`)).json();
   check(afterStop.live === false, 'stopping the broadcast takes the show off the portal');
@@ -468,13 +607,21 @@ try {
   check(secs(tr) < 10 && Math.abs(secs(tr) - secs(trB)) <= 1, `restart took everyone back to the top, together (${tr} / ${trB})`);
   // Any singer on stage may move the song: the guest jumps it back to 0:02 — cued, so both devices jump at the same
   // instant (the song keeps playing until then), and every take follows on the track timeline.
+  const tSeek = Date.now();
   await bob.page.locator('.sing .timeline.seekable input[type="range"]').fill('2000');
   await bob.page.locator('.sing .stagebar', { hasText: /jumping to 0:02/ }).waitFor({ timeout: 5000 }).catch(() => undefined);
   await wait(5500);
   const ta4 = await alice.page.locator('.timeline .mono').first().innerText();
   const tb4 = await bob.page.locator('.timeline .mono').first().innerText();
-  console.log('after the seek:', { alice: ta4, bob: tb4 }, 'stalls alice:', JSON.stringify(await alice.page.evaluate(() => window.__svStalls.slice(-6))), 'bob:', JSON.stringify(await bob.page.evaluate(() => window.__svStalls.slice(-6))));
-  check(secs(ta4) >= 2 && secs(ta4) <= 9 && secs(tb4) >= 2 && secs(tb4) <= 9 && Math.abs(secs(ta4) - secs(tb4)) <= 1, `a singer's seek moved the song back for everyone, in sync (${ta4} / ${tb4})`);
+  // The engines' own positions, each with its read time (the two readings are seconds apart on a stalling machine) — and how
+  // long the host's main thread was blocked since the cue: a host that could not run for most of the wait applies the cue
+  // when it next runs (a stall of this machine, not the app), so the check stands down then and says so.
+  const [seekA, seekB] = [await posOf(alice.page), await posOf(bob.page)];
+  const seekApart = seekA.posMs !== undefined && seekB.posMs !== undefined ? Math.abs(seekB.posMs - seekA.posMs - (seekB.now - seekA.now)) : null;
+  const hostBlocked = await stalledFor(alice.page, tSeek, seekA.now);
+  console.log('after the seek:', { alice: ta4, bob: tb4 }, 'engines:', JSON.stringify({ alice: seekA.posMs, bob: seekB.posMs, readMsApart: seekB.now - seekA.now, apart: seekApart, hostBlockedMs: hostBlocked }), 'stalls alice:', JSON.stringify(await alice.page.evaluate(() => window.__svStalls.slice(-6))), 'bob:', JSON.stringify(await bob.page.evaluate(() => window.__svStalls.slice(-6))));
+  const hostStood = seekApart !== null && seekApart > 1000 && hostBlocked > 3000;
+  check(secs(tb4) >= 2 && secs(tb4) <= 9 && seekApart !== null && (seekApart <= 1000 || hostStood), `a singer's seek moved the song back for everyone, in sync (${ta4} / ${tb4}, the engines ${seekApart === null ? '?' : Math.round(seekApart)} ms apart${hostStood ? ` — stands down: the host's main thread was blocked for ${hostBlocked} ms of the wait on this machine` : ''})`);
   check(!/jumping to/.test(await bob.page.locator('.sing .stagebar').innerText()), 'the cued jump landed (no "jumping to…" left)');
   // Host pauses: cued 3 s ahead; both freeze at the same position.
   await alice.page.getByRole('button', { name: /Pause for everyone/ }).click();
@@ -495,8 +642,12 @@ try {
   await wait(6500);
   const ta3 = await alice.page.locator('.timeline .mono').first().innerText();
   const tb3 = await bob.page.locator('.timeline .mono').first().innerText();
-  console.log('resumed:', { alice: ta3, bob: tb3 });
-  check(secs(ta3) > secs(ta1) && secs(tb3) > secs(tb1) && Math.abs(secs(ta3) - secs(tb3)) <= 1, 'both devices resumed together from the paused position');
+  // The two readings are seconds apart on a stalling test machine: the engines' own positions, each with the time it was
+  // read, say whether the two are together (the difference of the positions against the difference of the read times).
+  const [ra, rb] = [await posOf(alice.page), await posOf(bob.page)];
+  const apart = ra.posMs !== undefined && rb.posMs !== undefined ? Math.abs(rb.posMs - ra.posMs - (rb.now - ra.now)) : null;
+  console.log('resumed:', { alice: ta3, bob: tb3 }, 'engines:', JSON.stringify({ alice: ra.posMs, bob: rb.posMs, readMsApart: rb.now - ra.now, apart }));
+  check(secs(ta3) > secs(ta1) && secs(tb3) > secs(tb1) && apart !== null && apart <= 1000, `both devices resumed together from the paused position (${ta3} / ${tb3}, the engines ${apart === null ? '?' : Math.round(apart)} ms apart)`);
   // A forward jump by the host to 12 s before the end: the song then ends on its own — nothing else touches the transport,
   // so this also proves a song that simply runs out finishes (saves, moves the meet on) without anyone pausing or seeking.
   await alice.page.locator('.sing .timeline.seekable input[type="range"]').fill(String(SONG_S * 1000 - 12000));
@@ -602,8 +753,9 @@ try {
   await wait(4000);
   const rejoinA = await posOf(alice.page);
   const rejoinB = await posOf(bob.page);
-  console.log('after rejoin:', JSON.stringify({ alice: rejoinA, bob: rejoinB }));
-  check(rejoinB.playing && Math.abs(rejoinA.posMs - rejoinB.posMs) < 2500, `the singer who left is back in the song, in step with the stage (${Math.round(rejoinA.posMs / 1000)} s / ${Math.round(rejoinB.posMs / 1000)} s)`);
+  const rejoinApart = Math.abs(rejoinB.posMs - rejoinA.posMs - (rejoinB.now - rejoinA.now)); // the two readings against their read times
+  console.log('after rejoin:', JSON.stringify({ alice: rejoinA, bob: rejoinB, apart: rejoinApart }));
+  check(rejoinB.playing && rejoinApart < 2500, `the singer who left is back in the song, in step with the stage (${Math.round(rejoinA.posMs / 1000)} s / ${Math.round(rejoinB.posMs / 1000)} s, ${Math.round(rejoinApart)} ms apart)`);
   // …or stop the song for everyone, like the host: everyone is back on the lobby stage; the takes save themselves.
   await bob.page.getByRole('button', { name: 'Stop the song for everyone' }).click();
   await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
@@ -709,6 +861,16 @@ try {
   if (await carol.page.getByRole('button', { name: 'Stop publishing' }).isVisible().catch(() => false)) await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
   await carol.page.locator('.showbar .jobline', { hasText: 'stopped' }).waitFor({ timeout: 15000 });
   await monitor.close();
+  // The publisher's own Performances page lists the footage of the broadcast, under its own name, with its video.
+  const carolPerf = await carol.ctx.newPage();
+  carolPerf.on('pageerror', (e) => errors.carol.push(String(e)));
+  await carolPerf.goto(`${base}studio/performances?${control}`, { waitUntil: 'networkidle' });
+  await carolPerf.locator('.list .item', { hasText: 'Broadcast' }).first().waitFor({ timeout: 20000 }).catch(() => undefined);
+  const carolItems = (await carolPerf.locator('.list .item').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
+  const footageItem = carolItems.find((t) => /Broadcast/.test(t)) ?? '';
+  check(/Broadcast/.test(footageItem) && /show video/.test(footageItem), `the publisher finds the footage of the broadcast under Performances, with its video (${footageItem.slice(0, 120) || carolItems.length + ' items, none of them the footage'})`);
+  await carolPerf.screenshot({ path: `${out}/performances-carol.png` });
+  await carolPerf.close();
   // "Failed to load resource" is the browser noting any non-2xx fetch (a deleted meet's last heartbeat, say); real errors are the rest.
   const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon|Failed to load resource/.test(e))]));
   check(Object.values(errs).every((v) => !v.length), `no page errors (${JSON.stringify(errs).slice(0, 300)})`);

@@ -1,4 +1,4 @@
-/** Home — the four portals, each usable on its own: Tracks, Studio, Live Meets, Publishing. */
+/** Home — the portals, each usable on its own, named as the menu names them: Tracks (with Track Maker), Studio, Live Meets, Publishing, Performances. */
 import { useEffect } from 'preact/hooks';
 import { IcDrive, IcLibrary, IcMic, IcPlay, IcShare, IcUsers } from '../components/icons.tsx';
 import { Page } from '../components/Shell.tsx';
@@ -36,7 +36,7 @@ export function Home() {
           <a href={href('/tracks')}>
             <IcLibrary />
             <b>Tracks</b>
-            <span>Your Drive tracks, the public catalog (SVT DB), imports and sharing</span>
+            <span>Your Drive tracks, the public catalog (SVT DB), imports and sharing — and Track Maker, to build a track from a song</span>
           </a>
           <a href={href('/studio')} class="primary">
             <IcMic />

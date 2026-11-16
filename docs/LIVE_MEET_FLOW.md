@@ -138,7 +138,10 @@ you practise. That frame is the
 picture of you everywhere: the show and the audience get exactly what you see of yourself here, only
 bigger. Controls: camera on/off,
 hear myself, **Songs** (a drawer over the stage: what is playing, what is next, pick a song — the song picker is at
-hand while singing too), FX presets with **Tweak** beside them (every control of the vocal chain in a
+hand while singing too), **Stage background** (the picture button beside Songs: a drawer of the
+backgrounds — a tap switches the stage background **for everyone, at once**: every device in the
+room, the audience's view and the show that Publisher mode sends out all draw the new one; any
+singer on stage may, the host too, in the lobby as well — *Stage background* under the stage row), FX presets with **Tweak** beside them (every control of the vocal chain in a
 drawer, live on your voice), and the **timeline — drag it (or use the arrow keys on it) to
 move back or forth in the song**. Transport belongs to the stage: every singer on stage may
 **Pause** (cued 3 s ahead, everyone freezes at the same position), **Resume**, and **seek** — a
@@ -152,6 +155,17 @@ device ends the song for everyone too. Whoever plays, pauses or seeks, the devic
 every cue is a shared GMT instant, never "when the message arrives". A take follows every pause and
 jump on the track timeline (a part sung again replaces the old one); the saved show records what
 happened, jumps included.
+
+**Instant, on every device.** Whatever a singer changes on stage — the background, the song, a
+pause, a jump, a restart, a slot — is one request to the service (the source of truth) and, the
+moment it is through, one word over the stage's own links to every other singer and to the show
+view: *changed*. They fetch the new state right then, not at their next poll — on a phone or on a
+laptop, in the room or in Publisher mode, the change shows within a few hundred milliseconds (the
+live e2e measures it: the show view and the host's stage follow a background switch from a
+singer's phone well inside a second). The audience, who have no links, poll every 2 s while the
+stage is live, so they follow within two seconds at the most. The links carry the word only; the
+state always comes from the service, so a device that missed the word is right again at its next
+poll.
 
 **What gets saved — by itself.** Every take is a personal session: your vocal, sample-accurate on
 the track timeline across any number of pauses — and its video is **the show**: exactly the
@@ -210,15 +224,21 @@ track, blended**: the very mix the host's device builds for the saved show (the 
 every singer's vocal, after their FX, in sync) is sent out by the host's device a second at a time
 (WebCodecs/Opus, 64 kbps, through the relay — no media server; listeners read it from the public
 `/watch/:id/mix` route, which the edge caches, so a hundred listeners cost the relay one answer
-per second) and played a couple of seconds behind the stage. The status line says *Hearing the stage · 2.1 s behind*. When
+per second) and played a couple of seconds behind the stage — **as one continuous sound**: the
+decoded packets go into one audio worklet (`sv-mix-out`) that plays them back to back on the audio
+clock, resampled in one piece to whatever rate the device runs at (a 44.1 kHz laptop, a 48 kHz
+phone), so there is no seam and no click at any packet edge, behind a three-second cushion (a batch
+that arrives a poll late is still in time, and so is a burst of them after the host's device held its breath), and silence — never a stutter — if it ever runs dry.
+The lyrics' clock on an audience device is the sound itself: the worklet reports how far it has
+played, so the words follow what is being heard. The status line says *Hearing the stage · 4.1 s behind*. When
 nothing arrives (the host's browser has no WebCodecs — Chrome, Edge, Safari 16.4+ and Firefox 130+
 do — or the host is not singing yet) the device plays the backing track alone, in sync. While the
 show plays with its own sound the mix stays off. **No lyrics for the audience, ever** — lyrics are
 Performer mode's, for the singers on stage. The singers on stage never hear any of this (or each
 other): Solo foldback, so latency never pulls them apart.
 
-A big audience costs nobody anything: an audience device polls the room every 5 s and the mix every
-second (through the edge cache), draws a still stage twice a second, runs no camera, no cut-out and
+A big audience costs nobody anything: an audience device polls the room every 2 s while the stage
+is live (5 s otherwise) and the mix every second (through the edge cache), draws a still stage twice a second, runs no camera, no cut-out and
 no mesh; the room names the first dozen of the audience and counts the rest (*Audience (120): Ann,
 Ben … and 108 more*), so what every poll carries stays small; the singers' and the publisher's work
 never grows with the audience (docs/ARCHITECTURE.md, "A hundred in a meet").
@@ -293,7 +313,14 @@ to the other singers' links for their recordings only; singers never hear each o
 never pulls them apart while they sing the same lines — and the show view plays those vocals with
 the backing track, which it runs a quarter second behind the shared clock to meet them. The same
 blend reaches the audience in the room through *Hear the stage* (section 4).
-Preview tiles monitor silently; one can be heard on request.
+Preview tiles monitor silently; one can be heard on request. **Crisp, whole, never crackling:**
+the publisher bus runs its own 48 kHz audio context (the broadcast's rate — nothing is resampled
+between the bus and the AAC encoder), every device's engine asks for 48 kHz too, and wherever a
+rate does have to change (a 44.1 kHz microphone into the host's mix for the audience; the bus into
+an encoder of another rate) the resampler carries its place from one block to the next — one
+continuous curve, never a seam between blocks. The live e2e records six seconds of the bus and
+six seconds of an audience device's output and measures them: no click, no gap, the backing track
+present and exactly where the singers are (docs/TESTING.md, "Sound checks").
 
 **What the publisher hears.** The show view's two buttons (vocals, music) are its *monitor* — the
 publisher's own ears — and never touch the broadcast, which always carries every voice and the
@@ -320,7 +347,16 @@ open there (copied to the clipboard, or the phone's share sheet, ready to paste 
 post), and **Watch page link** for the in-house page; a platform whose live link you have not set
 shows *add your YouTube link* instead, which opens Destinations. The same buttons sit on the active
 job in History. Stop, or leaving the show view, ends the job; a job whose segments stop for 20 s is off
-air. What a browser needs: WebCodecs (Chrome, Edge, Safari 17+, Firefox 130+) and an AAC encoder
+air. **The footage, in the publisher's Drive.** From *Go live* to *Stop publishing* the show view
+also records the whole broadcast — the very picture the encoder sends and the very sound of the
+bus — as **one video in the publisher's own Drive**, written as it goes (ten seconds at a time, a
+resumable upload, so a two-hour show never has to fit in memory and a tab that dies loses seconds):
+the bar says *footage to your Drive · 1:23 · 210 MB* while it runs and *footage saved to your
+Drive · 1:23* when the broadcast stops. It is listed under the publisher's **Performances** as
+**Broadcast** (*meet · Broadcast*, date, length, who was on stage), with the video; nothing is
+asked. The host's own *Full meet* film is a different file in the host's Drive (the stage mix,
+songs and talk); the footage is what went out. It needs the publisher's Google sign-in (the
+Publisher plan, or an admin): in the developer preview it stays on the device, and the bar says so. What a browser needs: WebCodecs (Chrome, Edge, Safari 17+, Firefox 130+) and an AAC encoder
 for sound — Windows, macOS, iOS and Android have one; Chrome on Linux and Firefox do not and go
 out **video only** (the bar says so; the audience then hears the stage mix for sound).
 

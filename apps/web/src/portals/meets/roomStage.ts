@@ -21,7 +21,7 @@ import { appSettings } from '../../state/settings.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
 import { LocalFeed } from '../../video/localFeed.ts';
-import { MeetRecorder } from '../../video/meetRecorder.ts';
+import { MeetRecorder, stageSound } from '../../video/meetRecorder.ts';
 import { PerformerMesh, type PeerState } from '../../video/peers.ts';
 import type { SegmenterMode } from '../../video/segmenter.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
@@ -158,11 +158,21 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       setPeerStates((s) => ({ ...s, [id]: state }));
     };
     mesh.onRemoteAudio = (id, stream) => show.setVocal(id, stream); // the mix always; the speakers only between songs (talk-back)
+    // Instant: what one singer changes (the background, the song, the transport) reaches the others and the show view
+    // over the mesh at once — they fetch the new state now — and what they change reaches this device the same way.
+    mesh.onMessage = (_from, m) => {
+      if (m.type === 'changed') session.poke();
+    };
+    session.onActed = () => {
+      (window as unknown as { __svSaid?: number }).__svSaid = mesh.say({ type: 'changed' }); // support / e2e: how many peers were told
+    };
     (window as unknown as { __svMesh?: PerformerMesh; __svFeed?: LocalFeed }).__svMesh = mesh; // support / e2e hooks
     (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed;
     session.onLeave = () => mesh.close(); // goodbyes before the session leaves
     return () => {
       session.onLeave = null;
+      session.onActed = null;
+      mesh.onMessage = null;
       void mesh.close();
       for (const r of remoteVideos.current.values()) {
         r.frame.dispose();
@@ -215,8 +225,10 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     mesh?.setLocalAudio(micOpen && onStage ? (opts.engine?.vocalStream()?.getAudioTracks()[0] ?? null) : null);
   }, [mesh, micOpen, onStage, opts.engine]);
   // Talk-back: the singers on stage hear each other until the countdown; from then to the end of the
-  // song nobody on stage hears anyone (Solo foldback). The host's device keeps the mix going for the
-  // audience between songs too, so the stage talk reaches the room.
+  // song nobody on stage hears anyone (Solo foldback). The host's device keeps ONE mix going for the
+  // audience the whole time it is on stage with the mic open — the talk between songs, the count-in,
+  // the song (whose recording hooks onto the same bus) — so what the audience hears never breaks off
+  // at a song's start: a torn-down bus used to leave them a silence of a count-in and a restart.
   const songRunning = meet.state === 'countdown' || meet.state === 'live';
   const host = you.userId === meet.hostUserId;
   useEffect(() => {
@@ -224,10 +236,13 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   }, [show, onStage, songRunning]);
   useEffect(() => {
     const engine = opts.engine;
-    if (!host || !onStage || !micOpen || songRunning || !engine) return;
+    if (!host || !onStage || !micOpen || !engine) return;
     show.startTalk(engine);
     return () => show.stopTalk();
-  }, [show, host, onStage, micOpen, songRunning, opts.engine]);
+  }, [show, host, onStage, micOpen, opts.engine]);
+  useEffect(() => {
+    (window as unknown as { __svStage?: unknown }).__svStage = { show, engine: opts.engine }; // support / e2e: the mix this device builds
+  }, [show, opts.engine]);
 
   const stagePerformers = meet.stage.filter((s) => s.participantId);
   const peerIds = stagePerformers.map((s) => s.participantId!).filter((id) => id !== you.participantId);
@@ -265,7 +280,7 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     const engine = opts.engine;
     if (!host || !onStage || !engine || !filmWanted || !meetOpen || !driveLinked) return;
     filmSingers.current = new Map(stagePerformers.map((s) => [s.slot, { slot: s.slot, displayName: s.displayName }]));
-    void film.start(engine, { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot) });
+    void film.start(stageSound(engine, show), { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot) });
   }, [film, host, onStage, opts.engine, filmWanted, meetOpen, driveLinked]);
   const endFilm = () => {
     const singers = [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot);

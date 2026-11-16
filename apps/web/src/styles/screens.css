@@ -1202,6 +1202,12 @@
 .showbar .jobline a {
   color: #fff;
 }
+.showbar .jobline .footage svg {
+  vertical-align: -2px;
+}
+.showbar .jobline .footage.warn {
+  color: var(--warn);
+}
 @media (max-width: 640px) {
   .showbar {
     grid-template-columns: minmax(0, 1fr);

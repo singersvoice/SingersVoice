@@ -12,8 +12,12 @@
  * YouTube (which needs AAC) is told so.
  */
 import { LIVE_SEGMENT_S } from '@singersvoice/protocol';
+import { LinearResampler } from '../audio/resample.ts';
 import { splitAdts, TsMuxer, type MediaPacket } from './tsMuxer.ts';
 
+/** How much sound may wait in the AAC encoder before blocks are left out (20 ms blocks: two seconds) — and until the wait is down to a second again, so skips come in stretches. */
+const MAX_AUDIO_QUEUE_BLOCKS = 100;
+const RESUME_AUDIO_QUEUE_BLOCKS = 50;
 export const LIVE_WIDTH = 1280;
 export const LIVE_HEIGHT = 720;
 export const LIVE_FPS = 30;
@@ -86,6 +90,7 @@ export interface LiveEncoderOptions {
 export class LiveEncoder {
   private video: VideoEncoder | null = null;
   private audio: AudioEncoder | null = null;
+  private resamplers: [LinearResampler, LinearResampler] | null = null;
   private tap: AudioWorkletNode | null = null;
   private muxer: TsMuxer | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -98,13 +103,13 @@ export class LiveEncoder {
   private adtsRun: Uint8Array[] = [];
   private adtsRunTs = 0;
   private pendingCut: number | null = null;
-  private segStartUs = 0;
   private seq = 0;
   private run = '';
   private running = false;
   private support: LiveSupport | null = null;
   /** Frames handed to the encoder / dropped because it was behind (for the status line). */
-  stats = { encoded: 0, dropped: 0, segments: 0 };
+  stats = { encoded: 0, dropped: 0, segments: 0, audioDropped: 0 };
+  private audioSkipping = false;
 
   constructor(private readonly opts: LiveEncoderOptions) {}
 
@@ -126,7 +131,6 @@ export class LiveEncoder {
     this.pendingCut = null;
     this.muxer = new TsMuxer(support.audio === 'aac' ? 'aac' : 'none');
     this.t0 = ctx.currentTime;
-    this.segStartUs = 0;
 
     const video = new VideoEncoder({
       output: (chunk) => this.onVideoChunk(chunk),
@@ -208,13 +212,26 @@ export class LiveEncoder {
   private onBlock(m: { type: string; data: Float32Array<ArrayBuffer>; frames: number; contextTime: number; sampleRate: number }): void {
     const a = this.audio;
     if (m.type !== 'block' || !a || a.state !== 'configured' || !this.running) return;
+    // An encoder that cannot keep up (a starved device) would queue sound without end and the sound would drift behind the
+    // picture: past the bound the block is left out — a skip, the timestamps (the audio clock's) keeping sound and picture together.
+    if (this.audioSkipping ? a.encodeQueueSize > RESUME_AUDIO_QUEUE_BLOCKS : a.encodeQueueSize > MAX_AUDIO_QUEUE_BLOCKS) {
+      this.audioSkipping = true;
+      this.stats.audioDropped++;
+      return;
+    }
+    this.audioSkipping = false;
     const timestamp = Math.max(0, Math.round((m.contextTime - this.t0) * 1e6));
     let data: Float32Array<ArrayBuffer> = m.data;
     let frames = m.frames;
     if (m.sampleRate !== AUDIO_RATE) {
-      const out = resamplePlanar(m.data, frames, 2, m.sampleRate, AUDIO_RATE);
-      data = out.data;
-      frames = out.frames;
+      // Only on a context that does not run at 48 kHz: one converter per channel for the whole stream, carried block to block (no seam).
+      if (!this.resamplers || this.resamplers[0]!.from !== m.sampleRate) this.resamplers = [new LinearResampler(m.sampleRate, AUDIO_RATE), new LinearResampler(m.sampleRate, AUDIO_RATE)];
+      const l = this.resamplers[0]!.push(m.data.subarray(0, frames));
+      const r = this.resamplers[1]!.push(m.data.subarray(frames, frames * 2));
+      frames = Math.min(l.length, r.length);
+      data = new Float32Array(new ArrayBuffer(frames * 2 * 4));
+      data.set(l.subarray(0, frames), 0);
+      data.set(r.subarray(0, frames), frames);
     }
     try {
       a.encode(new AudioData({ format: 'f32-planar', sampleRate: AUDIO_RATE, numberOfFrames: frames, numberOfChannels: 2, timestamp, data }));
@@ -280,9 +297,12 @@ export class LiveEncoder {
     const seg = this.packets.filter((p) => p.ts < keyTs);
     this.packets = this.packets.filter((p) => p.ts >= keyTs);
     if (!seg.some((p) => p.kind === 'video')) return;
-    const { bytes, durationS } = this.muxer.muxSegment(seg, 1e6 / LIVE_FPS);
-    this.segStartUs = keyTs;
-    const s: LiveSegment = { seq: this.seq, name: `sv${this.run}-${this.seq}.ts`, bytes, durationMs: Math.round(durationS * 1000), audio: this.hasAudio };
+    const { bytes } = this.muxer.muxSegment(seg, 1e6 / LIVE_FPS);
+    // What the segment covers of the broadcast: from its first frame to the keyframe that opens the next. A slow machine leaves
+    // frames out before a keyframe (the grab skips while the encoder is behind), and the player holds the last picture until the
+    // next segment — so the playlist names the whole span, never a shorter one and a jump.
+    const firstTs = seg.find((p) => p.kind === 'video')!.ts;
+    const s: LiveSegment = { seq: this.seq, name: `sv${this.run}-${this.seq}.ts`, bytes, durationMs: Math.round((keyTs - firstTs) / 1000), audio: this.hasAudio };
     this.seq++;
     this.stats.segments++;
     this.opts.onSegment(s);
@@ -315,23 +335,4 @@ export class LiveEncoder {
     this.adtsRun = [];
     this.pendingCut = null;
   }
-}
-
-/** Linear resampling of a planar stereo block (only when the context does not run at 48 kHz). */
-function resamplePlanar(input: Float32Array, frames: number, channels: number, from: number, to: number): { data: Float32Array<ArrayBuffer>; frames: number } {
-  const n = Math.round((frames * to) / from);
-  const out = new Float32Array(new ArrayBuffer(n * channels * 4));
-  const step = from / to;
-  for (let c = 0; c < channels; c++) {
-    const base = c * frames;
-    const ob = c * n;
-    for (let i = 0; i < n; i++) {
-      const x = i * step;
-      const i0 = Math.floor(x);
-      const i1 = Math.min(frames - 1, i0 + 1);
-      const f = x - i0;
-      out[ob + i] = input[base + i0]! * (1 - f) + input[base + i1]! * f;
-    }
-  }
-  return { data: out, frames: n };
 }

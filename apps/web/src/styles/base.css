@@ -133,6 +133,66 @@ h3 {
   height: 34px;
   width: auto;
 }
+/* The mark in motion: the loop is 16:9; the still mark takes its place when motion is off */
+.brandloop {
+  display: inline-block;
+  position: relative;
+  line-height: 0;
+}
+.brandloop video,
+.brandloop img {
+  display: block;
+  height: 34px;
+  width: auto;
+  border-radius: 6px;
+}
+.brandloop img {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .brandloop video {
+    display: none;
+  }
+  .brandloop img {
+    display: block;
+  }
+}
+/* The watermark: mid size, in the bottom-right corner above the tab bar (a phone) or of the window (a wide screen), faint, never in the way */
+.watermark {
+  position: fixed;
+  bottom: calc(var(--navbar) + var(--safe-bottom) + 12px);
+  right: max(12px, var(--safe-right));
+  z-index: 15;
+  pointer-events: none;
+  opacity: 0.5;
+}
+.watermark .brandloop video,
+.watermark .brandloop img {
+  height: 64px;
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+@media (min-width: 900px) {
+  .watermark {
+    bottom: 14px;
+  }
+  .watermark .brandloop video,
+  .watermark .brandloop img {
+    height: 81px;
+  }
+}
+/* A full-screen stage (the live stage, singing solo): the corner of the picture, under the top bar, clear of the controls along the bottom */
+.shell.nonav .watermark {
+  top: calc(var(--safe-top) + var(--topbar) + 10px);
+  bottom: auto;
+}
+/* The show view (full screen, no top bar): the mark at the right edge under the show's own header, out of its way */
+.show .watermark {
+  top: calc(var(--safe-top) + 96px);
+  bottom: auto;
+  right: max(10px, var(--safe-right));
+  opacity: 0.35;
+}
 .brand .word {
   font-weight: 800;
   letter-spacing: -0.02em;
@@ -182,7 +242,17 @@ h3 {
   -webkit-backdrop-filter: blur(14px);
   border-top: 1px solid var(--line);
 }
-.navbar a {
+/* One portal per cell: on a phone the first four and More; the rest (and the entries under a portal) on a wide screen only */
+.navbar .navitem {
+  display: grid;
+  align-content: center;
+}
+.navbar .navitem.wide-only,
+.navbar a.sub {
+  display: none;
+}
+.navbar a,
+.navbar .more {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -192,13 +262,63 @@ h3 {
   color: var(--muted);
   text-decoration: none;
   min-height: var(--btn);
+  border: 0;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.navbar a svg {
+.navbar a .ico,
+.navbar .more .ico {
+  display: grid;
+  place-items: center;
   width: var(--icon);
   height: var(--icon);
 }
-.navbar a.active {
+.navbar a svg,
+.navbar .more svg {
+  width: var(--icon);
+  height: var(--icon);
+}
+.navbar a.active,
+.navbar .more.active {
   color: var(--accent);
+}
+/* The More panel on a phone: the remaining portals, just above the bar */
+.navmore {
+  position: fixed;
+  left: max(10px, var(--safe-left));
+  right: max(10px, var(--safe-right));
+  bottom: calc(var(--navbar) + var(--safe-bottom) + 10px);
+  z-index: 70;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  animation: rise 0.18s ease-out;
+}
+.navmore > .row {
+  padding: 0 4px 6px;
+}
+.navmore a {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  min-height: var(--btn);
+  padding: 0 12px;
+  border-radius: var(--radius);
+  font-size: 0.98em;
+  color: var(--text);
+  text-decoration: none;
+}
+.navmore a.active {
+  color: var(--accent);
+  background: var(--surface-2);
 }
 .navbar a.primary span.ico {
   display: grid;
@@ -227,7 +347,7 @@ h3 {
     grid-column: 1;
     grid-row: 2;
     grid-auto-flow: row;
-    grid-auto-rows: 52px;
+    grid-auto-rows: auto;
     align-content: start;
     height: calc(100dvh - var(--topbar));
     padding: 12px 10px;
@@ -235,13 +355,44 @@ h3 {
     border-right: 1px solid var(--line);
     gap: 4px;
   }
+  /* the side menu lists every portal, each entry one row, the entries under a portal indented beneath it */
+  .navbar .navitem,
+  .navbar .navitem.wide-only {
+    display: grid;
+    gap: 2px;
+  }
+  .navbar .navitem.phone-only,
+  .navmore {
+    display: none;
+  }
   .navbar a {
     flex-direction: row;
     justify-content: flex-start;
     gap: 12px;
+    min-height: 48px;
     padding: 0 14px;
     border-radius: var(--radius);
     font-size: 0.95em;
+  }
+  .navbar a.sub {
+    display: flex;
+    min-height: 38px;
+    font-size: 0.88em;
+  }
+  .navbar a.sub .ico {
+    position: relative;
+  }
+  .navbar a.sub .ico::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    transform: translate(-50%, -50%);
+    opacity: 0.6;
   }
   .navbar a.active {
     background: var(--surface);

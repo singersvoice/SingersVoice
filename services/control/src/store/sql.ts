@@ -276,9 +276,17 @@ export class SqlStore {
 
   // ---------- the stage mix for the audience: a rolling window of one-second Opus batches per meet ----------
 
-  async addMix(meetId: string, batch: MixBatch): Promise<void> {
-    await this.db.run('INSERT INTO mix (meet_id, seq, created_at, data) VALUES (?,?,?,?) ON CONFLICT(meet_id, seq) DO UPDATE SET data=excluded.data', [meetId, batch.seq, new Date().toISOString(), JSON.stringify(batch)]);
-    await this.db.run('DELETE FROM mix WHERE meet_id=? AND seq <= ?', [meetId, batch.seq - MIX_KEEP]);
+  /**
+   * Keep a batch; the service numbers it — always one past the newest the meet has, whatever number
+   * the host's device sent. The device's own count starts again whenever it rebuilds its mix (a new
+   * song, a reload), and a listener who has seen batch 150 must never wait for the new count to pass
+   * 150: the numbers only ever go up. Resolves with the number given.
+   */
+  async addMix(meetId: string, batch: MixBatch): Promise<number> {
+    const seq = ((await this.db.get<{ m: number | null }>('SELECT MAX(seq) AS m FROM mix WHERE meet_id=?', [meetId]))?.m ?? 0) + 1;
+    await this.db.run('INSERT INTO mix (meet_id, seq, created_at, data) VALUES (?,?,?,?) ON CONFLICT(meet_id, seq) DO UPDATE SET data=excluded.data', [meetId, seq, new Date().toISOString(), JSON.stringify({ ...batch, seq })]);
+    await this.db.run('DELETE FROM mix WHERE meet_id=? AND seq <= ?', [meetId, seq - MIX_KEEP]);
+    return seq;
   }
 
   async listMix(meetId: string, since: number, limit = 8): Promise<{ batches: MixBatch[]; latest: number }> {

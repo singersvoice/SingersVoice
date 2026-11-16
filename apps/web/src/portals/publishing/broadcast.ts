@@ -2,21 +2,34 @@
  * The show view's broadcast, as one object: the publisher's sound bus, a 1280×720 canvas drawing
  * the show picture (the same drawing the saved performance uses), the WebCodecs encoder cutting it
  * into one-second MPEG-TS segments, and the sender delivering them to the service — which keeps
- * them for the in-house portal and forwards them to YouTube.
+ * them for the in-house portal and forwards them to YouTube — and, beside the encoder, the film of
+ * the whole broadcast: the same picture with the same sound, written piece by piece into the
+ * publisher's own Drive from "Go live" to "Stop publishing" (`MeetRecorder`, named "Broadcast").
  */
 import { signal } from '@preact/signals';
-import type { BackgroundItem, PublishJob } from '@singersvoice/protocol';
+import type { BackgroundItem, PerformanceSinger, PublishJob } from '@singersvoice/protocol';
 import { LIVE_HEIGHT, LIVE_WIDTH, LiveEncoder, liveSupport, type LiveSupport } from '../../broadcast/liveEncoder.ts';
 import { LiveSender, type SenderState } from '../../broadcast/liveSender.ts';
 import { PublisherBus } from '../../broadcast/publisherBus.ts';
+import { BROADCAST_TITLE, busSound, MeetRecorder } from '../../video/meetRecorder.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
 import type { StagePerformer } from '../../video/stage.ts';
+
+/** What the film of the broadcast is filed under: the meet, and who stood on stage while it ran. */
+export interface BroadcastFilmSpec {
+  meetId: string;
+  title: string;
+  hostName: string;
+  singers: () => PerformanceSinger[];
+}
 
 export class Broadcast {
   readonly bus = new PublisherBus();
   readonly picture = new ShowRecorder(LIVE_WIDTH, LIVE_HEIGHT);
   readonly status = signal<SenderState | null>(null);
   readonly support = signal<LiveSupport | null>(null);
+  /** The footage: the whole broadcast, into the publisher's Drive (its state says how far, and what is wrong). */
+  readonly film = new MeetRecorder(this.picture);
   private encoder: LiveEncoder | null = null;
   private sender: LiveSender | null = null;
   private unsubscribe: (() => void) | null = null;
@@ -43,8 +56,8 @@ export class Broadcast {
     this.picture.setPerformers(list);
   }
 
-  /** Start sending the show for this job. Resolves with what the browser could do. */
-  async start(job: PublishJob, onError: (message: string) => void): Promise<LiveSupport> {
+  /** Start sending the show for this job — and filming it into the publisher's Drive when `film` says what it is. Resolves with what the browser could do. */
+  async start(job: PublishJob, onError: (message: string) => void, film?: BroadcastFilmSpec): Promise<LiveSupport> {
     if (this.encoder) return this.support.value ?? (await liveSupport());
     this.job = job;
     await this.bus.ready();
@@ -76,7 +89,10 @@ export class Broadcast {
     this.support.value = support;
     if (!support.ok) {
       this.stop();
+      return support;
     }
+    // The footage: the same picture and the same sound as the broadcast, from now until the broadcast stops.
+    if (film) void this.film.start(busSound(this.bus), { ...film, film: { title: BROADCAST_TITLE, notes: 'The whole broadcast, as it went out.' } });
     return support;
   }
 
@@ -87,6 +103,7 @@ export class Broadcast {
     this.sender = null;
     this.unsubscribe?.();
     this.unsubscribe = null;
+    void this.film.stop(); // the last piece goes out and the upload completes; the film's state says when it is saved
     this.picture.stopDrawing();
     this.mirror.value?.getTracks().forEach((t) => t.stop());
     this.mirror.value = null;

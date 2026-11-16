@@ -71,12 +71,17 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
       }
       setPeerStates((s) => ({ ...s, [id]: state }));
     };
+    // Instant: a singer who changes something on stage (the background, the song, the transport) says so over the mesh; the show fetches the state now.
+    mesh.onMessage = (_from, m) => {
+      if (m.type === 'changed') session.poke();
+    };
     void mesh.start();
     session.onLeave = () => mesh.close(); // goodbyes before the session leaves
     const w = window as unknown as { __svShowMeshes?: PerformerMesh[] }; // support / e2e hooks
     (w.__svShowMeshes ??= []).push(mesh);
     return () => {
       w.__svShowMeshes = (w.__svShowMeshes ?? []).filter((m) => m !== mesh);
+      mesh.onMessage = null;
       if (session.onLeave) session.onLeave = null;
       void mesh.close();
       for (const r of remoteVideos.current.values()) {

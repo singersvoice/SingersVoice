@@ -1,6 +1,9 @@
 /**
  * Client-side meet session: join, poll (heartbeat), actions. Polling cadence: 2 s while the room
- * is forming or counting down (the kickstart instant is absolute, so 2 s is plenty), 5 s otherwise.
+ * is forming or counting down (the kickstart instant is absolute, so 2 s is plenty), 1.5 s on stage
+ * and in the show view while live, 2 s in the audience while live, 5 s otherwise — and `poke()`
+ * fetches the state at once when a peer says over the mesh that something changed (`onActed`
+ * fires after every action of this device, so the room can tell the others).
  */
 import { signal } from '@preact/signals';
 import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type MixBatch, type Participant, type RegisterPerformanceRequest, type SongPick, type StagePolicy } from '@singersvoice/protocol';
@@ -8,6 +11,8 @@ import { api, ApiError, clock, serverNow, syncClock } from '../../lib/api.ts';
 
 const POLL_FORMING_MS = 2000;
 const POLL_ONSTAGE_MS = 1500;
+/** The audience while the stage is live: the song, the background and who is on stage change under them too. */
+const POLL_AUDIENCE_LIVE_MS = 2000;
 const POLL_SETTLED_MS = 5000;
 
 export class MeetSession {
@@ -23,6 +28,9 @@ export class MeetSession {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
   private inFlight = false;
+  private pokeAgain = false;
+  /** After every action of this device went through (the snapshot is applied): the room tells its peers to fetch it now. */
+  onActed: (() => void) | null = null;
 
   /**
    * Resume token per meet — and per kind: the member record (host / performer / audience), the
@@ -78,7 +86,18 @@ export class MeetSession {
     const forming = m && (m.state === 'lobby' || m.state === 'countdown');
     // Performers (and a publisher's show view) follow the host's transport cues, so they poll faster while live.
     const onStageLive = m?.state === 'live' && (this.you.value?.slot != null || this.you.value?.role === 'publisher');
-    this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), forming ? POLL_FORMING_MS : onStageLive ? POLL_ONSTAGE_MS : POLL_SETTLED_MS);
+    this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), forming ? POLL_FORMING_MS : onStageLive ? POLL_ONSTAGE_MS : m?.state === 'live' ? POLL_AUDIENCE_LIVE_MS : POLL_SETTLED_MS);
+  }
+
+  /** Something changed (a peer said so over the mesh): fetch the snapshot now, not at the next poll. */
+  poke(): void {
+    if (this.stopped || !this.resumeToken) return;
+    if (this.inFlight) {
+      this.pokeAgain = true; // the answer on its way may predate the change: once more after it
+      return;
+    }
+    clearTimeout(this.timer);
+    void this.heartbeat().finally(() => this.schedule());
   }
 
   private apply(snap: MeetSnapshot): void {
@@ -125,12 +144,17 @@ export class MeetSession {
       }
     } finally {
       this.inFlight = false;
+      if (this.pokeAgain) {
+        this.pokeAgain = false;
+        this.poke();
+      }
     }
   }
 
   private async act(path: string, body: Record<string, unknown>): Promise<void> {
     const snap = await api.post('POST /meets/:id/slot', `/meets/${encodeURIComponent(this.meetId)}/${path}`, { resumeToken: this.resumeToken, ...body } as never);
     this.apply(snap as MeetSnapshot);
+    this.onActed?.();
   }
 
   claimSlot(slot: number | null): Promise<void> {
@@ -164,6 +188,10 @@ export class MeetSession {
   }
   setStagePolicy(stagePolicy: StagePolicy): Promise<void> {
     return this.act('policy', { stagePolicy });
+  }
+  /** The stage background — the host or any singer on stage, whenever; every device and the show follow at their next poll. */
+  setBackground(backgroundId: string): Promise<void> {
+    return this.act('background', { backgroundId });
   }
   /**
    * The song of the stage — anyone on stage: pick one (nothing up → it is up on every device; a song up → it is

@@ -93,3 +93,63 @@ finds all three under Performances. Runs in CI after the viewport screenshots:
 ```bash
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/live-duet.mjs screenshots
 ```
+
+### Sound checks — what a listener actually gets
+
+**The mix lab (`tools/ci/mix-lab.mjs`, `npm run mix-lab`)** measures the audience's player on its
+own, exactly: the real `MixPlayer` and the real `sv-mix-out` worklet run in Chromium on a song
+encoded the way the host's device encodes the stage mix (Opus batches, one a second), on an
+AudioContext at 48 kHz and again at 44.1 kHz (a laptop: every packet resampled), and six seconds of
+the output are recorded on the audio thread (the `sv-tap` worklet) and measured
+(`tools/ci/audio-measure.mjs`): the output is the song (normalised cross-correlation above 0.9 —
+the capture is matched against the whole song by FFT in the band of a sweep the test song carries,
+so the answer is a correlation coefficient and the exact track position), located within 0.3 s of
+where the player says it is (the lyrics follow the sound), **not one click** (the song puts nothing
+in the top of the spectrum, so a burst there is a seam — none), not one gap, the position advancing
+at real time, 3–5 s behind the newest batch.
+
+**The live e2e** then measures the real pipeline, with the synthetic singing voice as every
+microphone (a smooth harmonic voice, in phrases) and the test song (`tools/ci/e2e-song.mjs`: the
+sample on a loop with a slow 4.5 → 7.5 kHz sweep under it, so any six seconds can be told exactly
+where in the song they were):
+
+- **the audience**: six seconds of exactly what an audience device plays (`window.__svMix`),
+  recorded at the same moment as six seconds of the host's own mix (`window.__svStage`) — sound
+  (RMS), **no gap** (10 ms or more of digital silence), **no click** (an isolated step of 0.25 or
+  more, unmistakable whatever a codec adds), the **song itself** (correlation above 0.3 in the
+  audience's output and in the host's mix), **where the mix player says it is** (within 0.75 s of
+  the position the player reported as the capture began), and 3–8 s behind the stage — when the
+  host's Opus encoder is starved on the test machine (its queue past 25 blocks, or blocks left out
+  during the capture), the gap, click, song and position checks stand down and say so: the audience
+  then hears the skips the bounded backlog makes, which is the broadcaster working as designed, and
+  the player itself is measured exactly in the mix lab;
+- **the broadcast**: six seconds of the publisher bus (`window.__svBroadcast.bus.output`, exactly
+  what the encoder gets) against the host's mix at the same moment — sound, no gap, no click, the
+  backing track in it (correlation above 0.3), and the track **where the singers are** (the stage's
+  position less the quarter-second vocal lag, within a second).
+
+The measurements print beside the checks (`audience sound: …`, `the host's mix: …`, `publisher bus
+sound: …`). The unit side of the same thing is `apps/web/test/mixOut.test.ts`: the stateful
+resampler keeps one curve across 20 ms blocks at 44.1 → 48 and 48 → 44.1 kHz, and the `sv-mix-out`
+worklet (loaded with stand-ins for the AudioWorklet globals) waits for its cushion, plays packets
+back to back without a seam at either rate, goes silent (not noisy) when dry and resumes once the
+cushion is back.
+
+### Instant changes and the footage
+
+In the same run a singer on his phone switches the **stage background from the live stage**; a
+MutationObserver in every other page notes, on that page's own clock, the moment the new
+background is in its DOM, so the test machine's polling of four busy browsers never counts: the
+word must have gone out over the mesh to both peers (the other singer and the show view), every
+page must have the new background within two polls (the show view under 4 s, the audience under
+5 s, the host's stage under 5 s not counting the time its main thread was blocked — the host's is
+the busiest page on one machine running four browsers, and the watchdog's stalls that overlap
+the switch are the machine's, not the app's; the timings print beside the check, and on a real
+device the word arrives within a few hundred milliseconds), and the broadcast picture
+(`__svBroadcast.picture.backgroundId`) must draw it. The playlist the fake YouTube received must
+say each segment is about a second (0.9–2 s: a keyframe is asked for at the first grab a second
+after the last, so a late grab makes a longer segment, never a shorter one), and the segment
+itself must probe as a second of frames unless the encoder left frames out (`stats.dropped`). While the
+broadcast is on air the bar must say the **footage** is being recorded into the publisher's storage
+(`[data-footage="recording"]`), *Stop publishing* must complete it (`saved`), and at the end the
+publisher's Performances page must list *Broadcast* with its video.

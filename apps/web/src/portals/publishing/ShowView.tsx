@@ -12,16 +12,16 @@
  * the meet (stage, transport) and pulls media. The picture itself is `showStage.tsx`, shared with
  * the Preview tab's monitor tiles.
  */
-import { DESTINATIONS, fedDestinations, formatMs, playbackPositionMs, type Destination, type DestinationKind, type Meet, type Participant, type PublishJob } from '@singersvoice/protocol';
+import { DESTINATIONS, fedDestinations, formatMs, playbackPositionMs, type Destination, type DestinationKind, type Meet, type Participant, type PerformanceSinger, type PublishJob } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { IcMic, IcMusic, IcPlay, IcStop, IcUsers, IcX, IcZoom } from '../../components/icons.tsx';
-import { Page } from '../../components/Shell.tsx';
+import { IcMic, IcMusic, IcPlay, IcStop, IcUsers, IcVideo, IcX, IcZoom } from '../../components/icons.tsx';
+import { BrandWatermark, Page } from '../../components/Shell.tsx';
 import { Empty, Spinner } from '../../components/ui.tsx';
 import { api, ApiError, clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
 import { go, href } from '../../lib/nav.ts';
 import { keepAwake } from '../../lib/platform.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { canPublish } from '../../state/session.ts';
+import { canPublish, needsReconnect, profile } from '../../state/session.ts';
 import { MeetSession } from '../meets/meetSession.ts';
 import { loadMeetTrack } from '../meets/trackSource.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
@@ -38,6 +38,7 @@ const JOB_POLL_MS = 8000;
 const SYNC_TOLERANCE_MS = 300;
 
 export const activeJob = (j: PublishJob) => j.state === 'requested' || j.state === 'starting' || j.state === 'live';
+const mb = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB` : `${Math.round(bytes / 1024)} KB`);
 
 export function ShowView(props: { id: string }) {
   const [checked, setChecked] = useState(false);
@@ -211,13 +212,31 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     return () => clearInterval(t);
   }, [job?.jobId, job?.state]);
 
+  // ---- the footage: the whole broadcast into this publisher's Drive, from Go live to Stop publishing ----
+  const film = broadcast.film.state.value;
+  /** Everyone who stood on stage while the footage ran (its manifest names them). */
+  const filmSingers = useRef(new Map<number, PerformanceSinger>());
+  const stageKey = meet.stage.map((s) => `${s.slot}:${s.participantId ?? ''}`).join('|');
+  useEffect(() => {
+    for (const s of meet.stage) if (s.participantId) filmSingers.current.set(s.slot, { slot: s.slot, displayName: s.displayName });
+  }, [stageKey]);
+  const filmSpec = () => {
+    filmSingers.current = new Map(meet.stage.filter((s) => s.participantId).map((s) => [s.slot, { slot: s.slot, displayName: s.displayName }]));
+    return { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot) };
+  };
+  /** The footage goes to this publisher's Drive (signed in with Google; a lapsed session has to reconnect first) — on the device itself in the developer preview. */
+  const driveReady = !needsReconnect.value;
+  const onDrive = profile.value?.mode === 'drive';
+
   /** This browser starts encoding and sending the show for the job: the watch page, YouTube, and every RTMP destination the relay carries. */
   const startSending = async (j: PublishJob) => {
     const viaRelay = relayOn || (j.live?.relay !== undefined && j.live.relay !== 'off'); // the service said so when it made the job
     if (!fedDestinations(j.destinations, viaRelay).length) return;
-    const s = await broadcast.start(j, (m) => toast(`Broadcast stopped: ${m}`, 'error', 10000));
+    const s = await broadcast.start(j, (m) => toast(`Broadcast stopped: ${m}`, 'error', 10000), driveReady ? filmSpec() : undefined);
     if (!s.ok) toast(s.reason, 'error', 12000);
     else if (s.reason) toast(s.reason, 'warn', 12000);
+    if (s.ok && !driveReady) toast('The footage is not being saved: reconnect Drive first', 'warn', 8000);
+    else if (s.ok && !onDrive) toast('The footage stays on this device — sign in with Google to keep it in your Drive', 'warn', 8000);
   };
   const goLive = async () => {
     if (!picked?.length) return toast('Pick at least one destination', 'warn');
@@ -385,6 +404,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
       <audio ref={audioRef} src={trackUrl ?? undefined} preload="auto" crossOrigin="anonymous" />
       <Vocals vocals={feed.vocals} on={false} />
 
+      <BrandWatermark />
       <header class="show-top">
         <div class="show-title">
           <h1>{meet.title}</h1>
@@ -469,6 +489,13 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
               </>
             )}
             {sending?.state === 'sending' && <span class="muted"> · starting the encoder…</span>}
+            {(film.recording || film.saved || film.note) && (
+              <span class={`footage ${film.note ? 'warn' : ''}`} data-footage={film.recording ? 'recording' : film.saved ? 'saved' : 'off'} data-footage-bytes={film.bytes} title={film.recording ? 'The whole broadcast, as it goes out, into your Drive (Performances → Broadcast)' : film.saved ? 'The footage is in your Drive (Performances → Broadcast)' : film.note ?? ''}>
+                {' '}
+                · <IcVideo size={14} />{' '}
+                {film.recording ? `footage to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.seconds * 1000)} · ${mb(film.stored || film.bytes)}` : film.saved ? `footage saved to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.saved.durationMs)}` : film.note}
+              </span>
+            )}
             {job.watchUrl && (
               <>
                 {' '}

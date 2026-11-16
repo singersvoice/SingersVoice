@@ -9,6 +9,11 @@
  * "Perfect negotiation": the peer with the lexically smaller participantId is polite, so two
  * simultaneous offers never deadlock. Bitrate is capped per peer and scaled with the mesh size
  * so a phone on Wi‑Fi can carry a 10-singer stage.
+ *
+ * Every link also carries a small data channel (`sv`, negotiated on both sides, so it never
+ * renegotiates): a singer who changes something on stage — the background, the song, the
+ * transport — tells the others and the show view over it, and they fetch the new state at once
+ * rather than at their next poll. The service stays the source of truth; the channel only says "now".
  */
 import type { IceServer, MeetSignal } from '@singersvoice/protocol';
 import { api } from '../lib/api.ts';
@@ -47,7 +52,14 @@ interface Peer {
   offeredAt: number;
   /** When a dropped peer may be re-made (ms), so a dead link is retried with backoff instead of hammered. */
   retryAt: number;
+  /** The small message channel of this link (null where the browser has none). */
+  dc: RTCDataChannel | null;
 }
+
+/** What travels over the mesh's message channel. */
+export type MeshMessage = { type: 'changed' };
+/** The channel's negotiated id (the same on both sides of every link). */
+const DC_ID = 1;
 
 const POLL_CONNECTING_MS = 900;
 const POLL_STEADY_MS = 2500;
@@ -74,6 +86,8 @@ export class PerformerMesh {
   onRemote: ((id: string, stream: MediaStream | null, state: PeerState) => void) | null = null;
   /** A singer's vocal arrived / went away (on links that carry vocals: a publisher's, a recording singer's). */
   onRemoteAudio: ((id: string, stream: MediaStream | null) => void) | null = null;
+  /** A message from a peer over the mesh (see `say`). */
+  onMessage: ((from: string, message: MeshMessage) => void) | null = null;
   private localAudio: MediaStreamTrack | null = null;
   /** A publisher's show view only receives (never sends a camera). */
   private readonly receiveOnly: boolean;
@@ -154,6 +168,22 @@ export class PerformerMesh {
     return out;
   }
 
+  /** Tell every linked peer something, now (a link that is not up yet simply misses it: the poll covers that). Returns how many were told. */
+  say(message: MeshMessage): number {
+    const text = JSON.stringify(message);
+    let told = 0;
+    for (const p of this.peers.values()) {
+      if (p.dc?.readyState !== 'open') continue;
+      try {
+        p.dc.send(text);
+        told++;
+      } catch {
+        /* closing */
+      }
+    }
+    return told;
+  }
+
   /** Per-peer RTP counters (support / tests): frames sent & received, bytes, and the sender track state. */
   async stats(): Promise<Record<string, { framesSent: number; framesReceived: number; bytesSent: number; bytesReceived: number; audioBytesSent: number; audioBytesReceived: number; senderTrack: string; connection: string }>> {
     const out: Record<string, { framesSent: number; framesReceived: number; bytesSent: number; bytesReceived: number; audioBytesSent: number; audioBytesReceived: number; senderTrack: string; connection: string }> = {};
@@ -197,8 +227,23 @@ export class PerformerMesh {
 
   private connect(id: string, inbound: boolean): void {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers as RTCIceServer[], bundlePolicy: 'max-bundle' });
-    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0 };
+    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0, dc: null };
     this.peers.set(id, peer);
+    // The message channel, made before the first offer on both sides with the same id: part of the link from the start, never a renegotiation.
+    try {
+      const dc = pc.createDataChannel('sv', { negotiated: true, id: DC_ID, ordered: true });
+      dc.onmessage = (e) => {
+        try {
+          const m = JSON.parse(String(e.data)) as MeshMessage;
+          if (m && m.type === 'changed') this.onMessage?.(id, m);
+        } catch {
+          /* not ours */
+        }
+      };
+      peer.dc = dc;
+    } catch {
+      peer.dc = null;
+    }
     // Always have a video transceiver so the offer is the same whether or not our camera is ready.
     const track = this.local?.getVideoTracks()[0] ?? null;
     if (track && this.local && !this.receiveOnly) pc.addTrack(track, this.local);
@@ -321,6 +366,7 @@ export class PerformerMesh {
     p.pc.onicecandidate = null;
     p.pc.ontrack = null;
     p.pc.onconnectionstatechange = null;
+    if (p.dc) p.dc.onmessage = null;
     p.pc.close();
     this.onRemote?.(id, null, 'failed');
     if (p.audio) this.onRemoteAudio?.(id, null);

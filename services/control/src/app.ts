@@ -54,7 +54,7 @@ import {
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
-import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
+import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setBackground, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
 import { checkoutConfigured, createCheckoutSession, createPortalSession, fetchPublisherPrice, PLANS, planFromSubscription, verifyStripeSignature, type BillingConfig, type StripeSubscription } from './billing.ts';
@@ -662,6 +662,21 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json((await snapshot(c, meet.meetId, host))!);
   });
 
+  app.post('/meets/:id/background', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; backgroundId?: string };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const p = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    const r = setBackground(meet, p, String(body.backgroundId ?? ''));
+    if (!r.ok) return err(c, r.reason === 'bad_background' ? 400 : r.reason === 'meet_closed' ? 409 : 403, r.reason ?? 'refused', r.reason === 'not_on_stage' ? 'Only the host and the singers on stage choose the background' : r.reason === 'meet_closed' ? 'This meet is over' : 'That is not a background');
+    touch(meet);
+    await store.saveMeet(meet);
+    return c.json((await snapshot(c, meet.meetId, p))!);
+  });
+
   app.post('/meets/:id/policy', async (c) => {
     const { store } = c.get('deps');
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; stagePolicy?: string };
@@ -897,8 +912,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       packets: body.packets.map((p) => ({ ts: Number(p?.ts) || 0, b64: String(p?.b64 ?? '') })),
       serverEpochMs: Date.now(),
     };
-    await store.addMix(meet.meetId, batch);
-    return c.json({ ok: true as const, seq: batch.seq });
+    const seq = await store.addMix(meet.meetId, batch);
+    return c.json({ ok: true as const, seq });
   });
   app.get('/meets/:id/mix', async (c) => {
     const { store } = c.get('deps');

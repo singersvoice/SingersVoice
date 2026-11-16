@@ -13,7 +13,7 @@ import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { IcHeadphones, IcUsers } from '../../components/icons.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
-import { Logo } from '../../components/Shell.tsx';
+import { BrandWatermark, Logo } from '../../components/Shell.tsx';
 import { Spinner } from '../../components/ui.tsx';
 import { api, controlConfigured, serverNow, syncClock } from '../../lib/api.ts';
 import { asset, href } from '../../lib/nav.ts';
@@ -95,6 +95,7 @@ export function Watch(props: { id: string }) {
           </a>
         )}
       </header>
+      <BrandWatermark />
       <main class="content">
         {!controlConfigured.value && <div class="callout warn">The watch portal needs the SingersVoice service.</div>}
         {error && <div class="callout danger">{error}</div>}

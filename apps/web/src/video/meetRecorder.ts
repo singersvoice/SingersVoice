@@ -7,10 +7,16 @@
  * straight into the host's Google Drive as they come (`PerformanceStream`: a resumable upload),
  * so a two-hour meet never has to fit in memory and a tab that dies loses seconds, not the meet.
  * The finished film is a performance of the meet ("Full meet"), shared with everyone who was in it.
+ *
+ * The same recorder films the publisher's broadcast: in the show view the picture is the broadcast
+ * canvas and the sound is the publisher bus (the backing track and every vocal, exactly what goes
+ * out), and the whole broadcast lands in the publisher's own Drive as "Broadcast" — the footage of
+ * the show as it was streamed, kept by the account that is allowed to publish.
  */
 import { signal } from '@preact/signals';
 import { newId, type PerformanceManifest, type PerformanceSinger } from '@singersvoice/protocol';
 import type { AudioEngine } from '../audio/engine.ts';
+import type { PublisherBus } from '../broadcast/publisherBus.ts';
 import { platformName } from '../lib/platform.ts';
 import type { PerformanceStream, PerformanceSummary } from '../lib/storage/types.ts';
 import { audioSettings } from '../state/settings.ts';
@@ -23,6 +29,44 @@ const PIECE_MS = 10_000;
 /** The film's frame rate where the browser has no hardware H.264 (WebM, software): light on the stage's own device. */
 const SOFT_FPS = 15;
 export const FILM_TITLE = 'Full meet';
+/** The publisher's footage of the broadcast, as it went out. */
+export const BROADCAST_TITLE = 'Broadcast';
+
+/** Where the film's sound comes from: an audio context and a way to route the sound into the recorder's destination. */
+export interface FilmSound {
+  ctx: AudioContext;
+  /** Route the sound into `dest`; the function returned undoes it. */
+  attach(dest: AudioNode): () => void;
+}
+
+/** The stage mix on the host's device: every mix bus the show builds (the song's, the talk between songs) through one tap. */
+export const stageSound = (engine: AudioEngine, show: ShowRecorder): FilmSound => ({
+  ctx: engine.ctx,
+  attach: (dest) => {
+    const tap = engine.ctx.createGain();
+    tap.connect(dest);
+    show.setTap(tap);
+    return () => {
+      show.setTap(null);
+      tap.disconnect();
+    };
+  },
+});
+
+/** The publisher bus in the show view: the broadcast's own sound (the backing track and every singer's vocal, blended). */
+export const busSound = (bus: PublisherBus): FilmSound => ({
+  ctx: bus.ctx,
+  attach: (dest) => {
+    bus.output.connect(dest);
+    return () => {
+      try {
+        bus.output.disconnect(dest);
+      } catch {
+        /* not connected */
+      }
+    };
+  },
+});
 
 export interface MeetFilmState {
   recording: boolean;
@@ -42,12 +86,15 @@ export interface MeetFilmSpec {
   hostName: string;
   /** Who is on stage, asked when the film ends (the manifest names them). */
   singers: () => PerformanceSinger[];
+  /** What the film is called in the performances list ("Full meet" unless said otherwise) and the note on it. */
+  film?: { title: string; notes: string };
 }
 
 export class MeetRecorder {
   readonly state = signal<MeetFilmState>({ recording: false, seconds: 0, bytes: 0, stored: 0, note: null, saved: null });
   private mr: MediaRecorder | null = null;
-  private tap: GainNode | null = null;
+  /** Undoes the sound's routing into the recorder. */
+  private detach: (() => void) | null = null;
   private stream: PerformanceStream | null = null;
   private manifest: PerformanceManifest | null = null;
   private startedAt = 0;
@@ -68,7 +115,7 @@ export class MeetRecorder {
   private starting = false;
 
   /** Start the film (no-op while one runs or starts). The upload session is opened first: no Drive, no film. */
-  async start(engine: AudioEngine, spec: MeetFilmSpec): Promise<void> {
+  async start(sound: FilmSound, spec: MeetFilmSpec): Promise<void> {
     if (this.mr || this.stopping || this.starting) return;
     const mime = pickShowMime();
     if (!mime || !showSupported()) {
@@ -78,7 +125,7 @@ export class MeetRecorder {
     this.starting = true;
     this.cancelled = false;
     try {
-      await this.begin(engine, spec, mime);
+      await this.begin(sound, spec, mime);
     } finally {
       this.starting = false;
     }
@@ -86,7 +133,7 @@ export class MeetRecorder {
   /** `stop` came while the upload session was still being opened: the film is not started after all. */
   private cancelled = false;
 
-  private async begin(engine: AudioEngine, spec: MeetFilmSpec, mime: string): Promise<void> {
+  private async begin(sound: FilmSound, spec: MeetFilmSpec, mime: string): Promise<void> {
     const createdAt = new Date().toISOString();
     const a = audioSettings.peek();
     const ext = mime.includes('mp4') ? 'mp4' : 'webm';
@@ -102,17 +149,17 @@ export class MeetRecorder {
       createdAt,
       expiresAt: null,
       trackId: '',
-      trackTitle: FILM_TITLE,
+      trackTitle: spec.film?.title ?? FILM_TITLE,
       trackArtist: '',
       singerSlot: 1,
       meetId: spec.meetId,
       durationMs: 0,
-      timeline: { startedAtEpochMs: Date.now(), vocalOffsetMs: 0, videoOffsetMs: 0, latencyCompMs: 0, sampleRate: engine.ctx.sampleRate },
+      timeline: { startedAtEpochMs: Date.now(), vocalOffsetMs: 0, videoOffsetMs: 0, latencyCompMs: 0, sampleRate: sound.ctx.sampleRate },
       playback: { tempo: a.tempo, keyShift: a.keyShift, backingGain: a.backingGain },
       fx: a.params,
       device: { userAgent: navigator.userAgent, platform: platformName, headphones: null },
       files: [{ name: `video.${ext}`, mimeType: mime, size: 0, sha256: '' }],
-      notes: 'The whole meet, as the audience saw and heard it.',
+      notes: spec.film?.notes ?? 'The whole meet, as the audience saw and heard it.',
     };
     let stream: PerformanceStream;
     try {
@@ -125,13 +172,11 @@ export class MeetRecorder {
       void stream.abort();
       return;
     }
-    // The picture: the show canvas, drawn for the whole meet. The sound: every mix bus, through one tap.
+    // The picture: the show canvas, drawn for the whole meet. The sound: whatever `sound` routes in (the stage mix, the publisher bus).
     this.show.keepDrawing = true;
     this.show.startDrawing();
-    const tap = engine.ctx.createGain();
-    const dest = engine.ctx.createMediaStreamDestination();
-    tap.connect(dest);
-    this.show.setTap(tap);
+    const dest = sound.ctx.createMediaStreamDestination();
+    const detach = sound.attach(dest);
     // H.264 in MP4 is hardware-encoded wherever it is offered (Windows, Mac, iOS, Android): the film is the full
     // 1280×720 show at 24 fps. A browser that only offers WebM encodes in software — the film then runs lighter
     // (960×540, 15 fps, drawn from the show canvas) so the stage itself never slows down.
@@ -144,14 +189,14 @@ export class MeetRecorder {
     try {
       mr = new MediaRecorder(media, { mimeType: mime, videoBitsPerSecond: soft ? 1_200_000 : 2_500_000, audioBitsPerSecond: 160_000 });
     } catch (e) {
-      this.show.setTap(null);
+      detach();
       this.show.keepDrawing = false;
       this.stopScaling();
       void stream.abort();
       this.state.value = { ...this.state.value, note: `This browser cannot record the meet: ${e instanceof Error ? e.message : String(e)}` };
       return;
     }
-    this.tap = tap;
+    this.detach = detach;
     this.stream = stream;
     this.manifest = manifest;
     this.mr = mr;
@@ -168,7 +213,8 @@ export class MeetRecorder {
       mr.start(PIECE_MS);
     } catch (e) {
       this.mr = null;
-      this.show.setTap(null);
+      this.detach = null;
+      detach();
       this.show.keepDrawing = false;
       this.stopScaling();
       void stream.abort();
@@ -241,9 +287,8 @@ export class MeetRecorder {
         });
       }
       this.mr = null;
-      this.show.setTap(null);
-      this.tap?.disconnect();
-      this.tap = null;
+      this.detach?.();
+      this.detach = null;
       this.stopScaling(); // the picture's track goes with the recorder
       this.show.keepDrawing = false;
       this.show.stopDrawing();
