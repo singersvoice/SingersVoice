@@ -57,6 +57,8 @@ export interface RoomStage {
   others: number;
   /** Other performers whose picture arrives but has not moved for a while (their camera froze on their device), by participant id. */
   still: string[];
+  /** My camera, in words (frame rate, the cut-out, a picture standing still), refreshed every second while it is on. */
+  cameraLine: string;
   /** Make the video link to a performer again from scratch (a plain Reconnect for a picture that stands still). */
   reconnect: (id: string) => void;
 }
@@ -138,6 +140,16 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     };
   }, [compositor]);
   const reconnect = (id: string) => mesh?.remake(id);
+  // My camera's own line on the strip, once a second while it is on: what it does is never a guess.
+  const [cameraLine, setCameraLine] = useState('');
+  useEffect(() => {
+    if (!camOn || !onStage) {
+      setCameraLine('');
+      return;
+    }
+    const t = setInterval(() => setCameraLine(feed.cameraLine), 1000);
+    return () => clearInterval(t);
+  }, [camOn, onStage, feed]);
   // ---- the camera's health: a camera the browser muted or ended, or one frozen on a picture, is restarted — once by itself, then from a tap ----
   const [camHealth, setCamHealth] = useState<FeedHealth>('ok');
   const restarting = useRef<Promise<void> | null>(null);
@@ -333,5 +345,5 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect };
+  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect, cameraLine };
 }

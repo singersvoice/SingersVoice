@@ -97,6 +97,9 @@ export class LocalFeed {
   /** The last measurement of the singer (as a key) and since when it has not changed (0: it changes). */
   private lastMeasure: string | null = null;
   private stillSince = 0;
+  /** Frames the camera presented in the last second (0 where the browser gives no frame callbacks), for the strip's camera line. */
+  cameraFps = 0;
+  private framesAtSample = 0;
   /** The stage frame, set from the measured head and held (`framing.ts`). */
   readonly seat = new Seat(W, H);
   private probe: CanvasRenderingContext2D | null = null;
@@ -171,6 +174,8 @@ export class LocalFeed {
   private watch(track: MediaStreamTrack | null): void {
     this.watchGen++;
     this.framesSeen = 0;
+    this.framesAtSample = 0;
+    this.cameraFps = 0;
     this.lastFrameAt = 0;
     this.lastMeasure = null;
     this.stillSince = 0;
@@ -219,6 +224,8 @@ export class LocalFeed {
    * cut-out); frames flowing again, or the picture moving again, is 'ok'.
    */
   private sampleHealth(): void {
+    this.cameraFps = Math.max(0, this.framesSeen - this.framesAtSample);
+    this.framesAtSample = this.framesSeen;
     const t = this.watched;
     if (!t || t.readyState !== 'live' || t.muted) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return; // a hidden page presents no frames
@@ -292,6 +299,14 @@ export class LocalFeed {
   /** Where the seat is: settling (the whole camera frame goes out), gliding to a new frame, or held. */
   get seatState(): SeatState {
     return this.seat.state(performance.now());
+  }
+
+  /** What the camera is doing, in words for the stage strip: its frame rate (or that the browser tells no frames), the cut-out, and how long the picture has stood still. */
+  get cameraLine(): string {
+    const cut = this.segmenter.mode === 'model' ? 'cut-out model' : this.segmenter.mode === 'oval' ? 'cut-out silhouette' : this.segmenter.mode === 'loading' ? 'cut-out loading' : 'cut-out off';
+    const frames = this.framesSeen > 0 ? `camera ${this.cameraFps} fps` : 'camera (frames not told)';
+    const still = this.stillSince ? ` · picture still ${Math.round((performance.now() - this.stillSince) / 1000)} s` : '';
+    return `${frames} · ${cut}${still}`;
   }
 
   private tick(): void {

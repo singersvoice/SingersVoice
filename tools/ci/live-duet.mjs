@@ -846,8 +846,9 @@ try {
   await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
   await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
   check(true, '"Stop song" on a singer\'s device wraps up the song for everyone — straight back to the lobby stage');
-  await alice.page.locator('[data-save="done"][data-save-id]').nth(0).waitFor({ timeout: 60000 });
-  await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 90000 });
+  // The saves (a recorder's last pieces, the files written) can take minutes on a starved machine: the verdict is theirs, not a clock's.
+  await alice.page.locator('[data-save="done"][data-save-id], [data-save="failed"][data-save-id]').first().waitFor({ timeout: 150000 });
+  await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 150000 });
   check((await alice.page.locator('[data-save="failed"]').count()) === 0, 'the second song saved itself too (nothing stuck)');
   // Only the host removes people: dave (on stage by now) is put out of the meet for good and sees why.
   alice.page.once('dialog', (d) => void d.accept());

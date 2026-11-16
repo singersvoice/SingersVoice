@@ -73,6 +73,9 @@ for fifteen seconds (the model measures the singer exactly the same, cut-out aft
 person never does, however still) is frozen too — and the cut-out model's answers (a model that
 stops answering is given up on after three seconds; the soft silhouette stands in, the singer
 keeps moving, and the model is back the moment it answers). A camera that
+went dark or froze is restarted once by the device itself — and the strip always carries a plain
+**Restart camera** button while the camera is on, beside a line that says what the camera is doing
+(*camera 14 fps · cut-out model*, *picture still 9 s*), so a singer never has to guess. A camera that
 went dark or froze is restarted once by the device itself — on iOS together with the microphone,
 as the one capture that platform allows — and after that the stage strip offers **Your camera froze
 — restart it** as a plain button. Every opening of the microphone on iOS (the seat, *I'm ready*,

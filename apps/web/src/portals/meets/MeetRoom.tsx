@@ -831,6 +831,16 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
             {app.cameraOn ? <IcCameraOff size={16} /> : <IcCamera size={16} />}
           </button>
         )}
+        {props.onStage && stage.camOn && stage.camHealth === 'ok' && (
+          <button class="btn sm" style="pointer-events:auto" data-cam-restart="1" title="Open the camera again from scratch — the plain cure for a picture that stands still" onClick={() => void stage.restartCamera()}>
+            <IcCamera size={16} /> Restart camera
+          </button>
+        )}
+        {props.onStage && stage.camOn && stage.cameraLine && (
+          <span class="chip faint" style="pointer-events:none" data-camera-line={stage.cameraLine}>
+            {stage.cameraLine}
+          </span>
+        )}
         {props.onStage && stage.distance && (
           <span class="chip warn" style="pointer-events:none" data-distance={stage.distance}>
             {stage.distance === 'close' ? 'Sit back a little — the stage shows what your camera sees' : 'Come a little closer to the camera'}
