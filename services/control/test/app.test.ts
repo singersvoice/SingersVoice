@@ -12,6 +12,13 @@ import { SqlStore } from '../src/store/sql.ts';
 
 let app: ReturnType<typeof createApp>;
 let deps: AppDeps;
+/** Work the service finishes after an answer (YouTube's PUTs): collected here, awaited by the tests that care. */
+let pending: Promise<unknown>[] = [];
+const drain = async () => {
+  const work = pending;
+  pending = [];
+  await Promise.all(work);
+};
 
 beforeAll(async () => {
   const db = await openNodeSqlite(':memory:');
@@ -23,6 +30,7 @@ beforeAll(async () => {
     allowedOrigins: [],
     privilegedEmails: [],
     version: 'test',
+    background: (p) => void pending.push(p),
   };
   app = createApp(() => deps);
 });
@@ -502,11 +510,15 @@ describe('sv-control API', () => {
       expect((await put('bad name.ts', 0, seg(0))).status).toBe(400);
       expect((await put('s0.ts', 0, new Uint8Array([1, 2, 3]))).status).toBe(400); // not TS
       expect((await app.request(`/publishing/jobs/${job.jobId}/live/s0.ts?seq=0&dur=2000`, { method: 'PUT', headers: { 'X-Dev-User': 'bob', 'X-Dev-Name': 'bob' }, body: seg(0) as unknown as BodyInit })).status).toBe(403); // bob: not privileged
-      const first = await json<{ job: { state: string; live: { segments: number; youtube: string } }; youtube: { status: number } | null }>(await put('s0.ts', 0, seg(0)));
+      const first = await json<{ job: { state: string; live: { segments: number; youtube: string } } }>(await put('s0.ts', 0, seg(0)));
       expect(first.job.state).toBe('live');
       expect(first.job.live.segments).toBe(1);
-      expect(first.job.live.youtube).toBe('ok');
-      expect(first.youtube?.status).toBe(200);
+      // YouTube is sent the segment after the answer went out (its PUTs must never hold up the next segment): the verdict lands on the job then.
+      expect(first.job.live.youtube).toBe('waiting');
+      await drain();
+      const verdict = (await json<{ jobs: { jobId: string; live: { youtube: string; youtubeNote: string } }[] }>(await app.request('/publishing/jobs', { headers: as('alice') }))).jobs.find((j) => j.jobId === job.jobId)!;
+      expect(verdict.live.youtube).toBe('ok');
+      expect(verdict.live.youtubeNote).toBe('YouTube is receiving the show');
       // Segment then playlist, to the key's ingest URL, the key never in the playlist body.
       expect(sent.map((x) => x.method)).toEqual(['PUT', 'PUT']);
       expect(sent[0]!.url).toContain('cid=wxyz-9876&copy=0&file=s0.ts');
@@ -515,24 +527,31 @@ describe('sv-control API', () => {
       expect(sent[1]!.body).toContain('#EXT-X-MEDIA-SEQUENCE:0');
       expect(sent[1]!.body).toContain('#EXTINF:2.000,\ns0.ts');
       await put('s1.ts', 1, seg(1));
+      await drain();
       await put('s2.ts', 2, seg(2), 1900);
+      await drain();
       expect(sent[5]!.body).toContain('#EXT-X-TARGETDURATION:2');
+      // The next answer carries the verdict of the segment before it.
+      const third = await json<{ job: { live: { youtube: string } } }>(await put('s3.ts', 3, seg(3)));
+      expect(third.job.live.youtube).toBe('ok');
+      await drain();
 
       // The portal: on, with a playlist of the kept segments and the bytes themselves.
       const status = await json<{ live: boolean; segments: number; playlistPath: string }>(await app.request(`/watch/${id}/live`));
       expect(status.live).toBe(true);
-      expect(status.segments).toBe(3);
+      expect(status.segments).toBe(4);
       expect(status.playlistPath).toBe(`/watch/${id}/live.m3u8`);
       const pl = await app.request(`/watch/${id}/live.m3u8`);
       expect(pl.headers.get('content-type')).toContain('mpegurl');
       const text = await pl.text();
       expect(text).toContain('#EXT-X-MEDIA-SEQUENCE:0');
-      expect(text).toContain('live/s2.ts');
+      expect(text).toContain('live/s3.ts');
       const bytes = new Uint8Array(await (await app.request(`/watch/${id}/live/s1.ts`)).arrayBuffer());
       expect(bytes).toEqual(seg(1));
       expect((await app.request(`/watch/${id}/live/nope.ts`)).status).toBe(404);
       // The rolling window: after 14 segments only the last LIVE_KEEP (12) remain, the sequence moves on.
-      for (let i = 3; i < 14; i++) await put(`s${i}.ts`, i, seg(i));
+      for (let i = 4; i < 14; i++) await put(`s${i}.ts`, i, seg(i));
+      await drain();
       const later = await (await app.request(`/watch/${id}/live.m3u8`)).text();
       expect(later).toContain(`#EXT-X-MEDIA-SEQUENCE:${14 - LIVE_KEEP}`);
       expect(later).not.toContain('live/s1.ts');
@@ -544,12 +563,15 @@ describe('sv-control API', () => {
       expect(restarted).toContain('#EXT-X-MEDIA-SEQUENCE:0');
       expect(restarted).not.toContain('live/s9.ts');
       for (let i = 1; i < 11; i++) await put(`r${i}.ts`, i, seg(20 + i));
+      await drain();
       // A wrong key: YouTube answers 401 → rejected, the job carries the reason, the portal keeps playing.
       youtubeStatus = 401;
-      const rejected = await json<{ job: { state: string; error: string | null; live: { youtube: string } } }>(await put('r11.ts', 11, seg(31)));
-      expect(rejected.job.live.youtube).toBe('rejected');
-      expect(rejected.job.error).toContain('stream key');
-      expect(rejected.job.state).toBe('live');
+      await put('r11.ts', 11, seg(31));
+      await drain();
+      const rejected = (await json<{ jobs: { jobId: string; state: string; error: string | null; live: { youtube: string } }[] }>(await app.request('/publishing/jobs', { headers: as('alice') }))).jobs.find((j) => j.jobId === job.jobId)!;
+      expect(rejected.live.youtube).toBe('rejected');
+      expect(rejected.error).toContain('stream key');
+      expect(rejected.state).toBe('live');
       expect((await json<{ live: boolean }>(await app.request(`/watch/${id}/live`))).live).toBe(true);
 
       // Stop: segments gone, the portal off, no more segments accepted.
@@ -600,7 +622,7 @@ describe('sv-control API', () => {
       expect(first.job.live.relayNote).toContain('youtube, facebook');
       expect(first.job.live.youtube).toBe('ok'); // YouTube rides the relay…
       expect(first.job.live.youtubeNote).toContain('relay');
-      expect(first.youtube).toBeNull(); // …so its HLS ingestion is never called
+      expect(outside).toEqual([]); // …so its HLS ingestion is never called
       expect(outside).toEqual([]);
       // The relay saw: start (every target with its real key and ingest url, bearer secret), then the segment bytes.
       expect(calls.map((x) => x.url.replace(/^https:\/\/relay\.test\/streams\/[^/]+/, 'S'))).toEqual(['S/start', 'S/segments']);

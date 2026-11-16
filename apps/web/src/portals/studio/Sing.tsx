@@ -20,7 +20,8 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { isDrive, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
-import { LocalFeed } from '../../video/localFeed.ts';
+import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
+import { LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
 import { StageCompositor } from '../../video/stage.ts';
 
@@ -173,6 +174,21 @@ export function Sing(props: { id: string }) {
   // My cut-out on the virtual stage follows the camera stream, framing and slot.
   const camStream = camera.stream;
   const camOn = camera.on.value;
+  // The camera's health: a camera the browser muted or ended, or one frozen on a picture, is restarted — once by itself, then from a tap.
+  const [camHealth, setCamHealth] = useState<FeedHealth>('ok');
+  const autoRestartAt = useRef(0);
+  const restartCam = () => restartCamera(engineRef.current, camera).catch((e) => toast(errorText(e), 'warn'));
+  useEffect(() => {
+    feed.onHealth = (h) => {
+      setCamHealth(h);
+      if (h === 'ok' || !camera.on.value || Date.now() - autoRestartAt.current < 60_000) return;
+      autoRestartAt.current = Date.now();
+      void restartCam();
+    };
+    return () => {
+      feed.onHealth = null;
+    };
+  }, []);
   useEffect(() => {
     feed.onMode = (m) => setBlend(m);
     feed.attach(camOn ? camStream : null, true);
@@ -234,20 +250,7 @@ export function Sing(props: { id: string }) {
       const engine = engineRef.current ?? getEngine();
       engineRef.current = engine;
       await engine.resume(); // inside the tap gesture
-      const wantCombined = isIOS && app.cameraOn;
-      if (wantCombined) camera.close();
-      const video = await engine.openMic({
-        deviceId: app.audioInputId || undefined,
-        echoCancellation: app.echoCancellation,
-        video: wantCombined
-          ? app.cameraDeviceId
-            ? { deviceId: { exact: app.cameraDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
-            : { facingMode: app.cameraFacing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
-          : false,
-      });
-      if (video) camera.adopt(video, app.cameraFacing);
-      engine.applyFx(audio.params);
-      engine.setMonitor(audio.monitor);
+      await openMicWithCamera(engine, camera); // on iOS the camera comes with it: one capture per page there
       const player = engine.player!;
       if (!player.buffer) await player.load(loaded.audio, loaded.track.trackId);
       player.setGain(audio.backingGain);
@@ -430,6 +433,11 @@ export function Sing(props: { id: string }) {
         <section class="stagebar" data-blend={blend} data-mask={feed.segmenter.maskMode} data-performers={compositor.tiles.length}>
           {camOn && blend === 'loading' && <span class="chip">blending you into the stage…</span>}
           {camOn && blend === 'oval' && app.cutout && <span class="chip warn">soft-focus mode (cut-out model unavailable)</span>}
+          {camOn && camHealth !== 'ok' && (
+            <button class="btn sm accent" data-cam-health={camHealth} onClick={() => void restartCam()}>
+              {camHealth === 'frozen' ? 'Your camera froze — restart it' : camHealth === 'muted' ? 'Your camera was muted — restart it' : 'Your camera stopped — restart it'}
+            </button>
+          )}
           {!camOn && <span class="chip">camera off</span>}
         </section>
         <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={planParts(track.singerCount, [])} countdown={phase === 'countdown' ? countdown : null} showWho={track.singerCount > 1} title={track.title} />
@@ -441,14 +449,7 @@ export function Sing(props: { id: string }) {
             onChange={() => {
               const engine = engineRef.current;
               if (!engine?.micOpen.value) return;
-              const a = appSettings.peek();
-              void engine
-                .openMic({ deviceId: a.audioInputId || undefined, echoCancellation: a.echoCancellation })
-                .then(() => {
-                  engine.applyFx(audioSettings.peek().params);
-                  engine.setMonitor(audioSettings.peek().monitor);
-                })
-                .catch((e) => toast(errorText(e), 'error'));
+              void openMicWithCamera(engine, camera).catch((e) => toast(errorText(e), 'error'));
             }}
           />
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={phase === 'playing' || phase === 'paused' ? seek : undefined} />

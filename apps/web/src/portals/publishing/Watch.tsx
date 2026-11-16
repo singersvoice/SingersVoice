@@ -3,8 +3,9 @@
  * no lyrics here (those belong to the singers on stage). When the publisher's show view is on air,
  * the show itself plays — every singer on the stage background, the track and their voices blended
  * (HLS, a few seconds behind). Otherwise the stage background and line-up, with **Hear the stage**:
- * the host's mix a couple of seconds behind. Plus the chat (read-only here; sign in and join the
- * meet to talk).
+ * the host's mix a couple of seconds behind. Plus the chat, read-only. There is no way into the
+ * meet from here: the watch page is the published show and nothing else (a singer is invited by the
+ * host's share link).
  */
 import { formatMs, SLOT_COLORS, type SingerSlot, type WatchResponse } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -16,8 +17,7 @@ import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/Li
 import { BrandWatermark, Logo } from '../../components/Shell.tsx';
 import { Spinner } from '../../components/ui.tsx';
 import { api, controlConfigured, serverNow, syncClock } from '../../lib/api.ts';
-import { asset, href } from '../../lib/nav.ts';
-import { signedIn } from '../../state/session.ts';
+import { asset } from '../../lib/nav.ts';
 
 export function Watch(props: { id: string }) {
   const [data, setData] = useState<WatchResponse | null>(null);
@@ -85,15 +85,6 @@ export function Watch(props: { id: string }) {
       <header class="topbar">
         <Logo />
         <div class="title">{m?.title ?? 'SingersVoice live'}</div>
-        {!signedIn.value ? (
-          <a class="btn sm primary" href={href('/')}>
-            Sign in to join
-          </a>
-        ) : (
-          <a class="btn sm" href={href(`/meet/${encodeURIComponent(props.id)}`)}>
-            Join the meet
-          </a>
-        )}
       </header>
       <BrandWatermark />
       <main class="content">
@@ -158,7 +149,7 @@ export function Watch(props: { id: string }) {
                   </div>
                 ))}
               </div>
-              <div class="small faint">Sign in and join the meet to chat.</div>
+              <div class="small faint">The chat is the meet's own — the singers and the audience in it.</div>
             </section>
           </div>
         )}

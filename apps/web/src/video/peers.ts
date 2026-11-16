@@ -46,10 +46,18 @@ interface Peer {
   audio: MediaStream | null;
   /** Signals to this peer go out one after another, so an offer always lands in the relay before its ICE candidates. */
   sendChain: Promise<void>;
-  /** Remote ICE candidates that arrived before the remote description (the relay may reorder them). */
-  pendingIce: RTCIceCandidateInit[];
+  /** Remote ICE candidates that arrived before the remote description (the relay may reorder them), each with its connection's name. */
+  pendingIce: (RTCIceCandidateInit & { token?: string })[];
   /** When our offer went out (ms); an offer nobody answers is re-made. */
   offeredAt: number;
+  /**
+   * This RTCPeerConnection's own name, carried on every signal it sends, and the name of the one on
+   * the other side (from their offer or answer). A link re-made on either side (a lost or late answer,
+   * a reload) is a new name: a signal from or for an earlier connection — the answer to an offer we
+   * gave up on, candidates for a connection they closed — is left alone, never applied to the new one.
+   */
+  token: string;
+  remoteToken: string | null;
   /** When a dropped peer may be re-made (ms), so a dead link is retried with backoff instead of hammered. */
   retryAt: number;
   /** The small message channel of this link (null where the browser has none). */
@@ -70,7 +78,7 @@ const PUBLISHER_BPS = 2_000_000;
 /** A vocal over the mesh: Opus at 96 kbps (the browser's phone-call default is ~32 kbps and thins a singing voice). */
 const VOCAL_BPS = 96_000;
 /** An offer unanswered this long (a lost signal, a peer that reloaded) is made again from a fresh connection. */
-const OFFER_TIMEOUT_MS = 9000;
+const OFFER_TIMEOUT_MS = 12_000;
 /** A link that failed its ICE restarts is re-made after this long. */
 const REMAKE_AFTER_MS = 4000;
 
@@ -227,7 +235,7 @@ export class PerformerMesh {
 
   private connect(id: string, inbound: boolean): void {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers as RTCIceServer[], bundlePolicy: 'max-bundle' });
-    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0, dc: null };
+    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0, dc: null, token: Math.random().toString(36).slice(2, 10), remoteToken: null };
     this.peers.set(id, peer);
     // The message channel, made before the first offer on both sides with the same id: part of the link from the start, never a renegotiation.
     try {
@@ -262,7 +270,7 @@ export class PerformerMesh {
         peer.makingOffer = true;
         await pc.setLocalDescription();
         peer.offeredAt = Date.now();
-        await this.send(peer, 'offer', pc.localDescription);
+        await this.send(peer, 'offer', { ...pc.localDescription!.toJSON(), token: peer.token });
       } catch {
         /* retried on the next negotiation (or re-made when the offer times out) */
       } finally {
@@ -270,7 +278,7 @@ export class PerformerMesh {
       }
     };
     pc.onicecandidate = (e) => {
-      if (e.candidate) void this.send(peer, 'ice', e.candidate.toJSON());
+      if (e.candidate) void this.send(peer, 'ice', { ...e.candidate.toJSON(), token: peer.token });
     };
     // Simultaneous offers can leave a connection with more than one video transceiver; only one of
     // them carries RTP. Show whichever remote track is actually live (unmuted), and follow changes.
@@ -379,9 +387,14 @@ export class PerformerMesh {
       if (peer) this.drop(sig.from, false);
       return;
     }
-    const data = JSON.parse(sig.data) as RTCSessionDescriptionInit | RTCIceCandidateInit;
-    if (peer && sig.type === 'offer' && peer.pc.remoteDescription && fingerprintOf((data as RTCSessionDescriptionInit).sdp) !== fingerprintOf(peer.pc.remoteDescription.sdp)) {
-      // A new DTLS fingerprint means a new RTCPeerConnection on their side (reload, re-made link): mirror it.
+    const data = JSON.parse(sig.data) as (RTCSessionDescriptionInit | RTCIceCandidateInit) & { token?: string; forToken?: string };
+    // A signal from a connection they have since replaced, or an answer to an offer we gave up on and re-made
+    // (its name is not the one we hold): left alone. Applying it would marry the new connection to a dead one, and
+    // the two sides would re-make each other without end.
+    if (peer && sig.type === 'answer' && data.forToken && data.forToken !== peer.token) return;
+    if (peer && sig.type === 'ice' && data.token && peer.remoteToken && data.token !== peer.remoteToken) return;
+    if (peer && sig.type === 'offer' && peer.pc.remoteDescription && (data.token && peer.remoteToken ? data.token !== peer.remoteToken : fingerprintOf((data as RTCSessionDescriptionInit).sdp) !== fingerprintOf(peer.pc.remoteDescription.sdp))) {
+      // A new connection on their side (reload, re-made link — a new name, or a new DTLS fingerprint from an older build): mirror it.
       this.drop(sig.from, false);
       peer = undefined;
     }
@@ -398,6 +411,7 @@ export class PerformerMesh {
         peer.ignoreOffer = !peer.polite && collision;
         if (peer.ignoreOffer) return;
         await pc.setRemoteDescription(desc);
+        if (data.token) peer.remoteToken = data.token;
         if (desc.type === 'offer') {
           // Their offer asks for my vocal (a publisher, a singer recording the show): answer with a sending
           // audio line, fed when my mic is open — and ask for theirs back when I record the show too.
@@ -412,10 +426,10 @@ export class PerformerMesh {
                 .catch(() => undefined);
           }
           await pc.setLocalDescription();
-          await this.send(peer, 'answer', pc.localDescription);
+          await this.send(peer, 'answer', { ...pc.localDescription!.toJSON(), token: peer.token, forToken: data.token });
         }
-        // Candidates that overtook the description in the relay.
-        const queued = peer.pendingIce.splice(0);
+        // Candidates that overtook the description in the relay (those of another connection of theirs left out).
+        const queued = peer.pendingIce.splice(0).filter((c) => !c.token || !peer.remoteToken || c.token === peer.remoteToken);
         for (const c of queued) await pc.addIceCandidate(c).catch(() => undefined);
       } else if (sig.type === 'ice') {
         const c = data as RTCIceCandidateInit;

@@ -142,6 +142,11 @@ function DestinationSetup(props: { dest: Destination; onSaved: (d: Destination) 
   };
   return (
     <div class="stack" data-dest-setup={props.dest.kind} style="padding:8px 0 4px 0">
+      {props.dest.kind === 'youtube' && (
+        <div class="callout" data-youtube-hls-note>
+          <b>Without the RTMP relay, YouTube takes the show over HLS — and that needs a stream key made for HLS.</b> In YouTube Studio → Go live → Stream settings → Stream key, choose <b>Create new stream key</b>, set the <b>streaming protocol to HLS</b>, and paste that key here. A key made for RTMP can be accepted segment by segment and still show nothing in YouTube Studio. Set the latency to <b>Low latency</b> (ultra-low is RTMP only).
+        </div>
+      )}
       <Field label="Ingest URL (RTMPS)">
         <input class="input mono" value={ingestUrl} placeholder={def.ingestHint} aria-label={`${def.label} ingest URL`} autocomplete="off" spellcheck={false} onInput={(ev) => setIngestUrl((ev.currentTarget as HTMLInputElement).value)} />
       </Field>

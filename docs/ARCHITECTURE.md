@@ -159,7 +159,20 @@ MediaPipe Selfie Segmentation (bundled under `/mediapipe`, ~6 MB, cached by the 
 the first use; CDN fallback). The model's mask comes back either in the alpha channel or only as
 brightness with opaque alpha depending on the browser/GPU path, so — as in the original SingersVoice
 app — `alphaFromMaskPixels` uses whichever channel varies, normalises and feathers it, and falls back
-to a soft head-and-shoulders silhouette when the mask is unusable (never a rectangle). `video/stage.ts` seats every
+to a soft head-and-shoulders silhouette when the mask is unusable (never a rectangle). The model is
+never allowed to freeze the singer: frames go to it one at a time, a frame unanswered for
+`SEND_TIMEOUT_MS` gets as long again and then the silhouette takes over (`modelStuck`: the picture
+keeps moving off the camera) until the model answers or `MODEL_RETRY_MS` pass; every `start()` is a
+new generation, so a late answer or a frame the old camera still owes never blocks the new one.
+`video/localFeed.ts` watches the camera itself (`health`, `onHealth`): the track's mute / ended
+events, and the video's `requestVideoFrameCallback` — frames that were flowing (ten at least) and
+then stop for `FROZEN_AFTER` seconds while the page is visible and the track calls itself live is
+`'frozen'` (never a pixel heuristic: a plain wall or a synthetic camera shows the same bytes for
+ever and is perfectly alive; a browser without frame callbacks is not judged by frames). The room
+(`roomStage.ts`) and the studio restart the camera once by themselves and then offer a button;
+`video/capture.ts` is the one place the mic is opened: on iOS always together with the camera
+(one capture per page there — a second getUserMedia ends the first), so a mic re-opened for another
+setting never leaves the camera dark. `video/stage.ts` seats every
 performer in **one row of chairs**: slots of one size, evenly spaced by stage slot along a shallow
 arc (`arcLift`: the middle nearest, the ends up to 7 % up the picture), each standing on the row's
 floor behind a **riser** drawn in front of them (`drawRiser`: a curved band from its lit edge to the
@@ -200,9 +213,15 @@ receivers unpack it with a one-line WebGL shader. Signalling is relayed by the S
 bitrate is capped and scaled with the mesh size (≈1.6 Mbit/s total uplink). The mesh heals itself:
 signals to a peer go out in order (an offer always lands before its ICE candidates; the relay assigns
 its per-meet sequence inside one INSERT so simultaneous signals never collide), candidates that
-overtake a description are queued, an offer nobody answers within 9 s is made again from a fresh
-connection, a link that failed its ICE restarts is re-made, and a new DTLS fingerprint from a peer
-(a reload, a re-made link) is mirrored by re-making ours.
+overtake a description are queued, an offer nobody answers within 12 s is made again from a fresh
+connection, a link that failed its ICE restarts is re-made, and a new connection on a peer's side
+(a reload, a re-made link) is mirrored by re-making ours. **Every connection has a name** (`token`,
+eight random characters) carried on every signal it sends; an answer names the offer it answers
+(`forToken`). A signal from a connection a peer has since replaced, or an answer to an offer we gave
+up on and re-made, is left alone — never applied to the new connection — because applying it
+married the new connection to a dead one and the two sides re-made each other without end (a slow
+host that answered in ten seconds was enough to start it). An untagged signal (an older build) is
+taken as before, with the DTLS fingerprint telling a new connection from an old one.
 
 ## Publishing mode (the show view)
 
@@ -291,7 +310,11 @@ link; the first four tiles connect by themselves, the rest on request.
    in the `mix` table). An encoder that cannot keep up (a starved device) is never allowed to queue
    sound without end: past two seconds of backlog the broadcaster leaves blocks out — the audience
    hears a skip and stays near, instead of drifting ever further behind (`MixBroadcaster.dropped`
-   counts them; the broadcast's AAC encoder is bounded the same way, `LiveEncoder.stats.audioDropped`). The host's device keeps one mix bus from the moment its mic opens on stage
+   counts them). The broadcast's AAC encoder is never starved of a block, on purpose: a browser's
+   AAC encoder stamps its output by counting samples from the first block, so a block left out
+   would move every later sound earlier than its picture for good — the live encoder stamps the
+   sound itself the same way (the clock of the first block in, plus the AAC frames out since) and
+   only counts how far behind the encoder is (`stats.audioQueue`). The host's device keeps one mix bus from the moment its mic opens on stage
    through the talk, the count-in and every song (the song's recording hooks onto the same bus), so
    the audience's sound never breaks off at a song's start. Audience devices in the room and the public
    watch page poll it every second through the public `/watch/:id/mix` route (cached at the edge for

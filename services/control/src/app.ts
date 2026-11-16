@@ -98,6 +98,8 @@ export interface AppDeps {
   billing?: BillingConfig;
   /** The RTMP relay (RELAY_URL, RELAY_SECRET — services/relay, docs/RELAY.md): low-latency YouTube, and Facebook / Instagram / Twitch at all. */
   relay?: RelayConfig;
+  /** Work that finishes after the answer went out (YouTube's PUTs for a segment): the runtime's waitUntil where there is one; tests collect these to await them. */
+  background?: (p: Promise<unknown>) => void;
 }
 
 type Vars = { deps: AppDeps; user: UserRecord };
@@ -1215,7 +1217,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     live.bytes += bytes.length;
     live.lastSegmentAt = now;
     live.audio = c.req.query('audio') !== '0';
-    let youtube: { status: number } | null = null;
+    let youtube: (() => Promise<void>) | null = null;
     // The relay carries every RTMP destination of the job. A stream the relay no longer has (its first
     // segment, a relay that restarted, a stream closed for silence) is started again and the segment resent.
     const relayed = relay && job.destinations.some((k) => RELAY_KINDS.includes(k));
@@ -1242,15 +1244,17 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         live.youtube = 'rejected';
         live.youtubeNote = 'No YouTube stream key is saved';
       } else {
+        // YouTube gets the segment and the playlist after this answer went out: its two PUTs take a second or more, and the
+        // show view's next segment (and the watch page behind it) must never wait on them. The verdict lands on the job
+        // when it comes back and the next answer carries it.
         const window = youtubeWindow(await store.listLiveSegments(job.jobId));
         const playlist = hlsPlaylist(window, (n) => n);
-        const r = await sendToYoutube(youtubeHlsBase || YOUTUBE_HLS_INGEST, key, { name, bytes }, playlist);
-        youtube = { status: r.status };
-        live.youtube = r.status === 200 || r.status === 202 ? (r.playlistStatus === 200 || r.playlistStatus === 202 ? 'ok' : 'error') : r.status === 401 || r.status === 400 ? 'rejected' : 'error';
-        live.youtubeNote = r.note;
-        if (r.status === 401) {
-          job.error = r.note;
-        } else if (live.youtube === 'ok') job.error = null;
+        const jobId = job.jobId;
+        youtube = async () => {
+          const r = await sendToYoutube(youtubeHlsBase || YOUTUBE_HLS_INGEST, key, { name, bytes }, playlist);
+          const verdict: PublishJobLive['youtube'] = r.status === 200 || r.status === 202 ? (r.playlistStatus === 200 || r.playlistStatus === 202 ? 'ok' : 'error') : r.status === 401 || r.status === 400 ? 'rejected' : 'error';
+          await store.patchJobYoutube(jobId, verdict, r.note, r.status === 401 ? r.note : verdict === 'ok' ? null : undefined);
+        };
       }
     }
     job.live = live;
@@ -1260,7 +1264,11 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     }
     job.updatedAt = now;
     await store.saveJob(job);
-    return c.json({ job, youtube });
+    if (youtube) {
+      const work = youtube().catch((e) => console.warn('youtube forward', e));
+      (deps.background ?? ((p) => void p))(work);
+    }
+    return c.json({ job });
   });
 
   app.notFound((c) => c.json({ error: 'Not found', code: 'not_found' }, 404));

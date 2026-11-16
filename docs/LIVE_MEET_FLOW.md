@@ -53,6 +53,21 @@ room from a phone come out as two performers of one size, heads level, on one li
 framing setting any more — nobody is bigger than anybody. Ten singers make one even row across the
 stage, two stand big in the middle; the names sit on the riser under each singer.
 
+### The camera, watched
+
+A singer's picture must keep moving for everyone. The device watches its own camera three ways:
+the track's own *mute* and *ended* events (iOS ends a capture when another starts; a browser mutes
+one it interrupted), the video's own frame callbacks — frames that were flowing and then stop for
+five seconds while the page is visible (a camera frozen on one frame looks alive to every other
+API) — and the cut-out model's answers (a model that stops answering is given up on after three
+seconds; the soft silhouette stands in, the singer keeps moving, and the model is back the moment
+it answers). A camera that
+went dark or froze is restarted once by the device itself — on iOS together with the microphone,
+as the one capture that platform allows — and after that the stage strip offers **Your camera froze
+— restart it** as a plain button. Every opening of the microphone on iOS (the seat, *I'm ready*,
+another mic, *I'm on speakers*) re-captures the camera with it: a mic opened on its own there ends
+the camera, which is how a singer on an iPad once froze for everyone with their arms crossed.
+
 ### Who is who
 
 - Everyone who enters is **audience** (chat, lyrics and the backing track once the song runs).
@@ -243,6 +258,13 @@ no mesh; the room names the first dozen of the audience and counts the rest (*Au
 Ben … and 108 more*), so what every poll carries stays small; the singers' and the publisher's work
 never grows with the audience (docs/ARCHITECTURE.md, "A hundred in a meet").
 
+### The public watch page (`/watch/:id`)
+
+What the publisher puts out, and nothing else: the show when it is on air (behind a *Watch the
+show* tap), the stage background and line-up with *Hear the stage* otherwise, the chat read-only.
+There is **no way into the meet from it** — no join button, no sign-in prompt: a singer comes in
+by the host's share link, an audience member by the meet's link; the watch page is the broadcast.
+
 ## 5 · Between songs and the end
 
 When a song is over the meet is back in the **lobby**: stage, slots and cameras untouched, ready
@@ -322,26 +344,39 @@ continuous curve, never a seam between blocks. The live e2e records six seconds 
 six seconds of an audience device's output and measures them: no click, no gap, the backing track
 present and exactly where the singers are (docs/TESTING.md, "Sound checks").
 
-**What the publisher hears.** The show view's two buttons (vocals, music) are its *monitor* — the
-publisher's own ears — and never touch the broadcast, which always carries every voice and the
-track. A publisher who is also singing on stage (the same account) does not hear their own voice
-in the show view: it would come back a few hundred milliseconds late through the mesh, the
-"repeated voice" that feels like the show view listening to the mic — it does not; the show view
-never opens a microphone or camera. While the broadcast runs the show view displays the encoder's
-own canvas, so what the publisher watches is exactly what goes out.
+**What the publisher hears — and no microphone.** The show view's two buttons (headphones: the
+singers' voices; music: the backing track) are its *monitor* — the publisher's own ears — and never
+touch the broadcast, which always carries every voice and the track. The bar carries a **Mic off**
+chip: the show view never opens a microphone or a camera, it only plays the stage to the publisher
+and sends it out. A publisher who is also singing on stage (the same account) does not hear their
+own voice in the show view: it would come back a few hundred milliseconds late through the mesh,
+the "repeated voice" that feels like the show view listening to the mic — it does not. While the
+broadcast runs the show view displays the encoder's own canvas, so what the publisher watches is
+exactly what goes out.
 
 **Go live — the show view is the encoder.** Nothing sits between the publisher and the platforms:
 the show view's own browser encodes the picture (its 1280×720 show canvas through WebCodecs,
 H.264, a keyframe every second, no B-frames) and the sound (the bus above through WebCodecs,
 AAC-LC 48 kHz stereo 128 kbps), cuts them at the keyframes into one-second MPEG-TS segments and
 PUTs each one to the service (`PUT /publishing/jobs/:id/live/<name>.ts`). The service keeps the
-last eight for the **in-house portal** (an HLS playlist, `GET /watch/:id/live.m3u8`, that the
+last twelve for the **in-house portal** (an HLS playlist, `GET /watch/:id/live.m3u8`, that the
 watch page and the room's audience play through hls.js — Safari natively — a few seconds behind)
-and forwards each segment, then a fresh playlist, to **YouTube's HLS ingestion** with the saved
-stream key (`https://a.upload.youtube.com/http_upload_hls?cid=<key>&copy=0&file=…`): the key
-never leaves the service. The broadcast bar says *LIVE · 1:23 · 3100 kbps · 41 segments ·
-YouTube: YouTube is receiving the show*; a wrong key reads *YouTube rejected the stream key
-(401)*. Under it, while the show is on air, **the live links**: one button per platform the show
+and answers at once; *after* the answer it forwards the segment, then a fresh playlist, to
+**YouTube's HLS ingestion** with the saved stream key
+(`https://a.upload.youtube.com/http_upload_hls?cid=<key>&copy=0&file=…`) — YouTube's two PUTs take
+a second or more and must never hold up the next segment or the watch page behind it; YouTube's
+verdict lands on the job when it comes back and the next answer carries it. The key never leaves
+the service. **The key must be one YouTube made for HLS**: in YouTube Studio → Go live → Stream
+settings → Stream key → *Create new stream key*, streaming protocol **HLS**, latency *Low* (ultra-low
+is RTMP only); the Destinations page says so beside the YouTube key. The broadcast bar says
+*LIVE · 1:23 · 3100 kbps · 41 segments · YouTube: YouTube is receiving the show*; a wrong key reads
+*YouTube rejected the stream key (401)*. **The stream check.** Half a minute into every broadcast
+the show view plays its own playlist back from the service on a hidden, muted player — exactly what
+the watch page and the platforms get — and the bar says *stream check: ✓ plays (5 s checked)*, or
+what the player saw when it did not (*not playing after 30 s — at 0.0 s, ready 1/4, buffered
+nothing*); then the check stops, so the broadcasting device is not decoding its own stream for the
+whole show. The watch page, for its part, says *Still tuning in…* with the same player facts and a
+**Try again** after eight seconds without a picture. Under the bar, while the show is on air, **the live links**: one button per platform the show
 goes to — **YouTube link**, **Facebook link**, **Twitch link**… — that hands you the page viewers
 open there (copied to the clipboard, or the phone's share sheet, ready to paste into a chat or a
 post), and **Watch page link** for the in-house page; a platform whose live link you have not set

@@ -14,7 +14,7 @@
  */
 import { DESTINATIONS, fedDestinations, formatMs, playbackPositionMs, type Destination, type DestinationKind, type Meet, type Participant, type PerformanceSinger, type PublishJob } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { IcMic, IcMusic, IcPlay, IcStop, IcUsers, IcVideo, IcX, IcZoom } from '../../components/icons.tsx';
+import { IcHeadphones, IcMicOff, IcMusic, IcPlay, IcStop, IcUsers, IcVideo, IcX, IcZoom } from '../../components/icons.tsx';
 import { BrandWatermark, Page } from '../../components/Shell.tsx';
 import { Empty, Spinner } from '../../components/ui.tsx';
 import { api, ApiError, clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
@@ -26,6 +26,7 @@ import { MeetSession } from '../meets/meetSession.ts';
 import { loadMeetTrack } from '../meets/trackSource.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
+import { useStreamCheck } from '../../components/LiveShow.tsx';
 import { appSettings } from '../../state/settings.ts';
 import { blobLoudness } from '../../audio/loudness.ts';
 import { VOCAL_LAG_MS } from '../../video/showRecorder.ts';
@@ -131,6 +132,8 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   // The broadcast: sound bus + picture + encoder + sender, one per show view.
   const broadcast = useMemo(() => new Broadcast(), []);
   const sending = broadcast.status.value;
+  // The publisher's own check of the stream: half a minute after the first segments, the playlist played back here, hidden.
+  const streamCheck = useStreamCheck(`/watch/${encodeURIComponent(meet.meetId)}/live.m3u8`, sending?.state === 'live' && sending.segments >= 4);
   const support = broadcast.support.value;
   const broadcasting = sending !== null && (sending.state === 'sending' || sending.state === 'live');
   const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -451,8 +454,8 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
               {busy ? <Spinner /> : <IcStop />} Stop publishing
             </button>
           )}
-          <button class={`btn icon ${vocalsOn ? 'on' : ''}`} aria-label={vocalsOn ? 'Mute the singers in your monitor' : 'Hear the singers in your monitor'} aria-pressed={vocalsOn} title={`Your monitor: the singers' vocals (${Object.keys(feed.vocals).length} arriving)${ownOnStage.length ? ' — your own voice is left out, you hear it on stage' : ''}. The broadcast always carries every voice.`} onClick={() => setVocalsOn((v) => !v)}>
-            <IcMic />
+          <button class={`btn icon ${vocalsOn ? 'on' : ''}`} aria-label={vocalsOn ? 'Stop hearing the singers here' : 'Hear the singers here'} aria-pressed={vocalsOn} title={`Your monitor: the singers' voices (${Object.keys(feed.vocals).length} arriving)${ownOnStage.length ? ' — your own voice is left out, you hear it on stage' : ''}. The broadcast always carries every voice.`} onClick={() => setVocalsOn((v) => !v)}>
+            <IcHeadphones />
           </button>
           <button class={`btn icon ${music ? 'on' : ''}`} aria-label={music ? 'Mute the backing track' : 'Play the backing track here'} aria-pressed={music} disabled={!trackUrl} title={trackNote ?? (trackUrl ? 'Backing track, in sync with the singers (M)' : 'Loading the track…')} onClick={() => setMusic((m) => !m)}>
             <IcMusic />
@@ -468,7 +471,10 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
         </div>
         <div class="row between" style="gap:12px;flex-wrap:wrap">
           <MixBalance compact />
-          <span class="small faint">{ownOnStage.length ? 'Your own voice stays out of this monitor (you hear it on stage); the broadcast carries it.' : 'The monitor buttons change what you hear here, never the broadcast.'}</span>
+          <span class="chip" data-mic="off" title="The show view never opens your microphone: it only plays the stage to you and sends it out.">
+            <IcMicOff size={14} /> Mic off
+          </span>
+          <span class="small faint">{ownOnStage.length ? 'Your own voice stays out of this monitor (you hear it on stage); the broadcast carries it.' : 'The headphone and music buttons change what you hear here, never the broadcast. No microphone is used here.'}</span>
         </div>
         {job && (
           <div class="jobline small" data-live-state={sending?.state ?? ''} data-live-segments={sending?.segments ?? 0} data-live-youtube={sending?.youtube ?? ''} data-live-relay={sending?.relay ?? ''}>
@@ -489,6 +495,13 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
               </>
             )}
             {sending?.state === 'sending' && <span class="muted"> · starting the encoder…</span>}
+            {streamCheck.state !== 'off' && (
+              <span class={streamCheck.state === 'failed' ? 'danger' : streamCheck.state === 'ok' ? 'ok' : 'muted'} data-stream-check={streamCheck.state} title="The stream as the watch page and the platforms get it, played back here for half a minute">
+                {' '}
+                · stream check: {streamCheck.state === 'ok' ? '✓ ' : ''}
+                {streamCheck.note}
+              </span>
+            )}
             {(film.recording || film.saved || film.note) && (
               <span class={`footage ${film.note ? 'warn' : ''}`} data-footage={film.recording ? 'recording' : film.saved ? 'saved' : 'off'} data-footage-bytes={film.bytes} title={film.recording ? 'The whole broadcast, as it goes out, into your Drive (Performances → Broadcast)' : film.saved ? 'The footage is in your Drive (Performances → Broadcast)' : film.note ?? ''}>
                 {' '}

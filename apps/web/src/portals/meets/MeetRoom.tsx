@@ -33,6 +33,7 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { canPublish as canPublishSignal } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
+import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
 import type { MeetRecorder } from '../../video/meetRecorder.ts';
 import { MicStatus } from '../../components/MicStatus.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
@@ -109,22 +110,10 @@ export function MeetRoom(props: { id: string }) {
    * is heard by the audience; "I'm ready" opens it too when it is not open yet.
    */
   const openMic = async (): Promise<AudioEngine> => {
-    const app = appSettings.peek();
-    const audio = audioSettings.peek();
     const engine = engineRef.current ?? getEngine();
     engineRef.current = engine;
     await engine.resume();
-    const wantCombined = isIOS && app.cameraOn;
-    if (wantCombined) camera.close();
-    const video = await engine.openMic({
-      deviceId: app.audioInputId || undefined,
-      echoCancellation: app.echoCancellation,
-      video: wantCombined ? { facingMode: app.cameraFacing, width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-    });
-    if (video) camera.adopt(video, app.cameraFacing);
-    else if (app.cameraOn && !camera.on.value) await camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined }).catch(() => undefined);
-    engine.applyFx(audio.params);
-    engine.setMonitor(audio.monitor);
+    await openMicWithCamera(engine, camera);
     return engine;
   };
   const [micBusy, setMicBusy] = useState(false);
@@ -289,7 +278,7 @@ function Room(props: {
   onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>, singers: { slot: number; displayName: string; userId?: string }[]) => void;
 }) {
   const { session, meet, you, track, camera, engine } = props;
-  const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, engine });
+  const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, engine, restartCamera: () => restartCamera(engine, camera) });
   const onStage = you.slot !== null;
   const live = meet.state === 'countdown' || meet.state === 'live';
   // A take in progress keeps the live stage mounted until it wraps up, even once the meet is back in
@@ -302,19 +291,20 @@ function Room(props: {
 
   if (meet.state === 'ended' || meet.state === 'expired') return <Ended session={session} meet={meet} you={you} />;
 
-  return <Lobby session={session} meet={meet} you={you} track={track} stage={stage} prepared={props.prepared} preparing={props.preparing} onPrepare={props.onPrepare} onOpenMic={props.onOpenMic} micBusy={props.micBusy} participants={props.participants} engine={engine} />;
+  return <Lobby session={session} meet={meet} you={you} track={track} stage={stage} camera={camera} prepared={props.prepared} preparing={props.preparing} onPrepare={props.onPrepare} onOpenMic={props.onOpenMic} micBusy={props.micBusy} participants={props.participants} engine={engine} />;
 }
 
 // ---------------- Lobby + audience ----------------
 
-/** Re-open the microphone with the settings just changed (another mic, speakers vs headphones) — the chain and the take carry on. */
-async function reopenMic(engine: AudioEngine | null): Promise<void> {
+/**
+ * Re-open the microphone with the settings just changed (another mic, speakers vs headphones) — the chain and the
+ * take carry on. On iOS the camera is re-captured with it (one capture per page there: a mic opened on its own
+ * would end the camera and freeze this singer's picture for everyone).
+ */
+async function reopenMic(engine: AudioEngine | null, camera: Camera): Promise<void> {
   if (!engine?.micOpen.value) return;
-  const app = appSettings.peek();
   try {
-    await engine.openMic({ deviceId: app.audioInputId || undefined, echoCancellation: app.echoCancellation });
-    engine.applyFx(audioSettings.peek().params);
-    engine.setMonitor(audioSettings.peek().monitor);
+    await openMicWithCamera(engine, camera);
   } catch (e) {
     toast(errorText(e), 'error');
   }
@@ -326,6 +316,7 @@ function Lobby(props: {
   you: Participant;
   track: MeetTrack | null;
   stage: RoomStage;
+  camera: Camera;
   prepared: boolean;
   preparing: boolean;
   onPrepare: () => Promise<boolean>;
@@ -675,7 +666,7 @@ function Lobby(props: {
                       {props.micBusy ? <Spinner /> : <IcMic />} Turn my mic on
                     </button>
                   )}
-                  {micOpen && <MicStatus engine={props.engine} onChange={() => void reopenMic(props.engine)} />}
+                  {micOpen && <MicStatus engine={props.engine} onChange={() => void reopenMic(props.engine, props.camera)} />}
                   {micOpen && !live && <span class="chip ok" data-talkback="1" title="Until the countdown, the singers on stage hear each other and the audience hears the stage; once the song runs, nobody on stage hears anyone else">Talk-back on · headphones recommended</span>}
                 </>
               ) : host || openStage ? (
@@ -830,6 +821,11 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
           </button>
         )}
         {props.onStage && stage.camError && <span class="chip warn">camera: {stage.camError}</span>}
+        {props.onStage && stage.camOn && stage.camHealth !== 'ok' && (
+          <button class="btn sm accent" style="pointer-events:auto" data-cam-health={stage.camHealth} onClick={() => void stage.restartCamera()}>
+            <IcCamera size={16} /> {stage.camHealth === 'frozen' ? 'Your camera froze — restart it' : stage.camHealth === 'muted' ? 'Your camera was muted — restart it' : 'Your camera stopped — restart it'}
+          </button>
+        )}
         {props.onStage && (
           <button class={`btn sm ${app.cameraOn ? '' : 'accent'}`} style="pointer-events:auto" aria-label={app.cameraOn ? 'Camera off' : 'Camera on'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
             {app.cameraOn ? <IcCameraOff size={16} /> : <IcCamera size={16} />}
@@ -1248,7 +1244,7 @@ function LiveStage(props: {
               Tweak
             </button>
           </div>
-          <MicStatus engine={engine} onChange={() => void reopenMic(engine)} />
+          <MicStatus engine={engine} onChange={() => void reopenMic(engine, camera)} />
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={started && props.prepared ? (ms) => void seek(ms) : undefined} pending={seekTarget} disabled={countdown !== null} />
           <div class="main">
             <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })}>

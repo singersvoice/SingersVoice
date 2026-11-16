@@ -57,6 +57,8 @@ export class SvtDb {
       googleApiKey: env.GOOGLE_API_KEY || undefined,
       billing: { secretKey: env.STRIPE_SECRET_KEY || undefined, webhookSecret: env.STRIPE_WEBHOOK_SECRET || undefined, pricePublisher: env.STRIPE_PRICE_PUBLISHER || undefined, appUrl: env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
       relay: env.RELAY_URL && env.RELAY_SECRET ? { url: env.RELAY_URL, secret: env.RELAY_SECRET } : undefined,
+      // Work after the answer (YouTube's PUTs): the object stays up while it has work; waitUntil where the runtime offers it.
+      background: (p) => (state as unknown as { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(p) ?? void p,
     };
     this.app = createApp(() => this.deps);
   }

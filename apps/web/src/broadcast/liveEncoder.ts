@@ -15,15 +15,14 @@ import { LIVE_SEGMENT_S } from '@singersvoice/protocol';
 import { LinearResampler } from '../audio/resample.ts';
 import { splitAdts, TsMuxer, type MediaPacket } from './tsMuxer.ts';
 
-/** How much sound may wait in the AAC encoder before blocks are left out (20 ms blocks: two seconds) — and until the wait is down to a second again, so skips come in stretches. */
-const MAX_AUDIO_QUEUE_BLOCKS = 100;
-const RESUME_AUDIO_QUEUE_BLOCKS = 50;
 export const LIVE_WIDTH = 1280;
 export const LIVE_HEIGHT = 720;
 export const LIVE_FPS = 30;
 export const LIVE_VIDEO_BPS = 3_500_000;
 export const LIVE_AUDIO_BPS = 128_000;
 const AUDIO_RATE = 48000;
+/** Samples in one AAC frame (one ADTS frame, one encoder chunk). */
+const AAC_FRAME = 1024;
 /** ADTS frames per audio PES. */
 const ADTS_PER_PES = 4;
 /** A cut waits this long for the audio that belongs before the keyframe, then goes without it. */
@@ -107,9 +106,11 @@ export class LiveEncoder {
   private run = '';
   private running = false;
   private support: LiveSupport | null = null;
-  /** Frames handed to the encoder / dropped because it was behind (for the status line). */
-  stats = { encoded: 0, dropped: 0, segments: 0, audioDropped: 0 };
-  private audioSkipping = false;
+  /** Frames handed to the encoder / dropped because it was behind (for the status line); audioQueue: how far the AAC encoder is behind (blocks). */
+  stats = { encoded: 0, dropped: 0, segments: 0, audioQueue: 0, audioTimestampsOff: 0 };
+  /** The broadcast clock (µs) of the first sound fed to the AAC encoder, and the AAC frames out since: the sound's own timeline. */
+  private audioBaseUs: number | null = null;
+  private aacFrames = 0;
 
   constructor(private readonly opts: LiveEncoderOptions) {}
 
@@ -129,6 +130,8 @@ export class LiveEncoder {
     this.lastKeyUs = -Infinity;
     this.packets = [];
     this.pendingCut = null;
+    this.audioBaseUs = null;
+    this.aacFrames = 0;
     this.muxer = new TsMuxer(support.audio === 'aac' ? 'aac' : 'none');
     this.t0 = ctx.currentTime;
 
@@ -212,15 +215,11 @@ export class LiveEncoder {
   private onBlock(m: { type: string; data: Float32Array<ArrayBuffer>; frames: number; contextTime: number; sampleRate: number }): void {
     const a = this.audio;
     if (m.type !== 'block' || !a || a.state !== 'configured' || !this.running) return;
-    // An encoder that cannot keep up (a starved device) would queue sound without end and the sound would drift behind the
-    // picture: past the bound the block is left out — a skip, the timestamps (the audio clock's) keeping sound and picture together.
-    if (this.audioSkipping ? a.encodeQueueSize > RESUME_AUDIO_QUEUE_BLOCKS : a.encodeQueueSize > MAX_AUDIO_QUEUE_BLOCKS) {
-      this.audioSkipping = true;
-      this.stats.audioDropped++;
-      return;
-    }
-    this.audioSkipping = false;
+    // Every block goes in, whatever the encoder's backlog (stats say how far behind it is): the AAC encoder stamps its output by
+    // counting samples from the first block, so a block left out would move every later sound earlier than its picture for good.
+    this.stats.audioQueue = a.encodeQueueSize;
     const timestamp = Math.max(0, Math.round((m.contextTime - this.t0) * 1e6));
+    this.audioBaseUs ??= timestamp;
     let data: Float32Array<ArrayBuffer> = m.data;
     let frames = m.frames;
     if (m.sampleRate !== AUDIO_RATE) {
@@ -252,9 +251,16 @@ export class LiveEncoder {
   private onAudioChunk(chunk: EncodedAudioChunk): void {
     const data = new Uint8Array(chunk.byteLength);
     chunk.copyTo(data);
+    const frames = splitAdts(data);
+    // The sound's own timeline: the clock of the first block in, plus the AAC frames out since — the encoder's own stamps
+    // say the same on a browser that stamps right, and nothing on one that does not (a stream whose sound all says 0 would
+    // never play); a disagreement is counted for the status line.
+    const ts = this.audioBaseUs === null ? chunk.timestamp : this.audioBaseUs + Math.round((this.aacFrames * AAC_FRAME * 1e6) / AUDIO_RATE);
+    if (Math.abs(chunk.timestamp - ts) > 100_000) this.stats.audioTimestampsOff++;
+    this.aacFrames += frames.length || 1;
     // One chunk is one ADTS frame; a few go into each PES.
-    if (!this.adtsRun.length) this.adtsRunTs = chunk.timestamp;
-    this.adtsRun.push(...splitAdts(data));
+    if (!this.adtsRun.length) this.adtsRunTs = ts;
+    this.adtsRun.push(...frames);
     if (this.adtsRun.length >= ADTS_PER_PES) this.flushAdts();
     this.maybeCut();
   }

@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { LIVE_KEEP, MIX_KEEP, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type UserRecord } from '@singersvoice/protocol';
+import { LIVE_KEEP, MIX_KEEP, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type UserRecord, type PublishJobLive } from '@singersvoice/protocol';
 import { planActive } from '../billing.ts';
 import type { Driver } from './driver.ts';
 import { SCHEMA_SQL } from './schema.ts';
@@ -426,6 +426,16 @@ export class SqlStore {
        ON CONFLICT(job_id) DO UPDATE SET state=excluded.state, data=excluded.data, updated_at=excluded.updated_at`,
       [j.jobId, j.ownerUserId, j.meetId, j.state, JSON.stringify(j), j.createdAt, j.updatedAt],
     );
+  }
+
+  /**
+   * YouTube's verdict on a segment, landing after the answer to the show view went out: only these
+   * fields change (json_set), so a segment saved meanwhile is never overwritten with a stale copy.
+   */
+  async patchJobYoutube(jobId: string, youtube: PublishJobLive['youtube'], note: string, error: string | null | undefined): Promise<void> {
+    const args: unknown[] = ['$.live.youtube', youtube, '$.live.youtubeNote', note];
+    if (error !== undefined) args.push('$.error', error);
+    await this.db.run(`UPDATE publish_jobs SET data = json_set(data, ${args.map(() => '?').join(', ')}) WHERE job_id = ? AND json_type(data, '$.live') = 'object'`, [...args, jobId]);
   }
 
   async getJob(jobId: string): Promise<PublishJob | null> {

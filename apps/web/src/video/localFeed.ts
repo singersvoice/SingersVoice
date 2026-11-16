@@ -17,6 +17,13 @@ const H = COMPUTER ? 960 : 640;
 /** The person probe: the mask at this size, a few times a second (the head of a singer sitting back is still a dozen pixels wide). */
 const PROBE_W = 120;
 const PROBE_H = 160;
+/** The camera's own health: frames that were flowing and then stop for this many seconds (the page visible all the while) is a frozen camera. */
+export const FROZEN_AFTER = 5;
+/** Frames that must have flowed before their stopping means anything (a video that never fires frame callbacks is not judged by them). */
+const FLOWING_FRAMES = 10;
+
+/** What the camera is doing: live, muted by the browser, ended (the browser took it away), or frozen on one picture. */
+export type FeedHealth = 'ok' | 'muted' | 'ended' | 'frozen';
 
 /** A camera picture whose bottom edge lands above this much of the frame (the riser hides the rest) gets its bottom feathered… */
 const FEATHER_BELOW = 0.62;
@@ -62,6 +69,22 @@ export class LocalFeed {
    */
   note: 'close' | 'far' | null = null;
   onNote: ((n: 'close' | 'far' | null) => void) | null = null;
+  /**
+   * The camera's health, watched: the track's own mute/ended events (iOS ends a capture when another
+   * starts; a browser mutes one it interrupted) and the video's own frame callbacks — frames that
+   * were flowing and then stop for FROZEN_AFTER seconds while the page is visible is a camera frozen
+   * on one picture (the singer with their arms crossed, forever), which looks alive to every other
+   * API. The room restarts the camera on anything but 'ok'.
+   */
+  health: FeedHealth = 'ok';
+  onHealth: ((h: FeedHealth) => void) | null = null;
+  private healthTimer: ReturnType<typeof setInterval> | undefined;
+  private watched: MediaStreamTrack | null = null;
+  /** Bumped by every watch()/unwatch(): a frame callback from an earlier camera steps aside. */
+  private watchGen = 0;
+  private framesSeen = 0;
+  private lastFrameAt = 0;
+  private visibleSince = 0;
   private origin = { x: 50, y: 42 };
   /** The person last found in the mask, the crop aimed at and the crop drawn (eased towards it). */
   private person: PersonMeasure | null = null;
@@ -100,10 +123,12 @@ export class LocalFeed {
     this.useModel = useModel;
     this.segmenter.stop();
     clearInterval(this.timer);
+    this.unwatch();
     if (!stream) {
       this.video.srcObject = null;
       return;
     }
+    this.watch(stream.getVideoTracks()[0] ?? null);
     // The hidden camera <video> lives on the body for the feed's whole life: a media element taken
     // out of the document (a view swapping its stage container) is paused by the browser, and a
     // paused camera means a frozen cut-out for everyone else.
@@ -118,6 +143,76 @@ export class LocalFeed {
       this.onMode?.(m);
     });
     this.timer = setInterval(() => this.tick(), 1000 / 15);
+  }
+
+  private setHealth(h: FeedHealth): void {
+    if (this.health === h) return;
+    this.health = h;
+    this.onHealth?.(h);
+  }
+
+  private readonly onTrackMute = () => this.setHealth('muted');
+  private readonly onTrackUnmute = () => this.setHealth('ok');
+  private readonly onTrackEnded = () => this.setHealth('ended');
+
+  private readonly onVisibility = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') this.visibleSince = performance.now();
+  };
+
+  private watch(track: MediaStreamTrack | null): void {
+    this.watchGen++;
+    this.framesSeen = 0;
+    this.lastFrameAt = 0;
+    this.visibleSince = performance.now();
+    this.setHealth(track ? (track.readyState === 'ended' ? 'ended' : track.muted ? 'muted' : 'ok') : 'ok');
+    if (!track) return;
+    this.watched = track;
+    track.addEventListener('mute', this.onTrackMute);
+    track.addEventListener('unmute', this.onTrackUnmute);
+    track.addEventListener('ended', this.onTrackEnded);
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibility);
+    this.armFrameCallback(this.watchGen);
+    this.healthTimer = setInterval(() => this.sampleHealth(), 1000);
+  }
+
+  private unwatch(): void {
+    this.watchGen++;
+    clearInterval(this.healthTimer);
+    this.healthTimer = undefined;
+    const t = this.watched;
+    if (t) {
+      t.removeEventListener('mute', this.onTrackMute);
+      t.removeEventListener('unmute', this.onTrackUnmute);
+      t.removeEventListener('ended', this.onTrackEnded);
+    }
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.onVisibility);
+    this.watched = null;
+  }
+
+  /** One callback per frame the video presents (requestVideoFrameCallback, where the browser has it): the proof that frames flow. */
+  private armFrameCallback(gen: number): void {
+    const v = this.video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
+    if (typeof v.requestVideoFrameCallback !== 'function') return;
+    v.requestVideoFrameCallback(() => {
+      if (gen !== this.watchGen) return;
+      this.framesSeen++;
+      this.lastFrameAt = performance.now();
+      this.armFrameCallback(gen);
+    });
+  }
+
+  /**
+   * Once a second: frames that were flowing (FLOWING_FRAMES of them at least) and have stopped for FROZEN_AFTER seconds — the
+   * page visible all the while, the track calling itself live and unmuted — is a frozen camera; frames again is 'ok'.
+   */
+  private sampleHealth(): void {
+    const t = this.watched;
+    if (!t || t.readyState !== 'live' || t.muted || this.framesSeen < FLOWING_FRAMES) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return; // a hidden page presents no frames
+    const now = performance.now();
+    const quiet = now - Math.max(this.lastFrameAt, this.visibleSince);
+    if (quiet >= FROZEN_AFTER * 1000) this.setHealth('frozen');
+    else if (this.health === 'frozen' && now - this.lastFrameAt < 1500) this.setHealth('ok');
   }
 
   /** The person (and their head) in the mask right now, measured a few times a second on a small probe. */
@@ -222,6 +317,8 @@ export class LocalFeed {
 
   dispose(): void {
     clearInterval(this.timer);
+    this.unwatch();
+    this.onHealth = null;
     this.segmenter.stop();
     this.packer?.stop();
     this.packer = null;

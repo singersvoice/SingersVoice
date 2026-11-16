@@ -135,6 +135,23 @@ worklet (loaded with stand-ins for the AudioWorklet globals) waits for its cushi
 back to back without a seam at either rate, goes silent (not noisy) when dry and resumes once the
 cushion is back.
 
+**The HLS lab (`tools/ci/hls-lab.mjs`, `npm run hls-lab`)** measures what the watch page plays: the
+browser's own muxer (`apps/web/src/broadcast/tsMuxer.ts`) runs in Node on real H.264 + AAC that
+ffmpeg made, packetised and cut into one-second segments exactly as the show view's encoder does
+(video stamped on a 30 fps clock, four ADTS frames per audio PES, a cut at every keyframe), the
+segments are served as a live playlist that grows one a second, and Chromium plays it through
+hls.js with the watch page's own settings — with sound and without (the live e2e can only ever run
+video-only, since the headless browser has no AAC encoder). The first segment must probe as H.264 +
+AAC with the sound starting beside the picture; the player must start within a few seconds, keep
+advancing (≥ 5 s played in 12), and raise no fatal error.
+
+**The camera watchdog and the cut-out model** are unit-tested in Node with a fake DOM
+(`apps/web/test/segmenter.test.ts`, `feedHealth.test.ts`): a model that stops answering hands the
+picture to the silhouette within three seconds and gets it back the moment it answers, a new camera
+is never blocked by a frame the old one still owes, a track's mute / ended events are reported at
+once, a camera whose frames were flowing and stop for five seconds is called frozen (and a camera
+whose frames never flowed, a hidden page or a muted track is never judged by frames).
+
 ### Instant changes and the footage
 
 In the same run a singer on his phone switches the **stage background from the live stage**; a
@@ -149,7 +166,16 @@ device the word arrives within a few hundred milliseconds), and the broadcast pi
 (`__svBroadcast.picture.backgroundId`) must draw it. The playlist the fake YouTube received must
 say each segment is about a second (0.9–2 s: a keyframe is asked for at the first grab a second
 after the last, so a late grab makes a longer segment, never a shorter one), and the segment
-itself must probe as a second of frames unless the encoder left frames out (`stats.dropped`). While the
+itself must probe as a second of frames unless the encoder left frames out (`stats.dropped`). On
+this one machine the pages' main threads stall for seconds at a time, so a few checks read the
+state rather than a moment: the lobby waits for the link itself (`data-linked`), the Preview tile
+counts as receiving both performers when both links are up and both are drawn (frames advancing
+inside one 1.5 s window is printed beside it), the two singers' "saved" chips are watched at once
+(a chip stays 20 s), and a tap on the show view's self-hiding chrome wakes it first and counts as
+landed when the button is gone afterwards. While the
 broadcast is on air the bar must say the **footage** is being recorded into the publisher's storage
 (`[data-footage="recording"]`), *Stop publishing* must complete it (`saved`), and at the end the
-publisher's Performances page must list *Broadcast* with its video.
+publisher's Performances page must list *Broadcast* with its video. The show view's own **stream
+check** (`[data-stream-check="ok"]`: the playlist played back on a hidden player half a minute in)
+must say the stream plays, the bar must carry the **Mic off** chip, and the public watch page must
+offer no way into the meet.

@@ -20,7 +20,7 @@ import { needsReconnect } from '../../state/session.ts';
 import { appSettings } from '../../state/settings.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
-import { LocalFeed } from '../../video/localFeed.ts';
+import { LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
 import { MeetRecorder, stageSound } from '../../video/meetRecorder.ts';
 import { PerformerMesh, type PeerState } from '../../video/peers.ts';
 import type { SegmenterMode } from '../../video/segmenter.ts';
@@ -48,12 +48,16 @@ export interface RoomStage {
   camError: string | null;
   /** Open the camera from a user gesture (after a permission refusal, or on browsers that need the tap). */
   openCamera: () => Promise<void>;
+  /** The camera's health (localFeed.ts): anything but 'ok' and the stage restarts it once by itself; the strip offers a button after that. */
+  camHealth: FeedHealth;
+  /** The camera again, from a tap (after it froze or went dark). */
+  restartCamera: () => Promise<void>;
   /** Performers whose video link is up / other performers on stage. */
   linked: number;
   others: number;
 }
 
-export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; engine: AudioEngine | null }): RoomStage {
+export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; engine: AudioEngine | null; restartCamera: () => Promise<void> }): RoomStage {
   const feed = useMemo(() => new LocalFeed(), []);
   const compositor = useMemo(() => new StageCompositor('show'), []);
   const show = useMemo(() => new ShowRecorder(), []);
@@ -128,6 +132,36 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       feed.onNote = null;
     };
   }, []);
+  // ---- the camera's health: a camera the browser muted or ended, or one frozen on a picture, is restarted — once by itself, then from a tap ----
+  const [camHealth, setCamHealth] = useState<FeedHealth>('ok');
+  const restarting = useRef<Promise<void> | null>(null);
+  const autoRestartAt = useRef(0);
+  const latest = useRef(opts); // the newest engine/camera pairing, for a restart fired from an older closure
+  latest.current = opts;
+  const restartCamera = (): Promise<void> => {
+    if (restarting.current) return restarting.current;
+    restarting.current = latest.current
+      .restartCamera()
+      .then(() => setCamError(null))
+      .catch((e) => setCamError(e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        restarting.current = null;
+      });
+    return restarting.current;
+  };
+  useEffect(() => {
+    feed.onHealth = (h) => {
+      setCamHealth(h);
+      if (h === 'ok' || !onStage || !camOn) return;
+      // one restart by itself per minute: a camera that stays frozen gets the button, not a loop of prompts
+      if (Date.now() - autoRestartAt.current < 60_000) return;
+      autoRestartAt.current = Date.now();
+      void restartCamera();
+    };
+    return () => {
+      feed.onHealth = null;
+    };
+  }, [onStage, camOn]);
 
   // ---- the performer mesh (video only; singers never hear each other), while I am on stage ----
   useEffect(() => {
@@ -293,5 +327,5 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, linked, others };
+  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others };
 }

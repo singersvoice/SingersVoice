@@ -23,6 +23,7 @@
     "screenshots": "node tools/ci/screenshots.mjs",
     "audio-lab": "node tools/ci/audio-lab.mjs",
     "mix-lab": "node tools/ci/mix-lab.mjs",
+    "hls-lab": "node tools/ci/hls-lab.mjs",
     "control": "npm run dev -w services/control",
     "control:smoke": "node tools/ci/control-smoke.mjs",
     "control:deploy": "node tools/cf/deploy.mjs"

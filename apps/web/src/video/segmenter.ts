@@ -13,6 +13,10 @@ const TARGET_FPS = 15;
 const LOAD_TIMEOUT_MS = 20_000;
 const MASK_W = 240;
 const MASK_H = 320;
+/** A frame the model has not answered in this long gets as long again; still no answer and the model counts as stuck. */
+export const SEND_TIMEOUT_MS = 1500;
+/** How long the silhouette stands in for a stuck model before the model is asked again. */
+export const MODEL_RETRY_MS = 8000;
 
 export const smoothStep = (e0: number, e1: number, v: number): number => {
   const t = Math.max(0, Math.min(1, (v - e0) / (e1 - e0)));
@@ -132,6 +136,12 @@ function acquireModel(): Promise<SelfieSegmentationLike> {
   return sharedSegPromise;
 }
 
+/** Tests only: forget the page's model so the next start() makes a new one. */
+export function _resetSharedModel(): void {
+  sharedSeg = null;
+  sharedSegPromise = null;
+}
+
 export class PersonSegmenter {
   /** Person over transparent background, feathered edge. */
   readonly canvas: HTMLCanvasElement;
@@ -141,11 +151,16 @@ export class PersonSegmenter {
   /** Increments on every new frame (compositor redraws only when it changed). */
   frame = 0;
   fps = 0;
+  /** Times the model stopped answering and the silhouette stood in (support / tests). */
+  stalls = 0;
   private seg: SelfieSegmentationLike | null = null;
   private video: HTMLVideoElement | null = null;
   private running = false;
   private busy = false;
+  /** Bumped by every start()/stop(): a loop, a late answer or a timer from an earlier run sees it and steps aside. */
+  private gen = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private ctx2d: CanvasRenderingContext2D;
   private maskCtx: CanvasRenderingContext2D;
   private lastFrameAt = 0;
@@ -189,28 +204,32 @@ export class PersonSegmenter {
    */
   async start(video: HTMLVideoElement, useModel = true, onModeChange?: (m: SegmenterMode) => void): Promise<void> {
     this.stop();
+    const gen = ++this.gen;
     this.video = video;
     this.running = true;
+    this.busy = false; // a frame still out from an earlier run is not waited for
     this.onModeChange = onModeChange ?? null;
     this.setMode(useModel && PersonSegmenter.supported() ? 'loading' : 'oval');
-    this.loopOval();
+    this.loopOval(gen);
     if (this.mode !== 'loading') return;
     let attempt = 0;
-    while (this.running && this.video === video) {
+    while (this.running && this.gen === gen) {
       try {
         const seg = await acquireModel();
-        if (!this.running || this.video !== video) return;
-        seg.onResults((r) => this.drawModel(r));
+        if (!this.running || this.gen !== gen) return;
+        seg.onResults((r) => {
+          if (this.gen === gen && this.mode === 'model') this.drawModel(r); // never a late answer over the silhouette, or one for a camera since replaced
+        });
         this.seg = seg;
         clearTimeout(this.timer);
         this.setMode('model');
-        this.loopModel();
+        this.loopModel(gen);
         return;
       } catch {
         attempt++;
         this.setMode('oval'); // keep showing the silhouette while we retry
         await new Promise((r) => setTimeout(r, Math.min(30_000, 3000 * attempt)));
-        if (!this.running || this.video !== video) return;
+        if (!this.running || this.gen !== gen) return;
         this.setMode('loading');
       }
     }
@@ -222,16 +241,29 @@ export class PersonSegmenter {
     this.onModeChange?.(m);
   }
 
-  private loopModel(): void {
+  /**
+   * Frames to the model, one at a time, at the target rate. A model that stops answering (it happens: a camera
+   * swapped under it on an iPad, a lost GPU context) would otherwise leave the singer frozen on the last cut-out for
+   * everyone — so a frame not answered in SEND_TIMEOUT_MS gets as long again, and if it is still out the silhouette
+   * takes over (the singer keeps moving) until the model answers or MODEL_RETRY_MS have passed.
+   */
+  private loopModel(gen: number): void {
+    const timeout = () => new Promise<boolean>((r) => setTimeout(() => r(false), SEND_TIMEOUT_MS));
     const step = async () => {
-      if (!this.running || !this.seg || !this.video) return;
+      if (!this.running || this.gen !== gen || this.mode !== 'model' || !this.seg || !this.video) return;
       const v = this.video;
       if (!this.busy && v.readyState >= 2 && v.videoWidth) {
         this.busy = true;
-        try {
-          await this.seg.send({ image: v });
-        } catch {
-          /* skip frame */
+        const answered = this.seg.send({ image: v }).then(
+          () => true,
+          () => true, // a refused frame is an answer too: the next one goes
+        );
+        let inTime = await Promise.race([answered, timeout()]);
+        if (!inTime) inTime = await Promise.race([answered, timeout()]);
+        if (this.gen !== gen) return;
+        if (!inTime) {
+          this.modelStuck(gen, answered);
+          return;
         }
         this.busy = false;
       }
@@ -240,10 +272,27 @@ export class PersonSegmenter {
     void step();
   }
 
-  private loopOval(): void {
+  /** The model stopped answering: the silhouette stands in, and the model is asked again once it answers or after MODEL_RETRY_MS. */
+  private modelStuck(gen: number, pending: Promise<boolean>): void {
+    this.stalls++;
+    this.busy = false;
+    this.setMode('oval');
+    this.loopOval(gen);
+    clearTimeout(this.retryTimer);
+    const again = () => {
+      clearTimeout(this.retryTimer);
+      if (!this.running || this.gen !== gen || !this.seg || this.mode !== 'oval') return;
+      this.setMode('model');
+      this.loopModel(gen);
+    };
+    this.retryTimer = setTimeout(again, MODEL_RETRY_MS);
+    void pending.then(() => setTimeout(again, 0));
+  }
+
+  private loopOval(gen: number): void {
     clearTimeout(this.timer);
     const step = () => {
-      if (!this.running || this.mode === 'model' || !this.video) return;
+      if (!this.running || this.gen !== gen || this.mode === 'model' || !this.video) return;
       if (this.video.readyState >= 2 && this.video.videoWidth) this.drawOval(this.video);
       this.timer = setTimeout(step, 1000 / TARGET_FPS);
     };
@@ -354,7 +403,10 @@ export class PersonSegmenter {
 
   stop(): void {
     this.running = false;
+    this.gen++;
     clearTimeout(this.timer);
+    clearTimeout(this.retryTimer);
+    this.busy = false;
     this.seg = null; // the shared model stays alive for the next start (see acquireModel)
     this.video = null;
     this.setMode('off');
