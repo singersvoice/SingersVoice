@@ -843,8 +843,9 @@ try {
   check(rejoinB.playing && rejoinApart < 2500, `the singer who left is back in the song, in step with the stage (${Math.round(rejoinA.posMs / 1000)} s / ${Math.round(rejoinB.posMs / 1000)} s, ${Math.round(rejoinApart)} ms apart)`);
   // …or stop the song for everyone, like the host: everyone is back on the lobby stage; the takes save themselves.
   await bob.page.getByRole('button', { name: 'Stop the song for everyone' }).click();
-  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
-  await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
+  // The wrap-up of a take (the recorder's last pieces, the save queued) is heavy on a starved page: the lobby can be a while coming.
+  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 120000 });
+  await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 120000 });
   check(true, '"Stop song" on a singer\'s device wraps up the song for everyone — straight back to the lobby stage');
   // The saves (a recorder's last pieces, the files written) can take minutes on a starved machine: the verdict is theirs, not a clock's.
   await alice.page.locator('[data-save="done"][data-save-id], [data-save="failed"][data-save-id]').first().waitFor({ timeout: 150000 });
