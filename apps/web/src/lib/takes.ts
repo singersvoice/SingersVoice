@@ -1,7 +1,7 @@
 /** Build and save performance manifests for solo (Studio) and live (Meets) takes. */
 import { newId, tempExpiry, type FileEntry, type PerformanceKind, type PerformanceManifest, type PerformanceSinger, type TrackPackageV2 } from '@singersvoice/protocol';
 import { sha256Blob } from './hash.ts';
-import { platformName } from './platform.ts';
+import { appBuild, platformName } from './platform.ts';
 import type { PerformanceSummary, Progress } from './storage/types.ts';
 import { audioSettings } from '../state/settings.ts';
 import { withProvider } from '../state/session.ts';
@@ -67,7 +67,7 @@ export async function buildManifest(
     },
     playback: { tempo: a.tempo, keyShift: a.keyShift, backingGain: a.backingGain },
     fx: a.params,
-    device: { userAgent: navigator.userAgent, platform: platformName, headphones: null },
+    device: { userAgent: navigator.userAgent, platform: platformName, headphones: null, build: appBuild },
     files,
     notes: '',
   };

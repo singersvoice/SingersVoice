@@ -39,9 +39,10 @@ export interface PersonMeasure {
   body: PersonBox;
 }
 
-/** The neck is this much narrower than the head; the shoulders this much wider. */
+/** The neck is this much narrower than the head; the shoulders this much wider; the jaw under the ears at most this much of the head's width. */
 const NECK = 0.62;
 const SHOULDERS = 1.4;
+const DIP = 0.92;
 
 /**
  * Where the person is in a mask (grey: bright = person), as fractions of w×h, or null when nobody
@@ -53,39 +54,94 @@ export function boxOfMask(data: Uint8ClampedArray, w: number, h: number, thresho
   return measureMask(data, w, h, threshold)?.body ?? null;
 }
 
+/** Scratch for `largestBlob` (one probe at a time; grown to the biggest probe seen). */
+let blobLabel = new Int32Array(0);
+let blobStack = new Int32Array(0);
+
 /**
- * The person and their head in a mask. The body as `boxOfMask` has it; the head from the top of the
- * figure down its middle: its width grows from the crown, tops out at the ears, and the head ends
- * where the figure narrows to the neck (or, with hair down to the shoulders, where it widens to
- * them); when neither shows, a head is as tall as 1.35 of its width. The head is always between 1.1
- * and 1.6 times as tall as it is wide — a measurement outside that is brought into it.
+ * Of the lit pixels (`on`, w×h), the biggest 4-connected blob — the person; a plant, a poster, the
+ * corner of a chair the model also lit are not, and left out of the measurement. `on` is overwritten
+ * with the blob alone.
+ */
+function largestBlob(on: Uint8Array, w: number, h: number): void {
+  const n = w * h;
+  if (blobLabel.length < n) {
+    blobLabel = new Int32Array(n);
+    blobStack = new Int32Array(n);
+  }
+  const label = blobLabel;
+  const stack = blobStack;
+  label.fill(0, 0, n);
+  let next = 0;
+  let best = 0;
+  let bestSize = 0;
+  for (let start = 0; start < n; start++) {
+    if (!on[start] || label[start]) continue;
+    const id = ++next;
+    let size = 0;
+    let sp = 0;
+    stack[sp++] = start;
+    label[start] = id;
+    while (sp) {
+      const i = stack[--sp]!;
+      size++;
+      const x = i % w;
+      if (x > 0 && on[i - 1] && !label[i - 1]) (label[i - 1] = id), (stack[sp++] = i - 1);
+      if (x < w - 1 && on[i + 1] && !label[i + 1]) (label[i + 1] = id), (stack[sp++] = i + 1);
+      if (i >= w && on[i - w] && !label[i - w]) (label[i - w] = id), (stack[sp++] = i - w);
+      if (i < n - w && on[i + w] && !label[i + w]) (label[i + w] = id), (stack[sp++] = i + w);
+    }
+    if (size > bestSize) {
+      bestSize = size;
+      best = id;
+    }
+  }
+  if (next > 1) for (let i = 0; i < n; i++) if (label[i] !== best) on[i] = 0;
+}
+
+/**
+ * The person and their head in a mask. The person is the biggest blob of lit pixels; the body as
+ * `boxOfMask` has it; the head from the top of the figure down its middle: its width grows from the
+ * crown and tops out at the ears or the hair — the first row narrower than that (the jaw) or the
+ * width standing still (within 4 % over a quarter of itself) settles it, whatever widens below (a
+ * collar, a sweater the model lit along with the room behind it, the shoulders) — and the head ends
+ * where the figure narrows to the neck or widens to the shoulders; when neither shows, a head is as
+ * tall as 1.35 of its width. The head is always between 1.1 and 1.6 times as tall as it is wide — a
+ * measurement outside that is brought into it.
  */
 export function measureMask(data: Uint8ClampedArray, w: number, h: number, threshold = 100): PersonMeasure | null {
-  const rows: { l: number; r: number }[] = new Array(h);
+  const n = w * h;
+  const on = new Uint8Array(n);
+  let area = 0;
+  for (let i = 0; i < n; i++) {
+    if (data[i * 4]! > threshold) {
+      on[i] = 1;
+      area++;
+    }
+  }
+  if (area < n * 0.01) return null; // a few stray pixels are not a person
+  largestBlob(on, w, h);
   const widths: number[] = [];
   const centres: number[] = [];
   let y0 = -1;
   let y1 = -1;
-  let area = 0;
   for (let y = 0; y < h; y++) {
-    const row = y * w * 4;
+    const row = y * w;
     let l = -1;
     let r = -1;
     for (let x = 0; x < w; x++) {
-      if (data[row + x * 4]! > threshold) {
+      if (on[row + x]) {
         if (l < 0) l = x;
         r = x;
       }
     }
-    rows[y] = { l, r };
     if (l < 0) continue;
     if (y0 < 0) y0 = y;
     y1 = y;
     widths.push(r - l + 1);
     centres.push((l + r + 1) / 2);
-    area += r - l + 1;
   }
-  if (y0 < 0 || area < w * h * 0.01) return null; // a few stray pixels are not a person
+  if (y0 < 0) return null;
   widths.sort((a, b) => a - b);
   centres.sort((a, b) => a - b);
   const bw = widths[Math.min(widths.length - 1, Math.floor(widths.length * 0.8))]! + 2; // + a probe pixel of margin each side (soft edges, hair)
@@ -93,14 +149,14 @@ export function measureMask(data: Uint8ClampedArray, w: number, h: number, thres
   const body: PersonBox = { x: (cx - bw / 2) / w, y: Math.max(0, y0 - 1) / h, w: bw / w, h: (Math.min(h - 1, y1 + 1) - Math.max(0, y0 - 1) + 1) / h };
 
   // The head: the figure's middle column band, from the top down.
-  const bandL = cx - bw * 0.6;
-  const bandR = cx + bw * 0.6;
+  const bandL = Math.max(0, Math.floor(cx - bw * 0.6));
+  const bandR = Math.min(w, Math.ceil(cx + bw * 0.6));
   const core = (y: number): { l: number; r: number } | null => {
-    const row = y * w * 4;
+    const row = y * w;
     let l = -1;
     let r = -1;
-    for (let x = Math.max(0, Math.floor(bandL)); x < Math.min(w, Math.ceil(bandR)); x++) {
-      if (data[row + x * 4]! > threshold) {
+    for (let x = bandL; x < bandR; x++) {
+      if (on[row + x]) {
         if (l < 0) l = x;
         r = x;
       }
@@ -117,6 +173,8 @@ export function measureMask(data: Uint8ClampedArray, w: number, h: number, thres
   }
   if (top < 0) top = y0;
   let headW = 0;
+  let settled = false;
+  const maxAt: number[] = [];
   let sumC = 0;
   let nC = 0;
   let bottom = -1;
@@ -132,7 +190,17 @@ export function measureMask(data: Uint8ClampedArray, w: number, h: number, thres
       }
       if (down > 1.9 * headW || down > 0.5 * figureH) break; // no neck in sight: a head is only so tall
     }
-    if (cw > headW) headW = cw;
+    if (!settled) {
+      // Past the round crown, the head's width is settled by the first row narrower than the widest so far (the jaw
+      // under the ears, with or without a neck below it) or by the width standing still for a quarter of itself.
+      if (headW >= 3 && down >= 0.5 * headW && cw <= DIP * headW) settled = true;
+      else {
+        if (cw > headW) headW = cw;
+        maxAt[down] = headW;
+        const back = Math.max(2, Math.round(0.25 * headW));
+        if (headW >= 3 && down >= Math.max(3, 0.5 * headW) && down >= back && headW - maxAt[down - back]! <= Math.max(1, 0.04 * headW)) settled = true;
+      }
+    }
     if (c) {
       sumC += (c.l + c.r + 1) / 2;
       nC++;
@@ -219,7 +287,174 @@ export function visiblePart(r: FrameRect, srcW: number, srcH: number): FrameRect
   return { sx: ix0, sy: iy0, sw: ix1 - ix0, sh: iy1 - iy0, dx: r.dx + (ix0 - r.sx) * kx, dy: r.dy + (iy0 - r.sy) * ky, dw: (ix1 - ix0) * kx, dh: (iy1 - iy0) * ky };
 }
 
-/** A crop only moves for a change bigger than this (fraction of the frame) — no breathing from mask noise. */
-export const CROP_DEAD = 0.02;
-/** How fast the crop follows a moved target (per ~66 ms frame). */
-export const CROP_EASE = 0.12;
+
+/**
+ * The seat: how the stage frame is set and held. A stage camera on a seated performer is framed once
+ * and left alone; it is never steered after the performer's every sway. The head is measured a few
+ * times a second and the measurement is noisy — hair, an ear, a hand near the face, the mask's soft
+ * edge, a model that loses half the figure for a moment — so a frame that followed it would breathe
+ * and zoom. The seat takes the median of a settling window of measurements that agree with each
+ * other, frames once, and holds that frame. It re-frames only when the singer has clearly moved —
+ * the head's centre, top or size away from where the frame has it by more than a margin — and stayed
+ * there for `reseatAfterMs`, the measurements again agreeing: then one smooth glide (`glideMs`) to
+ * the new frame, held again. Nothing moves with the singer frame by frame.
+ */
+export const SEAT = {
+  /** The first frame is set from this long a window of measurements (at least `minSamples` of them). */
+  settleMs: 1500,
+  /** A move has to hold this long — `sustained` of the window's measurements beyond the margins — before the seat follows it. */
+  reseatAfterMs: 2500,
+  sustained: 0.8,
+  minSamples: 3,
+  /**
+   * Measurements that agree: a window's middle half (its 25th to 75th percentile) spans at most this much of the frame in
+   * the head's place, and this fraction of its median in the head's size — a model losing and finding the figure is
+   * not a singer moving.
+   */
+  agreePlace: 0.08,
+  agreeSize: 0.25,
+  /** The glide from the held frame to the new one. */
+  glideMs: 900,
+  /** The head's centre may be this far (fraction of the frame width) from where the frame has it. */
+  driftX: 0.12,
+  /** The top of the head may rise this far above where the frame has it (fraction of the frame height): any higher and the crown nears the edge… */
+  driftUp: 0.06,
+  /** …and sink this far below it (a singer slumping in the chair). */
+  driftDown: 0.14,
+  /** The head may be this much smaller / bigger than the frame has it (a lean back / a lean in). */
+  sizeMin: 0.76,
+  sizeMax: 1.3,
+} as const;
+
+export type SeatState = 'settling' | 'gliding' | 'held';
+
+interface HeadSample {
+  cx: number;
+  top: number;
+  w: number;
+  h: number;
+  at: number;
+}
+
+/** The head as a frame has it: centre (of the frame's width), top and height (of the frame's height). */
+interface HeadPlace {
+  hx: number;
+  hy: number;
+  hh: number;
+}
+
+const quantile = (xs: number[], p: number): number => {
+  const s = [...xs].sort((a, b) => a - b);
+  if (!s.length) return NaN;
+  const i = (s.length - 1) * p;
+  const lo = Math.floor(i);
+  const hi = Math.ceil(i);
+  return s[lo]! + (s[hi]! - s[lo]!) * (i - lo);
+};
+const median = (xs: number[]): number => quantile(xs, 0.5);
+
+/** Smooth in and out: the glide starts and ends at rest. */
+const smooth = (t: number): number => t * t * (3 - 2 * t);
+
+export class Seat {
+  /** The frame held, or being glided to — null while the seat is settling (the whole camera frame is drawn). */
+  target: FrameRect | null = null;
+  /** Where `target` has the head (set from the median head the seat was set from). */
+  private basis: HeadPlace | null = null;
+  private from: FrameRect | null = null;
+  private glideStart = 0;
+  private samples: HeadSample[] = [];
+
+  constructor(
+    private readonly srcW: number,
+    private readonly srcH: number,
+    readonly opts: typeof SEAT = SEAT,
+  ) {}
+
+  state(now: number): SeatState {
+    if (!this.target) return 'settling';
+    return this.from && now - this.glideStart < this.opts.glideMs ? 'gliding' : 'held';
+  }
+
+  /**
+   * A head measured now, as fractions of the camera frame (null: nobody found — nothing to learn; the
+   * seat holds). Only a plausible measurement of a real cut-out belongs here, never a stand-in silhouette.
+   */
+  sample(head: PersonBox | null, now: number): void {
+    if (!head) return;
+    const o = this.opts;
+    this.samples.push({ cx: head.x + head.w / 2, top: head.y, w: head.w, h: head.h, at: now });
+    const window = this.target ? o.reseatAfterMs : o.settleMs;
+    this.samples = this.samples.filter((s) => now - s.at <= window / o.sustained); // a move that lasted `window` is `sustained` of what is kept
+    if (this.samples.length < o.minSamples || now - this.samples[0]!.at < window) return;
+    if (this.target && this.state(now) !== 'held') return;
+    if (this.target) {
+      const out = this.samples.filter((s) => this.beyond(s)).length;
+      if (out < Math.ceil(o.sustained * this.samples.length)) return;
+    }
+    if (!this.agree()) return;
+    this.seat(this.target ?? frameRect(this.srcW, this.srcH, 1), now);
+  }
+
+  /** Whether the window's measurements agree with each other (their middle half close together). */
+  private agree(): boolean {
+    const o = this.opts;
+    const s = this.samples;
+    const span = (xs: number[]) => quantile(xs, 0.75) - quantile(xs, 0.25);
+    const hs = s.map((x) => x.h);
+    return span(s.map((x) => x.cx)) <= o.agreePlace && span(s.map((x) => x.top)) <= o.agreePlace && span(hs) <= o.agreeSize * median(hs);
+  }
+
+  /** Set the frame from the window's median head and glide to it from `from`. */
+  private seat(from: FrameRect, now: number): void {
+    const s = this.samples;
+    const head: PersonBox = { x: 0, y: median(s.map((x) => x.top)), w: median(s.map((x) => x.w)), h: median(s.map((x) => x.h)) };
+    head.x = median(s.map((x) => x.cx)) - head.w / 2;
+    const target = stageCrop(this.srcW, this.srcH, head);
+    this.target = target;
+    this.basis = this.place({ cx: head.x + head.w / 2, top: head.y, w: head.w, h: head.h, at: now }, target);
+    this.from = from;
+    this.glideStart = now;
+    this.samples = [];
+  }
+
+  private place(s: HeadSample, f: FrameRect): HeadPlace {
+    return { hx: (s.cx * this.srcW - f.sx) / f.sw, hy: (s.top * this.srcH - f.sy) / f.sh, hh: (s.h * this.srcH) / f.sh };
+  }
+
+  /** Whether a measured head sits beyond the margins of where the frame has it. */
+  private beyond(s: HeadSample): boolean {
+    const o = this.opts;
+    const b = this.basis!;
+    const p = this.place(s, this.target!);
+    if (Math.abs(p.hx - b.hx) > o.driftX) return true;
+    if (p.hy < b.hy - o.driftUp || p.hy > b.hy + o.driftDown) return true;
+    const k = p.hh / b.hh;
+    return k < o.sizeMin || k > o.sizeMax;
+  }
+
+  /** The crop to draw now: the whole camera frame until the seat is set, the glide while it moves, the held frame. */
+  crop(now: number): FrameRect {
+    const t = this.target;
+    if (!t) return frameRect(this.srcW, this.srcH, 1);
+    const f = this.from;
+    if (!f) return t;
+    const k = (now - this.glideStart) / this.opts.glideMs;
+    if (k >= 1) {
+      this.from = null;
+      return t;
+    }
+    const e = smooth(Math.max(0, k));
+    return { ...t, sx: f.sx + (t.sx - f.sx) * e, sy: f.sy + (t.sy - f.sy) * e, sw: f.sw + (t.sw - f.sw) * e, sh: f.sh + (t.sh - f.sh) * e };
+  }
+}
+
+/**
+ * Whether a head measurement is one of a person the stage can seat: not a few pixels (a model that
+ * lost the figure keeps a fragment lit), and — unless the head fills the picture (a close-up, where
+ * the shoulders are beyond the edges) — a head, not the figure itself measured as one.
+ */
+export function plausibleHead(m: PersonMeasure): boolean {
+  if (m.head.w < 0.05) return false;
+  return m.head.w >= 0.4 || m.head.w <= 0.85 * m.body.w;
+}

@@ -3,7 +3,7 @@
  * sends — so every stage draws every singer the same size — wherever they sit from their camera.
  */
 import { describe, expect, it } from 'vitest';
-import { boxOfMask, cropFactor, distanceNote, frameRect, measureMask, STAGE_FRAME, stageCrop, visiblePart, type PersonBox } from '../src/video/framing.ts';
+import { boxOfMask, cropFactor, distanceNote, frameRect, measureMask, plausibleHead, STAGE_FRAME, stageCrop, visiblePart, type PersonBox } from '../src/video/framing.ts';
 import { coverRect } from '../src/video/segmenter.ts';
 
 /** A grey mask w×h: bright where `person(x, y)`. */
@@ -63,6 +63,44 @@ describe('measuring the singer in the mask', () => {
     expect(m.head.y).toBe(0);
     expect(m.head.x + m.head.w / 2).toBeCloseTo(36 / 120, 1);
     expect(m.head.h * 160).toBeGreaterThan(48 * 1.1 - 0.01); // never shorter than a head can be
+  });
+
+  it('something else the model lit (a plant, a poster) is not the person: the biggest blob is', () => {
+    const person = figure(1, 60, 40);
+    const plant = (x: number, y: number) => x >= 96 && x < 110 && y >= 4 && y < 30; // a tall blob above and to the side
+    const m = measureMask(grey(120, 160, (x, y) => person(x, y) || plant(x, y)), 120, 160)!;
+    const alone = measureMask(grey(120, 160, person), 120, 160)!;
+    expect(m.head).toEqual(alone.head); // the crown stays the crown: the plant never pulls the frame up
+    expect(m.body).toEqual(alone.body);
+  });
+
+  it('a collar and shoulders widening right under the jaw, with no neck, do not swallow the head: the jaw settles its width', () => {
+    // A head 24 wide; under it the figure widens steadily to the full width (a jacket collar up to the jaw, round shoulders).
+    const hw = 12;
+    const hh = 16;
+    const cx = 60;
+    const top = 20;
+    const headCy = top + hh;
+    const jaw = headCy + hh * 0.9;
+    const m = measureMask(
+      grey(120, 160, (x, y) => {
+        if (((x - cx) / hw) ** 2 + ((y - headCy) / hh) ** 2 <= 1) return true;
+        if (y >= jaw) return Math.abs(x - cx) < Math.min(58, hw * 0.95 + (y - jaw) * 1.2); // widening 2.4 px a row from just under the head's width
+        return false;
+      }),
+      120,
+      160,
+    )!;
+    expect(m.head.w * 120).toBeCloseTo(24, -0.5); // ear to ear, not the shoulders
+    expect(m.head.h * 160).toBeLessThan(24 * 1.6 + 0.01);
+    expect(m.head.y * 160).toBeCloseTo(top, -0.5);
+  });
+
+  it('a measurement that is a fragment of the figure, or the figure itself as a head, is not plausible; a close-up is', () => {
+    expect(plausibleHead({ head: { x: 0.45, y: 0.5, w: 0.03, h: 0.04 }, body: { x: 0.2, y: 0.4, w: 0.6, h: 0.6 } })).toBe(false); // a few pixels
+    expect(plausibleHead({ head: { x: 0.2, y: 0.1, w: 0.3, h: 0.35 }, body: { x: 0.2, y: 0.1, w: 0.32, h: 0.9 } })).toBe(false); // as wide as the body: the figure
+    expect(plausibleHead({ head: { x: 0.4, y: 0.3, w: 0.2, h: 0.25 }, body: { x: 0.2, y: 0.3, w: 0.6, h: 0.7 } })).toBe(true); // a head on shoulders
+    expect(plausibleHead({ head: { x: 0, y: 0, w: 1, h: 1 }, body: { x: 0, y: 0, w: 1, h: 1 } })).toBe(true); // the head fills the picture: sit back
   });
 });
 

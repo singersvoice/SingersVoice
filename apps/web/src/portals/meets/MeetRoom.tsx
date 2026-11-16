@@ -34,7 +34,7 @@ import { canPublish as canPublishSignal } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
 import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
-import type { MeetRecorder } from '../../video/meetRecorder.ts';
+import { filmSound, type MeetRecorder } from '../../video/meetRecorder.ts';
 import { MicStatus } from '../../components/MicStatus.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
@@ -755,7 +755,7 @@ function MeetFilmSwitch(props: { film: MeetRecorder; onStage: boolean }) {
   const hint = !on
     ? 'Off: nothing of this meet is kept as one video'
     : s.recording
-      ? `Filming · ${formatMs(s.seconds * 1000)} · ${mb(s.bytes)}${s.stored < s.bytes ? ` (${mb(s.stored)} in Drive)` : ' in Drive'}${s.note ? ` · ${s.note}` : ''}`
+      ? `Filming · ${formatMs(s.seconds * 1000)} · ${mb(s.bytes)}${s.stored < s.bytes ? ` (${mb(s.stored)} in Drive)` : ' in Drive'} · ${filmSound(s)}${s.note ? ` · ${s.note}` : ''}`
       : s.saved
         ? `Saved: ${s.saved.trackTitle} · ${formatMs(s.saved.durationMs)}`
         : s.note
@@ -764,7 +764,7 @@ function MeetFilmSwitch(props: { film: MeetRecorder; onStage: boolean }) {
             ? 'Starts with your mic — the show picture and the stage mix, as the audience sees and hears it, into your Drive as it happens'
             : 'Films while you are on stage: the show picture and the stage mix, into your Drive as it happens';
   return (
-    <div data-meet-film={s.recording ? 'on' : on ? 'armed' : 'off'} data-film-seconds={s.seconds}>
+    <div data-meet-film={s.recording ? 'on' : on ? 'armed' : 'off'} data-film-seconds={s.seconds} data-film-level={Math.round(s.level)} data-film-heard={s.heard ? '1' : '0'}>
       <Switch checked={on} onChange={(v) => updateApp({ recordMeet: v })} label="Film the whole meet into my Drive" hint={hint} />
     </div>
   );
@@ -836,6 +836,18 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
             {stage.distance === 'close' ? 'Sit back a little — the stage shows what your camera sees' : 'Come a little closer to the camera'}
           </span>
         )}
+        {props.onStage &&
+          stage.still.map((id) => {
+            const name = meet.stage.find((s) => s.participantId === id)?.displayName.split(' ')[0] || 'A singer';
+            return (
+              <span key={id} class="chip warn" style="pointer-events:auto" data-still={id} title="Their picture arrives but nothing in it moves: their camera froze on their device. It restarts there by itself, or they tap Restart on their stage strip; Reconnect makes the video link again from here.">
+                {name}'s picture is not moving — their camera froze on their device
+                <button class="btn sm" style="margin-left:6px" onClick={() => stage.reconnect(id)}>
+                  Reconnect
+                </button>
+              </span>
+            );
+          })}
       </div>
     </div>
   );

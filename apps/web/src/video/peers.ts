@@ -170,6 +170,17 @@ export class PerformerMesh {
     }
   }
 
+  /**
+   * Make the link to a performer again from scratch (a plain "Reconnect": their picture arrives but
+   * stands still, or anything else that a fresh connection would settle). The other side treats the
+   * fresh offer as a new connection of the same peer; a performer not on stage is left alone.
+   */
+  remake(id: string): void {
+    if (!this.wanted.has(id) || !this.peers.has(id)) return;
+    void this.drop(id, false);
+    this.connect(id, false);
+  }
+
   peerStates(): Record<string, PeerState> {
     const out: Record<string, PeerState> = {};
     for (const [id, p] of this.peers) out[id] = p.state;

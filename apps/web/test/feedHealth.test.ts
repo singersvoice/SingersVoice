@@ -5,10 +5,25 @@
  * API calls healthy. A video that never presented frames is never judged by them.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { FROZEN_AFTER, LocalFeed, type FeedHealth } from '../src/video/localFeed.ts';
+import { FROZEN_AFTER, LocalFeed, STILL_AFTER, type FeedHealth } from '../src/video/localFeed.ts';
 import { fakeDom, FakeStream, FakeTrack } from './helpers/fakeDom.ts';
 
 const dom = fakeDom();
+
+/** A 120×160 probe mask with a figure (head on shoulders) centred at `cx`: what the feed's probe would read off the cut-out. */
+function figureMask(cx: number): Uint8ClampedArray {
+  const w = 120;
+  const h = 160;
+  const d = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const head = ((x - cx) / 12) ** 2 + ((y - 36) / 16) ** 2 <= 1;
+      const neck = y >= 50 && y < 58 && Math.abs(x - cx) < 7;
+      const body = y >= 58 && Math.abs(x - cx) < 30;
+      if (head || neck || body) d[(y * w + x) * 4] = 255;
+    }
+  return d;
+}
 
 describe('LocalFeed health', () => {
   it('reports the track muted and ended, and back to ok', () => {
@@ -71,6 +86,68 @@ describe('LocalFeed health', () => {
       dom.current.document.dispatchEvent(new Event('visibilitychange'));
       track.muted = true;
       await vi.advanceTimersByTimeAsync(1000 * (FROZEN_AFTER + 2));
+      expect(seen).toEqual([]);
+      feed.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * Frames flow and the model answers with a new cut-out every 150 ms; what the probe reads off it is `mask(t)`
+   * (the same mask every time: a camera presenting one picture over and over).
+   */
+  const present = async (feed: LocalFeed, seconds: number, mask: (t: number) => Uint8ClampedArray) => {
+    const t0 = Date.now();
+    let nextCut = 0;
+    while (Date.now() - t0 < seconds * 1000) {
+      const t = Date.now() - t0;
+      if (t >= nextCut) {
+        for (const c of dom.current.contexts) c.pixels = mask(t);
+        feed.segmenter.frame++;
+        nextCut += 150;
+      }
+      dom.current.video.frame();
+      await vi.advanceTimersByTimeAsync(50);
+    }
+  };
+
+  it('calls a camera that keeps presenting the same picture frozen — the model measuring the singer exactly the same for STILL_AFTER seconds — and ok once it moves', async () => {
+    vi.useFakeTimers();
+    try {
+      const feed = new LocalFeed();
+      const seen: FeedHealth[] = [];
+      feed.onHealth = (h) => seen.push(h);
+      feed.attach(new FakeStream([new FakeTrack()]) as unknown as MediaStream, false);
+      feed.segmenter.mode = 'model'; // the cut-outs are the model's (the stand-in silhouette never counts)
+      const still = figureMask(60);
+      await present(feed, STILL_AFTER - 2, () => still);
+      expect(seen).toEqual([]); // not yet
+      await present(feed, 4, () => still);
+      expect(seen).toEqual(['frozen']);
+      await present(feed, 3, (t) => figureMask(60 + (Math.floor(t / 150) % 2 ? 2 : -2))); // the singer moves again
+      expect(seen).toEqual(['frozen', 'ok']);
+      feed.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a singer who moves even a little, the silhouette, or nobody in the picture is never called frozen', async () => {
+    vi.useFakeTimers();
+    try {
+      const feed = new LocalFeed();
+      const seen: FeedHealth[] = [];
+      feed.onHealth = (h) => seen.push(h);
+      feed.attach(new FakeStream([new FakeTrack()]) as unknown as MediaStream, false);
+      feed.segmenter.mode = 'model';
+      await present(feed, STILL_AFTER + 5, (t) => figureMask(Math.floor(t / 150) % 2 ? 61 : 60)); // a pixel of sway
+      expect(seen).toEqual([]);
+      feed.segmenter.mode = 'oval';
+      await present(feed, STILL_AFTER + 5, () => figureMask(60)); // the same silhouette every time: not the model's word
+      expect(seen).toEqual([]);
+      feed.segmenter.mode = 'model';
+      await present(feed, STILL_AFTER + 5, () => new Uint8ClampedArray(120 * 160 * 4)); // nobody there: nothing to measure
       expect(seen).toEqual([]);
       feed.dispose();
     } finally {

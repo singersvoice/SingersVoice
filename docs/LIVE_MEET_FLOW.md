@@ -34,9 +34,10 @@ code, **Share link**, the idle countdown and, for Publisher-plan (or admin) acco
 
 ### The stage (always on)
 
-The strip at the top is the virtual stage: every performer cut out of their camera and seated in
-**one row of chairs** — the same size, evenly spaced by slot along a shallow arc, behind a lit riser
-that hides everything below the chest — over the stage background. It is live from the first slot
+The strip at the top is the virtual stage: every performer cut out of their camera and placed in
+**one straight row**, as performers stand in a line across a stage — the same size, evenly spaced by
+slot, every head at the same height, behind a lit riser that hides everything below the chest —
+over the stage background, however many are on it (one to ten). It is live from the first slot
 taken — there is no "start" for the stage itself. Chips on it: *N on stage · x/y video linked*,
 *blending you into the stage…* while the model loads, a camera on/off button for you, and the
 stage's word on your distance to the camera (*Sit back a little* / *Come a little closer*).
@@ -53,20 +54,36 @@ room from a phone come out as two performers of one size, heads level, on one li
 framing setting any more — nobody is bigger than anybody. Ten singers make one even row across the
 stage, two stand big in the middle; the names sit on the riser under each singer.
 
+**Steady, as in a show.** The frame is set once and held, the way a stage camera is framed on a
+seated performer and left alone: a second and a half after your cut-out appears your device settles
+on your frame (one smooth glide from the whole camera picture) and keeps it. Swaying, singing,
+gesturing, a hand near your face, the cut-out's edge wobbling — none of it moves the picture; it
+never breathes or zooms with you. Only when you have really moved — leaned well in or back, slid to
+one side, stood up — and stayed there for a couple of seconds does the frame follow, in one glide,
+and hold again.
+
 ### The camera, watched
 
-A singer's picture must keep moving for everyone. The device watches its own camera three ways:
+A singer's picture must keep moving for everyone. The device watches its own camera four ways:
 the track's own *mute* and *ended* events (iOS ends a capture when another starts; a browser mutes
 one it interrupted), the video's own frame callbacks — frames that were flowing and then stop for
 five seconds while the page is visible (a camera frozen on one frame looks alive to every other
-API) — and the cut-out model's answers (a model that stops answering is given up on after three
-seconds; the soft silhouette stands in, the singer keeps moving, and the model is back the moment
-it answers). A camera that
+API) — the picture itself — a camera that keeps presenting the *same* picture, frame after frame,
+for fifteen seconds (the model measures the singer exactly the same, cut-out after cut-out; a real
+person never does, however still) is frozen too — and the cut-out model's answers (a model that
+stops answering is given up on after three seconds; the soft silhouette stands in, the singer
+keeps moving, and the model is back the moment it answers). A camera that
 went dark or froze is restarted once by the device itself — on iOS together with the microphone,
 as the one capture that platform allows — and after that the stage strip offers **Your camera froze
 — restart it** as a plain button. Every opening of the microphone on iOS (the seat, *I'm ready*,
 another mic, *I'm on speakers*) re-captures the camera with it: a mic opened on its own there ends
 the camera, which is how a singer on an iPad once froze for everyone with their arms crossed.
+
+And the others see it in words: when a singer's picture arrives but nothing in it has moved for
+fifteen seconds, every other stage (the room's strip, the show view) says *Team's picture is not
+moving — their camera froze on their device* and the strip offers **Reconnect**, a plain button
+that makes the video link to them again from scratch (the cure when the stillness is on the
+receiving side); the cure on their side is the restart above, by itself or from their own button.
 
 ### Who is who
 
@@ -126,7 +143,7 @@ the camera, which is how a singer on an iPad once froze for everyone with their 
 | Option | Who | What it does |
 | --- | --- | --- |
 | **Turn my mic on** | singers | The mic opens by itself the moment you are seated (talk-back, your vocal in the song); this button only appears when the browser wanted a tap first (a permission not given yet, or iOS with the camera on) — one tap opens it. |
-| **Film the whole meet into my Drive** | host | On by default. From the moment the host's mic is open on stage until **End meet** (or the host steps off), the host's device records the whole meet as **one video** — the show picture (everyone on stage over the background, no lyrics) with the stage mix (the songs, the talk between them) — and writes it into their Drive *as it goes* (ten seconds at a time, a resumable upload): a two-hour meet never has to fit in memory, and a tab that dies loses seconds, not the meet (the next start of the app completes the file with what Drive already holds). The switch shows what it is doing (*Filming · 12:34 · 210 MB in Drive*). The finished film is a performance of the meet, **Full meet**, listed on the ended screen and under Performances, shared with everyone who was in the meet like a song's show. |
+| **Film the whole meet into my Drive** | host | On by default. From the moment the host's mic is open on stage until **End meet** (or the host steps off), the host's device records the whole meet as **one video** — the show picture (everyone on stage over the background, no lyrics) with the stage mix (the songs, the talk between them) — and writes it into their Drive *as it goes* (ten seconds at a time, a resumable upload): a two-hour meet never has to fit in memory, and a tab that dies loses seconds, not the meet (the next start of the app completes the file with what Drive already holds). The switch shows what it is doing (*Filming · 12:34 · 210 MB in Drive · sound −18 dB*) — the sound figure is what reaches the film right now, and *NO SOUND reaching the film* is said on the spot, never discovered afterwards. The finished film is a performance of the meet, **Full meet**, listed on the ended screen and under Performances, shared with everyone who was in the meet like a song's show. **Download** on a performance gives the files themselves (the show video; a take's vocal too) and nothing else — the details stay with the performance. |
 | **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS) if it is not open yet, decodes the current song, marks you *ready*. Shown once there is a song (and no choice open); ready resets whenever another song comes up. Under it the **Mic** line says what the microphone really gives: its name, its sample rate, the automatic level — and warns in red when it is a *phone-call quality* line (a Bluetooth headset's mic: 8–16 kHz, thin and muffled), with a menu to sing into another microphone; **I'm on speakers** turns echo cancellation on (only needed when the track plays out of speakers; with headphones it stays off for the cleanest voice — a hint appears when the sound is going out through speakers). |
 | **Start the song (8 s count-in)** | host, singers | Needs a song on the stage and no choice open (*Several songs are picked — choose one on the song card first*). Whoever taps it is made ready on the way (mic, track) if not yet; every device starts the backing track at the same server instant (the GMT kickstart), and every other singer on stage goes to the singing screen and joins from the count-in without a tap — mic open or not yet (it opens on the way). A singer whose browser insisted on a tap for the mic sees **Join the song** on the singing screen and starts mid-song with that tap. |
 | **End the song** (lobby, while a song runs) | host, singers | Ends the song for everyone; a song put forward during it comes up (several: the choice card). |
@@ -217,8 +234,9 @@ recording, the publisher and the other singers' recordings get is the treated vo
 for everyone, cued — a fluffed first line is nobody's problem) beside Pause and Stop; the host alone
 ends the song. Under the transport, **Track volume** and **Vocal volume** move in 3 dB steps
 (−30…+30) on top of a mix that is already balanced — the track normalised to one loudness whatever
-file it came from, a rider on every voice — and a guard turns the sum back down when both are
-pushed, so even +30 / +30 never lives in the limiter; **Backing level in your ears** (Settings) is
+file it came from, a rider on every voice (it lifts a voice, never a microphone's hiss: only sound
+standing well above the mic's own floor counts, and the floor is kept 12 dB under the voice) — and
+a guard turns the sum back down when both are pushed, so even +30 / +30 never lives in the limiter; **Backing level in your ears** (Settings) is
 only what you hear, never what is recorded: the balance *this
 device mixes at* — what it records, what the host's device relays to
 the audience, and (in the show view) what goes out to YouTube and the portal. They are kept on the
@@ -328,6 +346,18 @@ singers' vocals, backing track in sync, full screen). It shows the singers from 
 next: …*), the countdown as an opener, *Paused by the host*, and carries on across every song of
 the event: the show is independent of the song.
 
+**What Publish mode is, in one line.** What goes out to the platforms and the watch page is the
+**show**: the stage picture (every singer seated on it, cut out of their camera, the stage
+background, the names on the riser — no lyrics, no controls) with the **whole song as its sound**
+— the backing track and every singer's voice, blended on the publisher bus. And **the same thing
+is kept**: from *Go live* to *Stop publishing* the show view films exactly what it sends — the same
+picture, the same bus — into the publisher's own Drive as **Broadcast** (Performances → *meet ·
+Broadcast*), so the stream and the file are one and the same. Two films can exist of one meet, and
+they are different things: the host's **Full meet** (section 5a — the host's device, the stage mix
+as the audience in the room hears it, songs and talk, from the host's mic opening to *End meet*)
+and the publisher's **Broadcast** (the show, as it was streamed). Both say on their line, while they
+run, what sound reaches them.
+
 **The broadcast sound.** Publishing collects the whole song: every singer's vocal (after their
 own FX — the presets a singer picks are theirs, kept on their device until they change them)
 travels to the publisher's links at 96 kbps Opus (music quality, not the phone-call default), and
@@ -386,8 +416,9 @@ air. **The footage, in the publisher's Drive.** From *Go live* to *Stop publishi
 also records the whole broadcast — the very picture the encoder sends and the very sound of the
 bus — as **one video in the publisher's own Drive**, written as it goes (ten seconds at a time, a
 resumable upload, so a two-hour show never has to fit in memory and a tab that dies loses seconds):
-the bar says *footage to your Drive · 1:23 · 210 MB* while it runs and *footage saved to your
-Drive · 1:23* when the broadcast stops. It is listed under the publisher's **Performances** as
+the bar says *footage to your Drive · 1:23 · 210 MB · sound −20 dB* while it runs (the sound figure
+is what reaches the footage — the same bus the stream carries — and *NO SOUND* is said on the spot)
+and *footage saved to your Drive · 1:23* when the broadcast stops. It is listed under the publisher's **Performances** as
 **Broadcast** (*meet · Broadcast*, date, length, who was on stage), with the video; nothing is
 asked. The host's own *Full meet* film is a different file in the host's Drive (the stage mix,
 songs and talk); the footage is what went out. It needs the publisher's Google sign-in (the

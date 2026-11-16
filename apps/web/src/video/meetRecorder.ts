@@ -17,7 +17,7 @@ import { signal } from '@preact/signals';
 import { newId, type PerformanceManifest, type PerformanceSinger } from '@singersvoice/protocol';
 import type { AudioEngine } from '../audio/engine.ts';
 import type { PublisherBus } from '../broadcast/publisherBus.ts';
-import { platformName } from '../lib/platform.ts';
+import { appBuild, platformName } from '../lib/platform.ts';
 import type { PerformanceStream, PerformanceSummary } from '../lib/storage/types.ts';
 import { audioSettings } from '../state/settings.ts';
 import { withProvider } from '../state/session.ts';
@@ -68,6 +68,15 @@ export const busSound = (bus: PublisherBus): FilmSound => ({
   },
 });
 
+/** The film hears nothing when its sound has stayed under this (dBFS) — said on the film's line, so a silent film is never a surprise afterwards. */
+export const FILM_SILENT_DB = -55;
+
+/** What the film hears right now, for its line: its level, or that nothing reaches it (a silent film is said here, never found afterwards). */
+export function filmSound(s: { level: number; heard: boolean; seconds: number }): string {
+  if (s.level > FILM_SILENT_DB) return `sound ${Math.round(s.level)} dB`;
+  return s.heard || s.seconds < 3 ? 'sound: quiet' : 'NO SOUND reaching the film';
+}
+
 export interface MeetFilmState {
   recording: boolean;
   /** Seconds recorded so far. */
@@ -78,6 +87,9 @@ export interface MeetFilmState {
   /** Why it is not recording, or what is wrong on the way (the film carries on). */
   note: string | null;
   saved: PerformanceSummary | null;
+  /** The sound reaching the film over the last second (dBFS; -100 when none), and whether it has heard any since it started. */
+  level: number;
+  heard: boolean;
 }
 
 export interface MeetFilmSpec {
@@ -91,7 +103,7 @@ export interface MeetFilmSpec {
 }
 
 export class MeetRecorder {
-  readonly state = signal<MeetFilmState>({ recording: false, seconds: 0, bytes: 0, stored: 0, note: null, saved: null });
+  readonly state = signal<MeetFilmState>({ recording: false, seconds: 0, bytes: 0, stored: 0, note: null, saved: null, level: -100, heard: false });
   private mr: MediaRecorder | null = null;
   /** Undoes the sound's routing into the recorder. */
   private detach: (() => void) | null = null;
@@ -157,7 +169,7 @@ export class MeetRecorder {
       timeline: { startedAtEpochMs: Date.now(), vocalOffsetMs: 0, videoOffsetMs: 0, latencyCompMs: 0, sampleRate: sound.ctx.sampleRate },
       playback: { tempo: a.tempo, keyShift: a.keyShift, backingGain: a.backingGain },
       fx: a.params,
-      device: { userAgent: navigator.userAgent, platform: platformName, headphones: null },
+      device: { userAgent: navigator.userAgent, platform: platformName, headphones: null, build: appBuild },
       files: [{ name: `video.${ext}`, mimeType: mime, size: 0, sha256: '' }],
       notes: spec.film?.notes ?? 'The whole meet, as the audience saw and heard it.',
     };
@@ -176,7 +188,19 @@ export class MeetRecorder {
     this.show.keepDrawing = true;
     this.show.startDrawing();
     const dest = sound.ctx.createMediaStreamDestination();
-    const detach = sound.attach(dest);
+    // The sound comes in through one inlet: into the recorder, and past a meter that says on the film's line what it hears.
+    const inlet = sound.ctx.createGain();
+    const meter = sound.ctx.createAnalyser();
+    meter.fftSize = 2048;
+    inlet.connect(dest);
+    inlet.connect(meter);
+    const detachSound = sound.attach(inlet);
+    const detach = () => {
+      detachSound();
+      inlet.disconnect();
+      meter.disconnect();
+    };
+    this.meter = meter;
     // H.264 in MP4 is hardware-encoded wherever it is offered (Windows, Mac, iOS, Android): the film is the full
     // 1280×720 show at 24 fps. A browser that only offers WebM encodes in software — the film then runs lighter
     // (960×540, 15 fps, drawn from the show canvas) so the stage itself never slows down.
@@ -221,9 +245,29 @@ export class MeetRecorder {
       this.state.value = { ...this.state.value, note: `The recorder did not start: ${e instanceof Error ? e.message : String(e)}` };
       return;
     }
-    this.state.value = { recording: true, seconds: 0, bytes: 0, stored: 0, note: null, saved: null };
+    this.state.value = { recording: true, seconds: 0, bytes: 0, stored: 0, note: null, saved: null, level: -100, heard: false };
+    this.peak = -100;
     clearInterval(this.ticker);
     this.ticker = setInterval(() => this.tick(), 1000);
+    clearInterval(this.metering);
+    this.metering = setInterval(() => this.sampleLevel(), 100);
+  }
+
+  private meter: AnalyserNode | null = null;
+  private metering: ReturnType<typeof setInterval> | undefined;
+  private meterBuf = new Float32Array(2048);
+  /** The loudest 100 ms block since the last tick (dBFS). */
+  private peak = -100;
+
+  /** Ten times a second: the level of the sound reaching the film; the loudest block is what the line shows each second. */
+  private sampleLevel(): void {
+    const m = this.meter;
+    if (!m) return;
+    m.getFloatTimeDomainData(this.meterBuf);
+    let sum = 0;
+    for (let i = 0; i < this.meterBuf.length; i++) sum += this.meterBuf[i]! * this.meterBuf[i]!;
+    const db = 20 * Math.log10(Math.sqrt(sum / this.meterBuf.length) + 1e-5);
+    if (db > this.peak) this.peak = db;
   }
 
   /** The picture's track: the show's own (full size) or the scaled copy's; released when the film ends. */
@@ -259,7 +303,9 @@ export class MeetRecorder {
 
   private tick(): void {
     const s = this.stream;
-    this.state.value = { ...this.state.value, seconds: Math.floor((Date.now() - this.startedAt) / 1000), bytes: s?.bytes ?? 0, stored: s?.stored ?? 0, note: s?.error ?? null };
+    const level = Math.max(-100, this.peak);
+    this.peak = -100;
+    this.state.value = { ...this.state.value, seconds: Math.floor((Date.now() - this.startedAt) / 1000), bytes: s?.bytes ?? 0, stored: s?.stored ?? 0, note: s?.error ?? null, level, heard: this.state.value.heard || level > FILM_SILENT_DB };
   }
 
   /**
@@ -275,6 +321,9 @@ export class MeetRecorder {
     this.stopping = (async () => {
       clearInterval(this.ticker);
       this.ticker = undefined;
+      clearInterval(this.metering);
+      this.metering = undefined;
+      this.meter = null;
       const durationMs = Date.now() - this.startedAt;
       if (mr.state !== 'inactive') {
         await new Promise<void>((resolve) => {

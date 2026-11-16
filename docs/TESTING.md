@@ -108,6 +108,16 @@ where the player says it is (the lyrics follow the sound), **not one click** (th
 in the top of the spectrum, so a burst there is a seam — none), not one gap, the position advancing
 at real time, 3–5 s behind the newest batch.
 
+**The rider lab (`tools/ci/rider-lab.mjs`, `npm run rider-lab`)** measures the mix's automatic
+vocal level: the real `sv-leveler` worklet with the real `VOCAL_RIDER` settings on an
+OfflineAudioContext, fed a synthetic microphone (`apps/web/src/audio/riderLab.ts`: a steady hiss at
+one level and, over it, the e2e's voice sung in two-second phrases) — a microphone that only hisses
+at −40 dBFS comes out at −40 (never riden up; the old rider made it −22), a voice 12 dB over the
+hiss comes out at the vocal target with the hiss between its phrases 12 dB under the target, a
+quiet singer on a quiet microphone gets the full lift, a loud singer is brought down (the hiss with
+them), a voice only 5 dB over the hiss leaves the rider shut, and the guard (`MIX_GUARD`, no floor
+rule) holds a hot mix at the mix target.
+
 **The live e2e** then measures the real pipeline, with the synthetic singing voice as every
 microphone (a smooth harmonic voice, in phrases) and the test song (`tools/ci/e2e-song.mjs`: the
 sample on a loop with a slow 4.5 → 7.5 kHz sweep under it, so any six seconds can be told exactly
@@ -151,6 +161,33 @@ picture to the silhouette within three seconds and gets it back the moment it an
 is never blocked by a frame the old one still owes, a track's mute / ended events are reported at
 once, a camera whose frames were flowing and stop for five seconds is called frozen (and a camera
 whose frames never flowed, a hidden page or a muted track is never judged by frames).
+
+**A still picture** (`feedHealth.test.ts`, `stageStill.test.ts`): a camera presenting the same
+picture (the model measuring the singer exactly the same, cut-out after cut-out) is called frozen
+after `STILL_AFTER` seconds and ok once it moves; a pixel of sway, the silhouette, or nobody in the
+picture never is. On the stage, a remote performer whose frames arrive with the same 16×21 sample
+for `STILL_AFTER_MS` is marked still (`onStill`), a changed picture unmarks them, frames that stop
+give the placeholder and no mark, and a performer gone from the stage is forgotten.
+
+**The stage frame and the seat** (`apps/web/test/framing.test.ts`, `seat.test.ts`): the head is
+found crown to jaw and ear to ear on synthetic figures near and far, a blob the model lit elsewhere
+(a plant) never moves the crown, a collar widening right under the jaw never swallows the head, a
+fragment or the figure itself measured as a head is not plausible (a close-up is); the seat draws
+the whole camera frame while settling, glides once to the stage frame of the median head and holds
+it exactly, holds under wobble in place and size for half a minute, ignores a second of a different
+head and follows a singer who moved and stayed in one glide, never follows measurements that
+disagree (a model losing and finding the figure), and holds when nobody is found.
+
+**What the saved files hold** — the live e2e decodes three of them with ffmpeg at the end of the
+run and measures six seconds of each: the song's saved show (a singer's take), the host's **film of
+the whole meet** (at the moment of the first song it measured live, found where the film's clock
+puts it) and the publisher's **footage of the broadcast** (at the moment it measured on the bus)
+must all carry the song (the backing track located by correlation) and the voice. The voice is told
+from the song by its harmonics: the fake microphone sings a vibrato on 180 Hz (a phase modulation,
+each harmonic a line ±1.2 % wide), and `voice` in `tools/ci/audio-measure.mjs` reads the power at
+those harmonics against the bands between them, against the same figure for the song alone at the
+same position — a mix with the voice stands many dB above; a mix without it reads like the song.
+The same figure is checked live on the host's mix, the audience's sound and the publisher bus.
 
 ### Instant changes and the footage
 

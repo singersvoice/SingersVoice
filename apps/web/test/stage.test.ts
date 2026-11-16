@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ARC_LIFT, arcLift, fitPerson, floorAt, HEADROOM, layoutStage, RISER_COVER, riserBand, riserTop, type StageTile } from '../src/video/stage.ts';
 
-describe('virtual stage layout — one row of equal slots on a shallow arc, like a row of chairs', () => {
+describe('virtual stage layout — one straight row of equal slots, like performers in a line across a stage', () => {
   it('spreads N performers evenly, 3:4 slots of one size, each on the row\'s floor behind the riser', () => {
     const tiles = layoutStage(1200, 800, 3);
     expect(tiles).toHaveLength(3);
@@ -19,25 +19,28 @@ describe('virtual stage layout — one row of equal slots on a shallow arc, like
     }
   });
 
-  it('the row curves: the middle slot nearest (lowest), the ends up the picture by the arc lift — the same size all along', () => {
-    const row = layoutStage(1920, 1080, 5, 'show');
-    const floors = row.map((t) => t.y + t.h);
-    const h = row[0]!.h;
-    expect(floors[2]).toBeCloseTo(floorAt(1920, 1080, 960, h, 'show'), 5);
-    expect(floors[2]).toBeCloseTo(1080 - riserBand(1080, h, 'show') + h * RISER_COVER, 5); // the middle: no lift
-    expect(floors[0]).toBeLessThan(floors[1]!);
-    expect(floors[1]).toBeLessThan(floors[2]!);
-    expect(floors[0]).toBeCloseTo(floors[4]!, 5); // symmetric
-    expect(floors[2]! - floors[0]!).toBeLessThan(1080 * ARC_LIFT.show); // the end slot's centre is inside the ends of the arc
-    expect(floors[2]! - floors[0]!).toBeGreaterThan(1080 * ARC_LIFT.show * 0.5);
-    for (const t of row) expect(t.h).toBeCloseTo(h, 6);
-    expect(arcLift(1920, 1080, 1920, 'show')).toBeCloseTo(1080 * ARC_LIFT.show, 5); // the very edge: the full lift
-    expect(arcLift(1920, 1080, 960, 'show')).toBe(0);
+  it('the row is one straight line: every slot on the same floor, the same size, the same top — for 2, 5 and 10', () => {
+    for (const n of [2, 5, 10]) {
+      const row = layoutStage(1920, 1080, n, 'show');
+      const h = row[0]!.h;
+      for (const t of row) {
+        expect(t.y + t.h, `floor n=${n}`).toBeCloseTo(floorAt(1920, 1080, 960, h, 'show'), 5); // the same floor as the middle: no lift anywhere
+        expect(t.y, `top n=${n}`).toBeCloseTo(row[0]!.y, 5);
+        expect(t.h, `height n=${n}`).toBeCloseTo(h, 6);
+        expect(t.w, `width n=${n}`).toBeCloseTo(row[0]!.w, 6);
+      }
+      const gaps = row.slice(1).map((t, i) => t.x - row[i]!.x);
+      for (const g of gaps) expect(g, `spacing n=${n}`).toBeCloseTo(gaps[0]!, 5); // evenly spaced
+    }
+    expect(ARC_LIFT.show).toBe(0);
+    expect(ARC_LIFT.stage).toBe(0);
+    expect(arcLift(1920, 1080, 1920, 'show')).toBe(0); // the very edge: no lift
+    expect(riserTop(1920, 1080, 0, 400, 'show')).toBeCloseTo(riserTop(1920, 1080, 960, 400, 'show'), 5); // the riser's edge level too
   });
 
   it('show mode: the heads start near the top with one or two singers; a crowd of ten sits lower rather than behind a wall', () => {
     const [duo] = layoutStage(1920, 1080, 2, 'show') as [StageTile];
-    expect(duo.y).toBeCloseTo(1080 * 0.08 - arcLift(1920, 1080, duo.x + duo.w / 2, 'show'), 3); // the slot (the head a little into it) from near the top, lifted a little on the arc
+    expect(duo.y).toBeCloseTo(1080 * 0.08, 3); // the slot (the head a little into it) from near the top
     expect(riserBand(1080, duo.h, 'show')).toBeCloseTo(1080 - 1080 * 0.08 - duo.h * (1 - RISER_COVER), 5); // the riser takes the rest
     const ten = layoutStage(1920, 1080, 10, 'show');
     expect(riserBand(1080, ten[0]!.h, 'show')).toBeCloseTo(1080 * 0.4, 5); // capped: a riser, not a wall
@@ -69,7 +72,7 @@ describe('virtual stage layout — one row of equal slots on a shallow arc, like
     }
   });
 
-  it('the riser hides the lower part of every slot — the same share of each, following the arc', () => {
+  it('the riser hides the lower part of every slot — the same share of each, along one level edge', () => {
     const row = layoutStage(1920, 1080, 3, 'show');
     for (const t of row) {
       const cx = t.x + t.w / 2;
@@ -78,7 +81,7 @@ describe('virtual stage layout — one row of equal slots on a shallow arc, like
       expect(top).toBeGreaterThan(t.y + t.h * 0.5); // head and shoulders above it
       expect(top).toBeLessThan(1080); // the riser's edge is in the picture
     }
-    expect(riserTop(1920, 1080, 0, row[0]!.h, 'show')).toBeLessThan(riserTop(1920, 1080, 960, row[0]!.h, 'show')); // up at the ends
+    expect(riserTop(1920, 1080, 0, row[0]!.h, 'show')).toBeCloseTo(riserTop(1920, 1080, 960, row[0]!.h, 'show'), 5); // level from end to end
   });
 });
 
@@ -119,7 +122,7 @@ describe('fitting a frame into its slot — the stage frame, drawn whole, everyw
       expect(f.w / f.h).toBeCloseTo(0.75, 5);
       expect(f.x).toBeGreaterThanOrEqual(row[i]!.x - 0.01);
       expect(f.x + f.w).toBeLessThanOrEqual(row[i]!.x + row[i]!.w + 0.01);
-      expect(f.y + f.h).toBeCloseTo(row[i]!.y + row[i]!.h, 3); // on the slot's floor, along the arc
+      expect(f.y + f.h).toBeCloseTo(row[i]!.y + row[i]!.h, 3); // on the slot's floor, one line
     }
   });
 

@@ -55,6 +55,10 @@ export interface RoomStage {
   /** Performers whose video link is up / other performers on stage. */
   linked: number;
   others: number;
+  /** Other performers whose picture arrives but has not moved for a while (their camera froze on their device), by participant id. */
+  still: string[];
+  /** Make the video link to a performer again from scratch (a plain Reconnect for a picture that stands still). */
+  reconnect: (id: string) => void;
 }
 
 export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; engine: AudioEngine | null; restartCamera: () => Promise<void> }): RoomStage {
@@ -114,16 +118,9 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   useEffect(() => {
     feed.onMode = (m) => setBlend(m);
     feed.attach(camOn ? camStream : null, true);
-    if (camOn && camStream) {
-      camera.startAutoFrame(feed.video);
-      if (onStage) mesh?.setLocalStream(feed.packedStream());
-    } else {
-      camera.stopAutoFrame();
-      mesh?.setLocalStream(null);
-    }
+    if (camOn && camStream && onStage) mesh?.setLocalStream(feed.packedStream());
+    else if (!camOn || !camStream) mesh?.setLocalStream(null);
   }, [camStream, camOn, onStage]);
-  const origin = camera.origin.value;
-  useEffect(() => feed.setOrigin(origin), [origin.x, origin.y]);
   // The stage frame's word on my distance to the camera (sit back / come closer), for the stage strip.
   const [distance, setDistance] = useState<'close' | 'far' | null>(null);
   useEffect(() => {
@@ -132,6 +129,15 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       feed.onNote = null;
     };
   }, []);
+  // Another performer's picture standing still (frames arriving, nothing moving: their camera froze on their device): said on the strip, with Reconnect.
+  const [still, setStill] = useState<string[]>([]);
+  useEffect(() => {
+    compositor.onStill = setStill;
+    return () => {
+      compositor.onStill = null;
+    };
+  }, [compositor]);
+  const reconnect = (id: string) => mesh?.remake(id);
   // ---- the camera's health: a camera the browser muted or ended, or one frozen on a picture, is restarted — once by itself, then from a tap ----
   const [camHealth, setCamHealth] = useState<FeedHealth>('ok');
   const restarting = useRef<Promise<void> | null>(null);
@@ -274,9 +280,6 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     show.startTalk(engine);
     return () => show.stopTalk();
   }, [show, host, onStage, micOpen, opts.engine]);
-  useEffect(() => {
-    (window as unknown as { __svStage?: unknown }).__svStage = { show, engine: opts.engine }; // support / e2e: the mix this device builds
-  }, [show, opts.engine]);
 
   const stagePerformers = meet.stage.filter((s) => s.participantId);
   const peerIds = stagePerformers.map((s) => s.participantId!).filter((id) => id !== you.participantId);
@@ -301,6 +304,9 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   // ---- the film of the meet (the host's device): the whole meet as one video in the host's Drive ----
   const film = useMemo(() => new MeetRecorder(show), [show]);
+  useEffect(() => {
+    (window as unknown as { __svStage?: unknown }).__svStage = { show, engine: opts.engine, film }; // support / e2e: the mix this device builds, the film of the meet
+  }, [show, opts.engine, film]);
   const filmWanted = app.recordMeet;
   const meetOpen = meetIsOpen(meet);
   /** Everyone who stood on stage while the film ran (the manifest names them). */
@@ -327,5 +333,5 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others };
+  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect };
 }

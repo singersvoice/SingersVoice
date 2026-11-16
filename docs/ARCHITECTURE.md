@@ -167,33 +167,58 @@ new generation, so a late answer or a frame the old camera still owes never bloc
 `video/localFeed.ts` watches the camera itself (`health`, `onHealth`): the track's mute / ended
 events, and the video's `requestVideoFrameCallback` — frames that were flowing (ten at least) and
 then stop for `FROZEN_AFTER` seconds while the page is visible and the track calls itself live is
-`'frozen'` (never a pixel heuristic: a plain wall or a synthetic camera shows the same bytes for
-ever and is perfectly alive; a browser without frame callbacks is not judged by frames). The room
+`'frozen'` (never a raw-pixel heuristic: a plain wall or a synthetic camera shows the same bytes for
+ever and is perfectly alive; a browser without frame callbacks is not judged by frames) — and so
+is a camera that keeps presenting the same picture: the model's measurement of the singer (head
+and body, to the probe pixel) identical across new cut-outs for `STILL_AFTER` seconds, which a
+real person never is (the mask's own edge moves), while a camera pointed at nobody measures
+nothing and the silhouette is never the model's word. The room
 (`roomStage.ts`) and the studio restart the camera once by themselves and then offer a button;
+every other stage tells a still picture too — `StageCompositor` samples each remote performer's
+picture (16×21, once a second) and marks `still` after `STILL_AFTER_MS` of the very same bytes
+(`onStill`), the room's strip and the show view say so in words, and the strip offers
+**Reconnect** (`PerformerMesh.remake`: the link to that performer dropped and made again);
 `video/capture.ts` is the one place the mic is opened: on iOS always together with the camera
 (one capture per page there — a second getUserMedia ends the first), so a mic re-opened for another
-setting never leaves the camera dark. `video/stage.ts` seats every
-performer in **one row of chairs**: slots of one size, evenly spaced by stage slot along a shallow
-arc (`arcLift`: the middle nearest, the ends up to 7 % up the picture), each standing on the row's
-floor behind a **riser** drawn in front of them (`drawRiser`: a curved band from its lit edge to the
-bottom of the picture, a pool of each singer's colour, the names on it) that hides the lower 40 % of
-every frame (`RISER_COVER`) — the way a chair's front hides a seated coach's lap. One shared stage
+setting never leaves the camera dark. `video/stage.ts` places every
+performer in **one straight row**, as performers stand in a line across a stage: slots of one size,
+evenly spaced by stage slot, all on one floor (`ARC_LIFT` is 0 — no curve; `arcLift` remains the one
+place a curve would come from), every head at the same height, each behind a **riser** drawn in
+front of them (`drawRiser`: a level band from its lit edge to the bottom of the picture, a pool of
+each singer's colour, the names on it) that hides the lower 40 % of every frame (`RISER_COVER`) —
+the way a stage's front edge hides what is below the chest. One shared stage
 whether there is 1 singer or 10, on every device — under **one rule: a singer is drawn exactly as
 their own device frames them, and every device frames its singer the same way.** That framing is
 the **stage frame** (`video/framing.ts`, applied by `video/localFeed.ts` before the cut-out leaves
-the device): the feed measures its own mask a few times a second on a 120×160 probe
-(`measureMask`: the body as the width most rows have, so a stretched arm never counts; the head from
-the top of the figure down its middle — its width tops out at the ears and it ends where the figure
-narrows to the neck or widens to the shoulders, always 1.1–1.6× as tall as wide) and crops
+the device): the feed measures its own mask on every new cut-out, at most a few times a second, on
+a 120×160 probe (`measureMask`: the person is the biggest blob of lit pixels — a plant or a poster
+the model also lit is left out; the body as the width most rows have, so a stretched arm never
+counts; the head from the top of the figure down its middle — its width tops out at the ears or the
+hair, settled by the first row narrower than that (the jaw) or by the width standing still, so a
+collar or a sweater the model lit along with the room never counts as head, and it ends where the
+figure narrows to the neck or widens to the shoulders, always 1.1–1.6× as tall as wide) and crops
 (`stageCrop`) in the frame's own proportions so the head is 22 % of the frame tall with its top 8 %
 down, centred on the head — brought up for a singer sitting back (never past 3.3×), brought back
 for one sitting close (up to 2.4×; the crop then reaches past the camera picture and that part is
 transparent, `visiblePart`; the camera's bottom edge is feathered when it would show above the
-riser). The crop is deadbanded and eased so it never breathes; a distance note (`distanceNote`:
-*sit back* past 1.3×, *come closer* under 0.4×) reaches the stage strip once it has held a second.
-So every frame carries a head of one size at one place, every slot is one size, and every singer
-comes out one size — the stage never finds a person and zooms in on its own, and nobody chooses a
-framing (the Chest / Wide / Mid / Close / Auto presets are gone). The two modes differ in the slots
+riser). The crop is never steered after the measurement: the **seat** (`Seat`, `SEAT`) is how a
+stage camera is framed on a seated performer and left alone. Only a measurement of a real cut-out
+counts (the model's, with a plausible person in it, `plausibleHead` — never the stand-in
+silhouette, never a fragment of a figure the model lost); the seat takes the median of a 1.5 s
+window of measurements that agree with each other, sets the frame once (one 0.9 s glide from the
+whole camera frame) and holds it. It re-frames only when the singer has clearly moved — the head's
+centre, top or size away from where the frame has it by more than a margin (12 % of the frame
+across, 6 % up / 14 % down, the size under 0.76× or over 1.3×) — and stayed there 2.5 s, the
+measurements again agreeing: then one glide to the new frame, held again. A sway, a gesture, a
+hand near the face, the model losing and finding the figure, the mask's edge wobbling: none of it
+moves the picture. A distance note (`distanceNote`: *sit back* past 1.3×, *come closer* under 0.4×)
+follows the frame the seat holds. So every frame carries a head of one size at one place, every
+slot is one size, and every singer comes out one size — the stage never finds a person and zooms in
+on its own, nothing steers the camera picture (the FaceDetector auto-frame is gone), and nobody
+chooses a framing (the Chest / Wide / Mid / Close / Auto presets are gone). `tools/ci` has no lab for
+this; the measurement and the seat were tuned on the real model's masks of real singers (the show
+recording's cut-outs played back as a fake camera) — the old crop re-targeted on 45 of 58 frames
+and zoomed between 0.85× and 1.19× in 16 s; the seat glides once and holds. The two modes differ in the slots
 alone: **Publisher mode** ('show': Publishing, the lobby stage, the saved performance) — slots
 taller than the picture (1.2×, width permitting), their lower part behind the riser and below the
 picture, the heads from a tenth down, the riser band bounded to 9–40 % of the picture so ten small
@@ -453,7 +478,16 @@ vocal₂ ─ rider ─┴─ Vocal offset ───────┘
 - **Each vocal has a rider** (the `sv-leveler` worklet): a two-second RMS view of what is *sung*
   (a 50 ms gate at −45 dBFS stops it the moment the singer stops and keeps the pause out of the
   average), steered toward **−17 dBFS** at 1 dB/s up, 2 dB/s down, three times faster until within
-  6 dB — a singer's offset, not their phrasing; +18 dB lift at most, −12 dB cut.
+  6 dB — a singer's offset, not their phrasing; +18 dB lift at most, −12 dB cut. **It knows the
+  microphone's floor**: the quietest 50 ms of the last eight seconds (two buckets' minimum — a
+  phrase's own breath dips keep it under the voice, a louder floor is followed within a bucket, the
+  first 200 ms are the view filling up and never a floor). Only sound standing **8 dB above the
+  floor** counts as a voice — a steady hiss (a laptop's fan, a built-in mic's floor at −40 dBFS, well
+  above the gate) never opens the rider and is never riden up — and the lift is capped so the
+  **floor stays 12 dB under the target**: a noisy microphone gets a quieter voice rather than a loud
+  hiss between the phrases. Without this a film of a meet once carried a dead-quiet mic's floor at
+  −22 dBFS (its −40 raised by the full +18) and the guard then held the whole mix — the track, the
+  voices — under it. `tools/ci/rider-lab.mjs` measures all of it on the real worklet.
 - **Track volume / Vocal volume** (±30 dB, 3 dB steps, kept per device) are offsets on top of that
   balance: 0 / 0 is already right.
 - **The guard** (another `sv-leveler`, on the sum) only ever turns *down*, toward a −15 dBFS

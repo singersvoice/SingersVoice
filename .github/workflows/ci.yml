@@ -69,6 +69,9 @@ jobs:
       - name: The audience's player, measured (Opus batches → one continuous sound at 48 and 44.1 kHz)
         run: node tools/ci/mix-lab.mjs
 
+      - name: The vocal rider, measured (a microphone's hiss never riden up; a voice brought to the target, the floor kept under it)
+        run: node tools/ci/rider-lab.mjs
+
       - name: The watch page's player, measured (the browser's own muxer on real H.264 + AAC → hls.js plays it, with sound and without)
         run: node tools/ci/hls-lab.mjs
 

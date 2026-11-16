@@ -26,10 +26,13 @@ export interface FakeCtx {
 
 export function fakeContext(size = 24 * 24 * 4): FakeCtx & Record<string, unknown> {
   const ctx: FakeCtx & Record<string, unknown> = { calls: [], pixels: new Uint8ClampedArray(size), fillStyle: '', globalCompositeOperation: 'source-over', filter: 'none' };
-  for (const m of ['clearRect', 'fillRect', 'drawImage', 'save', 'restore', 'putImageData']) ctx[m] = (...a: unknown[]) => void ctx.calls.push(`${m}(${a.length})`);
+  for (const m of ['clearRect', 'fillRect', 'drawImage', 'save', 'restore', 'putImageData', 'setTransform', 'beginPath', 'closePath', 'rect', 'clip', 'translate', 'scale', 'moveTo', 'lineTo', 'arc', 'arcTo', 'fill', 'stroke', 'fillText'])
+    ctx[m] = (...a: unknown[]) => void ctx.calls.push(`${m}(${a.length})`);
   ctx.getImageData = () => ({ data: ctx.pixels });
   ctx.createImageData = (w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h });
   ctx.createLinearGradient = () => ({ addColorStop: () => undefined });
+  ctx.createRadialGradient = () => ({ addColorStop: () => undefined });
+  ctx.measureText = () => ({ width: 10 });
   return ctx;
 }
 
@@ -120,11 +123,11 @@ function installFakeDom(): FakeDom {
       if (tag === 'video') return video;
       const ctx = fakeContext();
       contexts.push(ctx);
-      return { width: 0, height: 0, getContext: () => ctx };
+      return { width: 0, height: 0, style: {} as Record<string, string>, className: '', getContext: () => ctx };
     },
   };
   set('document', document);
-  set('window', g.window ?? {});
+  set('window', { ...(g.window as object | undefined), devicePixelRatio: 1, requestAnimationFrame: () => 0, cancelAnimationFrame: () => undefined });
   set('navigator', { userAgent: 'FakeBrowser', hardwareConcurrency: 8 });
   set('HTMLCanvasElement', class {});
   set('MediaStream', FakeStream);

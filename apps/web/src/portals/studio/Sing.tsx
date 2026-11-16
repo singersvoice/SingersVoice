@@ -192,13 +192,9 @@ export function Sing(props: { id: string }) {
   useEffect(() => {
     feed.onMode = (m) => setBlend(m);
     feed.attach(camOn ? camStream : null, true);
-    if (camOn && camStream) camera.startAutoFrame(feed.video);
-    else camera.stopAutoFrame();
   }, [camStream, camOn]);
   // The Track / Vocal volume of the recorded mix (the same controls as the live stage; kept on the device).
   useEffect(() => show.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
-  const origin = camera.origin.value;
-  useEffect(() => feed.setOrigin(origin), [origin.x, origin.y]);
   const facing = camera.facing.value;
   useEffect(() => {
     const me = { id: 'me', slot: mySlot, label: `You · S${mySlot}`, color: SLOT_COLORS[mySlot], source: feed.source, mirror: facing === 'user', isMe: true } as const;

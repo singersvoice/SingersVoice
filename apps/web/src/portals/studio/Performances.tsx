@@ -358,12 +358,12 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
       setBusy(false);
     }
   };
+  /** The files themselves — the show video (and a take's vocal); the details stay with the performance, never a file of their own. */
   const download = () => {
     if (!loaded) return;
     const base = `${props.summary.trackTitle} ${props.summary.createdAt.slice(0, 16).replace(/[:T]/g, '-')}`;
     if (loaded.vocal.size) downloadBlob(loaded.vocal, `${base} vocal.wav`);
     if (loaded.video) downloadBlob(loaded.video, `${base} ${isShow ? 'show' : 'video'}.${loaded.video.type.includes('mp4') ? 'mp4' : 'webm'}`);
-    downloadBlob(new Blob([JSON.stringify(loaded.manifest, null, 1)], { type: 'application/json' }), `${base} manifest.json`);
   };
   /** A link anyone can open: the file is shared anyone-with-the-link on first use. */
   const shareLink = async () => {

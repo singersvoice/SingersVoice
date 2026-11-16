@@ -32,21 +32,33 @@ export interface LevelerConfig {
   windowMs: number;
   farDb: number;
   farMul: number;
+  /**
+   * The floor rule (0: none): the rider opens only for sound standing this many dB above the quietest the input has
+   * lately been (its floor — a microphone's hiss, a fan, the room), and never raises that floor past `floorKeep` dB
+   * under the target. Without it a dead-quiet microphone's floor was riden up by the full `maxDb` into a loud hiss,
+   * and the guard then held the whole mix under it.
+   */
+  floorMargin?: number;
+  floorKeep?: number;
+  /** How far back the floor looks (s). */
+  floorSeconds?: number;
 }
 
 /**
  * The per-vocal rider: a slow level that brings each voice to the vocal target — a two-second view,
  * 1 dB/s (a singer's offset, not their phrasing), three times faster until it is within 6 dB — and holds
- * still between phrases (the gate is above breath and room noise).
+ * still between phrases (the gate is above breath and room noise). A voice is what stands 8 dB above the
+ * microphone's own floor; the floor is kept 12 dB under the vocal target, whatever that costs a quiet
+ * singer on a noisy microphone.
  */
-export const VOCAL_RIDER: LevelerConfig = { target: MIX_TARGETS.vocalDb, minDb: -12, maxDb: 18, gate: -45, up: 1, down: 2, windowMs: 2000, farDb: 6, farMul: 3 };
+export const VOCAL_RIDER: LevelerConfig = { target: MIX_TARGETS.vocalDb, minDb: -12, maxDb: 18, gate: -45, up: 1, down: 2, windowMs: 2000, farDb: 6, farMul: 3, floorMargin: 8, floorKeep: 12, floorSeconds: 8 };
 /** The guard on the sum: turns down (never up) when the mix runs hotter than the mix target on average. */
 export const MIX_GUARD: LevelerConfig = { target: MIX_TARGETS.mixDb, minDb: -36, maxDb: 0, gate: -40, up: 1, down: 2, windowMs: 600, farDb: 6, farMul: 3 };
 
 /** An 'sv-leveler' node set up from a config (null when the worklet is not on this context). */
 export function leveler(ctx: BaseAudioContext, cfg: LevelerConfig): AudioWorkletNode | null {
   try {
-    const node = new AudioWorkletNode(ctx, 'sv-leveler', { numberOfInputs: 1, numberOfOutputs: 1, processorOptions: { windowMs: cfg.windowMs, farDb: cfg.farDb, farMul: cfg.farMul } });
+    const node = new AudioWorkletNode(ctx, 'sv-leveler', { numberOfInputs: 1, numberOfOutputs: 1, processorOptions: { windowMs: cfg.windowMs, farDb: cfg.farDb, farMul: cfg.farMul, floorMargin: cfg.floorMargin ?? 0, floorKeep: cfg.floorKeep ?? 12, floorSeconds: cfg.floorSeconds ?? 8 } });
     for (const k of ['target', 'minDb', 'maxDb', 'gate', 'up', 'down'] as const) node.parameters.get(k)?.setValueAtTime(cfg[k], 0);
     return node;
   } catch {

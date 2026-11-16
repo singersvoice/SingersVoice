@@ -1,24 +1,16 @@
 /**
- * Camera for the "you" tile: device selection, front/back flip and face-centred auto-framing
- * (the FaceDetector API where available — Chrome/Android — else the upper-centre of the frame).
- * The framing itself (the stage frame: the head the same size at the same place for every singer)
- * is `video/framing.ts`, applied by the local feed to the cut-out it sends; the face origin here is
- * only the fallback while nobody is found in the mask.
+ * The camera: device selection, front/back flip, a stream captured elsewhere adopted (iOS captures
+ * the microphone and the camera in one call). The framing (the stage frame: the head the same size
+ * at the same place for every singer, set once and held) is `video/framing.ts`, applied by the local
+ * feed to the cut-out it sends; nothing here steers the picture.
  */
 import { signal } from '@preact/signals';
-
-interface FaceDetectorLike {
-  detect(source: HTMLVideoElement): Promise<{ boundingBox: { x: number; y: number; width: number; height: number } }[]>;
-}
 
 export class Camera {
   stream: MediaStream | null = null;
   readonly on = signal(false);
   readonly facing = signal<'user' | 'environment'>('user');
-  readonly origin = signal<{ x: number; y: number }>({ x: 50, y: 40 });
   readonly deviceLabel = signal('');
-  private detector: FaceDetectorLike | null = null;
-  private frameTimer: ReturnType<typeof setInterval> | undefined;
 
   async open(opts: { deviceId?: string; facing?: 'user' | 'environment' } = {}): Promise<MediaStream> {
     this.close();
@@ -55,41 +47,7 @@ export class Camera {
     return all.filter((d) => d.kind === 'videoinput');
   }
 
-  /** Keep the face near the centre of the zoomed tile. Cheap: one detection every 700 ms. */
-  startAutoFrame(video: HTMLVideoElement): void {
-    this.stopAutoFrame();
-    const FD = (window as unknown as { FaceDetector?: new (o: { fastMode: boolean; maxDetectedFaces: number }) => FaceDetectorLike }).FaceDetector;
-    if (!FD) return;
-    try {
-      this.detector = new FD({ fastMode: true, maxDetectedFaces: 1 });
-    } catch {
-      this.detector = null;
-      return;
-    }
-    this.frameTimer = setInterval(async () => {
-      if (!this.detector || video.readyState < 2 || !video.videoWidth) return;
-      try {
-        const faces = await this.detector.detect(video);
-        const f = faces[0];
-        if (!f) return;
-        const cx = ((f.boundingBox.x + f.boundingBox.width / 2) / video.videoWidth) * 100;
-        const cy = ((f.boundingBox.y + f.boundingBox.height / 2) / video.videoHeight) * 100;
-        const cur = this.origin.value;
-        this.origin.value = { x: cur.x + (cx - cur.x) * 0.35, y: cur.y + (cy - cur.y) * 0.35 };
-      } catch {
-        /* detector unavailable mid-run */
-      }
-    }, 700);
-  }
-
-  stopAutoFrame(): void {
-    clearInterval(this.frameTimer);
-    this.frameTimer = undefined;
-    this.detector = null;
-  }
-
   close(): void {
-    this.stopAutoFrame();
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
     this.on.value = false;

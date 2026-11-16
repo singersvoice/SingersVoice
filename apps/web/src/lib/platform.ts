@@ -6,6 +6,8 @@ export const isStandalone =
   typeof window !== 'undefined' &&
   (window.matchMedia?.('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone === true);
 export const platformName = isIOS ? 'iOS' : isAndroid ? 'Android' : 'Web';
+/** The app build (the deployed commit, from the build's VITE_APP_VERSION; 'dev' otherwise) — written into every manifest. */
+export const appBuild: string = import.meta.env.VITE_APP_VERSION || 'dev';
 
 export function hasAudioWorklet(): boolean {
   return typeof AudioWorkletNode !== 'undefined';

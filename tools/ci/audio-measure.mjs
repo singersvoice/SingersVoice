@@ -277,7 +277,50 @@ export function locate(capture, track, rate, { workRate = 16000, minOverlapS = 2
   return { r: best.r, positionS: offsetS + best.lag / wr };
 }
 
+/**
+ * How much of the test voice is in `x` (mono at `rate`), in dB: the power at the voice's harmonics
+ * (f0 and its first `harmonics` multiples, each ±3 % — the vibrato is ±1.2 %) against the power
+ * between them (the bands midway), the median over one-second windows. The song has music in those
+ * bands too, so the figure means something against the same stretch of the song alone: a voice in
+ * the mix lifts it by many dB; a mix without the voice reads like the song.
+ */
+export function voice(x, rate, { f0 = 180, harmonics = 5, workRate = 16000 } = {}) {
+  const f = Math.max(1, Math.round(rate / workRate));
+  const y = f > 1 ? decimate(x, f) : x;
+  const wr = rate / f;
+  const N = 16384;
+  const scores = [];
+  for (let start = 0; start + N <= y.length; start += N) {
+    const re = new Float32Array(N);
+    const im = new Float32Array(N);
+    for (let i = 0; i < N; i++) re[i] = y[start + i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N));
+    fft(re, im);
+    const power = (lo, hi) => {
+      const a = Math.max(1, Math.round((lo / wr) * N));
+      const b = Math.min(N / 2 - 1, Math.round((hi / wr) * N));
+      let s = 0;
+      for (let k = a; k <= b; k++) s += re[k] * re[k] + im[k] * im[k];
+      return s / Math.max(1, b - a + 1);
+    };
+    let on = 0;
+    let off = 0;
+    for (let h = 1; h <= harmonics; h++) {
+      on += power(h * f0 * 0.97, h * f0 * 1.03);
+      if (h < harmonics) off += power((h + 0.5) * f0 * 0.97, (h + 0.5) * f0 * 1.03);
+    }
+    scores.push(10 * Math.log10((on / harmonics + 1e-12) / (off / (harmonics - 1) + 1e-12)));
+  }
+  scores.sort((a, b) => a - b);
+  return scores.length ? scores[scores.length >> 1] : NaN;
+}
+
 /** Everything the e2e asks about a capture (`capture`, `track`: mono float PCM at `rate`). */
 export function measure(capture, track, rate, { window = null } = {}) {
-  return { rms: rms(capture), clicks: clicks(capture, rate), steps: steps(capture), gaps: gaps(capture, rate), song: locate(capture, track, rate, { window }) };
+  return { rms: rms(capture), clicks: clicks(capture, rate), steps: steps(capture), gaps: gaps(capture, rate), song: locate(capture, track, rate, { window }), voice: voice(capture, rate) };
+}
+
+/** The same figure for the song alone, where `song` says the capture sits in it (the baseline a mix's `voice` is read against). */
+export function voiceOfSong(track, rate, positionS, seconds) {
+  const a = Math.max(0, Math.floor(positionS * rate));
+  return voice(track.subarray(a, Math.min(track.length, a + Math.round(seconds * rate))), rate);
 }

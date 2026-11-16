@@ -1,26 +1,35 @@
 /**
  * My own camera on the virtual stage: a hidden <video> for the camera stream, the person segmenter
  * that cuts me out of it, the stage frame (`framing.ts`: my head the standard size at the standard
- * place, so I am the same size as everyone else on every stage) applied to the cut-out, and — in a
- * live meet — the alpha packer that turns the framed cut-out into the stream other performers
- * receive. One instance per stage session.
+ * place, so I am the same size as everyone else on every stage) set once and held by the seat —
+ * never steered after my every sway — and applied to the cut-out, and — in a live meet — the alpha
+ * packer that turns the framed cut-out into the stream other performers receive. One instance per
+ * stage session.
  */
 import { AlphaPacker } from './alphaPack.ts';
-import { CROP_DEAD, CROP_EASE, cropFactor, distanceNote, frameRect, measureMask, stageCrop, visiblePart, type FrameRect, type PersonMeasure } from './framing.ts';
-import { coverRect, PersonSegmenter, type SegmenterMode } from './segmenter.ts';
+import { cropFactor, distanceNote, measureMask, plausibleHead, Seat, visiblePart, type PersonMeasure, type SeatState } from './framing.ts';
+import { PersonSegmenter, type SegmenterMode } from './segmenter.ts';
 import type { PerformerSource } from './stage.ts';
 
 /** The cut-out's own size: computers work at 720×960 so a singer standing full-height in a 720p show is drawn near 1:1; phones at 480×640. */
 const COMPUTER = typeof navigator !== 'undefined' && (navigator.hardwareConcurrency ?? 2) >= 4 && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 const W = COMPUTER ? 720 : 480;
 const H = COMPUTER ? 960 : 640;
-/** The person probe: the mask at this size, a few times a second (the head of a singer sitting back is still a dozen pixels wide). */
+/** The person probe: the mask at this size, measured on every new cut-out but at most this often (the head of a singer sitting back is still a dozen pixels wide). */
 const PROBE_W = 120;
 const PROBE_H = 160;
+const PROBE_EVERY_MS = 150;
 /** The camera's own health: frames that were flowing and then stop for this many seconds (the page visible all the while) is a frozen camera. */
 export const FROZEN_AFTER = 5;
 /** Frames that must have flowed before their stopping means anything (a video that never fires frame callbacks is not judged by them). */
 const FLOWING_FRAMES = 10;
+/**
+ * A camera that keeps presenting the same picture is frozen as much as one whose frames stop: the model's
+ * measurement of the singer (head and body, to the probe pixel) identical across new cut-outs for this many
+ * seconds. A real person, however still, never measures exactly the same for that long — the mask's own edge
+ * moves — and a camera pointed at nobody measures nothing, so neither is ever called frozen.
+ */
+export const STILL_AFTER = 15;
 
 /** What the camera is doing: live, muted by the browser, ended (the browser took it away), or frozen on one picture. */
 export type FeedHealth = 'ok' | 'muted' | 'ended' | 'frozen';
@@ -85,14 +94,14 @@ export class LocalFeed {
   private framesSeen = 0;
   private lastFrameAt = 0;
   private visibleSince = 0;
-  private origin = { x: 50, y: 42 };
-  /** The person last found in the mask, the crop aimed at and the crop drawn (eased towards it). */
-  private person: PersonMeasure | null = null;
-  private cropTarget: FrameRect | null = null;
-  private crop: FrameRect | null = null;
+  /** The last measurement of the singer (as a key) and since when it has not changed (0: it changes). */
+  private lastMeasure: string | null = null;
+  private stillSince = 0;
+  /** The stage frame, set from the measured head and held (`framing.ts`). */
+  readonly seat = new Seat(W, H);
   private probe: CanvasRenderingContext2D | null = null;
   private lastProbe = 0;
-  private noteSince = 0;
+  private lastProbedSeg = -1;
   /** Increments on every framed frame (compositor redraws only when it changed). */
   frame = 0;
 
@@ -163,6 +172,8 @@ export class LocalFeed {
     this.watchGen++;
     this.framesSeen = 0;
     this.lastFrameAt = 0;
+    this.lastMeasure = null;
+    this.stillSince = 0;
     this.visibleSince = performance.now();
     this.setHealth(track ? (track.readyState === 'ended' ? 'ended' : track.muted ? 'muted' : 'ok') : 'ok');
     if (!track) return;
@@ -203,88 +214,92 @@ export class LocalFeed {
 
   /**
    * Once a second: frames that were flowing (FLOWING_FRAMES of them at least) and have stopped for FROZEN_AFTER seconds — the
-   * page visible all the while, the track calling itself live and unmuted — is a frozen camera; frames again is 'ok'.
+   * page visible all the while, the track calling itself live and unmuted — is a frozen camera, and so is one whose
+   * picture has not changed for STILL_AFTER seconds (the model measuring the singer exactly the same, cut-out after
+   * cut-out); frames flowing again, or the picture moving again, is 'ok'.
    */
   private sampleHealth(): void {
     const t = this.watched;
-    if (!t || t.readyState !== 'live' || t.muted || this.framesSeen < FLOWING_FRAMES) return;
+    if (!t || t.readyState !== 'live' || t.muted) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return; // a hidden page presents no frames
     const now = performance.now();
-    const quiet = now - Math.max(this.lastFrameAt, this.visibleSince);
-    if (quiet >= FROZEN_AFTER * 1000) this.setHealth('frozen');
-    else if (this.health === 'frozen' && now - this.lastFrameAt < 1500) this.setHealth('ok');
+    const flowed = this.framesSeen >= FLOWING_FRAMES;
+    const stopped = flowed && now - Math.max(this.lastFrameAt, this.visibleSince) >= FROZEN_AFTER * 1000;
+    const still = this.stillSince > 0 && now - this.stillSince >= STILL_AFTER * 1000;
+    if (stopped || still) this.setHealth('frozen');
+    else if (this.health === 'frozen' && (!flowed || now - this.lastFrameAt < 1500)) this.setHealth('ok');
   }
 
-  /** The person (and their head) in the mask right now, measured a few times a second on a small probe. */
-  private findPerson(): PersonMeasure | null {
-    const now = performance.now();
-    if (now - this.lastProbe < 150) return this.person;
+  /** The measurement just made, against the last: the same one again starts (or continues) the stillness clock. */
+  private noteStillness(found: PersonMeasure | null, now: number): void {
+    if (!found || this.segmenter.mode !== 'model') {
+      this.lastMeasure = null;
+      this.stillSince = 0;
+      return;
+    }
+    const key = [found.head.x, found.head.y, found.head.w, found.head.h, found.body.x, found.body.y, found.body.w, found.body.h].join(',');
+    if (key === this.lastMeasure) {
+      if (!this.stillSince) this.stillSince = now;
+    } else {
+      this.lastMeasure = key;
+      this.stillSince = 0;
+    }
+  }
+
+  /**
+   * The person (and their head) in the mask, measured on a small probe — once per new cut-out, at most every
+   * PROBE_EVERY_MS: undefined when there is nothing new to measure, null when nobody is there.
+   */
+  private probePerson(now: number): PersonMeasure | null | undefined {
+    if (this.segmenter.frame === this.lastProbedSeg || now - this.lastProbe < PROBE_EVERY_MS) return undefined;
+    this.lastProbedSeg = this.segmenter.frame;
     this.lastProbe = now;
     if (!this.probe) {
       const pc = document.createElement('canvas');
       pc.width = PROBE_W;
       pc.height = PROBE_H;
       this.probe = pc.getContext('2d', { willReadFrequently: true });
-      if (!this.probe) return this.person;
+      if (!this.probe) return undefined;
     }
     try {
       this.probe.drawImage(this.segmenter.maskCanvas, 0, 0, PROBE_W, PROBE_H);
-      const found = measureMask(this.probe.getImageData(0, 0, PROBE_W, PROBE_H).data, PROBE_W, PROBE_H);
-      if (found) this.person = found; // nobody in frame: keep the last framing rather than jump
+      return measureMask(this.probe.getImageData(0, 0, PROBE_W, PROBE_H).data, PROBE_W, PROBE_H);
     } catch {
-      /* a lost context: keep what we had */
+      return undefined; // a lost context: nothing to learn this time
     }
-    return this.person;
   }
 
   /**
-   * The crop to draw this tick: the stage frame around the head (the whole camera frame until a
-   * person is found), eased towards where it should be and deadbanded, so mask noise never makes it
-   * breathe. The distance note follows the crop the stage frame asks for, once it has held a second.
+   * One measurement to the seat: only a real cut-out's (the model's, with a plausible person in it —
+   * never the stand-in silhouette, never a fragment of a figure the model lost) — and to the stillness
+   * clock (a camera presenting the same picture over and over). The distance note (sit back / come
+   * closer) follows the frame the seat holds.
    */
-  private framing(): FrameRect {
-    const person = this.findPerson();
-    const wanted = person ? stageCrop(W, H, person.head) : frameRect(W, H, 1, this.origin);
-    const moved = (a: FrameRect, b: FrameRect) => Math.max(Math.abs(a.sx - b.sx) / W, Math.abs(a.sy - b.sy) / H, Math.abs(a.sw - b.sw) / W, Math.abs(a.sh - b.sh) / H);
-    if (!this.cropTarget || moved(this.cropTarget, wanted) > CROP_DEAD) this.cropTarget = wanted;
-    const t = this.cropTarget;
-    const c = this.crop;
-    if (!c) this.crop = { ...t };
-    else {
-      const k = CROP_EASE;
-      const next = { ...t, sx: c.sx + (t.sx - c.sx) * k, sy: c.sy + (t.sy - c.sy) * k, sw: c.sw + (t.sw - c.sw) * k, sh: c.sh + (t.sh - c.sh) * k };
-      this.crop = moved(next, t) < 0.0005 ? { ...t } : next;
-    }
-    const note = person ? distanceNote(cropFactor(t, H)) : null;
-    const now = performance.now();
+  private measure(now: number): void {
+    const found = this.probePerson(now);
+    if (found === undefined) return;
+    this.noteStillness(found, now);
+    const trusted = this.segmenter.mode === 'model' && this.segmenter.maskMode !== 'soft-center';
+    this.seat.sample(trusted && found && plausibleHead(found) ? found.head : null, now);
+    const t = this.seat.target;
+    const note = t ? distanceNote(cropFactor(t, H)) : null;
     if (note !== this.note) {
-      if (!this.noteSince) this.noteSince = now;
-      else if (now - this.noteSince > 1000) {
-        this.note = note;
-        this.noteSince = 0;
-        this.onNote?.(note);
-      }
-    } else this.noteSince = 0;
-    return this.crop!;
+      this.note = note;
+      this.onNote?.(note);
+    }
   }
 
-  /** Crop centre (0..100 % of the camera picture), e.g. from the face detector — mapped into the cut-out, which is the camera picture centre-cropped to 3:4. */
-  setOrigin(o: { x: number; y: number }): void {
-    const vw = this.video.videoWidth;
-    const vh = this.video.videoHeight;
-    if (!vw || !vh) {
-      this.origin = o;
-      return;
-    }
-    const r = coverRect(vw, vh, W, H);
-    this.origin = { x: Math.max(0, Math.min(100, (((o.x / 100) * vw - r.sx) / r.sw) * 100)), y: Math.max(0, Math.min(100, (((o.y / 100) * vh - r.sy) / r.sh) * 100)) };
+  /** Where the seat is: settling (the whole camera frame goes out), gliding to a new frame, or held. */
+  get seatState(): SeatState {
+    return this.seat.state(performance.now());
   }
 
   private tick(): void {
-    const settled = this.crop !== null && this.cropTarget !== null && this.crop.sx === this.cropTarget.sx && this.crop.sy === this.cropTarget.sy && this.crop.sh === this.cropTarget.sh;
-    if (this.segmenter.frame === this.lastSeg && settled) return; // nothing new to draw
+    const now = performance.now();
+    this.measure(now);
+    if (this.segmenter.frame === this.lastSeg && this.seat.state(now) !== 'gliding') return; // nothing new to draw
     this.lastSeg = this.segmenter.frame;
-    const r = visiblePart(this.framing(), W, H); // the crop may reach past the camera picture: that part stays transparent
+    const r = visiblePart(this.seat.crop(now), W, H); // the crop may reach past the camera picture: that part stays transparent
     const c = this.ctx;
     c.clearRect(0, 0, W, H);
     const m = this.maskCtx;

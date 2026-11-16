@@ -47,6 +47,7 @@ jobs:
           VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
           VITE_GOOGLE_API_KEY: ${{ vars.VITE_GOOGLE_API_KEY }}
           VITE_CONTROL_URL: ${{ steps.control.outputs.url }}
+          VITE_APP_VERSION: ${{ github.sha }}
         run: npm run build
       - uses: actions/configure-pages@v5
         with:

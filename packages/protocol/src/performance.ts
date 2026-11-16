@@ -66,7 +66,8 @@ export interface PerformanceManifest {
   /** Backing-track playback settings used. */
   playback: { tempo: number; keyShift: number; backingGain: number };
   fx: VoxForgeParams;
-  device: { userAgent: string; platform: string; headphones: boolean | null };
+  /** The device that made it; `build` is the app build (the deployed commit), so a file can be read against the code that wrote it. */
+  device: { userAgent: string; platform: string; headphones: boolean | null; build?: string };
   files: FileEntry[];
   notes: string;
 }

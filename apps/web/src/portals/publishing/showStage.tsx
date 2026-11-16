@@ -26,6 +26,10 @@ export interface ShowFeed {
   vocals: Record<string, MediaStream>;
   /** The performers as the compositor draws them (the broadcast encoder's own canvas draws the same). */
   performers: StagePerformer[];
+  /** Performers whose picture arrives but has not moved for a while (their camera froze on their device): first names. */
+  still: string[];
+  /** Make the video link to a performer again from scratch. */
+  reconnect: (id: string) => void;
 }
 
 /** Receive every performer's video (the publisher never sends a camera) and lay them out as a show. */
@@ -36,6 +40,13 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
   const [peerStates, setPeerStates] = useState<Record<string, PeerState>>({});
   const [vocals, setVocals] = useState<Record<string, MediaStream>>({});
   const [performers, setPerformers] = useState<StagePerformer[]>([]);
+  const [stillIds, setStillIds] = useState<string[]>([]);
+  useEffect(() => {
+    compositor.onStill = setStillIds;
+    return () => {
+      compositor.onStill = null;
+    };
+  }, [compositor]);
 
   useEffect(() => {
     if (!mesh) return;
@@ -113,7 +124,8 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
   }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), peerStates]);
 
   const linked = stagePerformers.filter((s) => peerStates[s.participantId!] === 'connected').length;
-  return { compositor, mesh, linked, onStage: stagePerformers.length, vocals, performers };
+  const still = stillIds.map((id) => meet.stage.find((s) => s.participantId === id)?.displayName.split(' ')[0] || 'a singer');
+  return { compositor, mesh, linked, onStage: stagePerformers.length, vocals, performers, still, reconnect: (id) => mesh?.remake(id) };
 }
 
 /**

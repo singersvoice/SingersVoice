@@ -33,6 +33,7 @@ import { VOCAL_LAG_MS } from '../../video/showRecorder.ts';
 import { Broadcast } from './broadcast.ts';
 import { LiveLinks } from './LiveLinks.tsx';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
+import { filmSound } from '../../video/meetRecorder.ts';
 
 const IDLE_MS = 3000;
 const JOB_POLL_MS = 8000;
@@ -422,6 +423,11 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
           <span class="chip" data-vocals={Object.keys(feed.vocals).length}>
             <IcUsers size={14} /> {feed.onStage} on stage · {feed.linked}/{feed.onStage} video · {Object.keys(feed.vocals).length} vocal{Object.keys(feed.vocals).length === 1 ? '' : 's'}
           </span>
+          {feed.still.length > 0 && (
+            <span class="chip warn" data-still={feed.still.length} title="Their picture arrives but nothing in it moves: their camera froze on their device (it restarts there by itself, or they tap Restart on their stage strip).">
+              {feed.still.join(', ')}: picture not moving — camera frozen on their device
+            </span>
+          )}
         </div>
       </header>
 
@@ -503,10 +509,10 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
               </span>
             )}
             {(film.recording || film.saved || film.note) && (
-              <span class={`footage ${film.note ? 'warn' : ''}`} data-footage={film.recording ? 'recording' : film.saved ? 'saved' : 'off'} data-footage-bytes={film.bytes} title={film.recording ? 'The whole broadcast, as it goes out, into your Drive (Performances → Broadcast)' : film.saved ? 'The footage is in your Drive (Performances → Broadcast)' : film.note ?? ''}>
+              <span class={`footage ${film.note ? 'warn' : ''}`} data-footage={film.recording ? 'recording' : film.saved ? 'saved' : 'off'} data-footage-bytes={film.bytes} data-footage-seconds={film.seconds} title={film.recording ? 'The whole broadcast, as it goes out, into your Drive (Performances → Broadcast)' : film.saved ? 'The footage is in your Drive (Performances → Broadcast)' : film.note ?? ''}>
                 {' '}
                 · <IcVideo size={14} />{' '}
-                {film.recording ? `footage to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.seconds * 1000)} · ${mb(film.stored || film.bytes)}` : film.saved ? `footage saved to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.saved.durationMs)}` : film.note}
+                {film.recording ? `footage to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.seconds * 1000)} · ${mb(film.stored || film.bytes)} · ${filmSound(film)}` : film.saved ? `footage saved to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.saved.durationMs)}` : film.note}
               </span>
             )}
             {job.watchUrl && (

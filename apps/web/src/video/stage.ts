@@ -1,8 +1,8 @@
 /**
- * The virtual stage: every performer (1..10) is cut out of their camera and seated in one row over
- * the shared stage background — the same size, evenly spaced by stage slot along a shallow arc,
- * behind a lit riser that hides everything below the chest — like a row of chairs on a TV stage,
- * wherever each of them really is.
+ * The virtual stage: every performer (1..10) is cut out of their camera and placed in one straight
+ * row over the shared stage background — the same size, evenly spaced by stage slot, every head at
+ * the same height, behind a lit riser that hides everything below the chest — like performers in
+ * a line across a stage, wherever each of them really is.
  *
  * One rule, every stage: a singer is drawn exactly as their own device frames them, and every
  * device frames its singer the same way (the stage frame, `framing.ts`: the head the same size at
@@ -37,9 +37,6 @@ export interface StagePerformer {
   source: PerformerSource;
   /** Front camera: draw mirrored so the singer sees themselves as in a mirror. */
   mirror?: boolean;
-  /** 1 = full frame; >1 crops in around `origin` (0..100 %). */
-  zoom?: number;
-  origin?: { x: number; y: number };
   isMe?: boolean;
 }
 
@@ -62,10 +59,11 @@ export interface PersonFit {
 
 const FPS = 24;
 /**
- * The row of slots curves like a row of chairs facing the audience: the middle nearest, the ends
- * this far up the picture (fraction of its height). Every slot is the same size all along it.
+ * The row is one straight line, as performers stand in a line across a stage facing the audience:
+ * every slot on the same floor, the same size, evenly spaced — no curve (the lift of the ends is 0;
+ * `arcLift` stays as the one place a curve would come from, should a stage ever want one).
  */
-export const ARC_LIFT: Record<StageMode, number> = { show: 0.07, stage: 0.05 };
+export const ARC_LIFT: Record<StageMode, number> = { show: 0, stage: 0 };
 /**
  * The riser in front of the row hides this much of every frame from the bottom: the singers show
  * head and shoulders above its edge, whatever their camera's bottom edge cut — the way a chair's
@@ -96,10 +94,19 @@ export const HEADROOM = 0.045;
  * full-height frame in a 720p show is drawn near 1:1.
  */
 const MAX_UPSCALE = 4.5;
+/**
+ * A remote performer whose frames keep arriving with nothing moving in them for this long is marked
+ * `still` (their camera froze on their device; the stage says so and offers to re-make the link). A
+ * coarse sample of the picture is compared once a second — a person, however still, never gives the
+ * very same sample for this long (the cut-out's soft edge alone moves).
+ */
+export const STILL_AFTER_MS = 15_000;
+const STILL_SAMPLE_W = 16;
+const STILL_SAMPLE_H = 21;
 
 export type StageMode = 'stage' | 'show';
 
-/** How far up the picture the row's floor is at `x` (0 in the middle, `ARC_LIFT` at the ends): the chairs' arc. */
+/** How far up the picture the row's floor is at `x` (0 in the middle, `ARC_LIFT` at the ends — 0: a straight line). */
 export function arcLift(width: number, height: number, x: number, mode: StageMode): number {
   const u = 2 * (x / Math.max(1, width) - 0.5); // -1..1 across the picture
   return height * ARC_LIFT[mode] * u * u;
@@ -198,6 +205,13 @@ export class StageCompositor {
   private dpr = 1;
   /** Latest layout in CSS pixels (for tests / overlays). */
   tiles: (StageTile & { performer: StagePerformer; fit?: PersonFit })[] = [];
+  /** A coarse sample of each remote performer's picture, once a second: the same sample for STILL_AFTER_MS is a still picture. */
+  private samples = new Map<string, { key: string; since: number; at: number }>();
+  private sampler: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
+  /** Remote performers whose picture is still (frames arriving, nothing moving in them — their camera froze on their device). */
+  still = new Set<string>();
+  /** Called with the ids whenever the set of still pictures changes. */
+  onStill: ((ids: string[]) => void) | null = null;
 
   /** 'stage' (lyrics above the performers) or 'show' (performers fill the frame); may be switched while running. */
   mode: StageMode;
@@ -226,6 +240,7 @@ export class StageCompositor {
   setPerformers(list: StagePerformer[]): void {
     this.performers = [...list].sort((a, b) => a.slot - b.slot);
     for (const id of [...this.seen.keys()]) if (!this.performers.some((p) => p.id === id && p.source.kind === 'frame')) this.seen.delete(id);
+    for (const id of [...this.samples.keys()]) if (!this.performers.some((p) => p.id === id && p.source.kind === 'frame')) this.clearStill(id);
     for (const p of this.performers) {
       if (p.picture && !this.avatars.has(p.id)) {
         const img = new Image();
@@ -275,6 +290,7 @@ export class StageCompositor {
     const tiles = layoutStage(W, H, this.performers.length, this.mode);
     this.tiles = tiles.map((t, i) => ({ ...t, id: this.performers[i]!.id, performer: this.performers[i]! }));
     // Every singer's frame, whole, as their own device framed it — the same picture in every mode.
+    const now = performance.now();
     for (const t of this.tiles) {
       const p = t.performer;
       const src = this.sourceCanvas(p);
@@ -282,14 +298,57 @@ export class StageCompositor {
         this.live = true;
         t.fit = fitPerson(t, src.width, src.height, this.mode, H);
         this.drawPerson(c, src, p, t.fit, t);
+        if (p.source.kind === 'frame') this.sampleStill(p.id, src, now);
+        else this.clearStill(p.id);
       } else {
         t.fit = undefined;
+        this.clearStill(p.id);
         this.drawPlaceholder(c, p, t);
       }
     }
     // The riser in front of the row, then every singer's name on it.
     this.drawRiser(c, W, H, tiles[0]!.h);
     for (const t of this.tiles) this.drawTag(c, t.performer, t, W, H);
+  }
+
+  /**
+   * Once a second, a 16×21 sample of a remote performer's picture against the last: the very same bytes for
+   * STILL_AFTER_MS means the frames arrive but nothing in them moves — their camera froze on their device
+   * (the stage draws whatever arrives; this is how the host comes to know). A changed sample ends it.
+   */
+  private sampleStill(id: string, src: HTMLCanvasElement, now: number): void {
+    const last = this.samples.get(id);
+    if (last && now - last.at < 1000) return;
+    if (!this.sampler) {
+      const canvas = document.createElement('canvas');
+      canvas.width = STILL_SAMPLE_W;
+      canvas.height = STILL_SAMPLE_H;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      this.sampler = { canvas, ctx };
+    }
+    let key: string;
+    try {
+      const { ctx } = this.sampler;
+      ctx.clearRect(0, 0, STILL_SAMPLE_W, STILL_SAMPLE_H);
+      ctx.drawImage(src, 0, 0, STILL_SAMPLE_W, STILL_SAMPLE_H);
+      key = Array.from(ctx.getImageData(0, 0, STILL_SAMPLE_W, STILL_SAMPLE_H).data).join(',');
+    } catch {
+      return; // a lost context: not judged
+    }
+    const since = last && last.key === key ? last.since : now;
+    this.samples.set(id, { key, since, at: now });
+    const still = now - since >= STILL_AFTER_MS;
+    if (still !== this.still.has(id)) {
+      if (still) this.still.add(id);
+      else this.still.delete(id);
+      this.onStill?.([...this.still]);
+    }
+  }
+
+  private clearStill(id: string): void {
+    this.samples.delete(id);
+    if (this.still.delete(id)) this.onStill?.([...this.still]);
   }
 
   /** The RGBA person image for a performer (local person canvas, or the unpacked remote frame). */
