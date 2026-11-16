@@ -51,6 +51,7 @@ import {
   type LiveSegmentInfo,
   type LiveStatus,
   type PublishJobLive,
+  youtubeWatchUrl,
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
@@ -1042,7 +1043,11 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const destinations: Destination[] = DESTINATIONS.map((d) => {
       const s = stored.find((x) => x.kind === d.kind);
       // The in-house portal needs no key and is always available; the others are off until configured.
-      return s ? (({ keyEnc: _k, ...pub }) => pub)(s) : { kind: d.kind, label: d.label, enabled: !d.needsKey, ingestUrl: d.needsKey ? d.ingestHint : '', keyHint: '', updatedAt: '' };
+      if (!s) return { kind: d.kind, label: d.label, enabled: !d.needsKey, ingestUrl: d.needsKey ? d.ingestHint : '', keyHint: '', updatedAt: '' };
+      const { keyEnc: _k, ...pub } = s;
+      // A YouTube live link saved before the shapes were known (a Studio dashboard link, say) is handed out as the page viewers open.
+      if (pub.kind === 'youtube' && pub.watchUrl) pub.watchUrl = youtubeWatchUrl(pub.watchUrl) ?? pub.watchUrl;
+      return pub;
     });
     return c.json({ destinations, relay: Boolean(relay) });
   });
@@ -1105,6 +1110,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       if (norm === null) return err(c, 400, 'bad_watch_url', `The ${def.label} live link must be an https:// link (or just your channel name)`);
       watchUrl = norm;
     }
+    const auto = typeof body.auto === 'boolean' ? body.auto : Boolean(existing?.auto);
     const dest = {
       kind,
       label: String(body.label ?? existing?.label ?? def.label).slice(0, 60),
@@ -1112,6 +1118,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       ingestUrl: String(body.ingestUrl ?? existing?.ingestUrl ?? (def.needsKey ? def.ingestHint : '')).slice(0, 300),
       keyHint,
       ...(watchUrl ? { watchUrl } : {}),
+      ...(auto ? { auto: true } : {}),
       updatedAt: new Date().toISOString(),
       keyEnc,
     };
@@ -1172,6 +1179,14 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       ],
       live: { segments: 0, bytes: 0, lastSegmentAt: null, youtube: wanted.includes('youtube') ? 'waiting' : 'off', youtubeNote: '', relay: relayOn && wanted.some((k) => RELAY_KINDS.includes(k)) ? 'starting' : 'off', relayNote: '' },
     };
+    // The public pages the app made for this show (a YouTube broadcast of its own), and the broadcast to end on Stop.
+    if (body.links && typeof body.links === 'object') {
+      const links: Partial<Record<DestinationKind, string>> = {};
+      for (const [k, v] of Object.entries(body.links)) if (wanted.includes(k as DestinationKind) && typeof v === 'string' && /^https:\/\/\S{1,300}$/.test(v)) links[k as DestinationKind] = v;
+      if (Object.keys(links).length) job.links = links;
+    }
+    const yt = body.youtube;
+    if (yt && typeof yt === 'object' && /^[A-Za-z0-9_-]{1,64}$/.test(String(yt.broadcastId)) && /^[A-Za-z0-9_-]{1,64}$/.test(String(yt.streamId))) job.youtube = { broadcastId: String(yt.broadcastId), streamId: String(yt.streamId) };
     await store.saveJob(job);
     return c.json({ job }, 201);
   });

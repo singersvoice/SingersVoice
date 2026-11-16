@@ -406,6 +406,23 @@ link; the first four tiles connect by themselves, the rest on request.
    the browser can feed (`fedDestinations` in the protocol). Tests: the control test drives the
    service against a fake relay (`deps.relay.fetchImpl`), the relay's own test runs the server
    against a stub ffmpeg.
+4b′. **YouTube, run by the app** (`lib/youtube.ts`, the YouTube Data API v3 with the publisher's own
+   Google token carrying `YOUTUBE_SCOPE` — asked for once, incrementally, by **Connect YouTube**
+   under Destinations, and from then on by every token request, `youtubeWanted`): Connect finds the
+   channel's reusable HLS `liveStream` or makes one (`ensureHlsStream`) and hands its key to the
+   service like a pasted one (`PUT /publishing/destinations/youtube` with `auto: true`); **Go live**
+   makes a `liveBroadcast` in the meet's name (public or unlisted, `enableAutoStart`/`AutoStop`,
+   low latency), binds it to the stream (`startBroadcast`) and puts its public page on the job
+   (`PublishJob.links.youtube`, `PublishJob.youtube` — `POST /publishing/jobs` takes both; the
+   live-link buttons prefer a job's own links to the destination's standing link); while the job
+   runs the show view reads the broadcast's `lifeCycleStatus` and the stream's `streamStatus` /
+   `healthStatus` every 15 s (`youtubeStatus` → `youtubeWord`: *receiving · going live…*, *live ·
+   stream good*, *not receiving the stream yet*); **Stop** transitions the broadcast to `complete`
+   (`endBroadcast`; a broadcast that never went live is left as it is). YouTube's refusals come back
+   in the publisher's words (`youtubeReason`: live streaming not enabled on the channel, the API not
+   enabled in the Cloud project, the daily quota, a missing permission). A pasted YouTube link of
+   any shape — a Studio dashboard link above all, which viewers cannot open — becomes the page
+   viewers open (`youtubeWatchUrl`). Tests: `apps/web/test/youtube.test.ts` on a fake API.
 4c. **The film of the meet** (`video/meetRecorder.ts`): on the host's device, from the host on
    stage with the mic open until the meet is over, one MediaRecorder on the room's ShowRecorder
    canvas (drawn for the whole meet — `keepDrawing`; 1280×720 at 24 fps where the browser has
@@ -475,6 +492,18 @@ vocal₂ ─ rider ─┴─ Vocal offset ───────┘
   what the recording and the audience take) and `gain` (the singer's **Backing level in your ears**),
   so turning the music down in your headphones never turns it down in the show — which is what used
   to make the recorded track "bleak" and the knobs go to +12.
+- **The voice leaves the engine through one node** (`AudioEngine.voice`): the FX chain's output (through
+  the take recorder, which passes it on) feeds it, and the mesh (`vocalStream`), the stage mix
+  (`ShowRecorder.buildAudio`) and the monitor all take it from there. The engine watches it beside
+  the leveller, ten times a second: the raw microphone sung into (a peak over −34 dBFS) while the
+  voice stays under −80 dBFS, three seconds running, is a processed voice gone silent (a browser's
+  audio worklet gone wrong — a host once reached nobody's mix for a whole meet while her microphone
+  worked), and the raw microphone (through the trim) is switched into `voice` instead; the mic line
+  says *voice effects off — your voice goes out plain* (`voiceFallback`), and the next opening of the
+  mic tries the effects again. The mix bus meters every source (`MixBus.levels`: the track after
+  normalisation and offset, each voice after its rider) and the stage strip and the live stage show
+  the **mix line** once a second — *mix: you −18 dB · Team −22 dB · track −20 dB* — so a voice that
+  does not reach the mix is seen on the spot, never found in a file afterwards.
 - **Each vocal has a rider** (the `sv-leveler` worklet): a two-second RMS view of what is *sung*
   (a 50 ms gate at −45 dBFS stops it the moment the singer stops and keeps the pause out of the
   average), steered toward **−17 dBFS** at 1 dB/s up, 2 dB/s down, three times faster until within

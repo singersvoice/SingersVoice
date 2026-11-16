@@ -10,13 +10,16 @@ import { shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
 import { toast } from '../../lib/toast.ts';
 
-/** The live link of each platform a show goes to: the page viewers open there, or null when the publisher has not set it. */
-export function liveLinks(destinations: DestinationKind[], dests: Destination[], watchPage: string | null): { kind: DestinationKind; short: string; url: string | null }[] {
+/**
+ * The live link of each platform a show goes to: the page of this very show where the app made it (a YouTube
+ * broadcast of its own, `links`), else the platform's standing link the publisher set, or null when there is none.
+ */
+export function liveLinks(destinations: DestinationKind[], dests: Destination[], watchPage: string | null, links?: Partial<Record<DestinationKind, string>>): { kind: DestinationKind; short: string; url: string | null }[] {
   return destinations.map((kind) => {
     const def = DESTINATIONS.find((d) => d.kind === kind);
     const short = def?.short ?? kind;
     if (kind === 'inhouse') return { kind, short, url: watchPage ? new URL(href(watchPage), location.href).toString() : null };
-    return { kind, short, url: dests.find((d) => d.kind === kind)?.watchUrl || null };
+    return { kind, short, url: links?.[kind] || dests.find((d) => d.kind === kind)?.watchUrl || null };
   });
 }
 
@@ -25,8 +28,8 @@ export async function giveLink(title: string, short: string, url: string): Promi
   toast(r === 'copied' ? `${short} link copied — share it: ${url}` : r === 'shared' ? 'Shared' : url, r === 'failed' ? 'warn' : 'ok', 7000);
 }
 
-export function LiveLinks(props: { title: string; destinations: DestinationKind[]; dests: Destination[]; watchPage: string | null; compact?: boolean }) {
-  const links = liveLinks(props.destinations, props.dests, props.watchPage);
+export function LiveLinks(props: { title: string; destinations: DestinationKind[]; dests: Destination[]; watchPage: string | null; links?: Partial<Record<DestinationKind, string>>; compact?: boolean }) {
+  const links = liveLinks(props.destinations, props.dests, props.watchPage, props.links);
   if (!links.length) return null;
   return (
     <div class="row livelinks" data-live-links={links.filter((l) => l.url).length} style="gap:6px;flex-wrap:wrap;align-items:center">

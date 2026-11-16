@@ -324,6 +324,11 @@ export class ShowRecorder {
     return this.audio !== null;
   }
 
+  /** What each source brings to this device's mix right now (the track, every voice by id — 'me' is this singer), or null without a bus. */
+  mixLevels(): { track: number; vocals: Record<string, number> } | null {
+    return this.audio?.bus.levels() ?? null;
+  }
+
   /**
    * Start drawing now (if not already — the picture may be running for the film of the meet) and
    * recording at `atCtxTime` (the song's kickstart on the engine's clock), so the first frames are
@@ -452,12 +457,11 @@ export class ShowRecorder {
       player.out.connect(localTrack); // the track at its mix level — never the singer's listening level
       taps.push({ node: player.out, to: localTrack });
     }
-    const vocal = engine.recorder?.node ?? engine.chain?.output ?? null;
-    if (vocal) {
-      vocal.connect(localVocal);
-      taps.push({ node: vocal, to: localVocal });
-      bus.addVocal('me', localVocal);
-    }
+    // My voice as it leaves the engine (after the FX; the raw microphone when the engine had to give the FX up).
+    const vocal = engine.voice;
+    vocal.connect(localVocal);
+    taps.push({ node: vocal, to: localVocal });
+    bus.addVocal('me', localVocal);
     this.audio = { ctx, dest, bus, localTrack, localVocal, taps };
     for (const [id, v] of this.vocals) this.plugVocal(id, v);
     // The audience hears this very mix: the host's device sends it out a second at a time (WebCodecs/Opus).

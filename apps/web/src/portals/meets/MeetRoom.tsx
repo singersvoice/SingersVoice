@@ -841,6 +841,11 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
             {stage.cameraLine}
           </span>
         )}
+        {props.onStage && stage.mixLine && (
+          <span class="chip faint" style="pointer-events:none" data-mix-line={stage.mixLine} title="What each source brings to this device's mix right now — what the audience, the film and the takes get from here">
+            {stage.mixLine}
+          </span>
+        )}
         {props.onStage && stage.distance && (
           <span class="chip warn" style="pointer-events:none" data-distance={stage.distance}>
             {stage.distance === 'close' ? 'Sit back a little — the stage shows what your camera sees' : 'Come a little closer to the camera'}
@@ -1222,6 +1227,19 @@ function LiveStage(props: {
           {!paused && pauseAt !== null && <span class="chip warn">pausing…</span>}
           {seekTarget !== null && !paused && <span class="chip warn">jumping to {formatMs(seekTarget)}…</span>}
           {host && meet.requests.length > 0 && <span class="chip">wait list · {meet.requests.length} — seated when the song is over</span>}
+          {stage.mixLine && (
+            <span class="chip faint" data-mix-line={stage.mixLine} title="What each source brings to this device's mix right now — what the audience, the film and the takes get from here">
+              {stage.mixLine}
+            </span>
+          )}
+          {stage.still.map((id) => (
+            <span key={id} class="chip warn" data-still={id}>
+              {meet.stage.find((s) => s.participantId === id)?.displayName.split(' ')[0] || 'A singer'}'s picture is not moving — their camera froze on their device
+              <button class="btn sm" style="margin-left:6px" onClick={() => stage.reconnect(id)}>
+                Reconnect
+              </button>
+            </span>
+          ))}
           <SaveStatus compact />
         </section>
         <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={plan} countdown={countdown} showWho={track.singerCount > 1 || plan.singers.length > 1} title={track.title} />

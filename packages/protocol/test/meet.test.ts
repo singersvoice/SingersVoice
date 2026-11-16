@@ -8,6 +8,8 @@ import {
   fedDestinations,
   MAX_PERFORMERS,
   normalizeWatchUrl,
+  youtubeBroadcastUrl,
+  youtubeWatchUrl,
   meetIsOpen,
   RELAY_KINDS,
   sameSong,
@@ -88,11 +90,27 @@ describe('performance helpers', () => {
     expect(normalizeWatchUrl('twitch', 'alicesings')).toBe('https://www.twitch.tv/alicesings');
     expect(normalizeWatchUrl('facebook', 'AliceSingsPage')).toBe('https://www.facebook.com/AliceSingsPage/live');
     expect(normalizeWatchUrl('instagram', 'alice.sings')).toBe('https://www.instagram.com/alice.sings/live/');
-    expect(normalizeWatchUrl('youtube', ' https://youtube.com/watch?v=abc123 ')).toBe('https://youtube.com/watch?v=abc123');
-    expect(normalizeWatchUrl('youtube', 'http://youtu.be/abc')).toBe('https://youtu.be/abc');
+    expect(normalizeWatchUrl('youtube', ' https://youtube.com/watch?v=abc123xyz ')).toBe('https://www.youtube.com/watch?v=abc123xyz');
+    expect(normalizeWatchUrl('youtube', 'http://youtu.be/abc')).toBe('https://youtu.be/abc'); // not a video id YouTube would give: kept as typed
     expect(normalizeWatchUrl('youtube', '')).toBe('');
     expect(normalizeWatchUrl('youtube', 'not a link')).toBeNull();
     expect(normalizeWatchUrl('inhouse', 'whatever')).toBeNull();
+  });
+  it('a YouTube link of any shape the publisher copied becomes the page viewers open — a Studio dashboard link above all', () => {
+    const watch = 'https://www.youtube.com/watch?v=FTUbrBKUSvY';
+    expect(youtubeWatchUrl('https://studio.youtube.com/video/FTUbrBKUSvY/livestreaming')).toBe(watch); // the owner's dashboard: viewers cannot open it
+    expect(youtubeWatchUrl('https://studio.youtube.com/video/FTUbrBKUSvY/edit')).toBe(watch);
+    expect(youtubeWatchUrl('https://youtu.be/FTUbrBKUSvY')).toBe(watch);
+    expect(youtubeWatchUrl('https://www.youtube.com/live/FTUbrBKUSvY?feature=share')).toBe(watch);
+    expect(youtubeWatchUrl('https://m.youtube.com/watch?v=FTUbrBKUSvY&t=10')).toBe(watch);
+    expect(youtubeWatchUrl('https://www.youtube.com/@AliceSings')).toBe('https://www.youtube.com/@AliceSings/live');
+    expect(youtubeWatchUrl('https://www.youtube.com/@AliceSings/live')).toBe('https://www.youtube.com/@AliceSings/live');
+    expect(youtubeWatchUrl('https://www.youtube.com/channel/UCabcdefghijklmnop/videos')).toBe('https://www.youtube.com/channel/UCabcdefghijklmnop/live');
+    expect(youtubeWatchUrl('https://www.youtube.com/')).toBeNull();
+    expect(youtubeWatchUrl('https://example.com/watch?v=FTUbrBKUSvY')).toBeNull();
+    expect(normalizeWatchUrl('youtube', 'https://studio.youtube.com/video/FTUbrBKUSvY/livestreaming')).toBe(watch); // the live link as typed
+    expect(normalizeWatchUrl('youtube', 'https://www.youtube.com/')).toBe('https://www.youtube.com/'); // a link that is not one of the shapes: kept as typed
+    expect(youtubeBroadcastUrl('FTUbrBKUSvY')).toBe(watch);
   });
   it('which destinations the publisher\'s browser can feed: the watch page and YouTube alone, every RTMP platform with the relay', () => {
     const all = ['youtube', 'facebook', 'instagram', 'twitch', 'inhouse'] as const;

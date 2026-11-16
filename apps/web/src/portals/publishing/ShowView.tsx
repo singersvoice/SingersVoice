@@ -34,9 +34,12 @@ import { Broadcast } from './broadcast.ts';
 import { LiveLinks } from './LiveLinks.tsx';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
 import { filmSound } from '../../video/meetRecorder.ts';
+import { endBroadcast, ensureHlsStream, startBroadcast, youtubeStatus, youtubeToken, youtubeWord } from '../../lib/youtube.ts';
 
 const IDLE_MS = 3000;
 const JOB_POLL_MS = 8000;
+/** How often YouTube's own word on the show (the broadcast's state, the stream coming in or not) is read while the app runs the broadcast. */
+const YOUTUBE_POLL_MS = 15000;
 const SYNC_TOLERANCE_MS = 300;
 
 export const activeJob = (j: PublishJob) => j.state === 'requested' || j.state === 'starting' || j.state === 'live';
@@ -242,12 +245,30 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     if (s.ok && !driveReady) toast('The footage is not being saved: reconnect Drive first', 'warn', 8000);
     else if (s.ok && !onDrive) toast('The footage stays on this device — sign in with Google to keep it in your Drive', 'warn', 8000);
   };
+  // YouTube run by the app (Destinations → Connect YouTube): a broadcast of its own for this show, made at Go live.
+  const ytAuto = dests?.find((d) => d.kind === 'youtube')?.auto === true;
+  const [yt, setYt] = useState<{ text: string; ok: boolean } | null>(null);
   const goLive = async () => {
     if (!picked?.length) return toast('Pick at least one destination', 'warn');
     setBusy(true);
     try {
       await broadcast.bus.resume(); // inside the click: the browser lets the sound run
-      const r = await api.post('POST /publishing/jobs', '/publishing/jobs', { meetId: meet.meetId, destinations: picked, title: meet.title, description: meet.trackTitle ? `${meet.trackTitle} — live on SingersVoice` : '' });
+      const description = meet.trackTitle ? `${meet.trackTitle} — live on SingersVoice` : '';
+      let links: Partial<Record<DestinationKind, string>> | undefined;
+      let youtube: { broadcastId: string; streamId: string } | undefined;
+      if (picked.includes('youtube') && ytAuto) {
+        try {
+          const token = await youtubeToken(profile.value?.email);
+          const stream = await ensureHlsStream(token);
+          const b = await startBroadcast(token, { title: meet.title, streamId: stream.streamId, privacy: app.youtubePrivacy, description: description || 'Live on SingersVoice' });
+          links = { youtube: b.watchUrl };
+          youtube = { broadcastId: b.broadcastId, streamId: stream.streamId };
+          setYt({ text: 'YouTube: broadcast made · waiting for the stream', ok: true });
+        } catch (e) {
+          toast(`YouTube: ${errorText(e)} — going live to the saved stream key without a broadcast of its own`, 'warn', 14000);
+        }
+      }
+      const r = await api.post('POST /publishing/jobs', '/publishing/jobs', { meetId: meet.meetId, destinations: picked, title: meet.title, description, ...(links ? { links } : {}), ...(youtube ? { youtube } : {}) });
       setJob(r.job);
       await startSending(r.job);
     } catch (e) {
@@ -269,7 +290,37 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     } finally {
       setBusy(false);
     }
+    // The YouTube broadcast the app made is ended with the show (a viewer finds a finished video, not a stream that never ends).
+    if (job.youtube) {
+      try {
+        await endBroadcast(await youtubeToken(profile.value?.email), job.youtube.broadcastId);
+        setYt({ text: 'YouTube: the broadcast is over', ok: true });
+      } catch (e) {
+        toast(`YouTube: ${errorText(e)} — end the broadcast in YouTube Studio`, 'warn', 10000);
+      }
+    }
   };
+  // YouTube's own word on the show while the app's broadcast runs: the broadcast's state and whether the stream is coming in.
+  useEffect(() => {
+    const y = job?.youtube;
+    if (!y || !job || !activeJob(job)) return;
+    let stopped = false;
+    const read = async () => {
+      try {
+        const st = await youtubeStatus(await youtubeToken(profile.value?.email), y.broadcastId, y.streamId);
+        if (!stopped) setYt(youtubeWord(st));
+      } catch (e) {
+        if (!stopped) setYt({ text: `YouTube: ${errorText(e)}`, ok: false });
+      }
+    };
+    const first = setTimeout(() => void read(), 5000);
+    const t = setInterval(() => void read(), YOUTUBE_POLL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(first);
+      clearInterval(t);
+    };
+  }, [job?.jobId, job?.youtube?.broadcastId, job?.state]);
   // A job found running when the view opens (a reload): this browser picks the sending up again.
   useEffect(() => {
     if (job && activeJob(job) && !broadcast.running && job.live && !busy) void startSending(job);
@@ -496,7 +547,12 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
                     · relay: {sending.relay === 'ok' ? sending.relayNote || 'streaming' : sending.relay === 'starting' ? 'starting…' : sending.relayNote || 'error'}
                   </span>
                 ) : (
-                  sending.youtube !== 'off' && <span class={sending.youtube === 'ok' ? '' : sending.youtube === 'waiting' ? 'muted' : 'danger'}> · YouTube: {sending.youtubeNote || (sending.youtube === 'waiting' ? 'sending…' : sending.youtube)}</span>
+                  sending.youtube !== 'off' && (
+                    <span class={yt ? (yt.ok ? 'ok' : 'danger') : sending.youtube === 'ok' ? '' : sending.youtube === 'waiting' ? 'muted' : 'danger'} data-youtube-word={yt ? (yt.ok ? 'ok' : 'off') : ''}>
+                      {' '}
+                      · {yt ? yt.text : `YouTube: ${sending.youtubeNote || (sending.youtube === 'waiting' ? 'sending…' : sending.youtube)}`}
+                    </span>
+                  )
                 )}
               </>
             )}
@@ -528,7 +584,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
             {support && !support.ok && <span class="danger"> · {support.reason}</span>}
           </div>
         )}
-        {job && activeJob(job) && <LiveLinks title={job.title || meet.title} destinations={job.destinations} dests={dests ?? []} watchPage={job.watchUrl} />}
+        {job && activeJob(job) && <LiveLinks title={job.title || meet.title} destinations={job.destinations} dests={dests ?? []} watchPage={job.watchUrl} links={job.links} />}
       </footer>
     </div>
   );

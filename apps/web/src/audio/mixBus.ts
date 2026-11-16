@@ -85,9 +85,12 @@ export class MixBus {
   private readonly backingNorm: GainNode;
   private readonly vocalOffset: GainNode;
   private readonly guard: AudioWorkletNode | null;
-  private vocals = new Map<string, { source: AudioNode; rider: AudioWorkletNode | null; out: GainNode }>();
+  private vocals = new Map<string, { source: AudioNode; rider: AudioWorkletNode | null; out: GainNode; meter: AnalyserNode }>();
   private balance = { trackDb: 0, vocalDb: 0 };
   readonly workletAvailable: boolean;
+  /** A meter on the track (after normalisation and offset) and on every voice (after its rider): what each source brings to the mix, in dB, for the stage's mix line. */
+  private readonly backingMeter: AnalyserNode;
+  private meterBuf = new Float32Array(2048);
 
   constructor(ctx: BaseAudioContext, workletAvailable: boolean, opts: { ceilingDb?: number } = {}) {
     this.ctx = ctx;
@@ -99,6 +102,9 @@ export class MixBus {
     this.sum = ctx.createGain();
     this.backingIn.connect(this.backingNorm).connect(this.backingOut).connect(this.sum);
     this.vocalOffset.connect(this.sum);
+    this.backingMeter = ctx.createAnalyser();
+    this.backingMeter.fftSize = 2048;
+    this.backingOut.connect(this.backingMeter);
     this.guard = workletAvailable ? leveler(ctx, MIX_GUARD) : null;
     this.safety = safetyStage(ctx, workletAvailable, opts.ceilingDb ?? MIX_CEILING_DB);
     if (this.guard) {
@@ -134,7 +140,10 @@ export class MixBus {
     if (rider) source.connect(rider).connect(out);
     else source.connect(out);
     out.connect(this.vocalOffset);
-    this.vocals.set(id, { source, rider, out });
+    const meter = this.ctx.createAnalyser();
+    meter.fftSize = 2048;
+    out.connect(meter);
+    this.vocals.set(id, { source, rider, out, meter });
     return { out };
   }
 
@@ -149,6 +158,21 @@ export class MixBus {
     }
     v.rider?.disconnect();
     v.out.disconnect();
+    v.meter.disconnect();
+  }
+
+  private readDb(meter: AnalyserNode): number {
+    meter.getFloatTimeDomainData(this.meterBuf);
+    let sum = 0;
+    for (let i = 0; i < this.meterBuf.length; i++) sum += this.meterBuf[i]! * this.meterBuf[i]!;
+    return Math.max(-100, 20 * Math.log10(Math.sqrt(sum / this.meterBuf.length) + 1e-6));
+  }
+
+  /** What each source brings to the mix right now (dBFS over the last 43 ms; -100 when nothing): the track and every voice by id. */
+  levels(): { track: number; vocals: Record<string, number> } {
+    const vocals: Record<string, number> = {};
+    for (const [id, v] of this.vocals) vocals[id] = this.readDb(v.meter);
+    return { track: this.readDb(this.backingMeter), vocals };
   }
 
   get vocalIds(): string[] {

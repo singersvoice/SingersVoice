@@ -11,6 +11,7 @@ import { appSettings, audioSettings, updateApp, updateAudio } from '../state/set
 export function MicStatus(props: { engine: AudioEngine | null; onChange?: () => void }) {
   const info = props.engine?.inputInfo.value ?? null;
   const trim = props.engine?.inputTrimDb.value ?? 0;
+  const fallback = props.engine?.voiceFallback.value ?? null;
   const app = appSettings.value;
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [speakersOut, setSpeakersOut] = useState(false);
@@ -41,6 +42,11 @@ export function MicStatus(props: { engine: AudioEngine | null; onChange?: () => 
           {khz && ` · ${khz}`}
           {trim !== 0 && ` · auto level ${trim > 0 ? '+' : ''}${trim} dB`}
           {info.narrowband && <span class="chip warn">phone-call quality</span>}
+          {fallback && (
+            <span class="chip warn" data-voice-fallback="1" title={fallback}>
+              voice effects off — your voice goes out plain
+            </span>
+          )}
         </span>
         <label class="small row" style="gap:6px">
           <input

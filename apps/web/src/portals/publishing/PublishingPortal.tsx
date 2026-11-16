@@ -18,7 +18,9 @@ import { Empty, Field, Seg, Spinner, Switch } from '../../components/ui.tsx';
 import { api, ApiError, controlConfigured, refreshAccount } from '../../lib/api.ts';
 import { go, href } from '../../lib/nav.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { canPublish } from '../../state/session.ts';
+import { canPublish, profile } from '../../state/session.ts';
+import { appSettings, updateApp } from '../../state/settings.ts';
+import { connectYoutube, ensureHlsStream, forgetYoutube } from '../../lib/youtube.ts';
 import { LiveLinks } from './LiveLinks.tsx';
 import { resolveMeet } from './meetLookup.ts';
 import { Preview } from './Preview.tsx';
@@ -94,15 +96,87 @@ export function PublishingPortal() {
 const usableIngest = (u: string): string => (u && !u.includes('…') ? u : '');
 const looksLikeIngest = (u: string): boolean => /^rtmps?:\/\/\S+/i.test(u.trim());
 
-/** Save a platform's ingest URL / stream key (an empty key keeps the saved one), its live link and its enabled flag. */
-async function saveDestination(kind: DestinationKind, patch: { enabled: boolean; ingestUrl: string; streamKey?: string; watchUrl?: string }): Promise<Destination> {
+/** Save a platform's ingest URL / stream key (an empty key keeps the saved one), its live link, its enabled flag — and whether the app runs it (YouTube connected). */
+async function saveDestination(kind: DestinationKind, patch: { enabled: boolean; ingestUrl: string; streamKey?: string; watchUrl?: string; auto?: boolean }): Promise<Destination> {
   const r = await api.put('PUT /publishing/destinations/:kind', `/publishing/destinations/${kind}`, {
     enabled: patch.enabled,
     ingestUrl: patch.ingestUrl.trim(),
     ...(patch.streamKey?.trim() ? { streamKey: patch.streamKey.trim() } : {}),
     ...(patch.watchUrl !== undefined ? { watchUrl: patch.watchUrl.trim() } : {}),
+    ...(patch.auto !== undefined ? { auto: patch.auto } : {}),
   });
   return r.destination;
+}
+
+/**
+ * YouTube, run by the app: one tap connects the publisher's YouTube channel (the Google screen once more, with the
+ * YouTube permission) and makes the channel's HLS stream key for the service to keep — from then on every show
+ * gets a YouTube broadcast of its own, with its public link, the moment Go live is tapped. Nothing to paste.
+ */
+function YoutubeConnect(props: { dest: Destination; onSaved: (d: Destination) => void }) {
+  const [busy, setBusy] = useState(false);
+  const app = appSettings.value;
+  const signedIn = profile.value?.mode === 'drive';
+  const connect = async () => {
+    setBusy(true);
+    try {
+      const token = await connectYoutube(profile.value?.email);
+      const stream = await ensureHlsStream(token);
+      const d = await saveDestination('youtube', { enabled: true, ingestUrl: props.dest.ingestUrl, streamKey: stream.streamKey, auto: true, watchUrl: '' });
+      toast(`YouTube is connected — the stream key was made for you (ends with ${d.keyHint}); every show gets its own YouTube link when you go live`, 'ok', 9000);
+      props.onSaved(d);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : errorText(e), 'error', 12000);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const disconnect = async () => {
+    setBusy(true);
+    try {
+      forgetYoutube();
+      const d = await saveDestination('youtube', { enabled: props.dest.enabled, ingestUrl: props.dest.ingestUrl, auto: false });
+      toast('YouTube is no longer run by the app — paste a stream key and your live link by hand, or connect again', 'ok', 7000);
+      props.onSaved(d);
+    } catch (e) {
+      toast(errorText(e), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (props.dest.auto)
+    return (
+      <div class="callout ok stack" data-youtube-auto="1" style="gap:8px">
+        <div>
+          <b>YouTube is connected.</b> The stream key was made by the app (ends with {props.dest.keyHint}); every show gets a YouTube broadcast of its own, with its public link, the moment you tap <b>Go live</b> — and the bar reads YouTube's own word on the stream while it runs. Nothing to paste or look up in YouTube Studio.
+        </div>
+        <div class="row" style="gap:10px;flex-wrap:wrap;align-items:center">
+          <label class="small row" style="gap:6px">
+            Broadcasts are
+            <select class="input" value={app.youtubePrivacy} onChange={(e) => updateApp({ youtubePrivacy: (e.currentTarget as HTMLSelectElement).value === 'unlisted' ? 'unlisted' : 'public' })}>
+              <option value="public">public (everyone can find them)</option>
+              <option value="unlisted">unlisted (anyone with the link)</option>
+            </select>
+          </label>
+          <button class="btn ghost sm" disabled={busy} onClick={() => void disconnect()}>
+            Disconnect YouTube
+          </button>
+        </div>
+      </div>
+    );
+  return (
+    <div class="callout stack" data-youtube-connect="1" style="gap:8px">
+      <div>
+        <b>Let the app run YouTube for you.</b> One tap connects your YouTube channel (the Google screen once more, asking to manage your YouTube account): the app makes the HLS stream key, and from then on every show gets its own YouTube broadcast and link when you go live — nothing to paste. {signedIn ? '' : 'Sign in with Google first (Settings).'}
+      </div>
+      <div class="row">
+        <button class="btn accent" disabled={busy || !signedIn} onClick={() => void connect()} data-youtube-connect-button>
+          {busy ? <Spinner /> : <IcCheck />} Connect YouTube
+        </button>
+        <span class="small muted">or set it up by hand below</span>
+      </div>
+    </div>
+  );
 }
 
 /** The live-link field of a platform: the page viewers open to watch you there — a link, or just the channel name. */
@@ -142,11 +216,14 @@ function DestinationSetup(props: { dest: Destination; onSaved: (d: Destination) 
   };
   return (
     <div class="stack" data-dest-setup={props.dest.kind} style="padding:8px 0 4px 0">
-      {props.dest.kind === 'youtube' && (
+      {props.dest.kind === 'youtube' && <YoutubeConnect dest={props.dest} onSaved={props.onSaved} />}
+      {props.dest.kind === 'youtube' && !props.dest.auto && (
         <div class="callout" data-youtube-hls-note>
           <b>Without the RTMP relay, YouTube takes the show over HLS — and that needs a stream key made for HLS.</b> In YouTube Studio → Go live → Stream settings → Stream key, choose <b>Create new stream key</b>, set the <b>streaming protocol to HLS</b>, and paste that key here. A key made for RTMP can be accepted segment by segment and still show nothing in YouTube Studio. Set the latency to <b>Low latency</b> (ultra-low is RTMP only).
         </div>
       )}
+      {!(props.dest.kind === 'youtube' && props.dest.auto) && (
+        <>
       <Field label="Ingest URL (RTMPS)">
         <input class="input mono" value={ingestUrl} placeholder={def.ingestHint} aria-label={`${def.label} ingest URL`} autocomplete="off" spellcheck={false} onInput={(ev) => setIngestUrl((ev.currentTarget as HTMLInputElement).value)} />
       </Field>
@@ -173,6 +250,8 @@ function DestinationSetup(props: { dest: Destination; onSaved: (d: Destination) 
           </button>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -472,7 +551,7 @@ function JobCard(props: { job: PublishJob; dests: Destination[]; onStop?: () => 
           </>
         )}
       </div>
-      {active && <LiveLinks title={j.title} destinations={j.destinations} dests={props.dests} watchPage={j.watchUrl} />}
+      {active && <LiveLinks title={j.title} destinations={j.destinations} dests={props.dests} watchPage={j.watchUrl} links={j.links} />}
       <div class="small">
         {j.events.map((e, i) => (
           <div key={i}>

@@ -35,15 +35,48 @@ export const DESTINATIONS: {
 ];
 
 /**
+ * A YouTube link of any shape the publisher may have copied → the page viewers open, or null when it
+ * is not one of YouTube's: a Studio page (`studio.youtube.com/video/<id>/livestreaming` — the owner's
+ * dashboard, which viewers cannot open), `youtu.be/<id>`, `youtube.com/live/<id>` and `watch?v=<id>`
+ * all become `youtube.com/watch?v=<id>`; a channel (`/@handle`, `/channel/<id>`, `/c/<name>`,
+ * `/user/<name>`) becomes its `/live` page (always the channel's current live stream).
+ */
+export function youtubeWatchUrl(url: string): string | null {
+  const m = /^https?:\/\/(?:www\.|m\.)?([^/?#]+)(\/[^?#]*)?(?:\?([^#]*))?/i.exec(url.trim());
+  if (!m) return null;
+  const host = m[1]!.toLowerCase();
+  const parts = (m[2] ?? '').split('/').filter(Boolean);
+  const query = m[3] ?? '';
+  const id = (x: string | undefined): string | null => (x && /^[A-Za-z0-9_-]{6,64}$/.test(x) ? x : null);
+  const watch = (x: string) => `https://www.youtube.com/watch?v=${x}`;
+  if (host === 'youtu.be') return id(parts[0]) ? watch(parts[0]!) : null;
+  if (host === 'studio.youtube.com') return parts[0] === 'video' && id(parts[1]) ? watch(parts[1]!) : null;
+  if (host !== 'youtube.com') return null;
+  if (parts[0] === 'watch') {
+    const v = /(?:^|&)v=([^&]+)/.exec(query)?.[1];
+    return id(v) ? watch(v!) : null;
+  }
+  if (parts[0] === 'live') return id(parts[1]) ? watch(parts[1]!) : null;
+  if (parts[0]?.startsWith('@') && parts[0].length > 1) return `https://www.youtube.com/${parts[0]}/live`;
+  if ((parts[0] === 'channel' || parts[0] === 'c' || parts[0] === 'user') && parts[1]) return `https://www.youtube.com/${parts[0]}/${parts[1]}/live`;
+  return null;
+}
+
+/**
  * A platform's live link as the publisher typed it → the https page viewers open, '' when empty,
  * null when it is not a link: a bare YouTube handle (`@channel`, or the channel name) becomes its
  * `/live` page (always the channel's current live stream), a bare Twitch channel its page, a bare
- * Facebook page / Instagram name its live page; anything else must be an https URL.
+ * Facebook page / Instagram name its live page; a YouTube link of any shape becomes the page
+ * viewers open (`youtubeWatchUrl`); anything else must be an https URL.
  */
 export function normalizeWatchUrl(kind: DestinationKind, input: string): string | null {
   const v = input.trim();
   if (!v) return '';
-  if (/^https?:\/\/\S+$/i.test(v)) return v.replace(/^http:\/\//i, 'https://');
+  if (/^https?:\/\/\S+$/i.test(v)) {
+    const https = v.replace(/^http:\/\//i, 'https://');
+    if (kind === 'youtube' && /youtu\.?be/i.test(https)) return youtubeWatchUrl(https) ?? https;
+    return https;
+  }
   if (/[\s/?#]/.test(v)) return null;
   const name = v.replace(/^@/, '');
   if (!/^[\w.-]{1,64}$/.test(name)) return null;
@@ -69,6 +102,14 @@ export const fedDestinations = (wanted: DestinationKind[], relay: boolean): Dest
 
 /** YouTube's HLS ingestion endpoint; the stream key goes in `cid`, the file name is appended to `file=`. */
 export const YOUTUBE_HLS_INGEST = 'https://a.upload.youtube.com/http_upload_hls';
+/**
+ * The Google permission that lets the app run the publisher's YouTube channel for them (YouTube Data API v3:
+ * the HLS stream key made once, a broadcast made per show with its public link, the stream's own status
+ * read, the broadcast ended on Stop) — asked for once, under Destinations → Connect YouTube.
+ */
+export const YOUTUBE_SCOPE = 'https://www.googleapis.com/auth/youtube';
+/** The public page of a YouTube broadcast. */
+export const youtubeBroadcastUrl = (broadcastId: string): string => `https://www.youtube.com/watch?v=${broadcastId}`;
 /** Segments kept per job for the in-house portal (the playlist lists them all): a dozen seconds of show. */
 export const LIVE_KEEP = 12;
 /** A live job that has not received a segment for this long is no longer live (the publisher's tab is gone). */
@@ -91,6 +132,8 @@ export interface Destination {
   keyHint: string;
   /** Where viewers watch you on this platform (your channel's live page): the live-link button of a show on air. Absent on the in-house portal (the service makes its watch page). */
   watchUrl?: string;
+  /** YouTube, connected: the app runs the channel through the YouTube API — the key was made by it, each show gets a broadcast and its own link. */
+  auto?: boolean;
   updatedAt: string;
 }
 
@@ -102,6 +145,8 @@ export interface DestinationUpdate {
   label?: string;
   /** The live link (see `normalizeWatchUrl`); omitted to keep the existing one, '' to clear it. */
   watchUrl?: string;
+  /** See `Destination.auto`; omitted to keep the existing value. */
+  auto?: boolean;
 }
 
 export type PublishJobState = 'requested' | 'starting' | 'live' | 'stopping' | 'stopped' | 'failed';
@@ -138,6 +183,10 @@ export interface PublishJob {
   events: { at: string; state: PublishJobState; note: string }[];
   /** Absent on jobs made before browser publishing existed. */
   live?: PublishJobLive;
+  /** The public page of this show on each platform, where the app made it (a YouTube broadcast of its own): the live-link buttons prefer these to the destination's standing link. */
+  links?: Partial<Record<DestinationKind, string>>;
+  /** The YouTube broadcast and stream this show goes out as, when the app made them (ended on Stop; their status read while live). */
+  youtube?: { broadcastId: string; streamId: string };
 }
 
 /** One segment of a live job as the in-house portal lists it. */
@@ -165,6 +214,10 @@ export interface PublishJobRequest {
   destinations: DestinationKind[];
   title: string;
   description: string;
+  /** The public page of this show on a platform where the app made it (see `PublishJob.links`). */
+  links?: Partial<Record<DestinationKind, string>>;
+  /** The YouTube broadcast and stream the app made for this show (see `PublishJob.youtube`). */
+  youtube?: { broadcastId: string; streamId: string };
 }
 
 /** The plans an account can be on. Publishing mode is part of `publisher` (and of a privileged admin account). */

@@ -7,7 +7,7 @@
  * The consent screen must list exactly these scopes and be published ("In production")
  * so any Google account can sign in. See docs/GOOGLE_OAUTH.md.
  */
-import { DRIVE_SCOPES } from '@singersvoice/protocol';
+import { DRIVE_SCOPES, YOUTUBE_SCOPE } from '@singersvoice/protocol';
 
 export const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? '').trim();
 export const GOOGLE_API_KEY = (import.meta.env.VITE_GOOGLE_API_KEY ?? '').trim();
@@ -127,8 +127,19 @@ export function signInError(error?: string, description?: string): string {
  * Request an access token. `prompt: 'consent'` on first link (shows the Drive consent),
  * `''` afterwards (silent re-issue while the Google session is alive; still needs a user gesture on iOS).
  */
-export async function requestToken(opts: { prompt: '' | 'consent' | 'select_account'; hint?: string }): Promise<GoogleToken> {
+/** Whether the publisher connected YouTube (Destinations → Connect YouTube): every token asked for from then on carries the YouTube scope too. */
+export const YOUTUBE_WANTED_KEY = 'sv.youtube';
+export const youtubeWanted = (): boolean => {
+  try {
+    return localStorage.getItem(YOUTUBE_WANTED_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+export async function requestToken(opts: { prompt: '' | 'consent' | 'select_account'; hint?: string; youtube?: boolean }): Promise<GoogleToken> {
   if (!googleConfigured) throw new Error('Google sign-in is not configured (VITE_GOOGLE_CLIENT_ID)');
+  const scopes = opts.youtube || youtubeWanted() ? [...DRIVE_SCOPES, YOUTUBE_SCOPE] : DRIVE_SCOPES;
   // The sign-in window must open from the tap itself: a browser allows a popup only within the
   // user's gesture, and a script download in between is longer than that. The library is loaded
   // when the sign-in screen appears (loadGis there), so here it is normally already in hand; when it
@@ -142,12 +153,15 @@ export async function requestToken(opts: { prompt: '' | 'consent' | 'select_acco
   return new Promise<GoogleToken>((resolve, reject) => {
     const client = gis.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
-      scope: DRIVE_SCOPES.join(' '),
+      scope: scopes.join(' '),
       callback: (r) => {
         if (!r.access_token) return reject(new Error(signInError(r.error, r.error_description)));
         const granted = (r.scope ?? '').split(' ');
         if (!granted.includes('https://www.googleapis.com/auth/drive.file')) {
           return reject(new Error('Drive access was not granted — tick "See, edit, create and delete only the specific Google Drive files you use with this app"'));
+        }
+        if (opts.youtube && !granted.includes(YOUTUBE_SCOPE)) {
+          return reject(new Error('YouTube access was not granted — tick "Manage your YouTube account" on the Google screen'));
         }
         const token = { accessToken: r.access_token, expiresAt: Date.now() + ((r.expires_in ?? 3600) - 60) * 1000, scope: r.scope ?? '' };
         storeToken(token);

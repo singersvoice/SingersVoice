@@ -31,6 +31,8 @@ export interface AppSettings {
   vocalDb: number;
   /** Host: the whole meet is filmed on this device (the show picture with the stage mix) straight into Drive, as one video. */
   recordMeet: boolean;
+  /** Publisher, YouTube connected: who can find the broadcasts the app makes (public: everyone; unlisted: anyone with the link). */
+  youtubePrivacy: 'public' | 'unlisted';
 }
 
 export const APP_DEFAULTS: AppSettings = {
@@ -53,6 +55,7 @@ export const APP_DEFAULTS: AppSettings = {
   trackDb: 0,
   vocalDb: 0,
   recordMeet: true,
+  youtubePrivacy: 'public',
 };
 
 const APP_KEY = 'sv.settings.app';

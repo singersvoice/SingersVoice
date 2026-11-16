@@ -54,6 +54,14 @@ room from a phone come out as two performers of one size, heads level, on one li
 framing setting any more — nobody is bigger than anybody. Ten singers make one even row across the
 stage, two stand big in the middle; the names sit on the riser under each singer.
 
+**What reaches the mix, in numbers.** While you are on stage the strip (and the live stage's bar)
+carries a *mix line*, refreshed every second — *mix: you −18 dB · Team −22 dB · track −20 dB* —
+what each source brings to this device's mix right now, which on the host's device is what the
+audience, the film and the takes get. *You: silent* while you sing means your voice is not reaching
+the mix: the device notices that by itself within three seconds (the microphone sung into, nothing
+coming out of the voice effects) and switches your raw microphone in instead, with *voice effects
+off — your voice goes out plain* on the mic line; reopening the mic tries the effects again.
+
 **Steady, as in a show.** The frame is set once and held, the way a stage camera is framed on a
 seated performer and left alone: a second and a half after your cut-out appears your device settles
 on your frame (one smooth glide from the whole camera picture) and keeps it. Swaying, singing,
@@ -348,6 +356,20 @@ self-hiding bar (destinations, Go live / Stop,
 singers' vocals, backing track in sync, full screen). It shows the singers from the lobby on (*Up
 next: …*), the countdown as an opener, *Paused by the host*, and carries on across every song of
 the event: the show is independent of the song.
+
+**YouTube, run by the app.** Under **Destinations → YouTube** one tap, **Connect YouTube**, lets the
+app run the channel (the Google screen once more, asking to manage your YouTube account): it makes
+the channel's HLS stream key and keeps it on the service, and from then on every show gets a YouTube
+broadcast of its own the moment **Go live** is tapped — made in the meet's name, bound to that
+stream, set to go live by itself when the stream arrives — with its public link
+(`youtube.com/watch?v=…`) as the **YouTube link** button, YouTube's own word on the stream in the bar
+(*YouTube: receiving the stream · going live… / live · stream good / not receiving the stream yet*),
+and the broadcast ended on **Stop publishing**. Nothing is pasted or looked up in YouTube Studio; the
+broadcasts are public (or unlisted, a setting under Destinations). What YouTube refuses comes back in
+plain words (*Live streaming is not enabled on this YouTube channel yet…*). Without connecting, the
+manual way remains: a stream key made for HLS and a live link — and a pasted YouTube link of any
+shape (a Studio dashboard link, youtu.be, a /live link) becomes the page viewers open. The two
+switches this needs in the Google Cloud console are in docs/GOOGLE_OAUTH.md.
 
 **What Publish mode is, in one line.** What goes out to the platforms and the watch page is the
 **show**: the stage picture (every singer seated on it, cut out of their camera, the stage

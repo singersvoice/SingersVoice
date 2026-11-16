@@ -59,6 +59,8 @@ export interface RoomStage {
   still: string[];
   /** My camera, in words (frame rate, the cut-out, a picture standing still), refreshed every second while it is on. */
   cameraLine: string;
+  /** What each source brings to this device's mix (the host's: what the audience, the film and the takes get), in words, refreshed every second: "mix: you −18 · Team −22 · track −20". */
+  mixLine: string;
   /** Make the video link to a performer again from scratch (a plain Reconnect for a picture that stands still). */
   reconnect: (id: string) => void;
 }
@@ -150,6 +152,27 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     const t = setInterval(() => setCameraLine(feed.cameraLine), 1000);
     return () => clearInterval(t);
   }, [camOn, onStage, feed]);
+  // The mix line: what each source brings to this device's mix, once a second while the bus is up — a voice that never reaches the mix is seen here, not in a file afterwards.
+  const [mixLine, setMixLine] = useState('');
+  const stageNames = useRef(new Map<string, string>());
+  stageNames.current = new Map(meet.stage.filter((s) => s.participantId).map((s) => [s.participantId!, s.displayName.split(' ')[0] || 'Singer']));
+  useEffect(() => {
+    if (!onStage) {
+      setMixLine('');
+      return;
+    }
+    const fmt = (db: number) => (db <= -60 ? 'silent' : `${Math.round(db)} dB`);
+    const t = setInterval(() => {
+      const l = show.mixLevels();
+      if (!l) {
+        setMixLine('');
+        return;
+      }
+      const parts = Object.entries(l.vocals).map(([id, db]) => `${id === 'me' ? 'you' : (stageNames.current.get(id) ?? 'singer')} ${fmt(db)}`);
+      setMixLine(`mix: ${parts.join(' · ')} · track ${fmt(l.track)}`);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [onStage, show]);
   // ---- the camera's health: a camera the browser muted or ended, or one frozen on a picture, is restarted — once by itself, then from a tap ----
   const [camHealth, setCamHealth] = useState<FeedHealth>('ok');
   const restarting = useRef<Promise<void> | null>(null);
@@ -345,5 +368,5 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect, cameraLine };
+  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect, cameraLine, mixLine };
 }

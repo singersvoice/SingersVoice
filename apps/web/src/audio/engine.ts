@@ -34,6 +34,10 @@ const LEVEL_QUIET = 0.125; // −18 dBFS
 const LEVEL_HOT = 0.5; // −6 dBFS
 const LEVEL_MAX_DB = 12;
 const LEVEL_MIN_DB = -6;
+/** The voice watch: the processed voice under this RMS (−80 dBFS) while the raw microphone peaks over LEVEL_SINGING is silence… */
+const VOICE_SILENT_RMS = 1e-4;
+/** …and this many readings in a row (100 ms each) of it, the processed voice is given up for the raw microphone. */
+const VOICE_SILENT_READINGS = 30;
 
 export class AudioEngine {
   readonly ctx: AudioContext;
@@ -42,6 +46,18 @@ export class AudioEngine {
   chain: VoxForgeChain | null = null;
   recorder: PcmRecorder | null = null;
   player: BackingPlayer | null = null;
+  /**
+   * The voice as it leaves the engine — after the FX chain (and the take recorder, which passes it
+   * through): the one node the mesh, the stage mix and the monitor take it from. Watched: a voice that
+   * stays silent while the microphone is sung into (a browser's audio worklet gone wrong — a singer
+   * once reached nobody's mix for a whole meet) is replaced by the raw microphone, and `voiceFallback`
+   * says so.
+   */
+  readonly voice: GainNode;
+  readonly voiceFallback = signal<string | null>(null);
+  private voiceMeter: AnalyserNode | null = null;
+  private voiceBuf = new Float32Array(2048);
+  private voiceSilentFor = 0;
   private monitor: GainNode;
   private vocalOut: MediaStreamAudioDestinationNode | null = null;
   private micStream: MediaStream | null = null;
@@ -76,6 +92,8 @@ export class AudioEngine {
     this.monitor = this.ctx.createGain();
     this.monitor.gain.value = 0;
     this.monitor.connect(this.master);
+    this.voice = this.ctx.createGain();
+    this.voice.connect(this.monitor);
     this.trim = this.ctx.createGain();
     this.workletAvailable = hasAudioWorklet();
     this.ready = this.loadWorklets();
@@ -167,11 +185,12 @@ export class AudioEngine {
       if (this.workletAvailable) {
         this.recorder = new PcmRecorder(this.ctx);
         this.chain.output.connect(this.recorder.node);
-        this.recorder.node.connect(this.monitor);
-      } else {
-        this.chain.output.connect(this.monitor);
       }
     }
+    // The processed voice feeds `voice` (a connection already there is left as it is); a fallback from an earlier camera is undone.
+    (this.recorder?.node ?? this.chain.output).connect(this.voice);
+    this.voiceFallback.value = null;
+    this.voiceSilentFor = 0;
     this.micSource.connect(this.trim).connect(this.chain.input);
     this.startLeveller();
     this.micOpen.value = true;
@@ -205,16 +224,23 @@ export class AudioEngine {
     this.micSource.connect(an);
     this.levelAnalyser = an;
     this.levelPeaks = [];
+    if (!this.voiceMeter) {
+      this.voiceMeter = this.ctx.createAnalyser();
+      this.voiceMeter.fftSize = 2048;
+      this.voice.connect(this.voiceMeter);
+    }
     let db = this.inputTrimDb.value;
     let low = 0;
     this.levelTimer = setInterval(() => {
-      if (!this.autoLevel || !this.levelAnalyser) return;
+      if (!this.levelAnalyser) return;
       this.levelAnalyser.getFloatTimeDomainData(this.levelBuf);
       let peak = 0;
       for (let i = 0; i < this.levelBuf.length; i++) {
         const v = Math.abs(this.levelBuf[i]!);
         if (v > peak) peak = v;
       }
+      this.watchVoice(peak);
+      if (!this.autoLevel) return;
       this.levelPeaks.push(peak);
       if (this.levelPeaks.length > 20) this.levelPeaks.shift();
       const recent = Math.max(...this.levelPeaks);
@@ -243,6 +269,33 @@ export class AudioEngine {
     this.levelTimer = undefined;
     this.levelAnalyser?.disconnect();
     this.levelAnalyser = null;
+    this.voiceSilentFor = 0;
+  }
+
+  /**
+   * Ten times a second, beside the leveller: the microphone is being sung into (a raw peak over the singing
+   * floor) yet nothing comes out of the voice — for VOICE_SILENT_READINGS in a row — and the processed voice
+   * is given up: the raw microphone (through the trim) goes out instead, so the singer reaches the mix,
+   * the mesh and the take with a plain voice rather than none. Said on the mic line (`voiceFallback`).
+   */
+  private watchVoice(rawPeak: number): void {
+    if (this.voiceFallback.value || !this.voiceMeter || !this.chain) return;
+    this.voiceMeter.getFloatTimeDomainData(this.voiceBuf);
+    let sum = 0;
+    for (let i = 0; i < this.voiceBuf.length; i++) sum += this.voiceBuf[i]! * this.voiceBuf[i]!;
+    const voiceRms = Math.sqrt(sum / this.voiceBuf.length);
+    if (rawPeak > LEVEL_SINGING && voiceRms < VOICE_SILENT_RMS) this.voiceSilentFor++;
+    else this.voiceSilentFor = 0;
+    if (this.voiceSilentFor < VOICE_SILENT_READINGS) return;
+    const processed = this.recorder?.node ?? this.chain.output;
+    try {
+      processed.disconnect(this.voice);
+    } catch {
+      /* not connected */
+    }
+    this.trim.connect(this.voice);
+    this.voiceFallback.value = 'Voice effects are off: the browser stopped processing your voice, so it goes out plain (reopen the mic to try the effects again)';
+    console.warn('voice: the processed voice stayed silent while the microphone was sung into — the raw microphone goes out instead');
   }
 
   applyFx(p: VoxForgeParams): void {
@@ -258,7 +311,7 @@ export class AudioEngine {
     if (!this.chain) return null;
     if (!this.vocalOut) {
       this.vocalOut = this.ctx.createMediaStreamDestination();
-      (this.recorder?.node ?? this.chain.output).connect(this.vocalOut);
+      this.voice.connect(this.vocalOut);
     }
     return this.vocalOut.stream;
   }

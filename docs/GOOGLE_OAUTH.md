@@ -47,6 +47,33 @@ Without a client ID the app still runs fully in **device mode** (IndexedDB), so 
    `Temp`, `Config`, `Backgrounds`, `Exports` — every file carries `appProperties` (`svType`, `svId`, …).
 4. When the token expires a **Reconnect Drive** button appears in the top bar (a tap, no re-consent).
 
+## 3a. YouTube run by the app (Publishing → Destinations → Connect YouTube)
+
+A publisher who connects YouTube lets the app run their channel for them through the YouTube Data API v3:
+the HLS stream key is made once, every show gets a YouTube broadcast of its own with its public link
+(`youtube.com/watch?v=…`) the moment they tap **Go live**, the show view reads YouTube's own word on the
+stream while it runs, and the broadcast is ended on **Stop publishing**. Nothing is pasted or looked up in
+YouTube Studio. Two switches in the same Google Cloud project make it possible (once, by whoever owns the
+project):
+
+1. **APIs & Services → Library → "YouTube Data API v3" → Enable.** Until it is on, Connect YouTube says
+   *The YouTube Data API is not enabled for this app yet*.
+2. **OAuth consent screen → Data access (Scopes) → Add or remove scopes → tick
+   `https://www.googleapis.com/auth/youtube`** ("Manage your YouTube account") → Update → Save. The
+   app asks for this scope only when the publisher taps Connect YouTube (incremental consent); Drive
+   sign-in alone never asks for it. It is a *sensitive* scope: with the app published and not yet
+   verified by Google, the consent screen shows *"Google hasn't verified this app"* — the publisher
+   clicks **Advanced → Go to SingersVoice (unsafe)** once; up to 100 users may do so. (Google's
+   verification review removes that screen; it is optional for a channel's own publisher.)
+
+The publisher's channel itself must have live streaming enabled (YouTube Studio → Create → Go live;
+YouTube asks for a phone verification and takes up to 24 hours the first time) — otherwise YouTube
+answers *liveStreamingNotEnabled* and the show view says so in those words.
+
+The token the app holds carries the YouTube scope from then on (`sv.youtube` in local storage marks the
+account as connected; **Disconnect YouTube** under Destinations forgets it). Broadcasts are made
+**public** by default — the setting under Destinations switches them to unlisted.
+
 ## 4. Native iOS / Android apps (later)
 
 The PWA already runs installed on both platforms. If/when native shells (Capacitor) are added they get their own

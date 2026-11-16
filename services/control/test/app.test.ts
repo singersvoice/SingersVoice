@@ -468,14 +468,32 @@ describe('sv-control API', () => {
     expect(listed.destinations.find((d) => d.kind === 'youtube')?.watchUrl).toBe('https://www.youtube.com/@AliceSings/live');
     const cleared = await json<{ destination: { watchUrl?: string } }>(await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, watchUrl: '' }) }));
     expect(cleared.destination.watchUrl).toBeUndefined();
+    // A YouTube link of any shape becomes the page viewers open — a Studio dashboard link above all.
+    const studio = await json<{ destination: { watchUrl?: string } }>(await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, watchUrl: 'https://studio.youtube.com/video/FTUbrBKUSvY/livestreaming' }) }));
+    expect(studio.destination.watchUrl).toBe('https://www.youtube.com/watch?v=FTUbrBKUSvY');
+    // YouTube run by the app: `auto` is kept across saves until set off.
+    const auto = await json<{ destination: { auto?: boolean; keyHint: string } }>(await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, streamKey: 'made-by-the-app-5678', auto: true, watchUrl: '' }) }));
+    expect(auto.destination.auto).toBe(true);
+    expect(auto.destination.keyHint).toBe('…5678');
+    expect((await json<{ destination: { auto?: boolean } }>(await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true }) }))).destination.auto).toBe(true);
+    expect((await json<{ destination: { auto?: boolean } }>(await app.request('/publishing/destinations/youtube', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ enabled: true, auto: false }) }))).destination.auto).toBeUndefined();
     const meet = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Show' }) }));
     const bad = await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: meet.meet.meetId, destinations: ['twitch'] }) });
     expect(bad.status).toBe(400);
-    const job = await json<{ job: { state: string; watchUrl: string | null } }>(
+    const job = await json<{ job: { jobId: string; state: string; watchUrl: string | null } }>(
       await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: meet.meet.meetId, destinations: ['youtube', 'inhouse'], title: 'Show' }) }),
     );
     expect(job.job.state).toBe('requested');
     expect(job.job.watchUrl).toBe(`/watch/${meet.meet.meetId}`);
+    await app.request(`/publishing/jobs/${job.job.jobId}/stop`, { method: 'POST', headers: as('alice') });
+    // The public pages the app made for a show (a YouTube broadcast of its own) and the broadcast to end on Stop ride on the job; nonsense is left off.
+    const withLinks = await json<{ job: { links?: Record<string, string>; youtube?: { broadcastId: string; streamId: string } } }>(
+      await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: meet.meet.meetId, destinations: ['youtube', 'inhouse'], title: 'Show', links: { youtube: 'https://www.youtube.com/watch?v=FTUbrBKUSvY', twitch: 'https://twitch.tv/x', inhouse: 'javascript:alert(1)' }, youtube: { broadcastId: 'FTUbrBKUSvY', streamId: 'hls1' } }) }),
+    );
+    expect(withLinks.job.links).toEqual({ youtube: 'https://www.youtube.com/watch?v=FTUbrBKUSvY' }); // only the show's own destinations, only https
+    expect(withLinks.job.youtube).toEqual({ broadcastId: 'FTUbrBKUSvY', streamId: 'hls1' });
+    const listedJobs = await json<{ jobs: { links?: Record<string, string>; youtube?: unknown }[] }>(await app.request('/publishing/jobs', { headers: as('alice') }));
+    expect(listedJobs.jobs.some((j) => j.links?.youtube === 'https://www.youtube.com/watch?v=FTUbrBKUSvY' && j.youtube)).toBe(true); // kept, listed
     // A privileged account that is not the host publishes a meet only once it has joined it (its show view).
     const bobs = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('bob'), body: JSON.stringify({ title: "Bob's meet" }) }));
     const notIn = await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: bobs.meet.meetId, destinations: ['inhouse'] }) });
