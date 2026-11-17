@@ -21,6 +21,7 @@ import {
   performanceVideoName,
   safeName,
   type DriveFolderKey,
+  type PerformanceChapter,
   type PerformanceManifest,
   type SvFileType,
   type TrackPackageV2,
@@ -599,7 +600,16 @@ export class DriveProvider implements StorageProvider {
       svExpiresAt: manifest.expiresAt ?? '',
       svMedia: media,
       svShared: shared,
+      // A chapter of a filmed event: the Performances list groups the chapters of one filming and orders them.
+      ...(manifest.chapter ? { svEvent: manifest.chapter.eventId, svEventTitle: manifest.chapter.eventTitle.slice(0, 40), svChapter: String(manifest.chapter.index), svChapterKind: manifest.chapter.kind, svChapterAt: manifest.chapter.startedAt, svChapterMs: String(manifest.chapter.startMs), svChapterSong: manifest.chapter.trackTitle.slice(0, 60) } : {}),
     };
+  }
+
+  /** The chapter a file's properties describe (the manifest in its description has the whole of it). */
+  private chapterOf(p: Record<string, string>): PerformanceChapter | undefined {
+    if (!p.svEvent) return undefined;
+    const kind = p.svChapterKind === 'song' || p.svChapterKind === 'pause' || p.svChapterKind === 'stage' ? p.svChapterKind : 'stage';
+    return { eventId: p.svEvent, eventTitle: p.svEventTitle ?? '', index: Number(p.svChapter ?? 0), kind, trackId: p[APP_PROPS.trackId] ?? '', trackTitle: p.svChapterSong ?? '', songEpoch: 0, startedAt: p.svChapterAt ?? p.svCreatedAt ?? '', startMs: Number(p.svChapterMs ?? 0) };
   }
 
   private perfSummary(f: DriveFile): PerformanceSummary {
@@ -624,6 +634,7 @@ export class DriveProvider implements StorageProvider {
       videoLink: video,
       hasVideo: Boolean(video),
       shared: p.svShared === '1',
+      ...(this.chapterOf(p) ? { chapter: this.chapterOf(p) } : {}),
     };
   }
 

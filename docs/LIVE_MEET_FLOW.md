@@ -154,7 +154,8 @@ receiving side); the cure on their side is the restart above, by itself or from 
 | Option | Who | What it does |
 | --- | --- | --- |
 | **Turn my mic on** | singers | The mic opens by itself the moment you are seated (talk-back, your vocal in the song); this button only appears when the browser wanted a tap first (a permission not given yet, or iOS with the camera on) — one tap opens it. |
-| **Film the whole meet into my Drive** | host | On by default. From the moment the host's mic is open on stage until **End meet** (or the host steps off), the host's device records the whole meet as **one video** — the show picture (everyone on stage over the background, no lyrics) with the stage mix (the songs, the talk between them) — and writes it into their Drive *as it goes* (ten seconds at a time, a resumable upload): a two-hour meet never has to fit in memory, and a tab that dies loses seconds, not the meet (the next start of the app completes the file with what Drive already holds). The switch shows what it is doing (*Filming · 12:34 · 210 MB in Drive · sound −18 dB*) — the sound figure is what reaches the film right now, and *NO SOUND reaching the film* is said on the spot, never discovered afterwards. The finished film is a performance of the meet, **Full meet**, listed on the ended screen and under Performances, shared with everyone who was in the meet like a song's show. **Download** on a performance gives the files themselves (the show video; a take's vocal too) and nothing else — the details stay with the performance. |
+| **Film the whole meet into my Drive — a chapter per song, pause and stretch of stage** | host | On by default. From the moment the host's mic is open on stage until **End meet** (or the host steps off), the host's device records the whole meet — the show picture (everyone on stage over the background, no lyrics) with the stage mix (the songs, the talk between them) — and writes it into their Drive *as it goes* (ten seconds at a time, a resumable upload): a two-hour meet never has to fit in memory, and a tab that dies loses seconds, not the meet (the next start of the app completes the file with what Drive already holds). **Nothing a singer does to the song stops it**: Play, Pause, Stop, Restart and a seek are all inside the film. The film is **cut into chapters** where the stage goes: a new chapter whenever a song starts (at its kickstart, so the chapter begins where the song begins), another for every restart, resume or jump (*Ammo (continued at 1:12)*), one for every pause (*Paused — Ammo*), one for the stage between songs (*On stage*) — each a timestamped file of its own in Drive (`Full meet 03 · Ammo`), never merged, never overwritten, so every song can be played, found and shared on its own; a chapter longer than ten minutes carries on in parts. The switch shows what it is doing (*Filming · 12:34 · 210 MB in Drive · sound −18 dB · chapter 3 · Ammo 2:10 · 2 saved*) — the sound figure is what reaches the film right now, and *NO SOUND reaching the film* is said on the spot, never discovered afterwards. The chapters are performances of the meet, **Full meet 01, 02, …**, listed in order on the ended screen and, under Performances, as one filming with its chapters (**Play all** plays them in turn), shared with everyone who was in the meet like a song's show. **Download** on a performance gives the files themselves (the show video; a take's vocal too) and nothing else — the details stay with the performance. |
+| **Instrument** (a tick beside the mic, on the stage's mic status and in Settings → Audio) | any singer | A second input for an instrument — a guitar, keys, a violin on a **USB audio interface** beside the microphone: tick *Instrument*, pick the interface's input from the list, set its level (3 dB steps). It opens with the mic and is summed into that singer's sound, so it goes wherever the voice goes — the other singers, the take, the stage mix, the film, the broadcast — without the vocal effects or the auto-level (a line input: no echo cancellation, no noise suppression, no automatic gain; an interface's stereo pair is folded to mono). Unplugged, the mic status says so; not on iPhone or iPad, where Safari keeps one capture per page. |
 | **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS) if it is not open yet, decodes the current song, marks you *ready*. Shown once there is a song (and no choice open); ready resets whenever another song comes up. Under it the **Mic** line says what the microphone really gives: its name, its sample rate, the automatic level — and warns in red when it is a *phone-call quality* line (a Bluetooth headset's mic: 8–16 kHz, thin and muffled), with a menu to sing into another microphone; **I'm on speakers** turns echo cancellation on (only needed when the track plays out of speakers; with headphones it stays off for the cleanest voice — a hint appears when the sound is going out through speakers). |
 | **Start the song (8 s count-in)** | host, singers | Needs a song on the stage and no choice open (*Several songs are picked — choose one on the song card first*). Whoever taps it is made ready on the way (mic, track) if not yet; every device starts the backing track at the same server instant (the GMT kickstart), and every other singer on stage goes to the singing screen and joins from the count-in without a tap — mic open or not yet (it opens on the way). A singer whose browser insisted on a tap for the mic sees **Join the song** on the singing screen and starts mid-song with that tap. |
 | **End the song** (lobby, while a song runs) | host, singers | Ends the song for everyone; a song put forward during it comes up (several: the choice card). |
@@ -339,7 +340,7 @@ panel; Performances deletes an opened take. A meet's
 performance is also shared, from the host's Drive, with each singer's Google account (it shows up in
 their Drive's *Shared with me*).
 
-## 6 · Publishing (the Publisher plan, or an admin) — its own process
+## 6 · Publishing (club owners with a year, or a super admin) — its own process
 
 `/publishing`: **Publish a meet** (pick a meet you host or joined, or any by link/code; switch on
 the destinations — a platform that has no stream key yet opens its setup right there: ingest URL
@@ -381,11 +382,15 @@ background, the names on the riser — no lyrics, no controls) with the **whole 
 — the backing track and every singer's voice, blended on the publisher bus. And **the same thing
 is kept**: from *Go live* to *Stop publishing* the show view films exactly what it sends — the same
 picture, the same bus — into the publisher's own Drive as **Broadcast** (Performances → *meet ·
-Broadcast*), so the stream and the file are one and the same. Two films can exist of one meet, and
+Broadcast*), cut into the same **chapters** as the host's film (a chapter per song, restart, pause
+and stretch of stage, each its own timestamped file), so the stream and the files are one and the
+same and every song of the broadcast is playable on its own. The stream and the footage run from
+*Go live* to *Stop publishing* and nothing a singer does to the song — Play, Pause, Stop, Restart —
+interrupts either. Two films can exist of one meet, and
 they are different things: the host's **Full meet** (section 5a — the host's device, the stage mix
 as the audience in the room hears it, songs and talk, from the host's mic opening to *End meet*)
 and the publisher's **Broadcast** (the show, as it was streamed). Both say on their line, while they
-run, what sound reaches them.
+run, what sound reaches them and which chapter they are in.
 
 **The broadcast sound.** Publishing collects the whole song: every singer's vocal (after their
 own FX — the presets a singer picks are theirs, kept on their device until they change them)
@@ -449,9 +454,9 @@ the bar says *footage to your Drive · 1:23 · 210 MB · sound −20 dB* while i
 is what reaches the footage — the same bus the stream carries — and *NO SOUND* is said on the spot)
 and *footage saved to your Drive · 1:23* when the broadcast stops. It is listed under the publisher's **Performances** as
 **Broadcast** (*meet · Broadcast*, date, length, who was on stage), with the video; nothing is
-asked. The host's own *Full meet* film is a different file in the host's Drive (the stage mix,
-songs and talk); the footage is what went out. It needs the publisher's Google sign-in (the
-Publisher plan, or an admin): in the developer preview it stays on the device, and the bar says so. What a browser needs: WebCodecs (Chrome, Edge, Safari 17+, Firefox 130+) and an AAC encoder
+asked — as chapters, like the host's film. The host's own *Full meet* chapters are different files in the host's Drive (the stage mix,
+songs and talk); the footage is what went out. It needs the publisher's Google sign-in (a club
+owner with a year, or a super admin): in the developer preview it stays on the device, and the bar says so. What a browser needs: WebCodecs (Chrome, Edge, Safari 17+, Firefox 130+) and an AAC encoder
 for sound — Windows, macOS, iOS and Android have one; Chrome on Linux and Firefox do not and go
 out **video only** (the bar says so; the audience then hears the stage mix for sound).
 
@@ -480,7 +485,7 @@ page keeps playing throughout. Without a relay, YouTube keeps working through HL
 | Song transport | kickstart, pause/resume/restart, takes | the current song being loadable on each device |
 | Audience | the show (when on air) or the stage, hearing the stage, chat, asking to sing | the meet snapshot; the publisher's segments; the host's mix batches (falls back to the backing track alone) |
 | Publishing show / Preview | the broadcast picture, jobs | the meet's slot list + the performers' video |
-| The film of the meet | one video of the whole meet in the host's Drive | the host's device being on stage with its mic open (the stage's video and sound reach it only there) |
+| The film of the meet | the whole meet in the host's Drive, a chapter (file) per song, pause and stretch of stage | the host's device being on stage with its mic open (the stage's video and sound reach it only there) |
 | RTMP relay | the RTMP streams of a job | the service forwarding segments; the saved keys |
 
 Each of these can fail or change without the others noticing: a song that one device cannot load

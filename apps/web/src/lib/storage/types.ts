@@ -1,4 +1,4 @@
-import type { PerformanceManifest, TrackPackageV2 } from '@singersvoice/protocol';
+import type { PerformanceChapter, PerformanceManifest, TrackPackageV2 } from '@singersvoice/protocol';
 
 export type ProviderKind = 'drive' | 'local';
 
@@ -45,6 +45,8 @@ export interface PerformanceSummary {
   hasVideo: boolean;
   /** Shared anyone-with-the-link (Drive). */
   shared?: boolean;
+  /** A chapter of a filmed event (the film of a meet, the broadcast's footage): which event, which chapter, what kind. */
+  chapter?: PerformanceChapter;
 }
 
 export interface LoadedPerformance {

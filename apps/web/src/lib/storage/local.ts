@@ -100,6 +100,7 @@ export class LocalProvider implements StorageProvider {
         expiresAt: r.manifest.expiresAt,
         ref: r.manifest.performanceId,
         hasVideo: Boolean(r.video),
+        ...(r.manifest.chapter ? { chapter: r.manifest.chapter } : {}),
       }))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
@@ -128,6 +129,7 @@ export class LocalProvider implements StorageProvider {
       expiresAt: manifest.expiresAt,
       ref: manifest.performanceId,
       hasVideo: Boolean(files.video),
+      ...(manifest.chapter ? { chapter: manifest.chapter } : {}),
     };
   }
 
@@ -150,6 +152,7 @@ export class LocalProvider implements StorageProvider {
       },
       error: null,
       async finish(final) {
+        if (!bytes) throw new Error('Nothing was recorded');
         const video = new Blob(pieces, { type: mimeType });
         const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
         const done: PerformanceManifest = { ...manifest, durationMs: final.durationMs, files: [{ name: `video.${ext}`, mimeType, size: video.size, sha256: '' }] };

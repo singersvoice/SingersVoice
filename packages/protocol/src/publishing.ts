@@ -12,6 +12,8 @@
  * each RTMP target — YouTube included, at its ultra-low latency; without a relay those three stay
  * queued and YouTube runs through HLS ingestion (half a minute behind).
  */
+import type { MediaPermission, UserRole, UserSubscription } from './roles.ts';
+
 export type DestinationKind = 'youtube' | 'facebook' | 'instagram' | 'twitch' | 'inhouse';
 
 export const DESTINATIONS: {
@@ -220,7 +222,7 @@ export interface PublishJobRequest {
   youtube?: { broadcastId: string; streamId: string };
 }
 
-/** The plans an account can be on. Publishing mode is part of `publisher` (and of a privileged admin account). */
+/** The plans an account can be on. `publisher` is the club owner's subscription (see roles.ts); Publishing mode needs the club_owner role with it active, or a super admin. */
 export type PlanId = 'free' | 'publisher';
 
 /** Account record kept in the SVT DB (name/picture mirror the Google profile). */
@@ -229,15 +231,37 @@ export interface UserRecord {
   email: string;
   name: string;
   picture: string;
-  /** An admin: Publishing mode without a plan, and the right to grant plans. The first account ever seen is one. */
+  /** The account's role (roles.ts): what it may send, record and open. */
+  role: UserRole;
+  /** The club owner's yearly subscription (null when none was ever granted). */
+  subscription: UserSubscription | null;
+  /** What this account may send and record of itself (from the role). */
+  media: MediaPermission;
+  /** A super admin (kept for older clients: `role === 'super_admin'`). */
   privileged: boolean;
+  /** `publisher` while a subscription row exists (older clients); the role and `subscription` are the truth. */
   plan: PlanId;
-  /** When the plan lapses unless renewed (null = no end), ISO. */
+  /** The subscription's expiry (older clients), ISO or null. */
   planUntil: string | null;
-  /** Publishing mode is open to this account: privileged, or on an active Publisher plan. */
+  /** Publishing mode is open to this account right now: a super admin, or a club owner whose subscription is active. */
   canPublish: boolean;
+  /** Why it is closed, in words ('' when open). */
+  publishingNote: string;
   createdAt: string;
   lastSeenAt: string;
+}
+
+/** The Admin page: everyone with an account, newest first, with their role and subscription. */
+export interface AdminUsersResponse {
+  users: UserRecord[];
+  total: number;
+}
+
+/** A Super Admin's change to one account: its role, and/or what happens to its subscription. */
+export interface AdminUserUpdate {
+  role?: UserRole;
+  /** grant: a year from now (or from `startedAt`); renew: a year on from the current expiry (or from now when it has passed); set: the dates given; revoke: closed now. */
+  subscription?: { action: 'grant' | 'renew' | 'set' | 'revoke'; startedAt?: string; expiresAt?: string | null };
 }
 
 /** `GET /billing`: where this account stands and what the Publisher plan costs. */

@@ -1,7 +1,9 @@
+import { roleTitle } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { BackgroundPicker } from '../components/BackgroundPicker.tsx';
 import { FxPanel } from '../components/FxPanel.tsx';
 import { IcDrive } from '../components/icons.tsx';
+import { dbLabel, INSTRUMENT_LEVELS } from '../components/MicStatus.tsx';
 import { Page } from '../components/Shell.tsx';
 import { Field, Seg, Switch } from '../components/ui.tsx';
 import { googleConfigured, loadGis } from '../lib/google.ts';
@@ -9,7 +11,7 @@ import { idb, STORES } from '../lib/idb.ts';
 import { asset, go, href } from '../lib/nav.ts';
 import { bytes, isStandalone, platformName } from '../lib/platform.ts';
 import { errorText, toast } from '../lib/toast.ts';
-import { isDrive, plan, privileged, profile, provider, signInWithGoogle, signOut, withProvider } from '../state/session.ts';
+import { canPublish, isDrive, isSuperAdmin, media, profile, provider, role, signInWithGoogle, signOut, withProvider } from '../state/session.ts';
 import { checkControl, controlStatus, controlUrl, controlVersion, refreshAccount, setControlUrl } from '../lib/api.ts';
 import { appSettings, audioSettings, pullSettings, updateApp, updateAudio } from '../state/settings.ts';
 
@@ -133,11 +135,16 @@ export function Settings() {
             <span class={`chip ${controlStatus.value === 'online' ? 'ok' : controlStatus.value === 'unconfigured' ? '' : 'warn'}`}>
               {controlStatus.value === 'online' ? `online${controlVersion.value ? ` · v${controlVersion.value}` : ''}` : controlStatus.value === 'checking' ? 'checking…' : controlStatus.value === 'offline' ? 'unreachable' : 'not configured'}
             </span>
-            {privileged.value && <span class="chip ok">admin</span>}
-            <span class={`chip ${plan.value === 'publisher' ? 'ok' : ''}`}>{plan.value === 'publisher' ? 'Publisher plan' : 'Free plan'}</span>
+            <span class={`chip ${role.value === 'super_admin' || canPublish.value ? 'ok' : ''}`}>{roleTitle(role.value)}</span>
+            {role.value === 'club_owner' && <span class={`chip ${canPublish.value ? 'ok' : 'warn'}`}>{canPublish.value ? 'subscription active' : 'subscription closed'}</span>}
             <a class="btn sm" href={href('/plans')}>
-              Plans
+              Account & plan
             </a>
+            {isSuperAdmin.value && (
+              <a class="btn sm" href={href('/admin')}>
+                Admin
+              </a>
+            )}
             <a class="btn sm" href={href('/publishing')}>
               Publishing portal
             </a>
@@ -180,6 +187,30 @@ export function Settings() {
             </select>
           </Field>
           <Switch checked={app.echoCancellation} onChange={(v) => updateApp({ echoCancellation: v })} label="Echo cancellation" hint="Off = cleanest vocal (use headphones). On = speakers without headphones, lower quality." />
+          <Switch checked={app.instrumentOn} onChange={(v) => updateApp({ instrumentOn: v })} label="Instrument" hint="A second input — a guitar, keys, a violin on a USB audio interface — mixed into your sound on stage, in the recording and on the stream. Not on iPhone or iPad (one capture per page)." />
+          {app.instrumentOn && (
+            <Field label="Instrument input (USB interface)" hint="Plug the interface in first; it is listed with the microphones.">
+              <select class="input" value={app.instrumentDeviceId} data-instrument-input onChange={(e) => updateApp({ instrumentDeviceId: (e.currentTarget as HTMLSelectElement).value })}>
+                <option value="">Pick the USB input…</option>
+                {mics.map((m) => (
+                  <option key={m.deviceId} value={m.deviceId}>
+                    {m.label || `Input ${m.deviceId.slice(0, 6)}`}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          {app.instrumentOn && (
+            <Field label="Instrument level">
+              <select class="input" value={String(app.instrumentDb)} data-instrument-level onChange={(e) => updateApp({ instrumentDb: Number((e.currentTarget as HTMLSelectElement).value) })}>
+                {INSTRUMENT_LEVELS.map((db) => (
+                  <option key={db} value={String(db)}>
+                    {dbLabel(db)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <Switch checked={audio.monitor} onChange={(v) => updateAudio({ monitor: v })} label="Hear myself while singing" hint="Headphones only." />
           <Field label={`Backing level in your ears ${Math.round(audio.backingGain * 100)}%`} hint="Only what you hear while singing. The show, the recording and the audience get the track at its own balance (Track / Vocal volume on the stage).">
             <input type="range" min={0} max={1} step={0.01} value={audio.backingGain} onInput={(e) => updateAudio({ backingGain: Number((e.currentTarget as HTMLInputElement).value) })} />
@@ -194,7 +225,7 @@ export function Settings() {
 
         <section class="card stack">
           <h2>Camera</h2>
-          <Switch checked={app.cameraOn} onChange={(v) => updateApp({ cameraOn: v })} label="Camera on stage" />
+          <Switch checked={app.cameraOn && media.value === 'dual'} onChange={(v) => updateApp({ cameraOn: v })} label={media.value === 'dual' ? 'Camera on stage' : 'Camera on stage (your account is audio only — the SingersVoice admin can change that)'} disabled={media.value !== 'dual'} />
           <Field label="Camera device">
             <select class="input" value={app.cameraDeviceId} onChange={(e) => updateApp({ cameraDeviceId: (e.currentTarget as HTMLSelectElement).value })}>
               <option value="">Auto (front camera)</option>

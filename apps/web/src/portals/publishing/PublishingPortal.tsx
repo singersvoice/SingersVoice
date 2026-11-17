@@ -18,7 +18,7 @@ import { Empty, Field, Seg, Spinner, Switch } from '../../components/ui.tsx';
 import { api, ApiError, controlConfigured, refreshAccount } from '../../lib/api.ts';
 import { go, href } from '../../lib/nav.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { canPublish, profile } from '../../state/session.ts';
+import { canPublish, profile, publishingNote } from '../../state/session.ts';
 import { appSettings, updateApp } from '../../state/settings.ts';
 import { connectYoutube, ensureHlsStream, forgetYoutube } from '../../lib/youtube.ts';
 import { LiveLinks } from './LiveLinks.tsx';
@@ -56,9 +56,9 @@ export function PublishingPortal() {
               <Spinner /> Checking your account…
             </div>
           )}
-          <Empty title="Publishing mode is part of the Publisher plan" body="Streaming meets to YouTube and the in-house watch page — the show view, destinations, going live — is for Publisher subscribers. Singing, hosting and joining meets stay free.">
+          <Empty title="Publishing mode is for club owners" body={`${publishingNote.value || 'Streaming meets to YouTube and the in-house watch page — the show view, destinations, going live — is for club owners with an active yearly subscription, and for the SingersVoice admins.'} Singing, hosting and joining meets stay open to everyone.`}>
             <a class="btn primary" href={href('/plans')}>
-              See the Publisher plan
+              Your account and plan
             </a>
             <a class="btn" href={href('/meets')}>
               Back to Live Meets

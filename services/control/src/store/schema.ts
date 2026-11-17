@@ -127,3 +127,16 @@ CREATE TABLE IF NOT EXISTS live_segments (
   PRIMARY KEY (job_id, seq)
 );
 `;
+
+/**
+ * Columns added after the first release — put on tables that exist already (`CREATE TABLE IF NOT EXISTS`
+ * leaves an existing table as it was): checked and added one by one at startup (`PRAGMA table_info`).
+ *   users.role                 — the account's role (roles.ts); a privileged row becomes a super admin
+ *   subscriptions.started_at   — when the club owner's year started
+ *   subscriptions.status       — active / revoked (expired is a matter of the date)
+ */
+export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string; after?: string }[] = [
+  { table: 'users', column: 'role', ddl: "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'dual'", after: "UPDATE users SET role='super_admin' WHERE privileged=1" },
+  { table: 'subscriptions', column: 'started_at', ddl: 'ALTER TABLE subscriptions ADD COLUMN started_at TEXT' },
+  { table: 'subscriptions', column: 'status', ddl: "ALTER TABLE subscriptions ADD COLUMN status TEXT NOT NULL DEFAULT 'active'", after: "UPDATE users SET role='club_owner' WHERE role='dual' AND user_id IN (SELECT user_id FROM subscriptions WHERE plan='publisher')" },
+];

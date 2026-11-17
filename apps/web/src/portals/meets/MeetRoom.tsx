@@ -25,7 +25,7 @@ import { MixBalance } from '../../components/MixBalance.tsx';
 import { audienceLine } from './audience.ts';
 import { Page } from '../../components/Shell.tsx';
 import { Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
-import { clock, controlConfigured, serverNow } from '../../lib/api.ts';
+import { clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
 import { shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
 import { isIOS, keepAwake } from '../../lib/platform.ts';
@@ -62,6 +62,7 @@ export function MeetRoom(props: { id: string }) {
 
   useEffect(() => {
     if (!controlConfigured.value) return;
+    void refreshAccount(); // the account's role as it stands (audio only, dual): the room applies it from the start
     void session.join('audience').catch(() => undefined);
     return () => {
       // Unmounted = you left the meet (Leave, another meet, sign-out): free the slot right away.
@@ -756,17 +757,17 @@ function MeetFilmSwitch(props: { film: MeetRecorder; onStage: boolean }) {
   const hint = !on
     ? 'Off: nothing of this meet is kept as one video'
     : s.recording
-      ? `Filming · ${formatMs(s.seconds * 1000)} · ${mb(s.bytes)}${s.stored < s.bytes ? ` (${mb(s.stored)} in Drive)` : ' in Drive'} · ${filmSound(s)}${s.note ? ` · ${s.note}` : ''}`
+      ? `Filming · ${formatMs(s.seconds * 1000)} · ${mb(s.bytes)}${s.stored < s.bytes ? ` (${mb(s.stored)} in Drive)` : ' in Drive'} · ${filmSound(s)}${s.chapter ? ` · chapter ${s.chapter.index} ${s.chapter.kind === 'song' ? '♪' : s.chapter.kind === 'pause' ? '⏸' : '▪'} ${s.chapter.title} ${formatMs(s.chapter.seconds * 1000)}` : ''}${s.chapters ? ` · ${s.chapters} saved` : ''}${s.note ? ` · ${s.note}` : ''}`
       : s.saved
-        ? `Saved: ${s.saved.trackTitle} · ${formatMs(s.saved.durationMs)}`
+        ? `Saved: ${s.chapters} chapter${s.chapters === 1 ? '' : 's'} (the last: ${s.saved.trackTitle} · ${formatMs(s.saved.durationMs)})`
         : s.note
           ? s.note
           : props.onStage
             ? 'Starts with your mic — the show picture and the stage mix, as the audience sees and hears it, into your Drive as it happens'
             : 'Films while you are on stage: the show picture and the stage mix, into your Drive as it happens';
   return (
-    <div data-meet-film={s.recording ? 'on' : on ? 'armed' : 'off'} data-film-seconds={s.seconds} data-film-level={Math.round(s.level)} data-film-heard={s.heard ? '1' : '0'}>
-      <Switch checked={on} onChange={(v) => updateApp({ recordMeet: v })} label="Film the whole meet into my Drive" hint={hint} />
+    <div data-meet-film={s.recording ? 'on' : on ? 'armed' : 'off'} data-film-seconds={s.seconds} data-film-level={Math.round(s.level)} data-film-heard={s.heard ? '1' : '0'} data-film-chapter={s.chapter?.index ?? 0} data-film-chapter-kind={s.chapter?.kind ?? ''} data-film-chapters={s.chapters}>
+      <Switch checked={on} onChange={(v) => updateApp({ recordMeet: v })} label="Film the whole meet into my Drive — a chapter per song, pause and stretch of stage" hint={hint} />
     </div>
   );
 }
@@ -816,7 +817,8 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
           <IcUsers size={14} /> {n} on stage{props.onStage && stage.others ? ` · ${stage.linked}/${stage.others} video linked` : ''}
         </span>
         {props.onStage && stage.camOn && stage.blend === 'loading' && <span class="chip">blending you into the stage…</span>}
-        {props.onStage && !stage.camOn && app.cameraOn && (
+        {props.onStage && !stage.videoAllowed && <span class="chip" title="Your account sings with sound only — no camera on stage. The SingersVoice admin can change that." data-audio-only>audio only · no camera</span>}
+        {props.onStage && !stage.camOn && app.cameraOn && stage.videoAllowed && (
           <button class="btn sm accent" style="pointer-events:auto" onClick={() => void stage.openCamera()}>
             <IcCamera size={16} /> Turn the camera on
           </button>
@@ -828,7 +830,7 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
           </button>
         )}
         {props.onStage && (
-          <button class={`btn sm ${app.cameraOn ? '' : 'accent'}`} style="pointer-events:auto" aria-label={app.cameraOn ? 'Camera off' : 'Camera on'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
+          <button class={`btn sm ${app.cameraOn ? '' : 'accent'}`} style="pointer-events:auto" aria-label={app.cameraOn ? 'Camera off' : 'Camera on'} disabled={!stage.videoAllowed} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
             {app.cameraOn ? <IcCameraOff size={16} /> : <IcCamera size={16} />}
           </button>
         )}
@@ -1292,8 +1294,8 @@ function LiveStage(props: {
           <MicStatus engine={engine} onChange={() => void reopenMic(engine, camera)} />
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={started && props.prepared ? (ms) => void seek(ms) : undefined} pending={seekTarget} disabled={countdown !== null} />
           <div class="main">
-            <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
-              {app.cameraOn ? <IcCamera /> : <IcCameraOff />}
+            <button class={`btn icon ${app.cameraOn && stage.videoAllowed ? 'on' : ''}`} aria-label="Camera" disabled={!stage.videoAllowed} title={stage.videoAllowed ? 'Camera' : 'Your account is audio only — no camera on stage'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
+              {app.cameraOn && stage.videoAllowed ? <IcCamera /> : <IcCameraOff />}
             </button>
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
@@ -1381,16 +1383,19 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
         </div>
         <section class="card stack">
           <h3>Performances of this meet</h3>
-          <div class="muted small">One per song: the show — everyone on stage over the stage background, with the whole mix — and the film of the whole meet, saved by the host and shared with everyone who was in the meet. Find them any time under Performances.</div>
+          <div class="muted small">One per song: the show — everyone on stage over the stage background, with the whole mix — and the film of the whole meet in chapters (a chapter per song, pause and stretch of stage, each a file of its own), saved by the host and shared with everyone who was in the meet. Find them any time under Performances.</div>
           {!shows.length && <div class="muted small">No song was recorded in this meet.</div>}
           <div class="list">
-            {shows.map((p) => (
-              <div class="item wide-actions" key={p.performanceId} data-performance={p.performanceId}>
+            {[...shows].sort((a, b) => (a.chapter && b.chapter && a.chapter.eventId === b.chapter.eventId ? a.chapter.index - b.chapter.index : a.createdAt.localeCompare(b.createdAt))).map((p) => (
+              <div class="item wide-actions" key={p.performanceId} data-performance={p.performanceId} data-chapter={p.chapter?.index ?? ''} data-chapter-kind={p.chapter?.kind ?? ''} data-chapter-at={p.chapter?.startedAt ?? ''}>
                 <div class="thumb">
-                  <IcPlay size={18} />
+                  {p.chapter ? <span class="small">{String(p.chapter.index).padStart(2, '0')}</span> : <IcPlay size={18} />}
                 </div>
                 <div class="meta">
-                  <div class="t">{p.songTitle || 'Untitled song'}</div>
+                  <div class="t">
+                    {p.chapter ? `${p.chapter.eventTitle} ${String(p.chapter.index).padStart(2, '0')} · ${p.chapter.kind === 'song' ? '♪ ' : p.chapter.kind === 'pause' ? '⏸ ' : '▪ '}` : ''}
+                    {p.songTitle || 'Untitled song'}
+                  </div>
                   <div class="s">
                     {new Date(p.createdAt).toLocaleString()} · {formatMs(p.durationMs)} · {p.singers.map((x) => x.displayName.split(' ')[0]).join(', ') || p.hostName}
                   </div>

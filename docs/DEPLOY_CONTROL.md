@@ -15,7 +15,7 @@ Node 22 host. The web app finds it through `VITE_CONTROL_URL` (or discovers it, 
    - `CLOUDFLARE_API_TOKEN` = the token
    - `CLOUDFLARE_ACCOUNT_ID` = the account id
 4. *Settings → Secrets and variables → Actions → Variables*:
-   - `PRIVILEGED_EMAILS` = your Google address (comma-separate several). These are admin accounts: Publishing mode without a plan, and the right to grant the Publisher plan to others (docs/BILLING.md).
+   - `PRIVILEGED_EMAILS` = your Google address (comma-separate several). These are **super admin** accounts: Publishing mode always, and the Admin page (every account's role, the club owners' years — docs/BILLING.md). The first account ever to sign in is one too.
    - `VITE_GOOGLE_CLIENT_ID` (from docs/GOOGLE_OAUTH.md) — the service also uses it to validate tokens.
 5. https://github.com/singersvoice/SingersVoice/actions/workflows/deploy-control.yml → **Run workflow**
    (it also runs by itself on every push that touches the service).
@@ -49,8 +49,8 @@ Then set the repo variable `VITE_CONTROL_URL` to `https://<your host>` and run *
 | --- | --- | --- |
 | `GOOGLE_CLIENT_ID` | var | Access tokens must be issued to this OAuth client |
 | `ALLOWED_ORIGINS` | var | Extra browser origins (GitHub Pages + localhost are always allowed) |
-| `PRIVILEGED_EMAILS` | var/secret | Admin accounts: Publishing mode without a plan, and the right to grant plans (the first account ever seen is one too) |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PUBLISHER`, `APP_URL` | secret | The Publisher plan through Stripe — docs/BILLING.md |
+| `PRIVILEGED_EMAILS` | var/secret | Super admin accounts: Publishing mode always, and the Admin page — roles and club owner years (the first account ever seen is one too) |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PUBLISHER`, `APP_URL` | secret | The club owner year through Stripe — docs/BILLING.md |
 | `RELAY_URL`, `RELAY_SECRET` | secret | The RTMP relay (`services/relay`): YouTube at ultra-low latency, Facebook / Instagram / Twitch live — docs/RELAY.md. Without them YouTube goes through HLS ingestion and the other three stay queued |
 | `PUBLISH_KEY_SECRET` | secret | AES-GCM key (base64, 32 bytes) for stream keys at rest — generated on the worker if not given |
 | `DEV_AUTH` | var | `1` accepts `X-Dev-User` headers — local dev and CI only, never in production |

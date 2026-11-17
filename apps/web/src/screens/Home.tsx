@@ -4,7 +4,7 @@ import { IcDrive, IcLibrary, IcMic, IcPlay, IcShare, IcUsers } from '../componen
 import { Page } from '../components/Shell.tsx';
 import { checkControl, controlConfigured, controlStatus, refreshAccount } from '../lib/api.ts';
 import { href } from '../lib/nav.ts';
-import { canPublish, isDrive, plan, privileged, profile, provider } from '../state/session.ts';
+import { canPublish, isDrive, profile, provider, role } from '../state/session.ts';
 
 export function Home() {
   useEffect(() => {
@@ -27,8 +27,7 @@ export function Home() {
               <IcDrive size={14} /> {isDrive.value ? 'Drive linked' : 'device only'}
             </span>
             <span class={`chip ${svc === 'online' ? 'ok' : svc === 'unconfigured' ? '' : 'warn'}`}>SVT DB · {svc === 'online' ? 'online' : svc === 'checking' ? 'checking' : svc === 'offline' ? 'unreachable' : 'not deployed'}</span>
-            {privileged.value && <span class="chip ok">admin</span>}
-            {plan.value === 'publisher' && <span class="chip ok">Publisher plan</span>}
+            {role.value === 'super_admin' ? <span class="chip ok">super admin</span> : role.value === 'club_owner' ? <span class={`chip ${canPublish.value ? 'ok' : 'warn'}`}>club owner{canPublish.value ? '' : ' · subscription closed'}</span> : role.value === 'audio' ? <span class="chip">audio only</span> : null}
           </div>
         </section>
 
@@ -51,7 +50,7 @@ export function Home() {
           <a href={href('/publishing')}>
             <IcShare />
             <b>Publishing</b>
-            <span>{canPublish.value ? 'Stream meets to YouTube and the in-house watch page' : 'Publisher plan — stream meets to YouTube and the in-house watch page'}</span>
+            <span>{canPublish.value ? 'Stream meets to YouTube and the in-house watch page' : 'Club owners — stream meets to YouTube and the in-house watch page'}</span>
           </a>
           <a href={href('/studio/performances')}>
             <IcPlay />

@@ -53,6 +53,10 @@ import {
   type PublishJobLive,
   youtubeWatchUrl,
   YT_SEARCH_LIMIT,
+  yearFrom,
+  type AdminUserUpdate,
+  type AdminUsersResponse,
+  type PerformanceChapter,
   type YtFetchRequest,
   type YtJob,
   type YtSearchResponse,
@@ -114,6 +118,17 @@ type Env = { Bindings: Record<string, unknown>; Variables: Vars };
 /** A Drive file or folder id. */
 const DRIVE_FILE_ID = /^[A-Za-z0-9_-]{10,128}$/;
 
+/** A chapter as a client registered it, checked field by field (null when it is not one). */
+function chapterOf(c: unknown): PerformanceChapter | null {
+  if (!c || typeof c !== 'object') return null;
+  const x = c as Record<string, unknown>;
+  const kind = x.kind === 'song' || x.kind === 'pause' || x.kind === 'stage' ? x.kind : null;
+  const eventId = typeof x.eventId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(x.eventId) ? x.eventId : null;
+  if (!kind || !eventId) return null;
+  const startedAt = typeof x.startedAt === 'string' && !Number.isNaN(Date.parse(x.startedAt)) ? new Date(x.startedAt).toISOString() : new Date().toISOString();
+  return { eventId, eventTitle: String(x.eventTitle ?? '').slice(0, 60), index: Math.max(0, Math.min(100_000, Math.round(Number(x.index) || 0))), kind, trackId: String(x.trackId ?? '').slice(0, 120), trackTitle: String(x.trackTitle ?? '').slice(0, 120), songEpoch: Math.max(0, Math.round(Number(x.songEpoch) || 0)), startedAt, startMs: Math.max(0, Math.round(Number(x.startMs) || 0)) };
+}
+
 const DEFAULT_ORIGINS = ['https://singersvoice.github.io', 'http://localhost:5173', 'http://localhost:4173', 'http://127.0.0.1:5173', 'http://127.0.0.1:4173'];
 
 function err(c: Context<Env>, status: 400 | 401 | 403 | 404 | 409 | 410, code: string, message: string) {
@@ -148,7 +163,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         return allowed.includes(origin) ? origin : allowed[0]!;
       },
       allowHeaders: ['Authorization', 'Content-Type', 'X-Dev-User', 'X-Dev-Name'],
-      allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       maxAge: 600,
     }),
   );
@@ -493,7 +508,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (isBanned(meet, user.userId)) return err(c, 403, 'removed', 'The host removed you from this meet');
     const now = new Date().toISOString();
     const publisher = body.role === 'publisher';
-    if (publisher && !user.canPublish) return err(c, 403, 'publisher_plan', 'Publishing mode is part of the Publisher plan — see Plans');
+    if (publisher && !user.canPublish) return err(c, 403, 'publishing_closed', user.publishingNote || 'Publishing mode is closed to this account');
     // A publisher's show view is its own participant: the same account may be performing on another device.
     let p = body.resumeToken ? await store.getParticipantByToken(meet.meetId, body.resumeToken) : null;
     // A member (host / performer / audience) is one per account; every publisher view (the show view,
@@ -509,6 +524,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         displayName: user.name,
         picture: user.picture,
         role: publisher ? 'publisher' : user.userId === meet.hostUserId ? 'host' : 'audience',
+        media: user.media,
         slot: null,
         stageRequest: 'none',
         joinedAt: now,
@@ -517,6 +533,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       };
     }
     p.lastSeenAt = now;
+    p.media = user.media; // the account's permission as it stands now (a role changed since the last visit)
     // The host is on stage the moment their meet starts (first arrival), and anyone asking to join as a
     // performer is seated when the rules allow it (the host, or an open stage); everyone else is audience.
     const firstArrival = p.joinedAt === now;
@@ -945,6 +962,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       bytes: Math.max(0, Number(body.bytes) || 0),
       mimeType: String(body.mimeType ?? '').slice(0, 80),
       createdAt: new Date().toISOString(),
+      ...(chapterOf(body.chapter) ? { chapter: chapterOf(body.chapter)! } : {}),
     };
     await store.addPerformance(performance);
     touch(meet);
@@ -1064,34 +1082,106 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       const userId = (obj.client_reference_id as string | null) ?? (obj.metadata as { userId?: string } | undefined)?.userId ?? null;
       const customerId = typeof obj.customer === 'string' ? obj.customer : null;
       const subscriptionId = typeof obj.subscription === 'string' ? obj.subscription : null;
-      if (userId && (await deps.store.getUser(userId))) await deps.store.setSubscription({ userId, plan: 'publisher', planUntil: null, customerId, subscriptionId, source: 'stripe' });
+      if (userId && (await deps.store.getUser(userId))) {
+        await deps.store.setSubscription({ userId, plan: 'publisher', planUntil: null, startedAt: new Date().toISOString(), status: 'active', customerId, subscriptionId, source: 'stripe' });
+        const u = await deps.store.getUser(userId);
+        if (u && (u.role === 'audio' || u.role === 'dual')) await deps.store.setRole(userId, 'club_owner'); // a paying subscriber is a club owner
+      }
     } else if (event.type.startsWith('customer.subscription.')) {
       const sub = obj as unknown as StripeSubscription;
       const userId = sub.metadata?.userId || (await deps.store.userIdByCustomer(sub.customer));
       if (userId && (await deps.store.getUser(userId))) {
         const { plan, until } = event.type === 'customer.subscription.deleted' ? { plan: 'free' as const, until: null } : planFromSubscription(sub);
-        await deps.store.setSubscription({ userId, plan, planUntil: until, customerId: sub.customer, subscriptionId: sub.id, source: 'stripe' });
+        await deps.store.setSubscription({ userId, plan, planUntil: until, status: 'active', customerId: sub.customer, subscriptionId: sub.id, source: 'stripe' });
       }
     }
     return c.json({ ok: true as const });
   });
 
-  /** Admin: a plan by hand — a comp, a tester, a payment taken outside Stripe. `until` null = no end. */
+  // ---------- The Admin page (super admins): accounts, roles, club owner subscriptions ----------
+
+  const superAdminOnly = (c: Context<Env>) => (c.get('user').role !== 'super_admin' ? err(c, 403, 'not_super_admin', 'Only a super admin can do that') : null);
+
+  /** Admin: a plan by hand (older clients) — a club owner's year from now; `plan: free` takes the subscription away. */
   app.post('/admin/plan', async (c) => {
-    if (!c.get('user').privileged) return err(c, 403, 'not_privileged', 'Only an admin can grant plans');
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { email?: string; plan?: PlanId; until?: string | null };
-    const target = body.email ? await c.get('deps').store.getUserByEmail(String(body.email)) : null;
+    const store = c.get('deps').store;
+    const target = body.email ? await store.getUserByEmail(String(body.email)) : null;
     if (!target) return err(c, 404, 'no_user', 'No account with that email has signed in yet');
     const plan: PlanId = body.plan === 'publisher' ? 'publisher' : 'free';
-    const until = body.until ? new Date(body.until).toISOString() : null;
-    await c.get('deps').store.setSubscription({ userId: target.userId, plan, planUntil: plan === 'free' ? null : until, source: 'grant' });
-    return c.json({ user: (await c.get('deps').store.getUser(target.userId))! });
+    const until = body.until ? new Date(body.until).toISOString() : plan === 'publisher' ? yearFrom(new Date()) : null;
+    await store.setSubscription({ userId: target.userId, plan, planUntil: plan === 'free' ? null : until, startedAt: plan === 'free' ? null : new Date().toISOString(), status: 'active', source: 'grant' });
+    if (plan === 'publisher' && (target.role === 'audio' || target.role === 'dual')) await store.setRole(target.userId, 'club_owner');
+    return c.json({ user: (await store.getUser(target.userId))! });
+  });
+
+  app.get('/admin/users', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const users = await c.get('deps').store.listUsers();
+    return c.json({ users, total: users.length } satisfies AdminUsersResponse);
+  });
+
+  /**
+   * One account changed by a super admin: its role, and/or its club owner subscription — grant (a year from now),
+   * renew (a year on from the expiry, or from now once it has passed), set (the dates given), revoke. The last super
+   * admin cannot be demoted, so the Admin page never locks everyone out.
+   */
+  app.patch('/admin/users/:id', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const store = c.get('deps').store;
+    const id = c.req.param('id');
+    const target = await store.getUser(id);
+    if (!target) return err(c, 404, 'no_user', 'No such account');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as AdminUserUpdate;
+    if (body.role !== undefined) {
+      if (!['audio', 'dual', 'club_owner', 'super_admin'].includes(body.role)) return err(c, 400, 'bad_request', 'role must be audio, dual, club_owner or super_admin');
+      if (target.role === 'super_admin' && body.role !== 'super_admin' && (await store.countSuperAdmins()) <= 1) return err(c, 409, 'last_super_admin', 'This is the last super admin — make another one first');
+      await store.setRole(id, body.role);
+    }
+    const sub = body.subscription;
+    if (sub) {
+      const now = new Date();
+      const current = await store.getSubscription(id);
+      const iso = (v: unknown, fallback: string | null): string | null => (typeof v === 'string' && v && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : v === null ? null : fallback);
+      switch (sub.action) {
+        case 'grant': {
+          const startedAt = iso(sub.startedAt, now.toISOString())!;
+          await store.setSubscription({ userId: id, plan: 'publisher', startedAt, planUntil: iso(sub.expiresAt, yearFrom(startedAt)), status: 'active', source: 'grant' });
+          break;
+        }
+        case 'renew': {
+          const from = current?.planUntil && Date.parse(current.planUntil) > now.getTime() ? current.planUntil : now.toISOString();
+          await store.setSubscription({ userId: id, plan: 'publisher', startedAt: current?.startedAt ?? now.toISOString(), planUntil: yearFrom(from), status: 'active', source: 'grant' });
+          break;
+        }
+        case 'set': {
+          const startedAt = iso(sub.startedAt, current?.startedAt ?? now.toISOString());
+          const expiresAt = sub.expiresAt === undefined ? (current?.planUntil ?? yearFrom(startedAt ?? now)) : iso(sub.expiresAt, null);
+          await store.setSubscription({ userId: id, plan: 'publisher', startedAt, planUntil: expiresAt, status: 'active', source: 'grant' });
+          break;
+        }
+        case 'revoke':
+          if (current) await store.setSubscription({ userId: id, plan: 'publisher', startedAt: current.startedAt, planUntil: current.planUntil, status: 'revoked', source: current.source });
+          break;
+        default:
+          return err(c, 400, 'bad_request', 'subscription.action must be grant, renew, set or revoke');
+      }
+      // A subscription makes a club owner of a singer; a super admin keeps the role.
+      const after = await store.getUser(id);
+      if (sub.action !== 'revoke' && after && (after.role === 'audio' || after.role === 'dual')) await store.setRole(id, 'club_owner');
+    }
+    return c.json({ user: (await store.getUser(id))! });
   });
 
   // ---------- Publishing mode (the Publisher plan, or an admin) ----------
 
   app.use('/publishing/*', async (c, next) => {
-    if (!c.get('user').canPublish) return err(c, 403, 'publisher_plan', 'Publishing mode is part of the Publisher plan — subscribe on the Plans page');
+    const user = c.get('user');
+    if (!user.canPublish) return err(c, 403, 'publishing_closed', user.publishingNote || 'Publishing mode is closed to this account');
     await next();
   });
 

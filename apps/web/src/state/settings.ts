@@ -24,6 +24,10 @@ export interface AppSettings {
   showCueDeck: boolean;
   audioInputId: string;
   echoCancellation: boolean;
+  /** The instrument: a second input (a guitar, keys… on a USB interface) summed into this singer's sound; which input, and its level in dB. */
+  instrumentOn: boolean;
+  instrumentDeviceId: string;
+  instrumentDb: number;
   highContrastLyrics: boolean;
   onboarded: boolean;
   /** The mix balance on this device (dB): the backing track and the vocals in what is recorded, relayed and broadcast from here. */
@@ -54,6 +58,9 @@ export const APP_DEFAULTS: AppSettings = {
   showCueDeck: true,
   audioInputId: '',
   echoCancellation: false,
+  instrumentOn: false,
+  instrumentDeviceId: '',
+  instrumentDb: 0,
   highContrastLyrics: false,
   onboarded: false,
   trackDb: 0,

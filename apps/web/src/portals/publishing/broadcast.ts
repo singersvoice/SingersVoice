@@ -13,14 +13,16 @@ import { LiveSender, type SenderState } from '../../broadcast/liveSender.ts';
 import { PublisherBus } from '../../broadcast/publisherBus.ts';
 import { BROADCAST_TITLE, busSound, MeetRecorder } from '../../video/meetRecorder.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
+import type { ChapterCue } from '../../video/chapters.ts';
 import type { StagePerformer } from '../../video/stage.ts';
 
-/** What the film of the broadcast is filed under: the meet, and who stood on stage while it ran. */
+/** What the film of the broadcast is filed under: the meet, who stood on stage while it ran, and the chapter the stage is in as it starts. */
 export interface BroadcastFilmSpec {
   meetId: string;
   title: string;
   hostName: string;
   singers: () => PerformanceSinger[];
+  first?: ChapterCue;
 }
 
 export class Broadcast {
@@ -92,7 +94,10 @@ export class Broadcast {
       return support;
     }
     // The footage: the same picture and the same sound as the broadcast, from now until the broadcast stops.
-    if (film) void this.film.start(busSound(this.bus), { ...film, film: { title: BROADCAST_TITLE, notes: 'The whole broadcast, as it went out.' } });
+    if (film) {
+      const { first, ...spec } = film;
+      void this.film.start(busSound(this.bus), { ...spec, film: { title: BROADCAST_TITLE, notes: 'The whole broadcast, as it went out.' } }, first);
+    }
     return support;
   }
 

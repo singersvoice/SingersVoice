@@ -62,6 +62,17 @@ export class AudioEngine {
   private vocalOut: MediaStreamAudioDestinationNode | null = null;
   private micStream: MediaStream | null = null;
   private micSource: MediaStreamAudioSourceNode | null = null;
+  /**
+   * The instrument: a second input beside the microphone (a guitar, keys, a violin on a USB interface),
+   * its own capture, summed into the singer's sound where the take recorder listens — so it goes wherever
+   * the voice goes (the take, the other singers, the stage mix, the film, the broadcast) — but never through
+   * the vocal effects or the leveller. Mono: an interface's stereo pair is folded together.
+   */
+  private instStream: MediaStream | null = null;
+  private instSource: MediaStreamAudioSourceNode | null = null;
+  private instGain: GainNode;
+  readonly instrumentInfo = signal<{ label: string; sampleRate: number | null; channels: number | null } | null>(null);
+  readonly instrumentError = signal<string | null>(null);
   readonly pitch = signal<PitchReading | null>(null);
   readonly micOpen = signal(false);
   readonly inputLabel = signal('');
@@ -95,6 +106,10 @@ export class AudioEngine {
     this.voice = this.ctx.createGain();
     this.voice.connect(this.monitor);
     this.trim = this.ctx.createGain();
+    this.instGain = this.ctx.createGain();
+    this.instGain.channelCount = 1;
+    this.instGain.channelCountMode = 'explicit';
+    this.instGain.channelInterpretation = 'speakers';
     this.workletAvailable = hasAudioWorklet();
     this.ready = this.loadWorklets();
   }
@@ -199,6 +214,7 @@ export class AudioEngine {
 
   closeMic(): void {
     this.stopLeveller();
+    this.closeInstrument();
     this.micSource?.disconnect();
     this.micSource = null;
     this.trim.disconnect();
@@ -207,6 +223,51 @@ export class AudioEngine {
     this.micOpen.value = false;
     this.inputInfo.value = null;
     this.pitch.value = null;
+  }
+
+  /**
+   * Open the instrument input (after the microphone: it joins the voice where the take recorder listens, so a
+   * take holds voice and instrument together; without the worklet it lands on the voice bus itself). A line
+   * input: no echo cancellation, no noise suppression, no automatic gain — the level is `gainDb`, set by the singer.
+   */
+  async openInstrument(opts: { deviceId: string; gainDb?: number }): Promise<void> {
+    await this.resume();
+    this.closeInstrument();
+    this.instrumentError.value = null;
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: opts.deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false });
+    } catch (e) {
+      this.instrumentError.value = e instanceof Error && e.name === 'OverconstrainedError' ? 'The instrument input is not plugged in (pick it again once it is).' : e instanceof Error ? e.message : String(e);
+      throw e;
+    }
+    this.instStream = new MediaStream(stream.getAudioTracks());
+    const t = this.instStream.getAudioTracks()[0];
+    const st = t?.getSettings?.() ?? {};
+    this.instrumentInfo.value = { label: t?.label ?? 'Instrument', sampleRate: typeof st.sampleRate === 'number' ? st.sampleRate : null, channels: typeof st.channelCount === 'number' ? st.channelCount : null };
+    this.instSource = this.ctx.createMediaStreamSource(this.instStream);
+    this.setInstrumentGain(opts.gainDb ?? 0);
+    this.instSource.connect(this.instGain).connect(this.recorder?.node ?? this.voice);
+    t?.addEventListener('ended', () => {
+      if (this.instStream?.getAudioTracks()[0] === t) {
+        this.closeInstrument();
+        this.instrumentError.value = 'The instrument input was unplugged.';
+      }
+    });
+  }
+
+  /** The instrument's level (dB, −24…+24), changed on the spot. */
+  setInstrumentGain(db: number): void {
+    this.instGain.gain.setTargetAtTime(Math.pow(10, Math.max(-24, Math.min(24, db)) / 20), this.ctx.currentTime, 0.03);
+  }
+
+  closeInstrument(): void {
+    this.instSource?.disconnect();
+    this.instSource = null;
+    this.instGain.disconnect();
+    this.instStream?.getTracks().forEach((t) => t.stop());
+    this.instStream = null;
+    this.instrumentInfo.value = null;
   }
 
   /**

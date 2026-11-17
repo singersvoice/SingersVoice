@@ -326,6 +326,8 @@ try {
   // Both land on the live stage; wait for the kickstart (8 s lead).
   await alice.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
   await bob.page.locator('.sing .stagebar').waitFor({ timeout: 30000 });
+  // The instant the song starts for everyone, as the service has it: the film's first song chapter must be cut there.
+  const firstKickstart = (await (await fetch(`${servers.controlUrl}/meets/${meetId}`, { headers: { 'X-Dev-User': 'alice', 'X-Dev-Name': 'alice' } })).json()).meet?.kickstartEpochMs ?? null;
   // Every lyric line is in the colour of the singer who sings it, whole: the song divided between the two singers in it
   // (S1 green, S2 blue, ALL light) — read off the first lines, right after the kickstart.
   await bob.page.locator('.sing .lyric[data-who="S2"]').first().waitFor({ timeout: 30000 });
@@ -866,19 +868,50 @@ try {
   // The ended screen lists the saved performances of the meet: one per song the host sang, and the film of the whole
   // meet (the host's device recorded it from her mic opening to "End meet", straight into her storage); so does everyone's Performances.
   await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 90000 });
-  await alice.page.locator('[data-performance]').nth(2).waitFor({ timeout: 30000 }).catch(() => undefined);
-  const endedList = (await alice.page.locator('[data-performance]').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
-  const endedShows = endedList.length;
-  check(endedShows === 3, `the ended meet lists its saved performances, one per song and the film of the meet (${endedShows})`);
-  const filmLine = endedList.find((t) => /Full meet/.test(t)) ?? '';
-  const filmDur = / · (\d+):(\d\d) · /.exec(filmLine); // "Full meet 11/14/2026, 3:22 AM · 9:55 · alice, bob" — the duration sits between the separators
-  const filmSecs = filmDur ? Number(filmDur[1]) * 60 + Number(filmDur[2]) : -1;
-  check(filmSecs >= 240, `the film of the meet spans the whole meet, both songs and the talk between (${filmLine || 'no film listed'})`);
+  // THE FILM IS A RUN OF CHAPTERS, cut where the stage went and never stopped by it. What the stage did, in order: the host's mic
+  // opened in the lobby (on stage) · alice started the song (its kickstart) · bob restarted it · bob jumped it to 0:02 · alice paused
+  // it (an interruption) · alice resumed it · alice jumped it to 12 s before the end · it ran out (the stage between songs) · bob
+  // started the second act · bob stopped it (the stage again) · End meet. Every one a file of its own, numbered, with its time.
+  const wantChapters = [
+    ['stage', /^Full meet 01 · ▪ On stage$/],
+    ['song', /^Full meet 02 · ♪ CI Sample Song$/],
+    ['song', /^Full meet 03 · ♪ CI Sample Song$/], // the restart: from the top again, its own chapter
+    ['song', /^Full meet 04 · ♪ CI Sample Song \(continued at 0:0[1-3]\)$/], // the jump to 0:02
+    ['pause', /^Full meet 05 · ⏸ Paused — CI Sample Song$/],
+    ['song', /^Full meet 06 · ♪ CI Sample Song \(continued at 0:\d\d\)$/], // resumed where it stood
+    ['song', /^Full meet 07 · ♪ CI Sample Song \(continued at 6:[45]\d\)$/], // the jump to 6:48
+    ['stage', /^Full meet 08 · ▪ On stage$/],
+    ['song', /^Full meet 09 · ♪ CI Sample Song$/], // the second act
+    ['stage', /^Full meet 10 · ▪ On stage$/],
+  ];
+  await alice.page.waitForFunction((n) => document.querySelectorAll('[data-performance][data-chapter-kind]:not([data-chapter-kind=""])').length >= n, wantChapters.length, { timeout: 90000 }).catch(() => undefined);
+  const endedRows = await alice.page.locator('[data-performance]').evaluateAll((els) => els.map((e) => ({ text: e.innerText.replace(/\s+/g, ' '), title: (e.querySelector('.t')?.innerText ?? '').replace(/\s+/g, ' ').trim(), kind: e.getAttribute('data-chapter-kind') || '', index: Number(e.getAttribute('data-chapter') || 0), at: e.getAttribute('data-chapter-at') || '' })));
+  const endedSongShows = endedRows.filter((r) => !r.kind);
+  const chapters = endedRows.filter((r) => r.kind).sort((a, b) => a.index - b.index);
+  console.log('ended screen:', JSON.stringify(endedRows.map((r) => `${r.kind || 'show'}${r.index ? r.index : ''}: ${r.text.slice(0, 80)}`)));
+  check(endedSongShows.length === 2, `the ended meet lists one saved show per song the host sang (${endedSongShows.length})`);
+  const whole = chapters.filter((c) => !/\(part \d+\)/.test(c.title)); // a chapter longer than a chunk carries on in parts: the same chapter
+  const kinds = whole.map((c) => c.kind).join(',');
+  check(kinds === wantChapters.map((w) => w[0]).join(','), `the film of the meet is a run of chapters cut where the stage went — on stage, the song, its restart, the jump, the pause, the song resumed, the jump near the end, the stage between, the second act, the stage again (${kinds})`);
+  check(chapters.length >= wantChapters.length && chapters.every((c, i) => c.index === i + 1), `the chapters are numbered in order, none missing, none merged (${chapters.map((c) => c.index).join(' ')})`);
+  const misnamed = wantChapters.map(([, re], i) => (re.test(whole[i]?.title ?? '') ? null : `${i + 1}: "${whole[i]?.title ?? '—'}"`)).filter(Boolean);
+  check(misnamed.length === 0, `every chapter is named for what it is — the song, its restart, where a jump or a resume took it up, the pause, the stage between${misnamed.length ? ` (not as expected: ${misnamed.join(', ')})` : ''}`);
+  const stamps = chapters.map((c) => Date.parse(c.at));
+  check(stamps.every((t) => t > 0) && stamps.every((t, i) => i === 0 || t > stamps[i - 1]), 'every chapter carries its timestamp, and they climb in order');
+  const durOf = (t) => { const m = / · (\d+):(\d\d) · /.exec(t); return m ? Number(m[1]) * 60 + Number(m[2]) : 0; }; // "… · 9:55 · alice, bob" — the duration sits between the separators
+  const filmSecs = chapters.reduce((n, c) => n + durOf(c.text), 0);
+  check(filmSecs >= 240, `the chapters together span the whole meet, both songs and the talk between — the film never stopped at a song's start, pause, stop or restart (${filmSecs} s in ${chapters.length} chapters)`);
+  check(chapters.every((c) => (c.kind === 'song' ? durOf(c.text) >= 5 : true)), 'no song chapter is a sliver (each holds the singing it was cut for)');
   check((await alice.page.locator('[data-meet-film]').count()) === 0 || (await alice.page.locator('[data-meet-film="on"]').count()) === 0, 'the film stopped with the meet');
   await navigate(bob.page, `${new URL(base).pathname}studio/performances`);
   await bob.page.locator('[data-show]').first().waitFor({ timeout: 20000 });
   const bobShows = (await bob.page.locator('[data-show]').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
-  check(bobShows.length === 3 && bobShows.filter((t) => /Duet e2e · CI Sample Song/.test(t)).length === 2 && bobShows.some((t) => /Duet e2e · Full meet/.test(t)), `a singer finds the meet's performances under Performances, by name and date — the songs and the film (${bobShows.length})`);
+  check(bobShows.length === 2 && bobShows.filter((t) => /Duet e2e · CI Sample Song/.test(t)).length === 2, `a singer finds the meet's song shows under Performances, by name and date (${bobShows.length})`);
+  const bobEvent = bob.page.locator('[data-event]', { hasText: 'Full meet' }).first();
+  await bobEvent.waitFor({ timeout: 20000 });
+  const bobChapters = await bobEvent.locator('[data-chapter]').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-chapter')}:${e.getAttribute('data-chapter-kind')}`));
+  check(bobChapters.length === chapters.length && bobChapters.every((c, i) => c === `${chapters[i].index}:${chapters[i].kind}`), `a singer finds the film of the meet as the same run of chapters, shared with the whole meet (${bobChapters.length})`);
+  check(new RegExp(`${chapters.length} chapters`).test(await bobEvent.innerText()), `the filming is one card for the singer — "${chapters.length} chapters", each its own row with its time (a Watch link each once the host's Drive holds them; this run stores locally)`);
   await bob.page.screenshot({ path: `${out}/performances-bob.png` });
   const bobTakes = (await bob.page.locator('.list .item').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
   check(bobTakes.some((t) => /CI Sample Song/.test(t) && /show video/.test(t) && /Kept/.test(t)), `a singer's own takes are kept by themselves, their video the show (${bobTakes.length} items)`);
@@ -910,27 +943,63 @@ try {
     const m = measure(slice, songAt(48000), 48000, { window });
     return { rms: m.rms, song: m.song, voice: m.voice - voiceOfSong(songAt(48000), 48000, m.song.positionS, 6), seconds: pcm.length / 48000, atS };
   };
+  /**
+   * Which way the picture faces: the fake person wears a MAGENTA badge on the camera's left of their head and a YELLOW one on
+   * the camera's right (fake-person.mjs) — colours the stage never shows otherwise. In the frame at `atS`, magenta left of
+   * yellow is the picture as the camera saw it ('left'); the other way round is a mirror ('right'). Both singers are the same
+   * fake person, so the two centres move together.
+   */
+  const mirrorOf = (file, atS) => {
+    const W = 320, H = 180;
+    const rgb = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(Math.max(0, atS)), '-i', file, '-frames:v', '1', '-vf', `scale=${W}:${H}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 24 });
+    let mag = { n: 0, x: 0 }, yel = { n: 0, x: 0 };
+    for (let i = 0, px = 0; i + 2 < rgb.length && px < W * H; i += 3, px++) {
+      const [r, g, b] = [rgb[i], rgb[i + 1], rgb[i + 2]];
+      const x = px % W;
+      if (r > 170 && b > 170 && g < 100) { mag.n++; mag.x += x; }
+      else if (r > 190 && g > 190 && b < 90) { yel.n++; yel.x += x; }
+    }
+    if (mag.n < 10 || yel.n < 10) return { side: 'unknown', magenta: mag.n, yellow: yel.n };
+    const magX = mag.x / mag.n, yelX = yel.x / yel.n;
+    return { side: magX < yelX - 2 ? 'left' : magX > yelX + 2 ? 'right' : 'centre', magentaX: Math.round(magX), yellowX: Math.round(yelX), magenta: mag.n, yellow: yel.n };
+  };
   if (showB64) {
     const showSound = await fileSound(`${out}/show-alice.webm`, 4, [0, 30]);
+    const showMirror = mirrorOf(`${out}/show-alice.webm`, 4);
+    console.log('show mirror check:', JSON.stringify(showMirror));
+    check(showMirror.side === 'left', `the saved show is not mirrored — the singer's badges are where the camera saw them (${showMirror.side}: magenta x ${showMirror.magentaX ?? '?'}, yellow x ${showMirror.yellowX ?? '?'})`);
     console.log("the saved show's sound:", JSON.stringify({ ...showSound, rms: showSound.rms.toFixed(3), voice: showSound.voice.toFixed(1) }));
     check(showSound.song.r > 0.3, `the saved show carries the song (correlation ${showSound.song.r.toFixed(2)} at ${showSound.song.positionS.toFixed(1)} s into the song, 4 s into the file)`);
     check(showSound.voice > 6, `the saved show carries the singer's voice (${showSound.voice.toFixed(1)} dB above the song alone)`);
   }
-  // The film of the meet: the moment of the first song that was measured live, found where the film's clock says.
+  // The film of the meet: the moment of the first song that was measured live sits in the first song chapter (cut at the
+  // song's kickstart), where the chapter's own timestamp says.
   await alice.page.keyboard.press('Escape');
   await alice.page.locator('.sheet').waitFor({ state: 'detached', timeout: 5000 }).catch(() => undefined);
-  await alice.page.locator('[data-show]', { hasText: 'Full meet' }).first().getByRole('button', { name: 'Play' }).click();
+  const aliceEvent = alice.page.locator('[data-event]', { hasText: 'Full meet' }).first();
+  await aliceEvent.waitFor({ timeout: 20000 });
+  const songChapter = aliceEvent.locator('[data-chapter-kind="song"]').first();
+  const songChapterAt = Date.parse(await songChapter.getAttribute('data-chapter-at'));
+  await songChapter.getByRole('button', { name: 'Play' }).click();
   const filmB64 = await sheetVideo(alice.page);
   if (filmB64) await writeFile(`${out}/film-alice.webm`, Buffer.from(filmB64, 'base64'));
   if (filmB64) {
-    // Where that moment sits in the film: the film's own clock as the capture was set up (plus the capture's own start), else the wall clock since the film began.
-    const filmAt = Math.max(0, (filmSecondsAtSong !== null ? filmSecondsAtSong + (hostCap.wallStart - songWallAt) / 1000 : (songWallAt - filmStartAt) / 1000) - 1);
+    // Where that moment sits in the chapter: the capture's wall clock against the chapter's start (the song's kickstart, a moment ahead).
+    const filmAt = Math.max(0, (hostCap.wallStart - songChapterAt) / 1000 - 1);
     const filmSound = await fileSound(`${out}/film-alice.webm`, filmAt, [stageS - 25, stageS + 15]);
     console.log("the film's sound:", JSON.stringify({ ...filmSound, rms: filmSound.rms.toFixed(3), voice: filmSound.voice.toFixed(1) }));
-    check(filmSound.song.r > 0.3, `the film of the meet carries the song where the meet sang it (correlation ${filmSound.song.r.toFixed(2)} at ${filmSound.song.positionS.toFixed(1)} s into the song, ${filmAt.toFixed(0)} s into the film)`);
-    check(filmSound.voice > 6, `the film of the meet carries the host's voice (${filmSound.voice.toFixed(1)} dB above the song alone)`);
-  } else check(false, 'the film of the meet can be played from Performances');
+    check(filmSound.song.r > 0.3, `the song's chapter of the film carries the song where the meet sang it (correlation ${filmSound.song.r.toFixed(2)} at ${filmSound.song.positionS.toFixed(1)} s into the song, ${filmAt.toFixed(0)} s into the chapter)`);
+    check(filmSound.voice > 6, `the song's chapter of the film carries the host's voice (${filmSound.voice.toFixed(1)} dB above the song alone)`);
+    const cutOff = firstKickstart ? (songChapterAt - firstKickstart) / 1000 : null;
+    check(cutOff !== null && cutOff > -2 && cutOff < 2.5, `the song's chapter is cut at the song's kickstart — the service's instant, not a poll later (the chapter starts ${cutOff === null ? '?' : cutOff.toFixed(2)} s from it; a moment ahead by design)`);
+    check(Math.abs(filmSound.song.positionS - filmAt) < 3, `the chapter's clock is the song's: ${filmSound.song.positionS.toFixed(1)} s of the song at ${filmAt.toFixed(1)} s into the chapter`);
+  } else check(false, "the song's chapter of the film can be played from Performances");
   await alice.page.keyboard.press('Escape');
+  // THE PICTURE IS NOT MIRRORED: in the film too, both singers' badges sit where the cameras saw them (the screen keeps its selfie
+  // mirror; what is recorded and streamed does not).
+  const filmMirror = filmB64 ? mirrorOf(`${out}/film-alice.webm`, Math.max(0, (hostCap.wallStart - songChapterAt) / 1000)) : { side: 'no film' };
+  console.log('film mirror check:', JSON.stringify(filmMirror));
+  check(filmMirror.side === 'left', `the film of the meet is not mirrored either (${filmMirror.side}: magenta x ${filmMirror.magentaX ?? '?'}, yellow x ${filmMirror.yellowX ?? '?'})`);
   // The saved show is a moving picture for its whole length, not one frame with a song behind it: the picture's track is fed
   // frame by frame (CanvasTrack), so it holds whether or not the tab was in front.
   if (showB64) {
@@ -951,42 +1020,48 @@ try {
   await alice.page.getByRole('button', { name: 'Delete Duet e2e' }).click();
   await wait(1500);
   check((await alice.page.locator('.meet-item').count()) === 0, 'the host deleted the meet from the list');
-  // Publishing is the Publisher plan: dave (a free account) finds it closed, with the plan on offer; an admin can grant it, and then it opens.
+  // Publishing is for club owners: dave (a dual account) finds it closed, with the reason; the super admin grants a club
+  // owner's year on the Admin page, and it opens for that account at once (tools/ci/roles-e2e.mjs has the rest of the roles).
   await dave.page.goto(`${base}publishing?${control}`, { waitUntil: 'networkidle' });
-  await dave.page.getByText('Publishing mode is part of the Publisher plan').waitFor({ timeout: 15000 });
-  check(true, 'a free account finds Publishing closed, with the Publisher plan on offer');
+  await dave.page.getByRole('heading', { name: 'Publishing mode is for club owners' }).waitFor({ timeout: 15000 });
+  check(/club owner/.test(await dave.page.locator('.empty, main').first().innerText()), 'a singer finds Publishing closed, with the reason: it is for club owners');
   await dave.page.goto(`${base}plans?${control}`, { waitUntil: 'networkidle' });
   await dave.page.locator('[data-plan="free"]').waitFor({ timeout: 15000 });
-  check((await dave.page.locator('[data-plan-card="publisher"]').innerText()).includes('Publisher'), 'the Plans page shows Free and Publisher');
-  check(await dave.page.getByRole('button', { name: 'Request the plan' }).isVisible(), 'without Stripe configured the plan is requested from the admin, not bought');
-  await alice.page.goto(`${base}plans?${control}`, { waitUntil: 'networkidle' });
-  await alice.page.locator('[data-admin-grant] input').fill('dave@dev.local');
-  await alice.page.getByRole('button', { name: 'Grant Publisher' }).click();
-  await alice.page.getByText(/is on the Publisher plan/).waitFor({ timeout: 10000 });
+  check((await dave.page.locator('[data-plan-card="publisher"]').innerText()).includes('Club owner'), 'the Plans page shows Free and the club owner year');
+  check(await dave.page.getByRole('button', { name: 'Ask for a club owner year' }).isVisible(), 'without Stripe configured the year is asked of the admin, not bought');
+  await alice.page.goto(`${base}admin?${control}`, { waitUntil: 'networkidle' });
+  const daveRow = alice.page.locator('[data-admin-user="dave@dev.local"]');
+  await daveRow.waitFor({ timeout: 15000 });
+  await daveRow.locator('[data-sub-grant]').click();
+  await alice.page.locator('[data-admin-user="dave@dev.local"][data-user-role="club_owner"]').waitFor({ timeout: 10000 });
+  check(/publishing open/.test(await daveRow.innerText()), "the super admin's grant on the Admin page makes a club owner of the account, with Publishing open");
   await dave.page.goto(`${base}publishing?${control}`, { waitUntil: 'networkidle' });
   await dave.page.getByRole('radio', { name: 'Publish a meet' }).waitFor({ timeout: 15000 });
-  check(true, "an admin's grant opens Publishing for that account at once");
+  check(true, "the grant opens Publishing for that account at once");
   await carol.page.mouse.move(900, 900);
   await carol.page.mouse.move(930, 950);
   await carol.page.locator('.show[data-idle="0"]').waitFor({ timeout: 5000 });
   if (await carol.page.getByRole('button', { name: 'Stop publishing' }).isVisible().catch(() => false)) await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
   await carol.page.locator('.showbar .jobline', { hasText: 'stopped' }).waitFor({ timeout: 15000 });
   await monitor.close();
-  // The publisher's own Performances page lists the footage of the broadcast, under its own name, with its video.
+  // The publisher's own Performances page lists the footage of the broadcast as a run of chapters of its own, cut like the film.
   const carolPerf = await carol.ctx.newPage();
   carolPerf.on('pageerror', (e) => errors.carol.push(String(e)));
   await carolPerf.goto(`${base}studio/performances?${control}`, { waitUntil: 'networkidle' });
-  await carolPerf.locator('.list .item', { hasText: 'Broadcast' }).first().waitFor({ timeout: 20000 }).catch(() => undefined);
-  const carolItems = (await carolPerf.locator('.list .item').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
-  const footageItem = carolItems.find((t) => /Broadcast/.test(t)) ?? '';
-  check(/Broadcast/.test(footageItem) && /show video/.test(footageItem), `the publisher finds the footage of the broadcast under Performances, with its video (${footageItem.slice(0, 120) || carolItems.length + ' items, none of them the footage'})`);
+  const carolEvent = carolPerf.locator('[data-event]', { hasText: 'Broadcast' }).first();
+  await carolEvent.waitFor({ timeout: 20000 }).catch(() => undefined);
+  const carolChapters = (await carolEvent.locator('[data-chapter]').evaluateAll((els) => els.map((e) => ({ index: Number(e.getAttribute('data-chapter')), kind: e.getAttribute('data-chapter-kind'), at: Date.parse(e.getAttribute('data-chapter-at') || '') }))).catch(() => []));
+  console.log('footage chapters:', JSON.stringify(carolChapters));
+  // The broadcast went on air during the first song and was stopped before anything happened to it: one chapter, the song.
+  check(carolChapters.length >= 1 && carolChapters[0].kind === 'song' && carolChapters.every((c, i) => c.index === i + 1 && ['song', 'pause', 'stage'].includes(c.kind) && c.at > 0), `the publisher finds the footage of the broadcast under Performances as its chapters, cut where the stage went while it was on air (${carolChapters.map((c) => c.kind).join(',')})`);
   await carolPerf.screenshot({ path: `${out}/performances-carol.png` });
-  // The footage carries the song and the voices, exactly as the broadcast did (the moment measured on the bus, where the footage's clock has it).
-  await carolPerf.locator('.list .item', { hasText: 'Broadcast' }).first().getByRole('button', { name: /^Play/ }).click(); // the publisher's own list: the thumb opens it
+  // The footage carries the song and the voices, exactly as the broadcast did: the moment measured on the bus, in the chapter that holds it.
+  const busChapter = [...carolChapters].filter((c) => c.at <= busCap.wallStart).sort((a, b) => b.at - a.at)[0] ?? carolChapters[0];
+  await carolEvent.locator(`[data-chapter="${busChapter?.index ?? 1}"]`).getByRole('button', { name: /^Play/ }).click();
   const footageB64 = await sheetVideo(carolPerf);
   if (footageB64) await writeFile(`${out}/footage-carol.webm`, Buffer.from(footageB64, 'base64'));
   if (footageB64) {
-    const footageAt = Math.max(0, (footageSecondsAtBus !== null ? footageSecondsAtBus + (busCap.wallStart - busWallAt) / 1000 : (busWallAt - goLiveAt) / 1000) - 1);
+    const footageAt = Math.max(0, (busChapter ? (busCap.wallStart - busChapter.at) / 1000 : footageSecondsAtBus !== null ? footageSecondsAtBus + (busCap.wallStart - busWallAt) / 1000 : (busWallAt - goLiveAt) / 1000) - 1);
     const footageSound = await fileSound(`${out}/footage-carol.webm`, footageAt, [(stageAtBus ?? 0) / 1000 - 25, (stageAtBus ?? 0) / 1000 + 15]);
     console.log("the footage's sound:", JSON.stringify({ ...footageSound, rms: footageSound.rms.toFixed(3), voice: footageSound.voice.toFixed(1) }));
     check(footageSound.song.r > 0.3, `the footage of the broadcast carries the song (correlation ${footageSound.song.r.toFixed(2)} at ${footageSound.song.positionS.toFixed(1)} s into the song, ${footageAt.toFixed(0)} s into the footage)`);

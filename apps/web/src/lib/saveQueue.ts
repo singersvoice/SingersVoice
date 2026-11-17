@@ -27,6 +27,8 @@ export interface SaveJob {
   attempts: number;
   createdAt: number;
   finishedAt: number | null;
+  /** A chapter of a film: no toast, no chip while it goes well (the film's own line says what was saved); a failure still shows, with Retry. */
+  quiet: boolean;
 }
 
 export type SaveReport = (p: { label: string; fraction: number }) => void;
@@ -40,6 +42,8 @@ interface Spec {
   work: (report: SaveReport) => Promise<{ link: string | null }>;
   /** Called once it is done (a toast action, say). */
   onDone?: (job: SaveJob) => void;
+  /** No toast when it is done (a chapter of a film: one every song would be noise; the film's line says what was saved). */
+  quiet?: boolean;
 }
 
 const AUTO_RETRIES = 3;
@@ -60,7 +64,7 @@ function patch(id: string, p: Partial<SaveJob>): void {
 export function enqueueSave(spec: Spec): string {
   const id = spec.id ?? newId('perf-');
   specs.set(id, { ...spec, id });
-  const job: SaveJob = { id, title: spec.title, meetTitle: spec.meetTitle, shared: spec.shared ?? false, state: 'queued', progress: null, error: null, link: null, attempts: 0, createdAt: Date.now(), finishedAt: null };
+  const job: SaveJob = { id, title: spec.title, meetTitle: spec.meetTitle, shared: spec.shared ?? false, state: 'queued', progress: null, error: null, link: null, attempts: 0, createdAt: Date.now(), finishedAt: null, quiet: spec.quiet ?? false };
   saveJobs.value = [...saveJobs.value.filter((j) => j.id !== id), job];
   void pump();
   return id;
@@ -110,7 +114,7 @@ async function runJob(id: string): Promise<void> {
       patch(id, { state: 'done', progress: null, link: r.link, finishedAt: Date.now() });
       specs.delete(id);
       const job = saveJobs.value.find((j) => j.id === id)!;
-      toast(job.shared ? `Saved "${job.title}" — the meet's performance, shared with everyone in it` : `Saved "${job.title}" to your performances`, 'ok', 6000, { label: 'Performances', onClick: () => spec.onDone?.(job) });
+      if (!spec.quiet) toast(job.shared ? `Saved "${job.title}" — the meet's performance, shared with everyone in it` : `Saved "${job.title}" to your performances`, 'ok', 6000, { label: 'Performances', onClick: () => spec.onDone?.(job) });
       setTimeout(() => {
         saveJobs.value = saveJobs.value.filter((j) => j.id !== id || j.state !== 'done');
       }, KEEP_DONE_MS);

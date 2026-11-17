@@ -26,7 +26,7 @@ export const STRIPE_API = 'https://api.stripe.com/v1';
 /** The plans a user can be on; `publisher` unlocks Publishing mode (the show view, destinations, going live). */
 export const PLANS: Record<PlanId, { title: string; blurb: string }> = {
   free: { title: 'Free', blurb: 'Sing in the Studio, host and join live meets, keep every take in your own Drive.' },
-  publisher: { title: 'Publisher', blurb: 'Everything in Free, plus Publishing mode: the show view, YouTube and in-house live streams, destinations and the watch page.' },
+  publisher: { title: 'Club owner', blurb: 'Everything in Free, plus Publishing mode for a year: the show view, YouTube and in-house live streams, destinations and the watch page.' },
 };
 
 /** Checkout and the portal exist only when a key and a price are configured. */

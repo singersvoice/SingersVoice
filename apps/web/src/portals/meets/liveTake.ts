@@ -6,7 +6,7 @@
  * meet. All of it in the background saver (`lib/saveQueue.ts`): the singer is already back on the
  * stage. Every stage is remembered, so a retry picks up where it failed.
  */
-import { newId, type PerformanceSinger } from '@singersvoice/protocol';
+import { newId, type PerformanceChapter, type PerformanceSinger } from '@singersvoice/protocol';
 import { api } from '../../lib/api.ts';
 import { go } from '../../lib/nav.ts';
 import { enqueueSave, type SaveReport } from '../../lib/saveQueue.ts';
@@ -100,8 +100,10 @@ export function saveLiveTake(spec: LiveTakeSpec): string | null {
 }
 
 export interface MeetFilmSpec {
-  /** The film as the provider saved it (the upload is complete by now). */
+  /** The chapter as the provider saved it (the upload is complete by now). */
   saved: PerformanceSummary;
+  /** Which chapter of which filming it is (the Performances list groups the chapters of a film). */
+  chapter: PerformanceChapter;
   meet: { meetId: string; title: string; hostName: string };
   singers: PerformanceSinger[];
   /** The room's session: the registration goes through it so the ended screen lists the film at once. */
@@ -109,9 +111,9 @@ export interface MeetFilmSpec {
 }
 
 /**
- * The film of the whole meet (video/meetRecorder.ts) is in the host's Drive already; what is left
- * runs in the saver: share it anyone-with-the-link and with every member's Google account, and
- * list it with the meet — like a song's show, under the name "Full meet".
+ * A chapter of the film of the meet (video/meetRecorder.ts) is in the host's Drive already; what is
+ * left runs in the saver: share it anyone-with-the-link and with every member's Google account, and
+ * list it with the meet — like a song's show, under its event ("Full meet") and chapter.
  */
 export function registerMeetFilm(spec: MeetFilmSpec): void {
   const { saved, meet } = spec;
@@ -131,18 +133,19 @@ export function registerMeetFilm(spec: MeetFilmSpec): void {
       const r = await spec.session.registerPerformance({
         performanceId: saved.performanceId,
         songTitle: saved.trackTitle,
-        trackId: '',
+        trackId: spec.chapter.trackId,
         singers: spec.singers,
         link: links.link,
         videoLink: links.videoLink,
         durationMs: saved.durationMs,
         bytes: 0,
         mimeType: 'video/mp4',
+        chapter: spec.chapter,
       });
       registered = true;
       for (const email of r.shareWith) void withProvider((p) => p.sharePerformance(saved.performanceId, { type: 'user', email })).catch((e) => toast(`Could not share the film with ${email}: ${errorText(e)}`, 'warn', 6000));
     }
     return { link: links.videoLink ?? links.link };
   };
-  enqueueSave({ id: saved.performanceId, title: saved.trackTitle, meetTitle: meet.title, shared: true, work, onDone: () => go('/studio/performances') });
+  enqueueSave({ id: saved.performanceId, title: `${spec.chapter.eventTitle} ${String(spec.chapter.index).padStart(2, '0')} · ${saved.trackTitle}`, meetTitle: meet.title, shared: true, work, quiet: true });
 }

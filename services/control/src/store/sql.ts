@@ -1,31 +1,58 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { LIVE_KEEP, MIX_KEEP, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type UserRecord, type PublishJobLive } from '@singersvoice/protocol';
-import { planActive } from '../billing.ts';
+import { LIVE_KEEP, MIX_KEEP, mediaOfRole, publishingClosedReason, publishingOpen, subscriptionStatus, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
-import { SCHEMA_SQL } from './schema.ts';
+import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
-/** One account's plan: what it is on, until when, and the Stripe ids behind it (none for a grant). */
+/** One account's subscription row: the plan, its dates and standing, and the Stripe ids behind it (none for a grant). */
 export interface Subscription {
   userId: string;
   plan: PlanId;
+  startedAt: string | null;
   planUntil: string | null;
+  status: 'active' | 'revoked';
   customerId: string | null;
   subscriptionId: string | null;
   source: 'stripe' | 'grant';
   updatedAt: string;
 }
 
-type UserRow = { user_id: string; email: string; name: string; picture: string; privileged: number; created_at: string; last_seen_at: string; plan?: string | null; plan_until?: string | null };
+type UserRow = { user_id: string; email: string; name: string; picture: string; privileged: number; role?: string | null; created_at: string; last_seen_at: string; plan?: string | null; plan_until?: string | null; started_at?: string | null; sub_status?: string | null; sub_source?: string | null; sub_updated_at?: string | null };
 
-/** A user row (joined with its subscription) as the record the service hands out: the plan, and whether Publishing is open. */
-function userFromRow(r: UserRow): UserRecord {
-  const plan: PlanId = r.plan === 'publisher' ? 'publisher' : 'free';
-  const planUntil = r.plan_until ?? null;
-  const privileged = !!r.privileged;
-  return { userId: r.user_id, email: r.email, name: r.name, picture: r.picture, privileged, plan, planUntil, canPublish: privileged || planActive(plan, planUntil), createdAt: r.created_at, lastSeenAt: r.last_seen_at };
+const ROLES: UserRole[] = ['audio', 'dual', 'club_owner', 'super_admin'];
+export const asRole = (v: unknown, fallback: UserRole = 'dual'): UserRole => (ROLES.includes(v as UserRole) ? (v as UserRole) : fallback);
+
+/** The subscription a joined row carries (null when the account never had one), its status as it stands now (`expired` once the date has passed). */
+function subscriptionFromRow(r: UserRow, now: number): UserSubscription | null {
+  if (!r.plan) return null;
+  const stored = { startedAt: r.started_at ?? null, expiresAt: r.plan_until ?? null, status: r.plan !== 'publisher' ? ('none' as const) : r.sub_status === 'revoked' ? ('revoked' as const) : ('active' as const), source: r.sub_source === 'stripe' ? ('stripe' as const) : ('grant' as const), updatedAt: r.sub_updated_at ?? null };
+  return { ...stored, status: subscriptionStatus(stored, now) };
 }
 
-const USER_SELECT = 'SELECT u.*, s.plan AS plan, s.plan_until AS plan_until FROM users u LEFT JOIN subscriptions s ON s.user_id = u.user_id';
+/** A user row (joined with its subscription) as the record the service hands out: the role, the subscription, and whether Publishing is open right now. */
+export function userFromRow(r: UserRow, now = Date.now()): UserRecord {
+  const privileged = !!r.privileged;
+  const role = asRole(r.role, privileged ? 'super_admin' : 'dual');
+  const subscription = subscriptionFromRow(r, now);
+  const plan: PlanId = r.plan === 'publisher' ? 'publisher' : 'free';
+  return {
+    userId: r.user_id,
+    email: r.email,
+    name: r.name,
+    picture: r.picture,
+    role,
+    subscription,
+    media: mediaOfRole(role),
+    privileged: role === 'super_admin',
+    plan,
+    planUntil: r.plan_until ?? null,
+    canPublish: publishingOpen(role, subscription, now),
+    publishingNote: publishingClosedReason(role, subscription, now),
+    createdAt: r.created_at,
+    lastSeenAt: r.last_seen_at,
+  };
+}
+
+const USER_SELECT = 'SELECT u.*, s.plan AS plan, s.plan_until AS plan_until, s.started_at AS started_at, s.status AS sub_status, s.source AS sub_source, s.updated_at AS sub_updated_at FROM users u LEFT JOIN subscriptions s ON s.user_id = u.user_id';
 
 export interface StoredParticipant extends Participant {
   meetId: string;
@@ -45,8 +72,18 @@ export class SqlStore {
   }
 
   migrate(): Promise<void> {
-    if (!this.ready) this.ready = this.db.exec(SCHEMA_SQL);
+    if (!this.ready) this.ready = this.runMigrations();
     return this.ready;
+  }
+
+  private async runMigrations(): Promise<void> {
+    await this.db.exec(SCHEMA_SQL);
+    for (const m of COLUMN_MIGRATIONS) {
+      const cols = await this.db.all<{ name: string }>(`PRAGMA table_info(${m.table})`);
+      if (cols.some((c) => c.name === m.column)) continue;
+      await this.db.exec(m.ddl);
+      if (m.after) await this.db.exec(m.after);
+    }
   }
 
   // ---------- users ----------
@@ -55,7 +92,9 @@ export class SqlStore {
     const now = new Date().toISOString();
     const existing = await this.getUser(u.userId);
     if (existing) {
-      const privileged = u.privileged ?? existing.privileged;
+      // An address named in PRIVILEGED_EMAILS is a super admin whatever the row says; otherwise the role stays as set.
+      const privileged = u.privileged === true || existing.role === 'super_admin';
+      if (u.privileged === true && existing.role !== 'super_admin') await this.db.run("UPDATE users SET role='super_admin' WHERE user_id=?", [u.userId]);
       await this.db.run('UPDATE users SET email=?, name=?, picture=?, privileged=?, last_seen_at=? WHERE user_id=?', [
         u.email || existing.email,
         u.name || existing.name,
@@ -64,21 +103,29 @@ export class SqlStore {
         now,
         u.userId,
       ]);
-      return { ...existing, email: u.email || existing.email, name: u.name || existing.name, picture: u.picture || existing.picture, privileged, canPublish: privileged || planActive(existing.plan, existing.planUntil), lastSeenAt: now };
+      return (await this.getUser(u.userId))!;
     }
     const count = await this.countUsers();
-    // The very first account becomes privileged (bootstrap admin) unless told otherwise.
+    // The very first account becomes the super admin (bootstrap) unless told otherwise; everyone else starts as dual.
     const privileged = u.privileged ?? count === 0;
-    await this.db.run('INSERT INTO users (user_id, email, name, picture, privileged, created_at, last_seen_at) VALUES (?,?,?,?,?,?,?)', [
-      u.userId,
-      u.email,
-      u.name,
-      u.picture,
-      privileged ? 1 : 0,
-      now,
-      now,
-    ]);
-    return { userId: u.userId, email: u.email, name: u.name, picture: u.picture, privileged, plan: 'free', planUntil: null, canPublish: privileged, createdAt: now, lastSeenAt: now };
+    await this.db.run('INSERT INTO users (user_id, email, name, picture, privileged, role, created_at, last_seen_at) VALUES (?,?,?,?,?,?,?,?)', [u.userId, u.email, u.name, u.picture, privileged ? 1 : 0, privileged ? 'super_admin' : 'dual', now, now]);
+    return (await this.getUser(u.userId))!;
+  }
+
+  /** The Admin page: every account, newest first. */
+  async listUsers(limit = 500): Promise<UserRecord[]> {
+    const rows = await this.db.all<UserRow>(`${USER_SELECT} ORDER BY u.created_at DESC LIMIT ?`, [limit]);
+    return rows.map((r) => userFromRow(r));
+  }
+
+  /** A Super Admin sets an account's role; `privileged` follows it for older code paths. */
+  async setRole(userId: string, role: UserRole): Promise<void> {
+    await this.db.run('UPDATE users SET role=?, privileged=? WHERE user_id=?', [role, role === 'super_admin' ? 1 : 0, userId]);
+  }
+
+  async countSuperAdmins(): Promise<number> {
+    const r = await this.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM users WHERE role='super_admin'");
+    return Number(r?.n ?? 0);
   }
 
   async getUser(userId: string): Promise<UserRecord | null> {
@@ -94,8 +141,8 @@ export class SqlStore {
   // ---------- plans (billing) ----------
 
   async getSubscription(userId: string): Promise<Subscription | null> {
-    const r = await this.db.get<{ user_id: string; plan: string; plan_until: string | null; customer_id: string | null; subscription_id: string | null; source: string; updated_at: string }>('SELECT * FROM subscriptions WHERE user_id=?', [userId]);
-    return r ? { userId: r.user_id, plan: r.plan === 'publisher' ? 'publisher' : 'free', planUntil: r.plan_until, customerId: r.customer_id, subscriptionId: r.subscription_id, source: r.source === 'grant' ? 'grant' : 'stripe', updatedAt: r.updated_at } : null;
+    const r = await this.db.get<{ user_id: string; plan: string; plan_until: string | null; started_at: string | null; status: string | null; customer_id: string | null; subscription_id: string | null; source: string; updated_at: string }>('SELECT * FROM subscriptions WHERE user_id=?', [userId]);
+    return r ? { userId: r.user_id, plan: r.plan === 'publisher' ? 'publisher' : 'free', startedAt: r.started_at ?? null, planUntil: r.plan_until, status: r.status === 'revoked' ? 'revoked' : 'active', customerId: r.customer_id, subscriptionId: r.subscription_id, source: r.source === 'grant' ? 'grant' : 'stripe', updatedAt: r.updated_at } : null;
   }
 
   async userIdByCustomer(customerId: string): Promise<string | null> {
@@ -103,17 +150,22 @@ export class SqlStore {
     return r?.user_id ?? null;
   }
 
-  /** Put an account on a plan (a Stripe event, or an admin's grant); ids not given are kept. */
-  async setSubscription(s: { userId: string; plan: PlanId; planUntil: string | null; customerId?: string | null; subscriptionId?: string | null; source: 'stripe' | 'grant' }): Promise<Subscription> {
+  /**
+   * Put an account on a plan (a Stripe event, or a Super Admin's grant); ids not given are kept. `startedAt`
+   * not given: kept, or now for a plan that begins; `status` not given: active (a `free` plan is 'none' to readers).
+   */
+  async setSubscription(s: { userId: string; plan: PlanId; planUntil: string | null; startedAt?: string | null; status?: 'active' | 'revoked'; customerId?: string | null; subscriptionId?: string | null; source: 'stripe' | 'grant' }): Promise<Subscription> {
     const now = new Date().toISOString();
     const existing = await this.getSubscription(s.userId);
     const customerId = s.customerId === undefined ? (existing?.customerId ?? null) : s.customerId;
     const subscriptionId = s.subscriptionId === undefined ? (existing?.subscriptionId ?? null) : s.subscriptionId;
+    const startedAt = s.startedAt === undefined ? (existing?.startedAt ?? (s.plan === 'publisher' ? now : null)) : s.startedAt;
+    const status = s.status ?? 'active';
     await this.db.run(
-      'INSERT INTO subscriptions (user_id, plan, plan_until, customer_id, subscription_id, source, updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan, plan_until=excluded.plan_until, customer_id=excluded.customer_id, subscription_id=excluded.subscription_id, source=excluded.source, updated_at=excluded.updated_at',
-      [s.userId, s.plan, s.planUntil, customerId, subscriptionId, s.source, now],
+      'INSERT INTO subscriptions (user_id, plan, plan_until, started_at, status, customer_id, subscription_id, source, updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan, plan_until=excluded.plan_until, started_at=excluded.started_at, status=excluded.status, customer_id=excluded.customer_id, subscription_id=excluded.subscription_id, source=excluded.source, updated_at=excluded.updated_at',
+      [s.userId, s.plan, s.planUntil, startedAt, status, customerId, subscriptionId, s.source, now],
     );
-    return { userId: s.userId, plan: s.plan, planUntil: s.planUntil, customerId, subscriptionId, source: s.source, updatedAt: now };
+    return { userId: s.userId, plan: s.plan, startedAt, planUntil: s.planUntil, status, customerId, subscriptionId, source: s.source, updatedAt: now };
   }
 
   /** Stripe retries webhooks: true the first time an event id is seen. */
@@ -302,7 +354,7 @@ export class SqlStore {
   }
 
   async listMembers(meetId: string): Promise<UserRecord[]> {
-    const rows = await this.db.all<UserRow>(`SELECT u.*, s.plan AS plan, s.plan_until AS plan_until FROM meet_members m JOIN users u ON u.user_id = m.user_id LEFT JOIN subscriptions s ON s.user_id = u.user_id WHERE m.meet_id=? ORDER BY m.joined_at ASC`, [meetId]);
+    const rows = await this.db.all<UserRow>(`SELECT u.*, s.plan AS plan, s.plan_until AS plan_until, s.started_at AS started_at, s.status AS sub_status, s.source AS sub_source, s.updated_at AS sub_updated_at FROM meet_members m JOIN users u ON u.user_id = m.user_id LEFT JOIN subscriptions s ON s.user_id = u.user_id WHERE m.meet_id=? ORDER BY m.joined_at ASC`, [meetId]);
     return rows.map(userFromRow);
   }
 

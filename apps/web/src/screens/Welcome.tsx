@@ -57,7 +57,9 @@ export function Welcome() {
         <h1>
           Singers<span style="color:var(--accent)">Voice</span>
         </h1>
-        <p class="muted">Lyrics-first karaoke. Sing solo now, sing together on stage next — every take lands in your own Google Drive.</p>
+        <p class="muted tagline" data-tagline>
+          <b>“One Virtual Stage. Endless Musical Possibilities.”</b> — Sing solo, harmonize globally, or perform with musicians anywhere, play instruments, and collaborate live from anywhere.
+        </p>
       </div>
       <div class="actions">
         <button class="btn primary lg block" disabled={busy.value !== null || !googleConfigured} onClick={() => void onGoogle()}>

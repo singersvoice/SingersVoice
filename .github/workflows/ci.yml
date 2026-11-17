@@ -80,7 +80,12 @@ jobs:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/yt-track-e2e.mjs screenshots
 
-      - name: Live meet with two performers on one stage (cut-outs, WebRTC relay, cued pause/resume, the sound measured)
+      - name: Roles, the Admin page and the instrument (audio only on stage, a club owner's year granted, expired, renewed, revoked; a USB input beside the mic)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/roles-e2e.mjs screenshots
+
+      - name: Live meet with two performers on one stage (cut-outs, WebRTC relay, cued pause/resume, the film in chapters, nothing mirrored, the sound measured)
         env:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/live-duet.mjs screenshots

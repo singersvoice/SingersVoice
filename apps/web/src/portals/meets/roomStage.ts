@@ -12,12 +12,15 @@
  * picture with the whole mix, drawn from the same cut-outs (the other singers' vocals come over
  * the mesh for it — and are never played).
  */
-import { meetIsOpen, SLOT_COLORS, type Meet, type Participant, type PerformanceSinger, type SingerSlot } from '@singersvoice/protocol';
+import { meetIsOpen, participantMedia, SLOT_COLORS, type Meet, type Participant, type PerformanceChapter, type PerformanceSinger, type SingerSlot } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
-import { needsReconnect } from '../../state/session.ts';
+import { serverNow } from '../../lib/api.ts';
+import type { PerformanceSummary } from '../../lib/storage/types.ts';
+import { media, needsReconnect } from '../../state/session.ts';
 import { appSettings } from '../../state/settings.ts';
+import { chapterCue } from '../../video/chapters.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
 import { LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
@@ -63,6 +66,8 @@ export interface RoomStage {
   mixLine: string;
   /** Make the video link to a performer again from scratch (a plain Reconnect for a picture that stands still). */
   reconnect: (id: string) => void;
+  /** This account may send its picture (a dual account); an audio-only account sings with sound alone. */
+  videoAllowed: boolean;
 }
 
 export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; engine: AudioEngine | null; restartCamera: () => Promise<void> }): RoomStage {
@@ -80,6 +85,8 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   const camStream = camera.stream;
   const camOn = camera.on.value;
   const facing = camera.facing.value;
+  /** An audio-only account (roles.ts) has no camera on stage: nothing of its picture is captured, sent, recorded or streamed. */
+  const videoAllowed = media.value === 'dual';
 
   // ---- camera follows the stage: open when I step on (if my setting says so), close when I step off ----
   /** A camera opened from a tap stays open a moment even before the slot is confirmed (no open/close flicker). */
@@ -88,6 +95,10 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   const opening = useRef<Promise<void> | null>(null);
   const openCamera = (): Promise<void> => {
     if (camera.on.value) return Promise.resolve();
+    if (!videoAllowed) {
+      setCamError('Your account is audio only — no camera on stage (the SingersVoice admin can change that)');
+      return Promise.resolve();
+    }
     if (opening.current) return opening.current;
     holdUntil.current = Date.now() + 8000;
     opening.current = (async () => {
@@ -114,9 +125,9 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       const t = setTimeout(() => camera.close(), wait);
       return () => clearTimeout(t);
     }
-    if (app.cameraOn && !camOn && !opts.preparing) void openCamera();
-    if (!app.cameraOn && camOn && !opts.preparing) camera.close();
-  }, [onStage, app.cameraOn, camOn, opts.preparing]);
+    if (app.cameraOn && videoAllowed && !camOn && !opts.preparing) void openCamera();
+    if ((!app.cameraOn || !videoAllowed) && camOn && !opts.preparing) camera.close();
+  }, [onStage, app.cameraOn, camOn, opts.preparing, videoAllowed]);
 
   // ---- my cut-out, framed by me; the packed stream goes to the mesh while I am on stage ----
   useEffect(() => {
@@ -323,19 +334,22 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     if (onStage) mesh?.setPeers(peerIds);
   }, [peerKey, onStage]);
 
-  // Everyone on stage, left to right by slot, on one shared stage (placeholders for video I don't receive).
+  // Everyone on stage, left to right by slot, on one shared stage (placeholders for video I don't receive — and for an
+  // audio-only account, whatever arrives: the rule is applied on every device that draws the stage, not only on theirs).
   // The recording gets the same people with the show view's labels (first names, no "You").
+  const participants = session.snapshot.value?.participants ?? [];
+  const audioOnlyKey = stagePerformers.filter((s) => participantMedia(participants, s.participantId) === 'audio').map((s) => s.participantId).join(',');
   useEffect(() => {
     const list: StagePerformer[] = stagePerformers.map((s) => {
       const me = s.participantId === you.participantId;
       const color = SLOT_COLORS[Math.max(1, Math.min(10, s.slot)) as SingerSlot];
       if (me) return { id: 'me', slot: s.slot, label: `You · S${s.slot}`, color, source: feed.source, mirror: facing === 'user', isMe: true };
-      const r = remoteVideos.current.get(s.participantId!);
+      const r = participantMedia(participants, s.participantId) === 'audio' ? undefined : remoteVideos.current.get(s.participantId!);
       return { id: s.participantId!, slot: s.slot, label: `${s.displayName.split(' ')[0] || 'Singer'} · S${s.slot}`, picture: s.picture, color, source: r ? { kind: 'frame', frame: r.frame } : { kind: 'none' } };
     });
     compositor.setPerformers(list);
     show.setPerformers(list.map((p) => ({ ...p, label: p.isMe ? 'You' : p.label.replace(/ · S\d+$/, '') })));
-  }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), camStream, camOn, facing, peerStates, you.participantId]);
+  }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), camStream, camOn, facing, peerStates, you.participantId, audioOnlyKey]);
 
   // ---- the film of the meet (the host's device): the whole meet as one video in the host's Drive ----
   const film = useMemo(() => new MeetRecorder(show), [show]);
@@ -351,16 +365,25 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     for (const s of stagePerformers) filmSingers.current.set(s.slot, { slot: s.slot, displayName: s.displayName });
   }, [film.recording, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|')]);
   const driveLinked = !needsReconnect.value; // a Drive session that lapsed and came back starts the film then
+  /** Every chapter of the film, as it lands in Drive: shared with the meet and listed under its event (lib/liveTake.ts). */
+  const meetRef = useRef(meet);
+  meetRef.current = meet;
+  const onChapterSaved = (saved: PerformanceSummary, chapter: PerformanceChapter) => {
+    const m = meetRef.current;
+    registerMeetFilm({ saved, chapter, meet: { meetId: m.meetId, title: m.title, hostName: m.hostName }, singers: [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot), session });
+  };
   useEffect(() => {
     const engine = opts.engine;
     if (!host || !onStage || !engine || !filmWanted || !meetOpen || !driveLinked) return;
     filmSingers.current = new Map(stagePerformers.map((s) => [s.slot, { slot: s.slot, displayName: s.displayName }]));
-    void film.start(stageSound(engine, show), { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot) });
+    void film.start(stageSound(engine, show), { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot), onSaved: onChapterSaved }, chapterCue(meet, serverNow()));
   }, [film, host, onStage, opts.engine, filmWanted, meetOpen, driveLinked]);
-  const endFilm = () => {
-    const singers = [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot);
-    void film.stop().then((saved) => saved && registerMeetFilm({ saved, meet: { meetId: meet.meetId, title: meet.title, hostName: meet.hostName }, singers, session }));
-  };
+  // The film is cut where the stage goes: a song's start (its kickstart), a pause, a stop, the next song (video/chapters.ts).
+  const pb = meet.playback;
+  useEffect(() => {
+    film.cue(chapterCue(meet, serverNow()));
+  }, [film, pb?.state, pb?.epoch, pb?.pauseAtEpochMs, meet.kickstartEpochMs, meet.trackTitle, meet.songCount]);
+  const endFilm = () => void film.stop();
   useEffect(() => {
     if (!meetOpen || !onStage || !filmWanted) endFilm();
   }, [meetOpen, onStage, filmWanted]);
@@ -368,5 +391,5 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect, cameraLine, mixLine };
+  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect, cameraLine, mixLine, videoAllowed };
 }

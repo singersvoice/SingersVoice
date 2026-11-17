@@ -9,6 +9,9 @@
  * Every performance on stage is a personal session: each performer records locally and keeps
  * the take in their own Drive (`Performances/Live/<meet>`).
  */
+import type { PerformanceChapter } from './performance.ts';
+import type { MediaPermission } from './roles.ts';
+
 export const MAX_PERFORMERS = 10;
 /** Open meets (lobby / countdown / live) one account may host at a time. */
 export const MAX_OPEN_MEETS = 3;
@@ -175,12 +178,21 @@ export interface Participant {
   displayName: string;
   picture: string;
   role: MeetRole;
+  /** What this account may send of itself (roles.ts): its voice alone, or voice and picture. Absent on rows from older builds = dual. */
+  media?: MediaPermission;
   slot: number | null;
   /** This member's "ask to sing": pending until the host decides; declined until they ask again. */
   stageRequest: 'none' | 'pending' | 'declined';
   joinedAt: string;
   lastSeenAt: string;
 }
+
+/**
+ * What an account on stage may send of itself, by the room's participant list: an audio-only account's
+ * picture is never drawn, whatever arrives (every device applies it — the service sets `media` from
+ * the role at every join). Dual when the participant is unknown or from an older service.
+ */
+export const participantMedia = (participants: readonly Pick<Participant, 'participantId' | 'media'>[], participantId: string | null): MediaPermission => participants.find((p) => p.participantId === participantId)?.media ?? 'dual';
 
 export interface ChatMessage {
   id: string;
@@ -227,6 +239,8 @@ export interface MeetPerformance {
   bytes: number;
   mimeType: string;
   createdAt: string;
+  /** A chapter of a filmed event (the film of the whole meet, the broadcast's footage): which event, which chapter, what kind. */
+  chapter?: PerformanceChapter;
 }
 
 export interface RegisterPerformanceRequest {
@@ -241,6 +255,8 @@ export interface RegisterPerformanceRequest {
   durationMs: number;
   bytes: number;
   mimeType: string;
+  /** See `MeetPerformance.chapter`. */
+  chapter?: PerformanceChapter;
 }
 
 /** NTP-style clock offset from a request/response pair. offset = server − local. */

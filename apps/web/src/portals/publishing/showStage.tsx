@@ -5,7 +5,7 @@
  * broadcast audience should see besides the singers: the countdown opener, "paused", "show over".
  * Status badges and controls belong to the chrome around it, never to the picture.
  */
-import { SLOT_COLORS, type Meet, type Participant, type SingerSlot } from '@singersvoice/protocol';
+import { participantMedia, SLOT_COLORS, type Meet, type Participant, type SingerSlot } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
@@ -112,16 +112,19 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant):
     mesh?.setPeers(peerIds);
   }, [peerKey]);
 
-  // Everyone on stage, left to right by slot — huge, like a stage show (no "me": the publisher is not a performer).
+  // Everyone on stage, left to right by slot — huge, like a stage show (no "me": the publisher is not a performer). An
+  // audio-only account stands as its name card whatever its device sends: the rule holds on the stream too.
+  const participants = session.snapshot.value?.participants ?? [];
+  const audioOnlyKey = stagePerformers.filter((s) => participantMedia(participants, s.participantId) === 'audio').map((s) => s.participantId).join(',');
   useEffect(() => {
     const list: StagePerformer[] = stagePerformers.map((s) => {
-      const r = remoteVideos.current.get(s.participantId!);
+      const r = participantMedia(participants, s.participantId) === 'audio' ? undefined : remoteVideos.current.get(s.participantId!);
       const color = SLOT_COLORS[Math.max(1, Math.min(10, s.slot)) as SingerSlot];
       return { id: s.participantId!, slot: s.slot, label: s.displayName.split(' ')[0] || 'Singer', picture: s.picture, color, source: r ? { kind: 'frame', frame: r.frame } : { kind: 'none' } };
     });
     compositor.setPerformers(list);
     setPerformers(list);
-  }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), peerStates]);
+  }, [peerKey, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|'), peerStates, audioOnlyKey]);
 
   const linked = stagePerformers.filter((s) => peerStates[s.participantId!] === 'connected').length;
   const still = stillIds.map((id) => meet.stage.find((s) => s.participantId === id)?.displayName.split(' ')[0] || 'a singer');

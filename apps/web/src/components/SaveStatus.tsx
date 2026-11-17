@@ -1,10 +1,13 @@
-/** What the background saver is doing: chips for each take being saved, saved, or stuck (with Retry). */
+/**
+ * What the background saver is doing: chips for each take being saved, saved, or stuck (with Retry). A
+ * chapter of a film (a quiet job) shows only when it is stuck — the film's own line counts the saved ones.
+ */
 import { href } from '../lib/nav.ts';
 import { dismissSave, retrySave, saveJobs } from '../lib/saveQueue.ts';
 import { IcCheck, IcX } from './icons.tsx';
 
 export function SaveStatus(props: { compact?: boolean }) {
-  const jobs = saveJobs.value;
+  const jobs = saveJobs.value.filter((j) => !j.quiet || j.state === 'failed');
   if (!jobs.length) return null;
   return (
     <div class={`savestatus ${props.compact ? 'compact' : ''}`} role="status" aria-live="polite">

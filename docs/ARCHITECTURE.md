@@ -287,10 +287,31 @@ married the new connection to a dead one and the two sides re-made each other wi
 host that answered in ten seconds was enough to start it). An untagged signal (an older build) is
 taken as before, with the DTLS fingerprint telling a new connection from an old one.
 
+## Roles, the Admin page and the club owner year
+
+Every account has one **role**, kept in the SVT DB (`users.role`) and read on every request
+(`packages/protocol/src/roles.ts`): **audio** (sings with sound only — the camera is never opened
+on stage on their device, and every other device draws their name card whatever arrives, by the
+`media` the room carries for each participant), **dual** (sound and picture — every new account),
+**club owner** (dual, and Publishing mode while the yearly subscription is active) and **super
+admin** (everything, always: Publishing without a subscription, and the **Admin page**). The first
+account ever seen is the super admin; an address in `PRIVILEGED_EMAILS` is one whatever its row
+says. A club owner's **subscription** is a row with a start, an expiry and a status (`active`,
+`revoked`, or `none`; `expired` is computed from the date on every read, so a year runs out by
+itself with nobody touching anything) — granted for a year on the Admin page (`/admin`, super
+admins only: every account, its role in a select, *Grant a year* / *Renew (+1 year)* / *Set dates*
+/ *Revoke*; `GET /admin/users`, `PATCH /admin/users/:id`, the last super admin cannot be demoted),
+or opened by Stripe (docs/BILLING.md). `canPublish` is computed from the two on the service — a
+super admin, or a club owner whose subscription is active today — and enforced there: every
+`/publishing/*` route and the publisher join answer `403 publishing_closed` with the reason in
+words (*expired on …*, *was revoked*, *is for club owners*), which the app shows on its gate. The
+app only mirrors the verdict (`role`, `media`, `subscription`, `publishingNote` from `/me`, refreshed
+on every portal and when entering a room). Tests: `services/control/test/app.test.ts` (roles,
+the guard, the dates), `tools/ci/roles-e2e.mjs` (the whole life of a subscription in the browser).
+
 ## Publishing mode (the show view)
 
-Publishing is its own portal (`/publishing`) for the Publisher plan — paid through Stripe (docs/BILLING.md) — and for admin accounts (`PRIVILEGED_EMAILS` on the
-service): per-platform destinations (YouTube, Facebook, Instagram, Twitch — RTMPS ingest URL +
+Publishing is its own portal (`/publishing`) for club owners with an active yearly subscription and for super admins (above; docs/BILLING.md for the paid way): per-platform destinations (YouTube, Facebook, Instagram, Twitch — RTMPS ingest URL +
 stream key, stored sealed — and the in-house portal), a publish job per meet, history. **Publish**
 opens the **show view** (`/publishing/show/:id`): the broadcast picture. It joins the meet as a
 *publisher* participant — its own kind: never on stage, never counted as audience, one per account
@@ -352,9 +373,14 @@ singer's take (`POST /meets/:id/recordings`, by account — the singer may have 
 then), and the host's copy is **the meet's performance**: shared from the host's Drive
 anyone-with-the-link and with each member's Google account, registered with the meet
 (`POST /meets/:id/performances`, host by account → the `performances` table; `meet_members`
-remembers everyone who was ever in the meet). `GET /performances` lists every show of every meet
-the account hosted or was in — the Performances page, with the shareable links. The PWA never
-applies an update while a save is pending.
+remembers everyone who was ever in the meet). A chapter of the film of the meet (4c below) is
+registered the same way, with `chapter` on the row (in `performances.data`: the event id and title,
+the index, the kind — `song`, `pause`, `stage` — the song, the instant it started) and on the Drive
+file's `appProperties` (`svEvent`, `svChapter`, `svChapterKind`, `svChapterAt`, `svChapterSong`),
+so a filming is put back together from either side. `GET /performances` lists every show and
+chapter of every meet the account hosted or was in — the Performances page, with the shareable
+links, the chapters grouped under their filming. The PWA never applies an update while a save is
+pending.
 
 **Preview** (admin monitoring) lists every open meet the account may publish (hosted or joined,
 any other by link / code) as a monitor tile: the exact broadcast picture (`showStage.tsx`, the
@@ -464,16 +490,34 @@ link; the first four tiles connect by themselves, the rest on request.
    any shape — a Studio dashboard link above all, which viewers cannot open — becomes the page
    viewers open (`youtubeWatchUrl`). Tests: `apps/web/test/youtube.test.ts` on a fake API.
 4c. **The film of the meet** (`video/meetRecorder.ts`): on the host's device, from the host on
-   stage with the mic open until the meet is over, one MediaRecorder on the room's ShowRecorder
-   canvas (drawn for the whole meet — `keepDrawing`; 1280×720 at 24 fps where the browser has
-   hardware H.264 in MP4 — Windows, Mac, iOS, Android — and a 960×540, 15 fps copy of it where it
-   only encodes WebM in software, so the stage itself never slows down) with a tap (`setTap`) on
-   every mix bus the device builds (the song's, the talk-back's), ten-second pieces into a `PerformanceStream` — the
-   Drive provider's `beginPerformanceStream`: one resumable upload session fed in order, pieces in
-   256 KiB multiples as 4 MiB fill, the last with the total; the session and the confirmed offset
-   are remembered in localStorage, and a film whose tab died is completed by the next start
-   (`finishDanglingFilms`: Drive is asked what it holds, the file is closed there). The result is a
-   performance of the meet ("Full meet", kind `show`), registered and shared like a song's show.
+   stage with the mic open until the meet is over — **never stopped by the song's transport**: a
+   singer's Start, Pause, Stop, Restart or seek changes nothing about the film running — on the
+   room's ShowRecorder canvas (drawn for the whole meet — `keepDrawing`; 1280×720 at 24 fps where
+   the browser has hardware H.264 in MP4 — Windows, Mac, iOS, Android — and a 960×540, 15 fps copy
+   of it where it only encodes WebM in software, so the stage itself never slows down) with a tap
+   (`setTap`) on every mix bus the device builds (the song's, the talk-back's). The film is **cut
+   into chapters** where the stage goes (`video/chapters.ts`, read off the meet's shared transport
+   every poll): a new chapter when a song starts — at its kickstart instant, not when the poll that
+   announced it landed, so the chapter begins where the song begins — and again for every restart,
+   seek and resume (each a new epoch: its own chapter, *Ammo (continued at 1:12)*), one for every
+   pause (*Paused — Ammo*, an interruption, cut at the cued instant), one for the stage between
+   songs (*On stage*, a new one after every song). Every chapter is its own MediaRecorder on the
+   same stream and its own `PerformanceStream` — the Drive provider's `beginPerformanceStream`: one
+   resumable upload session fed in order, pieces in 256 KiB multiples as 4 MiB fill, the last with
+   the total; the next chapter's recorder starts before the last one stops (they overlap by a frame,
+   so there is no gap), a chapter longer than ten minutes carries on in parts (*… (part 2)*), the
+   session and the confirmed offset are remembered in localStorage, and a chapter whose tab died
+   is completed by the next start (`finishDanglingFilms`: Drive is asked what it holds, the file is
+   closed there). Each chapter is a performance of the meet (kind `show`, `chapter` on its manifest
+   and on the Drive file's properties: the event id, the index, the kind, the song, the instant it
+   started), registered and shared like a song's show as it lands, so nothing is ever overwritten or
+   merged and every song is playable on its own; the ended screen and Performances put the filming
+   back together (`lib/filmEvents.ts` groups them by event, in order, with *Play all*).
+4d. **Orientation.** The screen mirrors the singer's own camera (a selfie, as a mirror does); the
+   `ShowRecorder` draws everyone **unmirrored** (`mirror: false` on every performer it is handed),
+   so every take, the film of the meet and the broadcast show the singers as the camera saw them
+   — a name on a shirt reads the right way round. Test: `apps/web/test/showMirror.test.ts`, and the
+   live e2e checks a frame of the saved show and of the film (two badges the fake person wears).
 5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.
 
 ## A hundred in a meet — what each one costs
@@ -603,6 +647,13 @@ correlates with the music) — mono, at the device's own rate. Echo cancellation
 singer says *I'm on speakers* (the track would otherwise leak into the mic). `AudioEngine.inputInfo`
 reports the device, its sample rate and channels; a rate under 32 kHz is a phone-call line (a
 Bluetooth headset's HFP mic) and the `MicStatus` component says so and offers another mic. The
+**instrument** is a second capture beside the microphone (`openInstrument`: a guitar, keys, a
+violin on a USB audio interface — *Instrument* ticked, the input picked, a level in 3 dB steps, on
+the mic status and in Settings; opened with the mic by `video/capture.ts`), a line input (no AEC,
+no NS, no AGC, the stereo pair folded to mono) summed into the singer's sound where the take
+recorder listens — after the vocal chain, before `voice` — so it reaches the take, the other singers,
+the stage mix, the film and the broadcast, and never the vocal effects or the leveller; unplugged,
+the track's `ended` closes it and the mic status says so; not on iOS (one capture per page). The
 **leveller** (`startLeveller`) replaces AGC: the raw peaks are watched 10× a second; quiet
 *singing* (a raw peak above −34 dBFS, gained below −18 dBFS, for three readings) lifts the trim 1 dB
 at a time up to +12 dB — room noise between phrases never does, which is what used to drive the gain

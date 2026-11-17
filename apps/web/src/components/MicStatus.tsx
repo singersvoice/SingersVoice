@@ -8,10 +8,16 @@ import { useEffect, useState } from 'preact/hooks';
 import type { AudioEngine } from '../audio/engine.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../state/settings.ts';
 
+/** The instrument's level, in plain steps. */
+export const INSTRUMENT_LEVELS = [-12, -9, -6, -3, 0, 3, 6, 9, 12];
+export const dbLabel = (db: number): string => (db > 0 ? `+${db} dB` : `${db} dB`);
+
 export function MicStatus(props: { engine: AudioEngine | null; onChange?: () => void }) {
   const info = props.engine?.inputInfo.value ?? null;
   const trim = props.engine?.inputTrimDb.value ?? 0;
   const fallback = props.engine?.voiceFallback.value ?? null;
+  const inst = props.engine?.instrumentInfo.value ?? null;
+  const instError = props.engine?.instrumentError.value ?? null;
   const app = appSettings.value;
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [speakersOut, setSpeakersOut] = useState(false);
@@ -97,6 +103,75 @@ export function MicStatus(props: { engine: AudioEngine | null; onChange?: () => 
           ))}
         </select>
       )}
+      {/* The instrument: a second input beside the microphone — a guitar, keys, a violin on a USB audio interface — mixed into
+          this singer's sound for everyone, the recording and the stream. A plain tick, the input to pick, its level. */}
+      <div class="row wrap" style="gap:8px;align-items:center" data-instrument={app.instrumentOn ? (inst ? 'on' : instError ? 'error' : 'unpicked') : 'off'}>
+        <label class="small row" style="gap:6px">
+          <input
+            type="checkbox"
+            checked={app.instrumentOn}
+            data-instrument-toggle
+            onChange={(e) => {
+              updateApp({ instrumentOn: (e.currentTarget as HTMLInputElement).checked });
+              props.onChange?.();
+            }}
+          />
+          <span title="A second input for an instrument — a guitar, keys, a violin on a USB audio interface — mixed into your sound for everyone on stage, the recording and the stream.">Instrument</span>
+        </label>
+        {app.instrumentOn && (
+          <select
+            class="input"
+            style="width:auto;max-width:14em"
+            value={app.instrumentDeviceId}
+            aria-label="Instrument input (USB interface)"
+            data-instrument-input
+            onChange={(e) => {
+              updateApp({ instrumentDeviceId: (e.currentTarget as HTMLSelectElement).value });
+              props.onChange?.();
+            }}
+          >
+            <option value="">Pick the USB input…</option>
+            {mics.map((m) => (
+              <option key={m.deviceId} value={m.deviceId}>
+                {m.label || `Input ${m.deviceId.slice(0, 6)}`}
+              </option>
+            ))}
+          </select>
+        )}
+        {app.instrumentOn && inst && (
+          <select
+            class="input"
+            style="width:auto"
+            value={String(app.instrumentDb)}
+            aria-label="Instrument level"
+            data-instrument-level
+            onChange={(e) => {
+              const db = Number((e.currentTarget as HTMLSelectElement).value);
+              updateApp({ instrumentDb: db });
+              props.engine?.setInstrumentGain(db);
+            }}
+          >
+            {INSTRUMENT_LEVELS.map((db) => (
+              <option key={db} value={String(db)}>
+                {dbLabel(db)}
+              </option>
+            ))}
+          </select>
+        )}
+        {app.instrumentOn &&
+          (inst ? (
+            <span class="small" data-instrument-label>
+              <b>Instrument</b> {inst.label || 'USB input'}
+              {inst.sampleRate ? ` · ${Math.round(inst.sampleRate / 1000)} kHz` : ''}
+            </span>
+          ) : instError ? (
+            <span class="chip warn" data-instrument-error>
+              {instError}
+            </span>
+          ) : (
+            <span class="small muted">pick the input your instrument is plugged into</span>
+          ))}
+      </div>
     </div>
   );
 }

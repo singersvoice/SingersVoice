@@ -3,7 +3,7 @@ import { useLocation } from 'preact-iso';
 import { useState } from 'preact/hooks';
 import { asset, href, relPath } from '../lib/nav.ts';
 import { toast } from '../lib/toast.ts';
-import { needsReconnect, profile, reconnect } from '../state/session.ts';
+import { isSuperAdmin, needsReconnect, profile, reconnect } from '../state/session.ts';
 import { IcHome, IcLibrary, IcMic, IcMore, IcPlay, IcSettings, IcShare, IcSliders, IcUsers, IcX } from './icons.tsx';
 
 /** The mark, always in motion: the brand loop (two singers on their disc), the still mark where motion is turned off. */
@@ -71,8 +71,8 @@ export interface NavItem {
   primary?: boolean;
   /** Paths that light this entry besides its own. */
   also?: string[];
-  /** Entries listed under this one on a wide screen. */
-  children?: { to: string; label: string }[];
+  /** Entries listed under this one on a wide screen (`when`: shown to that role only). */
+  children?: { to: string; label: string; when?: 'super_admin' }[];
 }
 export const NAV: NavItem[] = [
   { to: '/home', label: 'Home', Icon: IcHome },
@@ -81,7 +81,7 @@ export const NAV: NavItem[] = [
   { to: '/meets', label: 'Live Meets', Icon: IcUsers, also: ['/meet/'] },
   { to: '/publishing', label: 'Publishing', Icon: IcShare, also: ['/watch/'] },
   { to: '/studio/performances', label: 'Performances', Icon: IcPlay },
-  { to: '/settings', label: 'Settings', Icon: IcSettings, also: ['/plans', '/setup'] },
+  { to: '/settings', label: 'Settings', Icon: IcSettings, also: ['/plans', '/setup', '/admin'], children: [{ to: '/admin', label: 'Admin', when: 'super_admin' }] },
 ];
 /** On a phone: the first four portals and More. */
 const PHONE_TABS = 4;
@@ -91,6 +91,9 @@ const isActive = (rel: string, n: { to: string; also?: string[] }): boolean => {
   if (n.to === '/studio') return hit('/studio') && !rel.startsWith('/studio/performances') && !rel.startsWith('/studio/trackmaker');
   return hit(n.to) || (n.also ?? []).some(hit);
 };
+
+/** The entries this account sees: a child marked for the super admin shows to one only. */
+const visibleChildren = (n: NavItem) => (n.children ?? []).filter((c) => !c.when || (c.when === 'super_admin' && isSuperAdmin.value));
 
 export function NavBar() {
   const { path } = useLocation();
@@ -104,7 +107,8 @@ export function NavBar() {
       <nav class="navbar" aria-label="Primary">
         {NAV.map((n, i) => {
           const active = isActive(rel, n);
-          const childActive = n.children?.find((c) => rel === c.to || rel.startsWith(`${c.to}/`));
+          const children = visibleChildren(n);
+          const childActive = children.find((c) => rel === c.to || rel.startsWith(`${c.to}/`));
           return (
             <span key={n.to} class={`navitem ${i >= PHONE_TABS ? 'wide-only' : ''}`}>
               <a href={href(n.to)} class={`${active && !childActive ? 'active' : ''} ${n.primary ? 'primary' : ''}`} aria-current={active && !childActive ? 'page' : undefined}>
@@ -113,7 +117,7 @@ export function NavBar() {
                 </span>
                 <span>{n.label}</span>
               </a>
-              {n.children?.map((c) => (
+              {children.map((c) => (
                 <a key={c.to} href={href(c.to)} class={`sub ${childActive?.to === c.to ? 'active' : ''}`} aria-current={childActive?.to === c.to ? 'page' : undefined}>
                   <span class="ico" />
                   <span>{c.label}</span>
@@ -144,7 +148,7 @@ export function NavBar() {
               <n.Icon size={18} /> {n.label}
             </a>
           ))}
-          {NAV.flatMap((n) => n.children ?? []).map((c) => (
+          {NAV.flatMap((n) => visibleChildren(n)).map((c) => (
             <a key={c.to} href={href(c.to)} class={rel.startsWith(c.to) ? 'active' : ''} onClick={() => setMore(false)}>
               <IcSliders size={18} /> {c.label}
             </a>

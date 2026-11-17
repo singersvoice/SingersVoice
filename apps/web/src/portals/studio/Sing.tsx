@@ -18,7 +18,7 @@ import { headphonesLikely, isIOS, keepAwake } from '../../lib/platform.ts';
 import { buildManifest, saveTake as persistTake, type TakeResult } from '../../lib/takes.ts';
 import type { LoadedTrack, TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { isDrive, withProvider } from '../../state/session.ts';
+import { isDrive, media, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
 import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
@@ -221,13 +221,14 @@ export function Sing(props: { id: string }) {
     e.player?.setKeyShift(audio.keyShift);
   }, [audio]);
 
-  // Camera on/off follows settings while on stage.
+  // Camera on/off follows settings while on stage — never for an audio-only account (roles.ts): its takes carry the voice alone.
+  const videoAllowed = media.value === 'dual';
   useEffect(() => {
     if (phase === 'loading' || phase === 'review') return;
-    if (app.cameraOn && !camera.on.value) {
+    if (app.cameraOn && videoAllowed && !camera.on.value) {
       camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined }).catch(() => toast('Camera unavailable — singing without video', 'warn'));
-    } else if (!app.cameraOn && camera.on.value) camera.close();
-  }, [app.cameraOn, app.cameraFacing, app.cameraDeviceId, phase]);
+    } else if ((!app.cameraOn || !videoAllowed) && camera.on.value) camera.close();
+  }, [app.cameraOn, app.cameraFacing, app.cameraDeviceId, phase, videoAllowed]);
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
@@ -435,7 +436,7 @@ export function Sing(props: { id: string }) {
               {camHealth === 'frozen' ? 'Your camera froze — restart it' : camHealth === 'muted' ? 'Your camera was muted — restart it' : 'Your camera stopped — restart it'}
             </button>
           )}
-          {!camOn && <span class="chip">camera off</span>}
+          {!camOn && <span class="chip">{videoAllowed ? 'camera off' : 'audio only · no camera'}</span>}
         </section>
         {track.video ? (
           <KaraokeVideo track={track} tMs={tMs} playing={phase === 'playing'} rate={audio.tempo} countdown={phase === 'countdown' ? countdown : null} />
@@ -455,8 +456,8 @@ export function Sing(props: { id: string }) {
           />
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={phase === 'playing' || phase === 'paused' ? seek : undefined} />
           <div class="main">
-            <button class={`btn icon ${app.cameraOn ? 'on' : ''}`} aria-label="Camera" onClick={() => updateApp({ cameraOn: !app.cameraOn })} disabled={busy}>
-              {app.cameraOn ? <IcCamera /> : <IcCameraOff />}
+            <button class={`btn icon ${app.cameraOn && videoAllowed ? 'on' : ''}`} aria-label="Camera" title={videoAllowed ? 'Camera' : 'Your account is audio only — no camera'} onClick={() => updateApp({ cameraOn: !app.cameraOn })} disabled={busy || !videoAllowed}>
+              {app.cameraOn && videoAllowed ? <IcCamera /> : <IcCameraOff />}
             </button>
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" title="Hear myself (use headphones)" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />

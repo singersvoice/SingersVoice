@@ -21,7 +21,7 @@ import { api, ApiError, clock, controlConfigured, refreshAccount, serverNow } fr
 import { go, href } from '../../lib/nav.ts';
 import { keepAwake } from '../../lib/platform.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { canPublish, needsReconnect, profile } from '../../state/session.ts';
+import { canPublish, needsReconnect, profile, publishingNote } from '../../state/session.ts';
 import { MeetSession } from '../meets/meetSession.ts';
 import { loadMeetTrack } from '../meets/trackSource.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
@@ -34,6 +34,7 @@ import { Broadcast } from './broadcast.ts';
 import { LiveLinks } from './LiveLinks.tsx';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
 import { filmSound } from '../../video/meetRecorder.ts';
+import { chapterCue } from '../../video/chapters.ts';
 import { endBroadcast, ensureHlsStream, startBroadcast, youtubeStatus, youtubeToken, youtubeWord } from '../../lib/youtube.ts';
 
 const IDLE_MS = 3000;
@@ -64,9 +65,9 @@ export function ShowView(props: { id: string }) {
             <Spinner /> Checking your account…
           </div>
         ) : (
-          <Empty title="Publishing mode is part of the Publisher plan" body="The show view streams a meet to YouTube and the in-house watch page. Subscribe to the Publisher plan to open it.">
+          <Empty title="Publishing mode is for club owners" body={publishingNote.value || 'The show view streams a meet to YouTube and the in-house watch page — for club owners with an active subscription, and the SingersVoice admins.'}>
             <a class="btn primary" href={href('/plans')}>
-              See the Publisher plan
+              Your account and plan
             </a>
             <a class="btn" href={href('/meets')}>
               Back to Live Meets
@@ -233,8 +234,12 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   }, [stageKey]);
   const filmSpec = () => {
     filmSingers.current = new Map(meet.stage.filter((s) => s.participantId).map((s) => [s.slot, { slot: s.slot, displayName: s.displayName }]));
-    return { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot) };
+    return { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot), first: chapterCue(meet, serverNow()) };
   };
+  // The footage is cut where the stage goes — a song's start, a pause, a stop, the next song — into chapters, each a file of its own (video/chapters.ts).
+  useEffect(() => {
+    broadcast.film.cue(chapterCue(meet, serverNow()));
+  }, [pb.state, pb.epoch, pb.pauseAtEpochMs, meet.kickstartEpochMs, meet.trackTitle, meet.songCount]);
   /** The footage goes to this publisher's Drive (signed in with Google; a lapsed session has to reconnect first) — on the device itself in the developer preview. */
   const driveReady = !needsReconnect.value;
   const onDrive = profile.value?.mode === 'drive';
@@ -572,10 +577,10 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
               </span>
             )}
             {(film.recording || film.saved || film.note) && (
-              <span class={`footage ${film.note ? 'warn' : ''}`} data-footage={film.recording ? 'recording' : film.saved ? 'saved' : 'off'} data-footage-bytes={film.bytes} data-footage-seconds={film.seconds} title={film.recording ? 'The whole broadcast, as it goes out, into your Drive (Performances → Broadcast)' : film.saved ? 'The footage is in your Drive (Performances → Broadcast)' : film.note ?? ''}>
+              <span class={`footage ${film.note ? 'warn' : ''}`} data-footage={film.recording ? 'recording' : film.saved ? 'saved' : 'off'} data-footage-bytes={film.bytes} data-footage-seconds={film.seconds} data-footage-chapter={film.chapter?.index ?? 0} data-footage-chapters={film.chapters} title={film.recording ? 'The whole broadcast, as it goes out, into your Drive (Performances → Broadcast)' : film.saved ? 'The footage is in your Drive (Performances → Broadcast)' : film.note ?? ''}>
                 {' '}
                 · <IcVideo size={14} />{' '}
-                {film.recording ? `footage to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.seconds * 1000)} · ${mb(film.stored || film.bytes)} · ${filmSound(film)}` : film.saved ? `footage saved to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.saved.durationMs)}` : film.note}
+                {film.recording ? `footage to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.seconds * 1000)} · ${mb(film.stored || film.bytes)} · ${filmSound(film)}${film.chapter ? ` · chapter ${film.chapter.index} ${film.chapter.title}` : ''}` : film.saved ? `footage saved to ${onDrive ? 'your Drive' : 'this device'} · ${film.chapters} chapter${film.chapters === 1 ? '' : 's'}` : film.note}
               </span>
             )}
             {job.watchUrl && (

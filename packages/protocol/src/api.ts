@@ -2,7 +2,7 @@
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
 import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
 import type { MixBatch } from './mix.ts';
-import type { BillingStatus, Destination, DestinationKind, DestinationUpdate, LiveStatus, PlanId, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
+import type { AdminUserUpdate, AdminUsersResponse, BillingStatus, Destination, DestinationKind, DestinationUpdate, LiveStatus, PlanId, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 import type { YtFetchRequest, YtJob, YtSearchResponse, YtStatus } from './ytTracks.ts';
 
 export interface ApiError {
@@ -156,6 +156,9 @@ export interface Routes {
   'POST /catalog/tracks': { req: CatalogPublishRequest; res: { track: CatalogTrack } };
   'DELETE /catalog/tracks/:id': { res: { ok: true } };
   'POST /catalog/tracks/:id/pull': { res: { ok: true; pulls: number } };
+  /** The Admin page (super admins): every account; one account's role and subscription changed. */
+  'GET /admin/users': { res: AdminUsersResponse };
+  'PATCH /admin/users/:id': { req: AdminUserUpdate; res: { user: UserRecord } };
   /** YouTube song tracks (through the relay, docs/RELAY.md): can the service fetch them; search; fetch one into my Drive; the job as it goes. */
   'GET /yt': { res: YtStatus };
   'GET /yt/search': { res: YtSearchResponse };

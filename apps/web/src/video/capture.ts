@@ -31,6 +31,22 @@ export async function openMicWithCamera(engine: AudioEngine, camera: Camera): Pr
   else if (app.cameraOn && !camera.on.value) await camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined }).catch(() => undefined);
   engine.applyFx(audio.params);
   engine.setMonitor(audio.monitor);
+  await openInstrument(engine);
+}
+
+/**
+ * The instrument input, with the mic: a second capture (a guitar, keys… on a USB interface) summed into this singer's
+ * sound. Not on iOS, which keeps one capture per page (a second would end the microphone). A failure (the interface
+ * unplugged) is told on the mic status, never in the way of the singing.
+ */
+export async function openInstrument(engine: AudioEngine): Promise<void> {
+  const app = appSettings.peek();
+  if (!app.instrumentOn || !app.instrumentDeviceId || isIOS) {
+    engine.closeInstrument();
+    engine.instrumentError.value = app.instrumentOn && isIOS ? 'An instrument input is not available on iPhone or iPad: the browser keeps one capture per page.' : null;
+    return;
+  }
+  await engine.openInstrument({ deviceId: app.instrumentDeviceId, gainDb: app.instrumentDb }).catch(() => undefined);
 }
 
 /**

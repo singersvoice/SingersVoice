@@ -1,9 +1,13 @@
-# Billing — the Publisher plan
+# Billing — the club owner year
 
 Publishing mode (the show view, destinations, going live to YouTube and the in-house watch page) is
-part of the **Publisher plan**. Singing, hosting and joining meets stay free. An **admin** account
-(the first account ever seen, plus `PRIVILEGED_EMAILS`) publishes without a plan and can put any
-account on the plan by email from the Plans page.
+for **club owners** with an active **yearly subscription** (and for super admins, always). Singing,
+hosting and joining meets stay free. A **super admin** (the first account ever seen, plus
+`PRIVILEGED_EMAILS`) runs the **Admin page** (`/admin`): every account's role (audio only, dual,
+club owner, super admin) and the club owners' years — *Grant a year*, *Renew (+1 year)*, *Set
+dates*, *Revoke* — kept in the SVT DB with a start date, an expiry date and a status; a year that
+runs out closes Publishing by itself, with the date on the gate (docs/ARCHITECTURE.md, *Roles*).
+Stripe below is the paid way to the same subscription.
 
 ## How money is collected: Stripe
 
@@ -48,13 +52,13 @@ of running the business.
    ```
 
    Each command asks for the value and stores it on the Worker. The next request after the last
-   one shows the price on the Plans page and turns *Request the plan* into *Subscribe*.
+   one shows the price on the Plans page and turns *Ask for a club owner year* into *Subscribe for a year*.
 6. **Try it**: open the app with a second Google account → More → Plans → Subscribe → pay with a
-   test card → you land back on Plans and, within seconds (the webhook), the plan shows
-   *Publisher* and the Publishing portal opens.
+   test card → you land back on Plans and, within seconds (the webhook), the account is a
+   *club owner* with its year and the Publishing portal opens.
 
 Until step 5 is done, the Plans page still works: it shows both plans, says payments are not set
-up, and an admin grants the plan by email.
+up, and the super admin grants the year on the Admin page.
 
 ## What the service does
 
@@ -68,8 +72,12 @@ up, and an admin grants the plan by email.
   once. `checkout.session.completed` ties the Stripe customer to the account and opens the plan;
   `customer.subscription.*` set the plan and its period end (`active`, `trialing` and `past_due`
   keep it; `canceled` / `deleted` close it; a day of grace covers a renewal on its way).
-- `POST /admin/plan` — admin only: `{ email, plan, until? }`.
+- `POST /admin/plan` — super admin only: `{ email, plan, until? }` (a year from now when `until`
+  is left out; the account becomes a club owner). `GET /admin/users` and
+  `PATCH /admin/users/:id` (`{ role }`, `{ subscription: { action: grant | renew | set | revoke,
+  startedAt?, expiresAt? } }`) are the Admin page's.
 
-Rows: `subscriptions (user_id, plan, plan_until, customer_id, subscription_id, source, updated_at)`
-and `billing_events (event_id)`. `/me` carries `plan`, `planUntil` and `canPublish`; every
-publishing route and the publisher join check `canPublish`.
+Rows: `users (…, role)`, `subscriptions (user_id, plan, started_at, plan_until, status, customer_id,
+subscription_id, source, updated_at)` and `billing_events (event_id)`. `/me` carries `role`,
+`media`, `subscription` (start, expiry, status as of today), `canPublish` and `publishingNote`;
+every publishing route and the publisher join check `canPublish` on the service.

@@ -56,6 +56,13 @@ describe('sv-control API', () => {
     expect(edgeCacheControl('/watch/m1/mix', 1)).toBe('public, max-age=0, s-maxage=1'); // a poll always reaches the edge
   });
 
+  it("the app's browser may PATCH (the Admin page changes a role or a subscription that way): the preflight allows it", async () => {
+    const pre = await app.request('/admin/users/u1', { method: 'OPTIONS', headers: { Origin: 'https://singersvoice.github.io', 'Access-Control-Request-Method': 'PATCH', 'Access-Control-Request-Headers': 'content-type,x-dev-user' } });
+    expect(pre.status).toBeLessThan(300);
+    expect(pre.headers.get('access-control-allow-methods') ?? '').toMatch(/PATCH/);
+    expect(pre.headers.get('access-control-allow-origin')).toBe('https://singersvoice.github.io');
+  });
+
   it('health and time are public; everything else needs sign-in', async () => {
     expect((await app.request('/health')).status).toBe(200);
     expect((await app.request('/me')).status).toBe(401);
@@ -387,18 +394,18 @@ describe('sv-control API', () => {
     expect(list.meets.map((m) => m.title).sort()).toEqual(['Dave 0', 'Dave 2', 'Dave 3']);
   });
 
-  it('billing: Publishing is the Publisher plan — a Stripe webhook (signed, replay-safe) opens it, cancellation closes it, an admin can grant it', async () => {
-    // Nobody but an admin can publish until they are on the plan.
+  it('billing: Publishing is the club owner year — a Stripe webhook (signed, replay-safe) opens it, cancellation closes it, an admin can grant it', async () => {
+    // Nobody but a club owner with an active year (or a super admin) can publish.
     const locked = await app.request('/publishing/destinations', { headers: as('erin') });
     expect(locked.status).toBe(403);
-    expect((await json<{ code: string }>(locked)).code).toBe('publisher_plan');
+    expect((await json<{ code: string }>(locked)).code).toBe('publishing_closed');
     const erin = await json<{ user: { userId: string; plan: string; canPublish: boolean } }>(await app.request('/me', { headers: as('erin') }));
     expect(erin.user.plan).toBe('free');
     expect(erin.user.canPublish).toBe(false);
     // Without Stripe configured, the Plans page still knows the plans and that checkout is off.
     const status = await json<{ checkout: boolean; portal: boolean; plans: Record<string, { title: string }>; price: unknown }>(await app.request('/billing', { headers: as('erin') }));
     expect(status.checkout).toBe(false);
-    expect(status.plans.publisher!.title).toBe('Publisher');
+    expect(status.plans.publisher!.title).toBe('Club owner');
     expect((await app.request('/billing/checkout', { method: 'POST', headers: as('erin'), body: '{}' })).status).toBe(409);
 
     // Stripe arrives: checkout creates a session with our user id on it, the webhook signs its events.
@@ -456,6 +463,63 @@ describe('sv-control API', () => {
     expect((await app.request('/publishing/destinations', { headers: as('erin') })).status).toBe(200);
     delete deps.billing;
     resetPriceCache();
+  });
+
+  it('roles: a new account is dual; the super admin sees every account, sets roles and club owner subscriptions; Publishing opens with the subscription and closes by itself at its expiry; the last super admin stays', async () => {
+    // Everyone so far: alice (the first account: super admin), bob, carol, erin…
+    const me = await json<{ user: { role: string; media: string; subscription: unknown; canPublish: boolean; publishingNote: string } }>(await app.request('/me', { headers: as('bob') }));
+    expect(me.user).toMatchObject({ role: 'dual', media: 'dual', canPublish: false });
+    expect(me.user.publishingNote).toMatch(/club owners/);
+    expect((await json<{ user: { role: string } }>(await app.request('/me', { headers: as('alice') }))).user.role).toBe('super_admin');
+    // The Admin page is the super admin's alone.
+    expect((await app.request('/admin/users', { headers: as('bob') })).status).toBe(403);
+    const all = await json<{ users: { userId: string; role: string; email: string }[]; total: number }>(await app.request('/admin/users', { headers: as('alice') }));
+    expect(all.total).toBe(all.users.length);
+    const bobId = all.users.find((u) => u.email === 'bob@dev.local')!.userId;
+    const carolId = all.users.find((u) => u.email === 'carol@dev.local')!.userId;
+    expect((await app.request(`/admin/users/${bobId}`, { method: 'PATCH', headers: as('bob'), body: JSON.stringify({ role: 'super_admin' }) })).status).toBe(403);
+    // Audio only: the account's media permission follows, and a meet's participant carries it.
+    const audio = await json<{ user: { role: string; media: string } }>(await app.request(`/admin/users/${bobId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ role: 'audio' }) }));
+    expect(audio.user).toMatchObject({ role: 'audio', media: 'audio' });
+    const m = await json<{ meet: { meetId: string } }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Roles', trackId: 'trk-1', trackTitle: 'Song' }) }));
+    const joined = await json<{ you: { media: string } }>(await app.request(`/meets/${m.meet.meetId}/join`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ role: 'performer' }) }));
+    expect(joined.you.media).toBe('audio');
+    expect((await app.request(`/admin/users/${bobId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ role: 'dual' }) })).status).toBe(200);
+    expect((await app.request(`/admin/users/${bobId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ role: 'king' }) })).status).toBe(400);
+    // A club owner's year: granted, Publishing opens; the dates set to the past, it closes by itself; renewed, it opens for a year on.
+    const granted = await json<{ user: { role: string; canPublish: boolean; subscription: { startedAt: string; expiresAt: string; status: string } } }>(await app.request(`/admin/users/${carolId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'grant' } }) }));
+    expect(granted.user.role).toBe('club_owner'); // a subscription makes a club owner of a singer
+    expect(granted.user.canPublish).toBe(true);
+    expect(granted.user.subscription.status).toBe('active');
+    const year = Date.parse(granted.user.subscription.expiresAt) - Date.parse(granted.user.subscription.startedAt);
+    expect(Math.abs(year - 365.25 * 86400000)).toBeLessThan(2 * 86400000);
+    expect((await app.request('/publishing/destinations', { headers: as('carol') })).status).toBe(200);
+    expect((await app.request(`/meets/${m.meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ role: 'publisher' }) })).status).toBe(200);
+    const expired = await json<{ user: { canPublish: boolean; publishingNote: string; subscription: { status: string } } }>(await app.request(`/admin/users/${carolId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'set', startedAt: '2024-01-01T00:00:00Z', expiresAt: '2025-01-01T00:00:00Z' } }) }));
+    expect(expired.user.canPublish).toBe(false);
+    expect(expired.user.subscription.status).toBe('expired');
+    expect(expired.user.publishingNote).toMatch(/expired on 2025-01-01/);
+    const shut = await app.request('/publishing/destinations', { headers: as('carol') });
+    expect(shut.status).toBe(403);
+    expect((await json<{ code: string; error: string }>(shut)).error).toMatch(/expired/);
+    expect((await app.request(`/meets/${m.meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ role: 'publisher' }) })).status).toBe(403);
+    const renewed = await json<{ user: { canPublish: boolean; subscription: { expiresAt: string; status: string } } }>(await app.request(`/admin/users/${carolId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'renew' } }) }));
+    expect(renewed.user.canPublish).toBe(true);
+    expect(Date.parse(renewed.user.subscription.expiresAt)).toBeGreaterThan(Date.now() + 360 * 86400000); // from now, since the old expiry had passed
+    const revoked = await json<{ user: { canPublish: boolean; subscription: { status: string }; publishingNote: string } }>(await app.request(`/admin/users/${carolId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'revoke' } }) }));
+    expect(revoked.user.canPublish).toBe(false);
+    expect(revoked.user.subscription.status).toBe('revoked');
+    expect(revoked.user.publishingNote).toMatch(/revoked/);
+    // A super admin publishes without any subscription; the last one cannot be demoted; a second one can be.
+    expect((await app.request('/publishing/destinations', { headers: as('alice') })).status).toBe(200);
+    const aliceId = all.users.find((u) => u.email === 'alice@dev.local')!.userId;
+    expect((await app.request(`/admin/users/${aliceId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ role: 'dual' }) })).status).toBe(409);
+    expect((await json<{ user: { role: string; canPublish: boolean } }>(await app.request(`/admin/users/${carolId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ role: 'super_admin' }) }))).user).toMatchObject({ role: 'super_admin', canPublish: true });
+    expect((await app.request('/admin/users', { headers: as('carol') })).status).toBe(200);
+    expect((await app.request(`/admin/users/${carolId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ role: 'dual' }) })).status).toBe(200);
+    expect((await app.request('/admin/users', { headers: as('carol') })).status).toBe(403);
+    expect((await app.request('/admin/users/nobody', { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ role: 'dual' }) })).status).toBe(404);
+    expect((await app.request(`/meets/${m.meet.meetId}/end`, { method: 'POST', headers: as('alice') })).status).toBe(200);
   });
 
   it('publishing: the plan (or an admin) only; keys are sealed and only hinted; jobs need enabled destinations', async () => {

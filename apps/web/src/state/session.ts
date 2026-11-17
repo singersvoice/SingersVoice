@@ -3,6 +3,7 @@
  * and the Google token lifecycle. Signals keep every screen in sync.
  */
 import { computed, signal } from '@preact/signals';
+import { mediaOfRole, type MediaPermission, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import {
   AuthExpiredError,
   fetchProfile,
@@ -157,6 +158,39 @@ export function setPlan(p: 'free' | 'publisher', until: string | null, publish: 
     /* ignore */
   }
 }
+/**
+ * The account's role (roles.ts) and the club owner's subscription, from /me — what this device may send and
+ * record of its singer (`media`: an audio-only account has no camera on stage) and why Publishing is closed.
+ */
+export const role = signal<UserRole>(asRole(localStorage.getItem('sv.role')));
+export const media = computed<MediaPermission>(() => mediaOfRole(role.value));
+export const subscription = signal<UserSubscription | null>(readJson<UserSubscription>('sv.subscription'));
+export const publishingNote = signal<string>(localStorage.getItem('sv.publishingNote') ?? '');
+export const isSuperAdmin = computed(() => role.value === 'super_admin');
+export function setRole(r: UserRole, sub: UserSubscription | null, note: string): void {
+  role.value = r;
+  subscription.value = sub;
+  publishingNote.value = note;
+  try {
+    localStorage.setItem('sv.role', r);
+    localStorage.setItem('sv.subscription', sub ? JSON.stringify(sub) : '');
+    localStorage.setItem('sv.publishingNote', note);
+  } catch {
+    /* ignore */
+  }
+}
+function asRole(v: string | null): UserRole {
+  return v === 'audio' || v === 'dual' || v === 'club_owner' || v === 'super_admin' ? v : 'dual';
+}
+function readJson<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** My account id in the SVT DB (`g-<google sub>` / `dev-<id>`), from /me — what meets and catalog entries carry as owner. */
 export const accountUserId = signal<string>(localStorage.getItem('sv.accountUserId') ?? '');
 export function setAccountUserId(id: string): void {

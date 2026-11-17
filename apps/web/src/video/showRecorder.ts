@@ -187,22 +187,32 @@ export class ShowRecorder {
     }
   }
 
-  /** The same performers the stage draws; this device's own cut-out is held back by the lag. */
+  /**
+   * The same performers the stage draws; this device's own cut-out is held back by the lag. Nobody is
+   * drawn mirrored here: the screen shows a singer their own front camera as a mirror (what every phone
+   * does), but what is recorded, filmed and streamed is the stage as the audience sees it — writing on a
+   * shirt reads the right way round, a raised right hand is the right hand.
+   */
   setPerformers(list: StagePerformer[]): void {
     const ids = new Set(list.map((p) => p.id));
     for (const id of [...this.delayed.keys()]) if (!ids.has(id)) this.delayed.delete(id);
     const frames = Math.max(1, Math.round((this.lagMs / 1000) * SHOW_FPS));
     this.performers = list.map((p) => {
-      if (!p.isMe || p.source.kind !== 'person') return p;
+      if (!p.isMe || p.source.kind !== 'person') return { ...p, mirror: false };
       let d = this.delayed.get(p.id);
       if (!d) {
         d = new DelayedCanvas(p.source.canvas, frames);
         this.delayed.set(p.id, d);
       }
       const src = p.source;
-      return { ...p, label: p.label.replace(/^You\b/, this.youLabel ?? 'You'), source: { kind: 'person', canvas: d.out, version: src.version } };
+      return { ...p, mirror: false, label: p.label.replace(/^You\b/, this.youLabel ?? 'You'), source: { kind: 'person', canvas: d.out, version: src.version } };
     });
     this.compositor.setPerformers(this.performers);
+  }
+
+  /** What the recording draws (tests: nobody mirrored, this device's singer behind the lag). */
+  get drawnPerformers(): readonly StagePerformer[] {
+    return this.performers;
   }
 
   /** The recording names this device's singer like everyone else ("You" is for the screen). */
