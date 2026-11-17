@@ -80,6 +80,11 @@ jobs:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/yt-track-e2e.mjs screenshots
 
+      - name: Track search and the track database (the All tab, Sing-time copies into the singer's Drive, sorting, the song tree, unavailable links)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/tracks-e2e.mjs screenshots
+
       - name: Roles, the Admin page and the instrument (audio only on stage, a club owner's year granted, expired, renewed, revoked; a USB input beside the mic)
         env:
           BASE_PATH: /SingersVoice/

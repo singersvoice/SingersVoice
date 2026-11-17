@@ -394,6 +394,145 @@ describe('sv-control API', () => {
     expect(list.meets.map((m) => m.title).sort()).toEqual(['Dave 0', 'Dave 2', 'Dave 3']);
   });
 
+  it('the master track database: one record per source with a 12-character id, metadata filled in and never blanked, catalog entries mirrored', async () => {
+    const refs = { folderId: 'folder00000001', jsonId: 'json0000000011', audioId: 'audio000000011', audioMime: 'audio/mp4', videoId: 'video000000011', videoMime: 'video/mp4' };
+    const reg = { source: 'youtube', song: 'Ammo Ammaayena', artists: '', movie: '', year: null, language: 'Telugu', driveUrl: 'https://drive.google.com/drive/folders/folder00000001', refs, durationMs: 283000, singerCount: 1, youtubeId: 'dQw4w9WgXcQ', thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hq.jpg', copyTrackId: 'trk-alice-yt' };
+    const r1 = await app.request('/tracks/register', { method: 'POST', headers: as('alice'), body: JSON.stringify(reg) });
+    expect(r1.status).toBe(201);
+    const first = (await r1.json()) as { track: { trackId: string; sourceKey: string; song: string; language: string; lastAccessedAt: string | null; copies: number; singers: number; mine: { copyTrackId: string } | null; hasVideo: boolean }; created: boolean };
+    expect(first.created).toBe(true);
+    // 8 random characters from an alphabet without 0/O/1/I, then the month it was minted (YYMM).
+    const ym = `${String(new Date().getUTCFullYear() % 100).padStart(2, '0')}${String(new Date().getUTCMonth() + 1).padStart(2, '0')}`;
+    expect(first.track.trackId).toMatch(new RegExp(`^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}${ym}$`));
+    expect(first.track).toMatchObject({ sourceKey: 'yt:dQw4w9WgXcQ', song: 'Ammo Ammaayena', language: 'Telugu', lastAccessedAt: null, copies: 1, singers: 0, hasVideo: true, mine: { copyTrackId: 'trk-alice-yt', count: 0 } });
+    // The same video again, by another singer, with more metadata: the same record, the blanks filled, nothing blanked, the owner's files kept.
+    const r2 = await app.request('/tracks/register', { method: 'POST', headers: as('bob'), body: JSON.stringify({ ...reg, song: '', artists: 'Sid Sriram', movie: 'Ammo', year: 2019, language: '', refs: { ...refs, jsonId: 'json0000000012', audioId: 'audio000000012' }, driveUrl: 'https://drive.google.com/drive/folders/folderbob0001', copyTrackId: 'trk-bob-yt' }) });
+    expect(r2.status).toBe(200);
+    const again = (await r2.json()) as { track: { trackId: string; song: string; artists: string; movie: string; year: number | null; language: string; refs: { jsonId: string }; driveUrl: string; copies: number; ownerUserId: string }; created: boolean };
+    expect(again.created).toBe(false);
+    expect(again.track).toMatchObject({ trackId: first.track.trackId, song: 'Ammo Ammaayena', artists: 'Sid Sriram', movie: 'Ammo', year: 2019, language: 'Telugu', refs: { jsonId: 'json0000000011' }, driveUrl: 'https://drive.google.com/drive/folders/folder00000001', copies: 2 });
+    expect(again.track.ownerUserId).not.toBe('');
+    // What the service refuses: a source it does not know, no song, file ids that are not Drive's, a URL that is not Drive's, a YouTube track without its video.
+    expect((await app.request('/tracks/register', { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...reg, source: 'spotify' }) })).status).toBe(400);
+    expect((await app.request('/tracks/register', { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...reg, song: '  ', youtubeId: 'zzzzzzzzzzz' }) })).status).toBe(400); // a new source needs a name
+    expect((await app.request('/tracks/register', { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...reg, song: '  ' }) })).status).toBe(200); // a known one has its name already
+    expect((await app.request('/tracks/register', { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...reg, refs: { ...refs, jsonId: 'no' } }) })).status).toBe(400);
+    expect((await app.request('/tracks/register', { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...reg, driveUrl: 'https://evil.example/x' }) })).status).toBe(400);
+    expect((await app.request('/tracks/register', { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...reg, youtubeId: '' }) })).status).toBe(400);
+    expect((await app.request('/tracks/register', { method: 'POST', body: JSON.stringify(reg) })).status).toBe(401);
+    // A published catalog entry is a record too, and the entry learns its registry id.
+    const pub = { trackId: 'trk-cat-9', title: 'Ammo Ammaayena', artist: 'SV TrackMaker', genre: 'Telugu film', language: 'Telugu', durationMs: 283000, singerCount: 2, lineCount: 67, driveFolderId: 'foldercat00009', driveFolderLink: 'https://drive.google.com/drive/folders/foldercat00009', trackJsonId: 'json0000000009', audioId: 'audio000000009', audioMime: 'audio/mpeg' };
+    const pr = (await (await app.request('/catalog/tracks', { method: 'POST', headers: as('carol'), body: JSON.stringify(pub) })).json()) as { track: { registryId?: string } };
+    expect(pr.track.registryId).toMatch(/^[A-Z2-9]{8}\d{4}$/);
+    const cat = (await (await app.request(`/tracks/${pr.track.registryId}`, { headers: as('bob') })).json()) as { track: { source: string; sourceKey: string; catalogTrackId: string; song: string } };
+    expect(cat.track).toMatchObject({ source: 'catalog', sourceKey: 'catalog:trk-cat-9', catalogTrackId: 'trk-cat-9', song: 'Ammo Ammaayena' });
+    expect((await app.request('/tracks/NOTANID', { headers: as('bob') })).status).toBe(404);
+  });
+
+  it('the master track database: an access moves the global and my own last-accessed instants (UTC); searches and copies do not; the song groups sort by the latest access; history is mine', async () => {
+    const mk = (song: string, key: string, extra: Record<string, unknown> = {}) => ({ source: 'drive', song, driveUrl: `https://drive.google.com/drive/folders/${key}`, refs: { folderId: key, jsonId: `json${key.slice(-10)}`, audioId: `audi${key.slice(-10)}`, audioMime: 'audio/mpeg' }, durationMs: 200000, singerCount: 1, ...extra });
+    const reg = async (who: string, body: unknown) => ((await (await app.request('/tracks/register', { method: 'POST', headers: as(who), body: JSON.stringify(body) })).json()) as { track: { trackId: string } }).track.trackId;
+    const a1 = await reg('alice', mk('Bole Chudiyan', 'folderboleaaaa', { artists: 'Udit Narayan', movie: 'K3G', year: 2001, language: 'Hindi' }));
+    const a2 = await reg('bob', mk('Bole Chudiyan', 'folderbolebbbb', { artists: 'Karaoke Hits', language: 'Hindi' })); // the same song, another file: a version of its own
+    const b1 = await reg('alice', mk('Hey Jude', 'folderjudeaaaa', { artists: 'The Beatles', language: 'English' }));
+    expect(new Set([a1, a2, b1]).size).toBe(3);
+    const search = async (q: string, who = 'bob') => (await (await app.request(`/tracks/search?q=${encodeURIComponent(q)}`, { headers: as(who) })).json()) as { groups: { song: string; songKey: string; lastAccessedAt: string | null; versions: { trackId: string; lastAccessedAt: string | null; mine: null | { count: number } }[] }[]; total: number };
+    // Searching counts for nothing: nothing has been accessed yet; both Bole Chudiyan files are one group, two versions.
+    const s0 = await search('bole');
+    expect(s0.total).toBe(1);
+    expect(s0.groups[0]).toMatchObject({ song: 'Bole Chudiyan', songKey: 'bole chudiyan', lastAccessedAt: null });
+    expect(s0.groups[0]!.versions.map((v) => v.trackId).sort()).toEqual([a1, a2].sort());
+    expect((await search('chudiyan udit')).total).toBe(1); // every word must appear, in any field
+    expect((await search('chudiyan beatles')).total).toBe(0);
+    expect((await search('k3g')).total).toBe(1); // the movie is searched too
+    expect((await search('2001')).total).toBe(1); // and the year
+    // bob sings Hey Jude: the global instant and bob's own move to now, in UTC; alice's own history has nothing.
+    const t0 = Date.now();
+    const acc = (await (await app.request(`/tracks/${b1}/access`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ how: 'sing' }) })).json()) as { track: { lastAccessedAt: string; accessCount: number; singers: number; mine: { count: number; lastAccessedAt: string } } };
+    expect(Date.parse(acc.track.lastAccessedAt)).toBeGreaterThanOrEqual(t0 - 5);
+    expect(acc.track.lastAccessedAt.endsWith('Z')).toBe(true);
+    expect(acc.track).toMatchObject({ accessCount: 1, singers: 1, mine: { count: 1 } });
+    const asAlice = (await (await app.request(`/tracks/${b1}`, { headers: as('alice') })).json()) as { track: { mine: null | { count: number } } };
+    expect(asAlice.track.mine).toBeNull();
+    expect((await app.request(`/tracks/${b1}/access`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ how: 'hover' }) })).status).toBe(400);
+    expect((await app.request('/tracks/AAAAAAAA2611/access', { method: 'POST', headers: as('bob'), body: JSON.stringify({ how: 'sing' }) })).status).toBe(404);
+    // The groups sort by the latest access in them: Hey Jude first now, Bole Chudiyan (never sung) after; then a sing of bob's version lifts its group and puts his version first in it.
+    let all = await search(''); // every group (the catalog tests' songs are here too, never sung: after these)
+    expect(all.groups.map((g) => g.song).slice(0, 2)).toEqual(['Hey Jude', 'Bole Chudiyan']);
+    await new Promise((r) => setTimeout(r, 5));
+    await app.request(`/tracks/${a2}/access`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ how: 'play' }) });
+    all = await search('');
+    expect(all.groups.map((g) => g.song).slice(0, 2)).toEqual(['Bole Chudiyan', 'Hey Jude']);
+    expect(all.groups[0]!.versions.map((v) => v.trackId)).toEqual([a2, a1]);
+    expect(all.groups[0]!.versions[0]!.lastAccessedAt).toBe(all.groups[0]!.lastAccessedAt);
+    // A copy registered by a singer is not an access: nothing moves — but it is one more place the files come from.
+    const before = all.groups[1]!.lastAccessedAt;
+    const cp = (await (await app.request(`/tracks/${b1}/copies`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ refs: { folderId: 'foldercarol001', jsonId: 'jsoncarol00001', audioId: 'audiocarol0001', audioMime: 'audio/mpeg' }, driveUrl: 'https://drive.google.com/drive/folders/foldercarol001', copyTrackId: 'trk-carol-jude' }) })).json()) as { track: { lastAccessedAt: string; copies: number; accessCount: number } };
+    expect(cp.track).toMatchObject({ lastAccessedAt: before, copies: 1, accessCount: 1 });
+    expect((await app.request(`/tracks/${b1}/copies`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ refs: { folderId: 'x' }, driveUrl: 'https://drive.google.com/x', copyTrackId: 'y' }) })).status).toBe(400);
+    // History: what each singer sang, the latest first — nobody else's.
+    const hist = async (who: string) => ((await (await app.request('/tracks/history', { headers: as(who) })).json()) as { items: { trackId: string }[] }).items.map((i) => i.trackId);
+    expect(await hist('bob')).toEqual([b1]);
+    expect(await hist('alice')).toEqual([a2]);
+    expect(await hist('carol')).toEqual([]);
+    // Pages of groups.
+    const page = (await (await app.request('/tracks/search?q=bole&limit=1', { headers: as('bob') })).json()) as { groups: unknown[]; total: number; nextCursor: string | null };
+    expect(page.groups).toHaveLength(1);
+    expect(page.total).toBe(1);
+    expect(page.nextCursor).toBeNull();
+    const page2 = (await (await app.request('/tracks/search?limit=1', { headers: as('bob') })).json()) as { groups: unknown[]; total: number; nextCursor: string | null };
+    expect(page2.groups).toHaveLength(1);
+    expect(page2.total).toBeGreaterThanOrEqual(2);
+    expect(page2.nextCursor).toBe('1');
+    // Metadata: the owner (or a super admin) corrects it; another singer cannot.
+    expect((await app.request(`/tracks/${a1}/`, { method: 'PATCH', headers: as('bob'), body: JSON.stringify({ movie: 'Kabhi Khushi Kabhie Gham' }) })).status).toBe(404); // the trailing slash is no route
+    expect((await app.request(`/tracks/${a1}`, { method: 'PATCH', headers: as('bob'), body: JSON.stringify({ movie: 'Kabhi Khushi Kabhie Gham' }) })).status).toBe(403);
+    const patched = (await (await app.request(`/tracks/${a1}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ movie: 'Kabhi Khushi Kabhie Gham', year: 2001, song: '' }) })).json()) as { track: { movie: string; song: string } };
+    expect(patched.track).toMatchObject({ movie: 'Kabhi Khushi Kabhie Gham', song: 'Bole Chudiyan' }); // a blank song name is not taken
+    expect((await search('kabhi khushi')).total).toBe(1);
+    expect((await app.request(`/tracks/${a2}`, { method: 'PATCH', headers: as('carol'), body: JSON.stringify({ language: 'Hindi' }) })).status).toBe(403); // not carol's record
+    expect((await app.request(`/tracks/${a2}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ language: 'Hindi' }) })).status).toBe(200); // alice: the first account, the super admin
+  });
+
+  it("the master track database hands a song's files over from the owner's Drive, then from any singer's shared copy when the owner's is gone — and marks it unavailable when none is left", async () => {
+    const reg = async (who: string, body: unknown) => ((await (await app.request('/tracks/register', { method: 'POST', headers: as(who), body: JSON.stringify(body) })).json()) as { track: { trackId: string } }).track.trackId;
+    const id = await reg('alice', { source: 'drive', song: 'Fallback song', driveUrl: 'https://drive.google.com/drive/folders/folderfallback', refs: { folderId: 'folderfallback', jsonId: 'jsonowner00001', audioId: 'audioowner0001', audioMime: 'audio/mpeg' } });
+    await app.request(`/tracks/${id}/copies`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ refs: { folderId: 'folderbobcopy1', jsonId: 'jsonbobcopy001', audioId: 'audiobobcopy01', audioMime: 'audio/mpeg' }, driveUrl: 'https://drive.google.com/drive/folders/folderbobcopy1', copyTrackId: 'trk-bob-fb' }) });
+    const live = new Set(['jsonowner00001', 'audioowner0001', 'jsonbobcopy001', 'audiobobcopy01']);
+    const asked: string[] = [];
+    deps.fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      asked.push(url);
+      const hit = [...live].find((f) => url.includes(f));
+      return hit ? new Response(hit.startsWith('json') ? JSON.stringify({ title: 'Fallback song', from: hit }) : new Uint8Array([4, 2]), { status: 200, headers: { 'content-type': hit.startsWith('json') ? 'application/json' : 'audio/mpeg' } }) : new Response('gone', { status: 404, headers: { 'content-type': 'text/html' } });
+    }) as typeof fetch;
+    // The owner's file first.
+    let j = await app.request(`/tracks/${id}/file/json`, { headers: as('carol') });
+    expect(j.status).toBe(200);
+    expect(((await j.json()) as { from: string }).from).toBe('jsonowner00001');
+    // The owner unshared (or deleted) the folder: bob's shared copy answers instead; the song stays available.
+    live.delete('jsonowner00001');
+    live.delete('audioowner0001');
+    j = await app.request(`/tracks/${id}/file/json`, { headers: as('carol') });
+    expect(j.status).toBe(200);
+    expect(((await j.json()) as { from: string }).from).toBe('jsonbobcopy001');
+    const a = await app.request(`/tracks/${id}/file/audio`, { headers: as('carol') });
+    expect(a.status).toBe(200);
+    expect(new Uint8Array(await a.arrayBuffer())).toEqual(new Uint8Array([4, 2]));
+    expect(((await (await app.request(`/tracks/${id}`, { headers: as('carol') })).json()) as { track: { unavailable: boolean } }).track.unavailable).toBe(false);
+    // Every copy gone: the service says so, the record is marked unavailable — and an access is never counted for it (the device reports only successes).
+    live.clear();
+    const gone = await app.request(`/tracks/${id}/file/json`, { headers: as('carol') });
+    expect(gone.status).toBe(404);
+    expect(((await gone.json()) as { code: string }).code).toBe('not_shared');
+    expect(((await (await app.request(`/tracks/${id}`, { headers: as('carol') })).json()) as { track: { unavailable: boolean; lastAccessedAt: string | null } }).track).toMatchObject({ unavailable: true, lastAccessedAt: null });
+    expect((await app.request(`/tracks/${id}/file/video`, { headers: as('carol') })).status).toBe(404); // no video on this one
+    // A fresh copy registered: available again.
+    await app.request(`/tracks/${id}/copies`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ refs: { folderId: 'foldercarolcp1', jsonId: 'jsoncarolcpy01', audioId: 'audiocarolcp01', audioMime: 'audio/mpeg' }, driveUrl: 'https://drive.google.com/drive/folders/foldercarolcp1', copyTrackId: 'trk-carol-fb' }) });
+    expect(((await (await app.request(`/tracks/${id}`, { headers: as('carol') })).json()) as { track: { unavailable: boolean; copies: number } }).track).toMatchObject({ unavailable: false, copies: 2 });
+    deps.fetchImpl = undefined;
+  });
+
   it('billing: Publishing is the club owner year — a Stripe webhook (signed, replay-safe) opens it, cancellation closes it, an admin can grant it', async () => {
     // Nobody but a club owner with an active year (or a super admin) can publish.
     const locked = await app.request('/publishing/destinations', { headers: as('erin') });

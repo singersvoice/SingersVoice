@@ -19,10 +19,18 @@ export interface FakeFile {
   description?: string;
 }
 
+/** Ids run on across instances: a provider that remembers a tree from an earlier fake must never find those ids reused. */
+let nextSeq = 1;
+
 export class FakeDrive {
   files = new Map<string, FakeFile>();
   calls: string[] = [];
-  private seq = 1;
+  private get seq() {
+    return nextSeq;
+  }
+  private set seq(v: number) {
+    nextSeq = v;
+  }
   /** Resumable upload sessions: the metadata given at the start and the bytes received so far, in order. */
   sessions = new Map<string, { meta: Partial<FakeFile>; bytes: Uint8Array[]; size: number }>();
   /** Answer the next N session PUTs with 503 (an outage on the way). */
@@ -47,7 +55,7 @@ export class FakeDrive {
 
   private create(meta: Partial<FakeFile>, bytes: Uint8Array | null): FakeFile {
     const f: FakeFile = {
-      id: `f${this.seq++}`,
+      id: `f${String(this.seq++).padStart(12, '0')}`, // the length of a real Drive id: the service accepts it as one
       name: meta.name ?? 'untitled',
       mimeType: meta.mimeType ?? 'application/octet-stream',
       parents: meta.parents ?? [],

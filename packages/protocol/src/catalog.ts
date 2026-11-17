@@ -29,6 +29,8 @@ export interface CatalogTrack {
   updatedAt: string;
   /** How many users pulled it into their Drive. */
   pulls: number;
+  /** The master track database's record of this entry (registry.ts), mirrored by the service when it is published. */
+  registryId?: string;
 }
 
 export interface CatalogPublishRequest {

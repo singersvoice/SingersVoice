@@ -3,6 +3,7 @@ import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from '.
 import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
 import type { MixBatch } from './mix.ts';
 import type { AdminUserUpdate, AdminUsersResponse, BillingStatus, Destination, DestinationKind, DestinationUpdate, LiveStatus, PlanId, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
+import type { RegisterTrackRequest, TrackAccessRequest, TrackCopyRequest, TrackHistoryResponse, TrackMetaPatch, TrackRecord, TrackSearchResponse } from './registry.ts';
 import type { YtFetchRequest, YtJob, YtSearchResponse, YtStatus } from './ytTracks.ts';
 
 export interface ApiError {
@@ -156,6 +157,21 @@ export interface Routes {
   'POST /catalog/tracks': { req: CatalogPublishRequest; res: { track: CatalogTrack } };
   'DELETE /catalog/tracks/:id': { res: { ok: true } };
   'POST /catalog/tracks/:id/pull': { res: { ok: true; pulls: number } };
+  /** The master track database (registry.ts): what singers have sung, grouped by song, the latest sung first. */
+  'GET /tracks/search': { res: TrackSearchResponse };
+  /** My own history: what I sang, the latest first. */
+  'GET /tracks/history': { res: TrackHistoryResponse };
+  'GET /tracks/:id': { res: { track: TrackRecord } };
+  /** The track's file (json | audio | video) from the owner's shared Drive, or from any singer's shared copy when the owner's is gone. */
+  'GET /tracks/:id/file/:which': { res: never };
+  /** Register a track (one record per source; a second registration of the same source answers the first record). */
+  'POST /tracks/register': { req: RegisterTrackRequest; res: { track: TrackRecord; created: boolean } };
+  /** A successful access: the global last-accessed instant and my own history move to now. */
+  'POST /tracks/:id/access': { req: TrackAccessRequest; res: { track: TrackRecord } };
+  /** My copy of the track in my own Drive (shared): one more place its files can be fetched from. */
+  'POST /tracks/:id/copies': { req: TrackCopyRequest; res: { track: TrackRecord } };
+  /** The owner (or a super admin) corrects the metadata. */
+  'PATCH /tracks/:id': { req: TrackMetaPatch; res: { track: TrackRecord } };
   /** The Admin page (super admins): every account; one account's role and subscription changed. */
   'GET /admin/users': { res: AdminUsersResponse };
   'PATCH /admin/users/:id': { req: AdminUserUpdate; res: { user: UserRecord } };

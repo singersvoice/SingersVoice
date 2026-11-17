@@ -117,11 +117,13 @@ export function SongPicker(props: {
     setBusy(t.trackId);
     try {
       let catalogTrackId = sharedId(t);
+      let registryId: string | null = t.registryId ?? items.find((c) => c.trackId === catalogTrackId)?.registryId ?? null;
       if (!catalogTrackId && canPublish()) {
         setSharing({ label: 'Sharing the song with the meet', fraction: 0.1 });
         try {
-          await publishTrack(t.trackId, setSharing);
+          const r = await publishTrack(t.trackId, setSharing);
           catalogTrackId = t.trackId;
+          registryId = r.track.registryId ?? registryId;
           setPublished((s) => new Set([...s, t.trackId]));
         } catch (e) {
           toast(`Could not share "${t.title}" with the other devices (${errorText(e)}) — only your own devices can play it`, 'warn', 8000);
@@ -129,7 +131,7 @@ export function SongPicker(props: {
           setSharing(null);
         }
       }
-      await deliver({ trackId: t.trackId, catalogTrackId, trackTitle: t.title, durationMs: t.durationMs });
+      await deliver({ trackId: t.trackId, catalogTrackId, registryId, trackTitle: t.title, durationMs: t.durationMs });
     } catch (e) {
       toast(errorText(e), 'error', 7000);
     } finally {
@@ -139,7 +141,7 @@ export function SongPicker(props: {
   const pickShared = async (c: CatalogTrack) => {
     setBusy(c.trackId);
     try {
-      await deliver({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs });
+      await deliver({ trackId: null, catalogTrackId: c.trackId, registryId: c.registryId ?? null, trackTitle: c.title, durationMs: c.durationMs });
     } catch (e) {
       toast(errorText(e), 'error', 7000);
     } finally {

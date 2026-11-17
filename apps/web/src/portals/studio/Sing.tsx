@@ -13,6 +13,7 @@ import { SeekBar } from '../../components/SeekBar.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { catalogAvailable, isSameTrack, myCatalogUserId, pullCatalogTrack, searchCatalog } from '../../lib/catalog.ts';
+import { ensureRegistered, recordAccess } from '../../lib/registry.ts';
 import { go, href } from '../../lib/nav.ts';
 import { headphonesLikely, isIOS, keepAwake } from '../../lib/platform.ts';
 import { buildManifest, saveTake as persistTake, type TakeResult } from '../../lib/takes.ts';
@@ -152,10 +153,14 @@ export function Sing(props: { id: string }) {
   useEffect(() => {
     setPhase('loading');
     void withProvider(async (p) => {
-      const t = await p.getTrack(decodeURIComponent(props.id));
+      const id = decodeURIComponent(props.id);
+      const t = await p.getTrack(id);
       if (!t) throw new Error('Track not found (was it deleted?)');
       setLoaded(t);
       setPhase('ready');
+      // Opened for performance: the song is known to the SingersVoice track database (registered and shared on the
+      // first Sing of a track of my own; not for a failed load) and this access is on record — never a search.
+      void (t.track.registryId ? Promise.resolve(t.track.registryId) : ensureRegistered(id, { loaded: t }).catch(() => null)).then((rid) => recordAccess(rid, 'sing'));
     }).catch((e) => {
       toast(errorText(e), 'error', 7000);
       go('/studio/sing', true);

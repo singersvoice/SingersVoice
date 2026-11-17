@@ -21,7 +21,7 @@ export default defineConfig({
       manifest: {
         name: 'SingersVoice',
         short_name: 'SingersVoice',
-        description: 'Lyrics-first karaoke. Sing solo or together; your recordings stay in your own Google Drive.',
+        description: 'One Virtual Stage. Endless Musical Possibilities. Sing solo, harmonize globally, or perform with musicians anywhere, play instruments, and collaborate live from anywhere.',
         id: base,
         start_url: base,
         scope: base,

@@ -26,6 +26,7 @@ import { audienceLine } from './audience.ts';
 import { Page } from '../../components/Shell.tsx';
 import { Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
+import { recordAccess } from '../../lib/registry.ts';
 import { shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
 import { isIOS, keepAwake } from '../../lib/platform.ts';
@@ -80,13 +81,13 @@ export function MeetRoom(props: { id: string }) {
   }, [meet?.title, meet?.state, you?.slot]);
 
   // Load the current song whenever the set list moves on (every device resolves it: library, then catalog).
-  const trackKey = `${meet?.trackId ?? ''}|${meet?.catalogTrackId ?? ''}`;
+  const trackKey = `${meet?.trackId ?? ''}|${meet?.catalogTrackId ?? ''}|${meet?.registryId ?? ''}`;
   useEffect(() => {
     if (!meet) return;
     let cancelled = false;
     setTrack(null);
     setPrepared(false); // a new song: get ready again (the server cleared the ready flags too)
-    if (!meet.trackId && !meet.catalogTrackId) {
+    if (!meet.trackId && !meet.catalogTrackId && !meet.registryId) {
       setTrack({ loaded: null, source: 'none', reason: 'No song picked yet — add one to the set list.' });
       return;
     }
@@ -97,7 +98,7 @@ export function MeetRoom(props: { id: string }) {
   }, [trackKey]);
   // A singer on stage keeps what the meet sings: a shared song lands in their own library (Drive) in the background.
   useEffect(() => {
-    if (track?.source === 'catalog' && you?.slot != null) keepMeetTrack(track);
+    if ((track?.source === 'catalog' || track?.source === 'registry') && you?.slot != null) keepMeetTrack(track);
   }, [track, you?.slot]);
   // The mic is a stage thing: open while on stage (talk-back between songs, the vocal in the song), closed on stepping off or when the meet is over.
   const onStageNow = you?.slot != null;
@@ -169,6 +170,9 @@ export function MeetRoom(props: { id: string }) {
       if (loadedKey.current !== trackKey || !player.buffer) {
         await player.load(track.loaded.audio, track.loaded.track.trackId);
         loadedKey.current = trackKey;
+        // The song is in on this device, opened for performance: an access of mine on record in the SingersVoice track
+        // database (its global "last sung" moves to now) — only on a successful load, never for a pick or a search.
+        void recordAccess(meet?.registryId ?? track.loaded.track.registryId ?? (track.source === 'catalog' ? track.entry.registryId : track.source === 'registry' ? track.record.trackId : null), 'sing');
       }
       player.setGain(audio.backingGain);
       await keepAwake(true);

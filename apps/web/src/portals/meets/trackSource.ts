@@ -1,36 +1,49 @@
 /**
- * Where a meet's track comes from on this device: my own library (host / pulled copy) or the
- * public catalog — and, for a singer on stage, a copy of a catalog song is kept in their own
- * library (Drive) in the background, so what the meet sang is theirs to sing again.
+ * Where a meet's track comes from on this device: my own library (host / pulled copy), the public
+ * catalog, or the SingersVoice track database (any singer's shared copy of the song) — and, for a
+ * singer on stage, a copy of a shared song is kept in their own library (Drive) in the background,
+ * so what the meet sang is theirs to sing again.
  */
-import type { CatalogTrack, Meet } from '@singersvoice/protocol';
+import type { CatalogTrack, Meet, TrackRecord } from '@singersvoice/protocol';
 import { catalogIdOfCopy, fetchCatalogTrack, getCatalogTrack, keepCatalogCopy, sameTrackEitherWay } from '../../lib/catalog.ts';
+import { fetchRecordFiles, getTrackRecord, singRecord } from '../../lib/registry.ts';
 import type { LoadedTrack } from '../../lib/storage/types.ts';
 import { toast } from '../../lib/toast.ts';
 import { withProvider } from '../../state/session.ts';
 
-export type MeetTrack = { loaded: LoadedTrack; source: 'library' } | { loaded: LoadedTrack; source: 'catalog'; entry: CatalogTrack } | { loaded: null; source: 'none'; reason: string };
+export type MeetTrack = { loaded: LoadedTrack; source: 'library' } | { loaded: LoadedTrack; source: 'catalog'; entry: CatalogTrack } | { loaded: LoadedTrack; source: 'registry'; record: TrackRecord } | { loaded: null; source: 'none'; reason: string };
 
 const kept = new Set<string>();
-/** Keep a copy of a catalog song in my own library, once, in the background (a singer on stage). */
+/** Keep a copy of a shared song in my own library, once, in the background (a singer on stage). */
 export function keepMeetTrack(t: MeetTrack): void {
-  if (t.source !== 'catalog' || kept.has(t.entry.trackId)) return;
-  kept.add(t.entry.trackId);
-  void keepCatalogCopy(t.entry, t.loaded)
-    .then(() => toast(`"${t.loaded.track.title}" is now in your library too`, 'info', 4000))
-    .catch(() => {
-      kept.delete(t.entry.trackId); // try again next time it comes up
-    });
+  if (t.source === 'catalog') {
+    if (kept.has(t.entry.trackId)) return;
+    kept.add(t.entry.trackId);
+    void keepCatalogCopy(t.entry, t.loaded)
+      .then(() => toast(`"${t.loaded.track.title}" is now in your library too`, 'info', 4000))
+      .catch(() => {
+        kept.delete(t.entry.trackId); // try again next time it comes up
+      });
+  } else if (t.source === 'registry') {
+    if (kept.has(t.record.trackId)) return;
+    kept.add(t.record.trackId);
+    void singRecord(t.record)
+      .then(() => toast(`"${t.loaded.track.title}" is now in your library too`, 'info', 4000))
+      .catch(() => {
+        kept.delete(t.record.trackId);
+      });
+  }
 }
 
-export async function loadMeetTrack(meet: Pick<Meet, 'trackId' | 'catalogTrackId'>): Promise<MeetTrack> {
-  // 1. My library: my own track, a copy pulled from the catalog — or my original when the pick was somebody's copy of it.
+export async function loadMeetTrack(meet: Pick<Meet, 'trackId' | 'catalogTrackId' | 'registryId'>): Promise<MeetTrack> {
+  // 1. My library: my own track, a copy pulled from the catalog — or my original when the pick was somebody's copy of it;
+  //    or any track of mine that is the song by the track database's id.
   const ids = [meet.trackId, meet.catalogTrackId, meet.trackId ? catalogIdOfCopy(meet.trackId) : null].filter((x): x is string => Boolean(x));
   try {
     const mine = await withProvider(async (p) => {
       await p.ready();
       const list = await p.listTracks();
-      const hit = list.find((t) => ids.includes(t.trackId)) ?? list.find((t) => ids.some((id) => sameTrackEitherWay(t.trackId, id)));
+      const hit = list.find((t) => ids.includes(t.trackId)) ?? list.find((t) => ids.some((id) => sameTrackEitherWay(t.trackId, id))) ?? (meet.registryId ? list.find((t) => t.registryId === meet.registryId) : undefined);
       return hit ? p.getTrack(hit.trackId) : null;
     });
     if (mine) return { loaded: mine, source: 'library' };
@@ -40,13 +53,24 @@ export async function loadMeetTrack(meet: Pick<Meet, 'trackId' | 'catalogTrackId
   // 2. Public catalog (owner's Drive, anyone-with-link) — shared helper, same path as Tracks/Studio. A pick that was
   //    somebody's pulled copy names its catalog entry by its id.
   const catalogId = meet.catalogTrackId ?? (meet.trackId ? catalogIdOfCopy(meet.trackId) : null);
+  let catalogReason = '';
   if (catalogId) {
     try {
       const entry = await getCatalogTrack(catalogId);
       return { loaded: await fetchCatalogTrack(entry), source: 'catalog', entry };
     } catch (e) {
+      catalogReason = e instanceof Error ? e.message : String(e);
+    }
+  }
+  // 3. The SingersVoice track database: the song's files from whichever singer's Drive still shares them.
+  if (meet.registryId) {
+    try {
+      const record = await getTrackRecord(meet.registryId);
+      return { loaded: await fetchRecordFiles(record), source: 'registry', record };
+    } catch (e) {
       return { loaded: null, source: 'none', reason: `This song could not be loaded on this device (${e instanceof Error ? e.message : String(e)})` };
     }
   }
+  if (catalogReason) return { loaded: null, source: 'none', reason: `This song could not be loaded on this device (${catalogReason})` };
   return { loaded: null, source: 'none', reason: meet.trackId ? 'This song is not reachable from this device: the singer who picked it needs a Google Drive sign-in so it can be shared with the meet.' : 'No song picked yet.' };
 }

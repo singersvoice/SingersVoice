@@ -85,6 +85,8 @@ export interface SetListEntry {
   id: string;
   trackId: string | null;
   catalogTrackId: string | null;
+  /** The master track database's id of the song (registry.ts): every device can fetch it from a singer's shared Drive. */
+  registryId?: string | null;
   trackTitle: string;
   durationMs: number;
   pickedBy: string;
@@ -96,6 +98,7 @@ export interface SetListEntry {
 export interface SongPick {
   trackId: string | null;
   catalogTrackId: string | null;
+  registryId?: string | null;
   trackTitle: string;
   durationMs?: number;
 }
@@ -137,6 +140,8 @@ export interface Meet {
   trackTitle: string;
   /** Public catalog entry used to fetch lyrics/audio on every device (null = host's private track). */
   catalogTrackId: string | null;
+  /** The master track database's id of the song up now (registry.ts), when known. */
+  registryId?: string | null;
   /** The current song's length as picked (tells a song from a namesake; 0 when unknown). */
   currentDurationMs?: number;
   state: MeetState;

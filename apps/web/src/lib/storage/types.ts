@@ -15,6 +15,8 @@ export interface TrackSummary {
   shared?: boolean;
   /** A karaoke video behind the track (a YouTube song track): the stage shows it in place of the lyrics. */
   video?: boolean;
+  /** The master track database's id (registry.ts), once the track has been registered. */
+  registryId?: string;
 }
 
 export interface LoadedTrack {

@@ -171,8 +171,12 @@ try {
   // opens with the microphone, and the mic status says which input it is.
   await alice.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
   await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor();
-  if (await alice.page.getByRole('button', { name: 'Turn my mic on' }).isVisible().catch(() => false)) await alice.page.getByRole('button', { name: 'Turn my mic on' }).click();
-  await alice.page.locator('.micstatus').waitFor();
+  // The mic opens by itself a moment after the seat; a browser that wanted a tap leaves the button enabled — then it is tapped.
+  await alice.page.locator('.micstatus').waitFor({ timeout: 20000 }).catch(() => undefined);
+  if (!(await alice.page.locator('.micstatus').isVisible().catch(() => false))) {
+    await alice.page.getByRole('button', { name: 'Turn my mic on' }).click();
+    await alice.page.locator('.micstatus').waitFor();
+  }
   await alice.page.locator('[data-instrument="on"]').waitFor();
   const instLabel = await alice.page.locator('[data-instrument-label]').innerText();
   check(/Instrument/.test(instLabel) && instLabel.replace(/\s+/g, ' ').length > 'Instrument'.length + 2, `the instrument input is open beside the mic, named on the mic status (${instLabel.replace(/\s+/g, ' ')})`);

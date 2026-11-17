@@ -889,6 +889,32 @@ input[type='range'] {
 }
 
 /* An item with several actions: on a narrow screen the actions take a row of their own under the name. */
+/* The song tree of the Tracks portal's All tab: a song's versions under it, an artist's files under that. */
+.tree-node {
+  display: grid;
+  gap: 8px;
+}
+.tree-head {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  border: 1px solid var(--line);
+}
+.tree-head:hover {
+  border-color: var(--brand);
+}
+.tree-children {
+  display: grid;
+  gap: 8px;
+  margin-left: 18px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+.item.faint {
+  opacity: 0.6;
+}
 .item .actions {
   display: flex;
   gap: 6px;

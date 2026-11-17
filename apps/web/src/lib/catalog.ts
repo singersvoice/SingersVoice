@@ -14,6 +14,7 @@
 import { createTrack, normalizeTrack, type CatalogListResponse, type CatalogTrack } from '@singersvoice/protocol';
 import { api, ApiError, controlConfigured } from './api.ts';
 import { AuthExpiredError, GOOGLE_API_KEY } from './google.ts';
+import { registerCopy } from './registry.ts';
 import type { LoadedTrack, Progress, TrackSummary } from './storage/types.ts';
 import { driveProvider, profile, withProvider } from '../state/session.ts';
 
@@ -159,10 +160,13 @@ export async function keepCatalogCopy(entry: CatalogTrack, loaded: LoadedTrack, 
   const copy = createTrack({
     ...loaded.track,
     trackId: catalogCopyId(entry.trackId),
+    ...(entry.registryId ? { registryId: entry.registryId } : {}),
     notes: `${loaded.track.notes}\nFrom the public catalog (by ${entry.ownerName})`.trim(),
-    origin: 'unknown',
+    origin: loaded.track.origin === 'youtube' ? 'youtube' : 'unknown',
   });
   const summary = await withProvider((p) => p.saveTrack(copy, loaded.audio, onProgress));
   await api.post('POST /catalog/tracks/:id/pull', `/catalog/tracks/${encodeURIComponent(entry.trackId)}/pull`).catch(() => undefined);
+  // My copy is one more place the song's files can be fetched from (the SingersVoice track database): shared and told.
+  if (entry.registryId) await registerCopy(entry.registryId, summary.trackId).catch(() => undefined);
   return summary;
 }

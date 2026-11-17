@@ -1,8 +1,10 @@
 /**
- * Tracks portal — your tracks in Drive, the public catalog (SVT DB), YouTube song tracks and imports.
- * Publishing a track = Drive folder shared "anyone with the link" + catalog entry; any signed-in
- * singer can pull a published track into their own Drive. A YouTube song track is a karaoke video
- * fetched into your Drive (YoutubeTracks.tsx). Independent of Studio/Meets/Publishing.
+ * Tracks portal — All (one search across the SingersVoice track database, your Drive, the public
+ * catalog and YouTube: AllTracks.tsx), your tracks in Drive, the public catalog (SVT DB), YouTube
+ * song tracks and imports. Publishing a track = Drive folder shared "anyone with the link" + catalog
+ * entry; any signed-in singer can pull a published track into their own Drive. A YouTube song track
+ * is a karaoke video fetched into your Drive (YoutubeTracks.tsx). Every Sing registers the song with
+ * the track database (lib/registry.ts). Independent of Studio/Meets/Publishing.
  */
 import { createTrack, formatMs, importTrackV1, parseLrc, toLrc, type CatalogTrack, type TrackMakerV1, type TrackPackageV2 } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -19,12 +21,13 @@ import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { writeTrackCache } from '../../lib/trackCache.ts';
 import { driveProvider, isDrive, token, withProvider } from '../../state/session.ts';
+import { AllTracks } from './AllTracks.tsx';
 import { YoutubeTracks } from './YoutubeTracks.tsx';
 
-type Tab = 'mine' | 'catalog' | 'youtube';
+type Tab = 'all' | 'mine' | 'catalog' | 'youtube';
 
 export function TracksPortal() {
-  const [tab, setTab] = useState<Tab>('mine');
+  const [tab, setTab] = useState<Tab>('all');
   const [tracks, setTracks] = useState<TrackSummary[] | null>(null);
   const [published, setPublished] = useState<Set<string>>(new Set());
   const [q, setQ] = useState('');
@@ -164,6 +167,7 @@ export function TracksPortal() {
             value={tab}
             onChange={setTab}
             options={[
+              { v: 'all', label: 'All' },
               { v: 'mine', label: isDrive.value ? 'My Drive' : 'This device' },
               { v: 'catalog', label: 'Public catalog' },
               { v: 'youtube', label: 'YouTube' },
@@ -174,6 +178,8 @@ export function TracksPortal() {
           </a>
         </div>
         {busy && <Progress fraction={busy.fraction} label={busy.label} />}
+
+        {tab === 'all' && <AllTracks tracks={tracks ?? []} onChanged={() => void reload()} onMore={setSel} />}
 
         {tab === 'mine' && (
           <>

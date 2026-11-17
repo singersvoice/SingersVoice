@@ -80,6 +80,7 @@ export const choicePending = (m: Meet): boolean => m.setList.length > 0 && !song
 function setCurrent(m: Meet, song: SongPick | null): void {
   m.trackId = song?.trackId ?? null;
   m.catalogTrackId = song?.catalogTrackId ?? null;
+  m.registryId = song?.registryId ?? null;
   m.trackTitle = song ? song.trackTitle.slice(0, 120) : '';
   m.currentDurationMs = song?.durationMs ?? 0;
   for (const s of m.stage) s.ready = false; // a new song: everyone gets ready again (loads it)
@@ -95,7 +96,7 @@ export function addSong(m: Meet, p: Participant, song: SongPick, at = Date.now()
   if (!canPickSong(m, p)) return { ok: false, reason: 'not_on_stage' };
   if (!song.trackId && !song.catalogTrackId) return { ok: false, reason: 'no_track' };
   if (!song.trackTitle?.trim()) return { ok: false, reason: 'no_title' };
-  const pick: SongPick = { trackId: song.trackId ?? null, catalogTrackId: song.catalogTrackId ?? null, trackTitle: song.trackTitle.trim(), durationMs: Math.max(0, Math.round(song.durationMs ?? 0)) };
+  const pick: SongPick = { trackId: song.trackId ?? null, catalogTrackId: song.catalogTrackId ?? null, registryId: song.registryId ?? null, trackTitle: song.trackTitle.trim(), durationMs: Math.max(0, Math.round(song.durationMs ?? 0)) };
   const already = songPlace(m, pick);
   if (already?.place === 'current') return { ok: true, duplicate: 'current' };
   if (already?.place === 'proposed') return { ok: true, duplicate: 'proposed', entry: already.entry };

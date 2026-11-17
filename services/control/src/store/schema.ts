@@ -117,6 +117,45 @@ CREATE TABLE IF NOT EXISTS publish_jobs (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_owner ON publish_jobs(owner_user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS track_registry (
+  track_id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  source_key TEXT NOT NULL UNIQUE,
+  song TEXT NOT NULL,
+  song_key TEXT NOT NULL,
+  artists TEXT NOT NULL DEFAULT '',
+  movie TEXT NOT NULL DEFAULT '',
+  year INTEGER,
+  language TEXT NOT NULL DEFAULT '',
+  drive_url TEXT NOT NULL DEFAULT '',
+  folder_id TEXT NOT NULL DEFAULT '',
+  owner_user_id TEXT NOT NULL,
+  data TEXT NOT NULL,
+  search TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_accessed_at TEXT,
+  access_count INTEGER NOT NULL DEFAULT 0,
+  unavailable INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_registry_song ON track_registry(song_key);
+CREATE INDEX IF NOT EXISTS idx_registry_access ON track_registry(last_accessed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_registry_owner ON track_registry(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_registry_folder ON track_registry(folder_id);
+CREATE TABLE IF NOT EXISTS track_access (
+  track_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  first_at TEXT NOT NULL,
+  last_at TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  how TEXT NOT NULL DEFAULT 'sing',
+  copy_track_id TEXT,
+  copy_url TEXT NOT NULL DEFAULT '',
+  copy_refs TEXT,
+  copy_at TEXT,
+  PRIMARY KEY (track_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_track_access_user ON track_access(user_id, last_at DESC);
 CREATE TABLE IF NOT EXISTS live_segments (
   job_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
@@ -129,6 +168,13 @@ CREATE TABLE IF NOT EXISTS live_segments (
 `;
 
 /**
+ * The master track database (registry.ts): `track_registry` is one row per source file — the YouTube
+ * video, the singer's Drive folder, the catalog entry (`source_key`, unique) — with the song's search
+ * name and metadata, the owner's shareable Drive URL, the file ids in `data`, and the global
+ * `last_accessed_at` (UTC, the most recent successful access by anyone — never a search);
+ * `track_access` is every singer's own history of it (and their shared copy's file ids, so the files
+ * can be fetched from any singer's Drive when the owner's is gone).
+ *
  * Columns added after the first release — put on tables that exist already (`CREATE TABLE IF NOT EXISTS`
  * leaves an existing table as it was): checked and added one by one at startup (`PRAGMA table_info`).
  *   users.role                 — the account's role (roles.ts); a privileged row becomes a super admin

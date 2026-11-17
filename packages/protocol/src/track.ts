@@ -86,6 +86,11 @@ export interface TrackPackageV2 {
   origin: 'trackmaker' | 'import-v1' | 'import-lrc' | 'youtube' | 'unknown';
   /** A karaoke video the stage shows in place of the lyrics (a YouTube song track). */
   video?: TrackVideo;
+  /** The film the song is from, and its year (film songs; empty otherwise). */
+  movie?: string;
+  year?: number | null;
+  /** The master track database's 12-character id of this song (registry.ts), once it has been registered. */
+  registryId?: string;
 }
 
 /** The SVOld TrackMaker JSON (singersvoice.trackmaker.v1). Only the fields we read. */
@@ -176,6 +181,9 @@ export function createTrack(partial: Partial<TrackPackageV2> = {}): TrackPackage
     updatedAt: now,
     origin: partial.origin ?? 'trackmaker',
     ...(partial.video?.fileId ? { video: { ...partial.video } } : {}),
+    ...(partial.movie?.trim() ? { movie: partial.movie.trim() } : {}),
+    ...(partial.year && Number.isFinite(partial.year) ? { year: Math.round(partial.year) } : {}),
+    ...(partial.registryId ? { registryId: partial.registryId } : {}),
   };
 }
 

@@ -6,7 +6,7 @@
  * track like any other: it lists, sings, is picked for a meet, is published to the catalog; on stage
  * the video (the words are in the picture) stands where the lyrics would be.
  */
-import { createTrack, type TrackPackageV2, type YtJob, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
+import { createTrack, parseSongTitle, type TrackPackageV2, type YtJob, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
 import { api, ApiError, controlConfigured } from './api.ts';
 import type { Progress, TrackSummary } from './storage/types.ts';
 import { driveProvider } from '../state/session.ts';
@@ -45,12 +45,16 @@ export function ytTrackTitle(item: Pick<YtSearchItem, 'title'>): string {
     .slice(0, 100);
 }
 
-/** The track package a finished job becomes (lyrics none — they are in the picture). */
+/** The track package a finished job becomes (lyrics none — they are in the picture); what the video's title says of the song is kept with it. */
 export function ytTrackPackage(trackId: string, title: string, job: NonNullable<YtJob['result']>): TrackPackageV2 {
+  const meta = parseSongTitle(job.title || title, job.channel);
   return createTrack({
     trackId,
     title: title || job.title,
-    artist: job.channel,
+    artist: meta.artists || job.channel,
+    movie: meta.movie,
+    year: meta.year,
+    language: meta.language,
     durationMs: job.durationMs,
     layers: [{ id: 'L1', kind: 'backing', file: 'backing.m4a', mimeType: job.audioMime || 'audio/mp4', gain: 1, enabledByDefault: true }],
     lyrics: [],
@@ -94,7 +98,10 @@ export async function importYoutubeTrack(item: YtSearchItem, onProgress?: Progre
   let last: unknown = null;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      const summary = await d.saveTrack(pkg, null, (p) => onProgress?.({ label: p.label, fraction: JOB_SHARE + p.fraction * (1 - JOB_SHARE) }));
+      let summary = await d.saveTrack(pkg, null, (p) => onProgress?.({ label: p.label, fraction: JOB_SHARE + p.fraction * (1 - JOB_SHARE) }));
+      // The song in the SingersVoice track database — the video it is, what its title says, my shared folder as a place to
+      // fetch it from — and its id in the track.json. A failure here leaves a track that registers on its first Sing.
+      summary = (await registerYoutubeTrack(pkg, item, summary).catch(() => null)) ?? summary;
       onProgress?.({ label: 'Ready to sing', fraction: 1 });
       return summary;
     } catch (e) {
@@ -104,4 +111,29 @@ export async function importYoutubeTrack(item: YtSearchItem, onProgress?: Progre
     }
   }
   throw last instanceof Error ? last : new Error('The track could not be written');
+}
+
+async function registerYoutubeTrack(pkg: TrackPackageV2, item: YtSearchItem, summary: TrackSummary): Promise<TrackSummary | null> {
+  const d = driveProvider();
+  if (!d || !controlConfigured.value) return null;
+  const meta = parseSongTitle(item.title, item.channel);
+  const driveUrl = await d.shareTrack(pkg.trackId, { type: 'anyone' });
+  const refs = await d.publicTrackRefs(pkg.trackId);
+  const r = await api.post('POST /tracks/register', '/tracks/register', {
+    source: 'youtube',
+    song: meta.song || pkg.title,
+    artists: meta.artists || pkg.artist,
+    movie: meta.movie,
+    year: meta.year,
+    language: meta.language,
+    driveUrl,
+    refs: { folderId: refs.folderId, jsonId: refs.trackJsonId, audioId: refs.audioId, audioMime: refs.audioMime, ...(refs.videoId ? { videoId: refs.videoId, videoMime: refs.videoMime ?? 'video/mp4' } : {}) },
+    durationMs: pkg.durationMs,
+    singerCount: 1,
+    youtubeId: item.id,
+    thumbnail: item.thumbnail,
+    copyTrackId: pkg.trackId,
+  });
+  await d.saveTrack({ ...pkg, registryId: r.track.trackId }, null);
+  return { ...summary, registryId: r.track.trackId, shared: true };
 }

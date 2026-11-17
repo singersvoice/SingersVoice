@@ -100,21 +100,34 @@ describe('YouTube song tracks', () => {
       ];
       return { json: { job: { jobId: 'yt-1', videoId: 'dQw4w9WgXcQ', trackId: 't', startedAt: 'now', ...states[Math.min(polls, states.length) - 1]! } } };
     };
+    // The master track database: the song registered as the video it is, with what its title says, my shared folder as its place.
+    let registered: Record<string, unknown> | null = null;
+    service['POST /tracks/register'] = (body) => {
+      registered = body as Record<string, unknown>;
+      return { status: 201, json: { track: { trackId: 'ABCDEFGH2611', song: 'Never Gonna Give You Up' }, created: true } };
+    };
     const seen: string[] = [];
     const saved = await importYoutubeTrack(item, (p) => seen.push(`${p.label}@${p.fraction.toFixed(2)}`), { pollMs: 1 });
     expect(saved.title).toBe('Never Gonna Give You Up (Karaoke Version)');
     expect(saved.video).toBe(true);
+    expect(saved.registryId).toBe('ABCDEFGH2611');
     expect(seen).toContain('downloading · 56 %@0.30');
     expect(seen.some((s) => s.startsWith('uploading the video'))).toBe(true);
     expect(seen.at(-1)).toBe('Ready to sing@1.00');
-    expect(serviceCalls.map((c) => c.method + ' ' + c.path)).toEqual(['POST /yt/fetch', 'GET /yt/jobs/yt-1', 'GET /yt/jobs/yt-1', 'GET /yt/jobs/yt-1']);
+    expect(serviceCalls.map((c) => c.method + ' ' + c.path)).toEqual(['POST /yt/fetch', 'GET /yt/jobs/yt-1', 'GET /yt/jobs/yt-1', 'GET /yt/jobs/yt-1', 'POST /tracks/register']);
     expect(serviceCalls[0]!.auth).toBe('Bearer tok'); // the singer's own token: the files go into their Drive
+    expect(registered).toMatchObject({ source: 'youtube', song: 'Never Gonna Give You Up', artists: 'Sing King', youtubeId: 'dQw4w9WgXcQ', durationMs: 213_400, copyTrackId: saved.trackId });
+    expect((registered as unknown as { refs: { videoId: string; audioId: string; jsonId: string; folderId: string } }).refs).toMatchObject({ videoId: expect.any(String), audioId: expect.any(String), jsonId: expect.any(String), folderId: expect.any(String) });
+    expect(String((registered as unknown as { driveUrl: string }).driveUrl)).toMatch(/^https:\/\/drive\.google\.com\/drive\/folders\//);
     const p = session.driveProvider()!;
     const list = await p.listTracks();
     expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({ trackId: saved.trackId, artist: 'Sing King', durationMs: 213_400, video: true });
+    expect(list[0]).toMatchObject({ trackId: saved.trackId, artist: 'Sing King', durationMs: 213_400, video: true, registryId: 'ABCDEFGH2611', shared: true });
     const loaded = await p.getTrack(saved.trackId);
     expect(loaded!.track.video!.fileId).toBe('vid1');
+    expect(loaded!.track.registryId).toBe('ABCDEFGH2611'); // the id in the track.json: known on every device from now on
+    const folderOfJson = [...drive.files.values()].find((f) => f.name === 'track.json')!.parents[0]!;
+    expect(drive.files.get(folderOfJson)!.permissions.some((x) => x.type === 'anyone')).toBe(true); // the folder shared: the shareable URL
     expect(loaded!.track.notes).toContain('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
     expect(new Uint8Array(await loaded!.audio.arrayBuffer())).toEqual(new Uint8Array([1, 2]));
     const json = [...drive.files.values()].find((f) => f.name === 'track.json')!;

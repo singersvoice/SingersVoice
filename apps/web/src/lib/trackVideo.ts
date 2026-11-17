@@ -16,12 +16,12 @@ const urls = new Map<string, Promise<string>>();
 const KEEP = 3;
 
 /** An object URL for the track's video (null when the track has none); rejects with a plain message when it cannot be fetched. */
-export function trackVideoUrl(track: Pick<TrackPackageV2, 'trackId' | 'video'>, catalogTrackId?: string | null): Promise<string> | null {
+export function trackVideoUrl(track: Pick<TrackPackageV2, 'trackId' | 'video' | 'registryId'>, catalogTrackId?: string | null): Promise<string> | null {
   const v = track.video;
   if (!v?.fileId) return null;
   const hit = urls.get(v.fileId);
   if (hit) return hit;
-  const p = fetchVideo(v.fileId, v.mimeType, catalogTrackId ?? catalogIdOfCopy(track.trackId) ?? track.trackId)
+  const p = fetchVideo(v.fileId, v.mimeType, catalogTrackId ?? catalogIdOfCopy(track.trackId) ?? track.trackId, track.registryId ?? null)
     .then((blob) => URL.createObjectURL(blob))
     .catch((e) => {
       urls.delete(v.fileId); // the next try fetches again
@@ -38,7 +38,7 @@ export function trackVideoUrl(track: Pick<TrackPackageV2, 'trackId' | 'video'>, 
   return p;
 }
 
-async function fetchVideo(fileId: string, mime: string, catalogTrackId: string): Promise<Blob> {
+async function fetchVideo(fileId: string, mime: string, catalogTrackId: string, registryId: string | null): Promise<Blob> {
   const d = driveProvider();
   const type = mime || 'video/mp4';
   if (d) {
@@ -58,8 +58,9 @@ async function fetchVideo(fileId: string, mime: string, catalogTrackId: string):
       /* the service then */
     }
   }
+  // The service: the track database knows every singer's shared copy of the song; the catalog entry is the other way in.
   try {
-    const b = await api.getBlob('GET /catalog/tracks/:id/file/:which', `/catalog/tracks/${encodeURIComponent(catalogTrackId)}/file/video`);
+    const b = registryId ? await api.getBlob('GET /tracks/:id/file/:which', `/tracks/${encodeURIComponent(registryId)}/file/video`).catch(() => api.getBlob('GET /catalog/tracks/:id/file/:which', `/catalog/tracks/${encodeURIComponent(catalogTrackId)}/file/video`)) : await api.getBlob('GET /catalog/tracks/:id/file/:which', `/catalog/tracks/${encodeURIComponent(catalogTrackId)}/file/video`);
     return b.type ? b : new Blob([b], { type });
   } catch (e) {
     throw new Error(`The karaoke video could not be fetched (${e instanceof Error ? e.message : String(e)}) — the song still plays, without its picture`);

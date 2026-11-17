@@ -11,7 +11,7 @@ Live build: **https://singersvoice.github.io/SingersVoice/**
 
 ## Portals at a glance
 
-- **Tracks** — My Drive / Public catalog / YouTube tabs; *More → Publish to public catalog* shares the Drive folder and lists the track for everyone; *Add to my Drive* pulls a catalog track; **YouTube** — type a song (or paste a link), *Add to my Drive* on a result fetches it through the relay into `Tracks/YT` (progress in the relay's words), then *Sing*: the karaoke video where the lyrics would be, muted, on the song's clock. Needs the relay (docs/RELAY.md); without it the tab says so.
+- **Tracks** — All / My Drive / Public catalog / YouTube tabs, in that order. **All**: one box searches the SingersVoice track database (what singers have sung, grouped by song name — a song with several files is an expandable group, several artists cascade one more level; the latest sung first), your Drive and the catalog as you type, YouTube on *Search*; **Sing** on any version brings the song into your Drive under Tracks (shared, registered as your copy) and opens the stage; ▶ previews it here. Sing a track of your own once: it is shared, registered with a 12-character id and listed for every singer; the *in the database* chip shows it. The global "last sung" and your own history move only on a Sing or a preview that plays — never on a search. *More → Publish to public catalog* shares the Drive folder and lists the track for everyone; *Add to my Drive* pulls a catalog track; **YouTube** — type a song (or paste a link), *Add to my Drive* on a result fetches it through the relay into `Tracks/YT` (progress in the relay's words), then *Sing*: the karaoke video where the lyrics would be, muted, on the song's clock. Needs the relay (docs/RELAY.md); without it the tab says so. Track Maker has Movie and Year fields for the database's metadata.
 - **Studio** — Track Maker, Sing, Performances (unchanged flows, now under `/studio`).
 - **Live Meets** — Create meet (pick a *public* track so others can load it) → share the link/code → whoever has the link takes a slot with *Take a stage slot* (the stage is open; the host can switch to deciding each one) → with headphones on, the singers on stage hear each other and the audience hears the stage (talk-back) → *I'm ready* → host *Start the song (8 s count-in)* → everyone's stage starts at the same instant, nobody on stage hears anyone else → the song ends → the take lands as one file in `Performances` and is listed on the meet's ended page; the host's device films the whole meet into their Drive as it goes, a chapter per song, pause and stretch of stage (*Full meet 01, 02, …* on the ended page too; under Performances one filming with its chapters and *Play all*) — press Pause, Restart, Stop on the song and the film carries on, each a new chapter. Tick *Instrument* beside the mic to add a USB interface's input to your sound. Only the host can remove someone (*out* on a slot, × on a name). Idle 5 minutes → the meet closes itself.
 - **Publishing** (club owners with an active year, or a super admin) — Destinations (stream keys, saved once), Publish a meet, History; **Publish** in the room opens the show view; `/watch/<meetId>` is the public in-house page. With the RTMP relay deployed (docs/RELAY.md) YouTube runs at ultra-low latency and Facebook / Instagram / Twitch go live. Recording and streaming run from *Go live* to *Stop publishing*, whatever the singers do to the song; the footage lands in chapters like the host's film.
@@ -102,6 +102,33 @@ year, the super admin grants it on the Admin page, and Publishing opens for that
 
 ```bash
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/live-duet.mjs screenshots
+```
+
+## Track search and the track database (`tools/ci/tracks-e2e.mjs`)
+
+Four singers in one browser, each with a **Google Drive of their own faked in the test** (the unit
+tests' FakeDrive, served over HTTP to the browser — `sv.googleApiBase` on the device points
+`drive.ts` at it, a local address only — and to the service: `SV_FAKE_DRIVE_URL` sends sv-control's
+token check and public file reads there, with a folder's sharing inherited by its files as Drive
+does). The tabs are All · My Drive · Public catalog · YouTube, All first. alice imports a song; a
+search registers nothing; her first **Sing** shares her folder (checked on the fake: the anyone
+permission is real, and the URL is that folder), registers the song with a 12-character id, her file
+ids and her name, records her first access (now, UTC) and writes the id into her track.json; a second
+Sing adds no record. bob finds it under All with nothing typed (the latest sung, "by alice"); a
+**preview** that plays is an access of his (the global instant moves, he is in his own history);
+**Sing** brings the song through the service from alice's shared Drive into *his* Drive under
+`Tracks/CI Sample Song`, byte for byte, carrying the id, shared and registered as a copy, and opens
+it; sung again, his copy is opened, not made twice. His own "CI Sample Song" by another artist (an
+.lrc names it) makes the second version: one song group — "2 versions · 2 artists" — folded until
+opened, cascading by artist, every file with Sing; the groups and the versions sort by the latest
+access on the page and in the database, and move when a song is sung again; histories are each
+singer's own. alice **unshares** her folder: carol still gets the song, from bob's shared copy;
+with every copy unshared, dave's Sing says the files are no longer shared, nothing is saved, no
+access is counted, the record is marked unavailable and the row says so. A run of searches changes
+no count. Runs in CI before the live meet.
+
+```bash
+BASE_PATH=/SingersVoice/ npm run build && node tools/ci/tracks-e2e.mjs screenshots
 ```
 
 ## Roles, the Admin page and the instrument (`tools/ci/roles-e2e.mjs`)
@@ -210,6 +237,19 @@ the whole camera frame while settling, glides once to the stage frame of the med
 it exactly, holds under wobble in place and size for half a minute, ignores a second of a different
 head and follows a singer who moved and stayed in one glide, never follows measurements that
 disagree (a model losing and finding the figure), and holds when nobody is found.
+
+**The track database** (`packages/protocol/test/registry.test.ts`, `services/control/test/app.test.ts`,
+`apps/web/test/registry.test.ts`): the ids (8 random characters from an alphabet without 0/O/1/I, the
+month minted, the same way everywhere), the song keys that group one song's files, the reading of a
+karaoke title; the service — one record per source with the blanks filled and never blanked, the
+catalog mirrored, an access moving the global and the singer's own instants in UTC while searches and
+copies move nothing, the groups sorted by the latest access, pages, the owner's (or a super admin's)
+metadata patch; the files handed over from the owner's Drive, then from any singer's shared copy, the
+record marked unavailable when none is left and available again on a new copy. The singer's side: a
+track of their own shared and registered on its first Sing with the id written into the track.json,
+once; somebody else's record sung — the files through the service, the copy under Tracks carrying the
+id, shared and registered, found and not copied twice the next time; the service's refusal passed on
+with nothing saved; a preview's audio.
 
 **YouTube song tracks** (`services/relay/test/yt.test.mjs`, `apps/web/test/ytTracks.test.ts`,
 `drive.test.ts`, `services/control/test/app.test.ts`): the relay runs a search and a whole fetch job

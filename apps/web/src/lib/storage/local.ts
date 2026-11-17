@@ -42,6 +42,7 @@ export class LocalProvider implements StorageProvider {
         updatedAt: r.track.updatedAt,
         ref: r.track.trackId,
         ...(r.track.video ? { video: true } : {}),
+        ...(r.track.registryId ? { registryId: r.track.registryId } : {}),
       }))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
@@ -71,6 +72,7 @@ export class LocalProvider implements StorageProvider {
       updatedAt: track.updatedAt,
       ref: track.trackId,
       ...(track.video ? { video: true } : {}),
+      ...(track.registryId ? { registryId: track.registryId } : {}),
     };
   }
 

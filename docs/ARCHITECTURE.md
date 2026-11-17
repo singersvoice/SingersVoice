@@ -60,6 +60,47 @@ No portal imports another's screens; they share only `packages/protocol`, `lib/`
 `lib/catalog.ts` is the only place that knows how publishing and pulling work; portals call it and never
 each other, so any portal can be removed or replaced without touching the others.
 
+### The SingersVoice track database (`packages/protocol/registry.ts`, `lib/registry.ts`, `track_registry`)
+
+The master database of every karaoke track singers have sung — one **record per source file**: a
+YouTube video (`yt:<videoId>`), a singer's Drive folder (`drive:<folderId>`), a catalog entry
+(`catalog:<id>`; every published entry is mirrored, and the entry learns its `registryId`). A record
+holds the **song's search name, artist(s), movie, year, language**, a **12-character id** — 8 random
+characters from an alphabet without 0/O/1/I and the month it was minted, `YYMM`, minted by the service
+and nobody else (`newRegistryId`) — the owner's **shareable Google Drive URL** (their track folder,
+shared anyone-with-the-link) with the file ids behind it, and the global **last accessed** instant
+(UTC: the most recent *successful* access by anyone). Beside it, `track_access` keeps **every singer's
+own history** (first, last, count) and, when they made one, their **shared copy's** file ids.
+
+- **Sing registers.** The first Sing of a track of your own (`ensureRegistered`, from the Sing screen
+  once the track has loaded — Drive only) shares its folder, registers the song with its metadata
+  (title → song, artist, the Track Maker's Movie and Year, language) and writes the id into the
+  `track.json` (and the file's `svRegistry` property), so every device knows it from then on. A
+  YouTube import registers at import, with what the video's title says (`parseSongTitle`: "Song |
+  Movie | Singers | 2019 | Telugu Karaoke", "Song - Artist (Karaoke)", "(From "Movie")", a year, a
+  language word — anything it cannot tell stays empty, the owner or a super admin can set it,
+  `PATCH /tracks/:id`). A second registration of the same source — or of the same Drive folder —
+  answers the first record, filling blanks and never blanking what it had.
+- **Sing on somebody's record** (`singRecord`): the track of your library that is it (by id), else its
+  files fetched (your own token for your files, the app's API key if any, else the service —
+  `GET /tracks/:id/file/:which`, which tries the owner's Drive and then **every singer's shared copy**,
+  newest first, and marks the record `unavailable` only when none hands the files over), a copy saved
+  into **your** Drive under `Tracks/<title>` carrying the id (`reg-<id>-<you>`: stable, so it is never
+  made twice), shared, and registered as a copy (`POST /tracks/:id/copies`) — one more place the song
+  outlives its first Drive from. A catalog pull does the same with the entry's `registryId`.
+- **Access** (`POST /tracks/:id/access`, `how: sing | play`) is reported by the device only after the
+  fact: the Sing screen once the track loaded (solo), the meet room once the song loaded on that
+  device (every singer's device, each song start — `meet.registryId` travels with the song pick), the
+  All tab's preview once it plays. Searches, results, browsing, a failed copy or an unavailable link
+  never count. The service moves the record's global instant and the singer's own row to now.
+- **Search** (`GET /tracks/search?q=`): every word must appear (song, artists, movie, year, language,
+  source, owner); the answer is **groups by song name** (`songKey`: lowercased, the karaoke-file words
+  and brackets dropped, combining marks kept), the groups ordered by the latest access in them (the
+  never-sung last), the versions in a group the same way; `GET /tracks/history` is the singer's own.
+  The All tab (`portals/tracks/AllTracks.tsx`) draws the groups as a tree — a song with one file is its
+  row; several open on a tap; several artists cascade one level more — beside the singer's own Drive
+  matches, the catalog entries the database does not answer with already, and (on Search) YouTube.
+
 ### A YouTube song track (`lib/ytTracks.ts`, `packages/protocol/ytTracks.ts`, `services/relay/src/yt.mjs`)
 
 A karaoke video found on YouTube becomes a track of the singer's own, with its words in the picture:

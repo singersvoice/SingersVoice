@@ -27,9 +27,12 @@ const db = await openNodeSqlite(process.env.SV_DB ?? './sv-control.sqlite');
 const store = new SqlStore(nodeSqliteDriver(db));
 await store.migrate();
 
+/** Browser tests only: Google (Drive, the token check) stands in for itself at this address. */
+const fakeGoogle = process.env.SV_FAKE_DRIVE_URL ? fakeDriveFetch(process.env.SV_FAKE_DRIVE_URL) : undefined;
+
 const deps: AppDeps = {
   store,
-  auth: createAuthenticator({ googleClientId: process.env.GOOGLE_CLIENT_ID, devAuth: process.env.DEV_AUTH === '1' }),
+  auth: createAuthenticator({ googleClientId: process.env.GOOGLE_CLIENT_ID, devAuth: process.env.DEV_AUTH === '1', ...(fakeGoogle ? { fetchImpl: fakeGoogle } : {}) }),
   secrets: new SecretBox(process.env.PUBLISH_KEY_SECRET ?? ''),
   runtime: 'node',
   iceServers: parseIceServers(process.env.ICE_SERVERS),
@@ -41,7 +44,18 @@ const deps: AppDeps = {
   billing: { secretKey: process.env.STRIPE_SECRET_KEY || undefined, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined, pricePublisher: process.env.STRIPE_PRICE_PUBLISHER || undefined, appUrl: process.env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
   relay: process.env.RELAY_URL && process.env.RELAY_SECRET ? { url: process.env.RELAY_URL, secret: process.env.RELAY_SECRET } : undefined,
   fakeYoutubeDir: process.env.SV_FAKE_YOUTUBE_DIR || undefined,
+  fetchImpl: fakeGoogle,
 };
+
+/** Every Google address the service may ask (the Drive API, the download pages, the token check) sent to the fake instead, path and query kept. */
+function fakeDriveFetch(base: string): typeof fetch {
+  const hosts = ['https://www.googleapis.com', 'https://drive.usercontent.google.com', 'https://drive.google.com', 'https://oauth2.googleapis.com'];
+  return (input, init) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const host = hosts.find((h) => url.startsWith(h));
+    return fetch(host ? `${base.replace(/\/$/, '')}${url.slice(host.length)}` : url, init);
+  };
+}
 
 const app = createApp(() => deps);
 serve({ fetch: app.fetch, port: PORT }, () => console.log(`sv-control (node) listening on :${PORT}${process.env.DEV_AUTH === '1' ? ' [DEV_AUTH on]' : ''}`));

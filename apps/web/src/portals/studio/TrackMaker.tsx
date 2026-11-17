@@ -315,6 +315,12 @@ function SourceStep(props: {
         <Field label="Language">
           <input class="input" value={t.language} onInput={(e) => props.onPatch({ language: (e.currentTarget as HTMLInputElement).value })} placeholder="Telugu, English…" />
         </Field>
+        <Field label="Movie (optional)">
+          <input class="input" value={t.movie ?? ''} onInput={(e) => props.onPatch({ movie: (e.currentTarget as HTMLInputElement).value })} placeholder="The film the song is from" data-meta-movie />
+        </Field>
+        <Field label="Year (optional)">
+          <input class="input" type="number" inputMode="numeric" min={1900} max={2100} value={t.year ?? ''} onInput={(e) => props.onPatch({ year: Number((e.currentTarget as HTMLInputElement).value) || null })} data-meta-year />
+        </Field>
         <Field label="BPM (optional)">
           <input class="input" type="number" inputMode="numeric" value={t.bpm ?? ''} onInput={(e) => props.onPatch({ bpm: Number((e.currentTarget as HTMLInputElement).value) || null })} />
         </Field>

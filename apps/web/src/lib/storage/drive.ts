@@ -31,8 +31,17 @@ import { AuthExpiredError, type GoogleToken } from '../google.ts';
 import { md5Blob } from '../md5.ts';
 import type { LoadedPerformance, LoadedTrack, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
 
-const API = 'https://www.googleapis.com/drive/v3';
-const UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
+/** Google's API host — or, for the browser tests only, a fake standing in for it (`sv.googleApiBase` on the device). */
+const GOOGLE_API = (() => {
+  try {
+    const base = typeof localStorage !== 'undefined' ? localStorage.getItem('sv.googleApiBase') : null;
+    return base && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(base) ? base : 'https://www.googleapis.com';
+  } catch {
+    return 'https://www.googleapis.com';
+  }
+})();
+const API = `${GOOGLE_API}/drive/v3`;
+const UPLOAD = `${GOOGLE_API}/upload/drive/v3/files`;
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const CHUNK = 8 * 1024 * 1024; // multiple of 256 KiB
 const FILE_FIELDS = 'id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,parents,appProperties,description,webViewLink,trashed';
@@ -378,6 +387,7 @@ export class DriveProvider implements StorageProvider {
           link: f.parents?.[0] ? `https://drive.google.com/drive/folders/${f.parents[0]}` : f.webViewLink,
           shared: p.svShared === '1',
           ...(p.svVideo === '1' ? { video: true } : {}),
+          ...(p.svRegistry ? { registryId: p.svRegistry } : {}),
         } satisfies TrackSummary;
       })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -425,6 +435,7 @@ export class DriveProvider implements StorageProvider {
       svSingers: String(track.singerCount),
       svShared: existingJson?.appProperties?.svShared ?? '0',
       svVideo: track.video ? '1' : '0',
+      svRegistry: track.registryId ?? existingJson?.appProperties?.svRegistry ?? '',
     };
     if (audio) {
       onProgress?.({ label: 'Uploading backing track', fraction: 0.1 });
@@ -468,6 +479,7 @@ export class DriveProvider implements StorageProvider {
       link: `https://drive.google.com/drive/folders/${folderId}`,
       shared: props.svShared === '1',
       ...(track.video ? { video: true } : {}),
+      ...(props.svRegistry ? { registryId: props.svRegistry } : {}),
     };
   }
 

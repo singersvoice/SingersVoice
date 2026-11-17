@@ -18,6 +18,15 @@ import {
   normalizeWatchUrl,
   type CatalogPublishRequest,
   type CatalogTrack,
+  isDriveUrl,
+  isRegistryId,
+  registrySourceKey,
+  youtubeVideoId,
+  type RegisterTrackRequest,
+  type TrackAccessRequest,
+  type TrackCopyRequest,
+  type TrackFileRefs,
+  type TrackMetaPatch,
   type ChatMessage,
   type ChatRequest,
   type CreateMeetRequest,
@@ -355,6 +364,148 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json({ ok: true as const, pulls: await store.countPull(t.trackId) });
   });
 
+  // ---------- Tracks portal: the master track database (registry.ts) ----------
+  //
+  // One record per karaoke track singers have sung — from YouTube, from a singer's Drive, from the catalog —
+  // with its metadata, the owner's shareable Drive URL and when anyone last sang it. Every signed-in singer
+  // searches it and sings from it; the files come from the owner's shared Drive, or from any singer's shared
+  // copy when the owner's is gone. An access is counted only when the device reports a successful one.
+
+  const TRACK_SOURCES = new Set(['youtube', 'drive', 'catalog']);
+  const cleanRefs = (x: unknown): TrackFileRefs | null => {
+    const r = (x ?? {}) as Partial<TrackFileRefs>;
+    if (!DRIVE_FILE_ID.test(String(r.folderId ?? '')) || !DRIVE_FILE_ID.test(String(r.jsonId ?? '')) || !DRIVE_FILE_ID.test(String(r.audioId ?? ''))) return null;
+    return {
+      folderId: String(r.folderId),
+      jsonId: String(r.jsonId),
+      audioId: String(r.audioId),
+      audioMime: String(r.audioMime || 'audio/mpeg').slice(0, 60),
+      ...(r.videoId && DRIVE_FILE_ID.test(String(r.videoId)) ? { videoId: String(r.videoId), videoMime: String(r.videoMime || 'video/mp4').slice(0, 60) } : {}),
+    };
+  };
+  const registryId = (c: Context<Env>): string | null => {
+    const id = c.req.param('id');
+    return isRegistryId(id) ? id : null;
+  };
+
+  app.get('/tracks/search', async (c) => {
+    const q = (c.req.query('q') ?? '').trim().slice(0, 80);
+    const limit = Math.min(50, Math.max(1, Number(c.req.query('limit') ?? 20)));
+    const offset = Math.max(0, Number(c.req.query('cursor') ?? 0));
+    return c.json(await c.get('deps').store.searchRegistry(q, offset, limit, c.get('user').userId));
+  });
+
+  app.get('/tracks/history', async (c) => {
+    const limit = Math.min(50, Math.max(1, Number(c.req.query('limit') ?? 20)));
+    return c.json({ items: await c.get('deps').store.registryHistory(c.get('user').userId, limit) });
+  });
+
+  app.get('/tracks/:id', async (c) => {
+    const id = registryId(c);
+    const track = id ? await c.get('deps').store.getRegistryTrack(id, c.get('user').userId) : null;
+    return track ? c.json({ track }) : err(c, 404, 'no_track', 'This song is not in the SingersVoice track database');
+  });
+
+  // The track's files from any singer's shared Drive: the owner's first, then every registered copy — so a song
+  // outlives the one Drive it came from. A song nobody's Drive hands over any more is marked unavailable.
+  app.get('/tracks/:id/file/:which', async (c) => {
+    const { store, googleApiKey, fetchImpl } = c.get('deps');
+    const id = registryId(c);
+    const track = id ? await store.getRegistryTrack(id) : null;
+    if (!track || !id) return err(c, 404, 'no_track', 'This song is not in the SingersVoice track database');
+    const which = c.req.param('which');
+    if (which !== 'json' && which !== 'audio' && which !== 'video') return err(c, 400, 'bad_request', 'The file is json, audio or video');
+    let last = '';
+    for (const src of await store.trackFileSources(id)) {
+      const fileId = which === 'json' ? src.refs.jsonId : which === 'audio' ? src.refs.audioId : (src.refs.videoId ?? '');
+      if (!fileId) continue;
+      try {
+        const file = await fetchPublicDriveFile(fileId, { apiKey: googleApiKey, fetchImpl });
+        if (track.unavailable) await store.setTrackUnavailable(id, false);
+        const contentType = which === 'json' ? 'application/json' : which === 'video' ? src.refs.videoMime || 'video/mp4' : src.refs.audioMime || file.contentType;
+        return new Response(file.body, { status: 200, headers: { 'Content-Type': contentType, 'Cache-Control': 'private, max-age=3600', ...(file.size ? { 'Content-Length': String(file.size) } : {}) } });
+      } catch (e) {
+        last = e instanceof Error ? e.message : String(e);
+      }
+    }
+    if (which === 'video' && !track.hasVideo) return err(c, 404, 'no_video', 'This song has no video');
+    await store.setTrackUnavailable(id, true);
+    return err(c, 404, 'not_shared', `This song's files are no longer shared from any singer's Drive${last ? ` (${last})` : ''}`);
+  });
+
+  app.post('/tracks/register', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as Partial<RegisterTrackRequest> | null;
+    const refs = cleanRefs(body?.refs);
+    const song = String(body?.song ?? '').replace(/\s+/g, ' ').trim();
+    if (!body || !TRACK_SOURCES.has(String(body.source)) || !refs) return err(c, 400, 'bad_request', 'source, song and the Drive file ids (folderId, jsonId, audioId) are required');
+    if (!isDriveUrl(body.driveUrl)) return err(c, 400, 'bad_request', 'driveUrl must be a Google Drive link');
+    const youtubeId = body.youtubeId ? youtubeVideoId(String(body.youtubeId)) : null;
+    if (body.source === 'youtube' && !youtubeId) return err(c, 400, 'bad_request', 'A YouTube track names its video');
+    const user = c.get('user');
+    const { store } = c.get('deps');
+    // A source the database holds already needs no name (the record has one); a new one does.
+    const catalogTrackId = body.catalogTrackId ? String(body.catalogTrackId).slice(0, 120) : null;
+    const sourceKey = body.sourceKey && /^(yt|drive|catalog):[A-Za-z0-9_-]{1,128}$/.test(String(body.sourceKey)) ? String(body.sourceKey) : registrySourceKey({ source: body.source as RegisterTrackRequest['source'], youtubeId, catalogTrackId, refs });
+    if (!song && !(await store.getRegistryBySource(sourceKey))) return err(c, 400, 'bad_request', 'The song needs a name');
+    const r = await store.registerTrack({
+      source: body.source as RegisterTrackRequest['source'],
+      song,
+      artists: String(body.artists ?? ''),
+      movie: String(body.movie ?? ''),
+      year: body.year === null || body.year === undefined ? null : Number(body.year),
+      language: String(body.language ?? ''),
+      driveUrl: body.driveUrl,
+      refs,
+      durationMs: Number(body.durationMs ?? 0),
+      singerCount: Number(body.singerCount ?? 1),
+      youtubeId,
+      thumbnail: /^https:\/\/[^\s]{1,300}$/.test(String(body.thumbnail ?? '')) ? String(body.thumbnail) : '',
+      catalogTrackId,
+      sourceKey,
+      ...(body.copyTrackId ? { copyTrackId: String(body.copyTrackId).slice(0, 120) } : {}),
+      ownerUserId: user.userId,
+      ownerName: user.name,
+    });
+    return c.json(r, r.created ? 201 : 200);
+  });
+
+  app.post('/tracks/:id/access', async (c) => {
+    const id = registryId(c);
+    const body = (await c.req.json().catch(() => null)) as Partial<TrackAccessRequest> | null;
+    const how = body?.how === 'play' ? 'play' : body?.how === 'sing' ? 'sing' : null;
+    if (!id || !how) return err(c, 400, 'bad_request', 'how is sing or play');
+    const track = await c.get('deps').store.recordTrackAccess(id, c.get('user').userId, how);
+    return track ? c.json({ track }) : err(c, 404, 'no_track', 'This song is not in the SingersVoice track database');
+  });
+
+  app.post('/tracks/:id/copies', async (c) => {
+    const id = registryId(c);
+    const body = (await c.req.json().catch(() => null)) as Partial<TrackCopyRequest> | null;
+    const refs = cleanRefs(body?.refs);
+    if (!id || !refs || !isDriveUrl(body?.driveUrl) || !body?.copyTrackId) return err(c, 400, 'bad_request', 'The copy needs its Drive file ids, its Drive link and its id in your library');
+    const track = await c.get('deps').store.recordTrackCopy(id, c.get('user').userId, { refs, driveUrl: body.driveUrl, copyTrackId: String(body.copyTrackId).slice(0, 120) });
+    return track ? c.json({ track }) : err(c, 404, 'no_track', 'This song is not in the SingersVoice track database');
+  });
+
+  app.patch('/tracks/:id', async (c) => {
+    const id = registryId(c);
+    const { store } = c.get('deps');
+    const user = c.get('user');
+    const existing = id ? await store.getRegistryTrack(id) : null;
+    if (!existing || !id) return err(c, 404, 'no_track', 'This song is not in the SingersVoice track database');
+    if (existing.ownerUserId !== user.userId && user.role !== 'super_admin') return err(c, 403, 'not_owner', 'Only the singer who registered this song (or a super admin) can change its details');
+    const body = (await c.req.json().catch(() => null)) as Partial<TrackMetaPatch> | null;
+    if (!body) return err(c, 400, 'bad_request', 'song, artists, movie, year or language');
+    const patch: TrackMetaPatch = {};
+    if (typeof body.song === 'string') patch.song = body.song;
+    if (typeof body.artists === 'string') patch.artists = body.artists;
+    if (typeof body.movie === 'string') patch.movie = body.movie;
+    if (typeof body.language === 'string') patch.language = body.language;
+    if (body.year === null || typeof body.year === 'number') patch.year = body.year;
+    const track = await store.patchRegistryTrack(id, patch);
+    return track ? c.json({ track }) : err(c, 404, 'no_track', 'This song is not in the SingersVoice track database');
+  });
+
   // ---------- Tracks portal: YouTube song tracks (through the relay) ----------
 
   const noRelay = (c: Context<Env>) => err(c, 404, 'no_relay', 'YouTube song tracks need the relay (docs/RELAY.md) — it is not deployed');
@@ -670,7 +821,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
     tick(meet);
     const song = body.song ?? {};
-    const r = addSong(meet, p, { trackId: song.trackId ? String(song.trackId) : null, catalogTrackId: song.catalogTrackId ? String(song.catalogTrackId) : null, trackTitle: String(song.trackTitle ?? ''), durationMs: Number(song.durationMs ?? 0) });
+    const r = addSong(meet, p, { trackId: song.trackId ? String(song.trackId) : null, catalogTrackId: song.catalogTrackId ? String(song.catalogTrackId) : null, registryId: isRegistryId(song.registryId) ? song.registryId : null, trackTitle: String(song.trackTitle ?? ''), durationMs: Number(song.durationMs ?? 0) });
     if (!r.ok) {
       if (r.reason === 'not_on_stage') return err(c, 403, 'not_on_stage', 'Step on stage (or host the meet) to pick songs');
       return err(c, 400, r.reason ?? 'bad_song', r.reason === 'meet_closed' ? 'This meet has ended' : 'Pick a track with a title');

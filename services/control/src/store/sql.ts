@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { LIVE_KEEP, MIX_KEEP, mediaOfRole, publishingClosedReason, publishingOpen, subscriptionStatus, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { LIVE_KEEP, MIX_KEEP, mediaOfRole, newRegistryId, publishingClosedReason, publishingOpen, registrySourceKey, songKey, subscriptionStatus, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
@@ -63,6 +63,29 @@ export interface StoredDestination extends Destination {
   keyEnc: string;
 }
 
+/** A master-database row as selected (`REGISTRY_SELECT` adds the singer and copy counts). */
+type RegistryRow = { track_id: string; source: string; source_key: string; song: string; song_key: string; artists: string; movie: string; year: number | null; language: string; drive_url: string; folder_id: string; owner_user_id: string; data: string; search: string; created_at: string; updated_at: string; last_accessed_at: string | null; access_count: number; unavailable: number; singers?: number; copies?: number };
+/** What a registry row keeps in its `data` JSON. */
+interface RegistryData {
+  refs: TrackFileRefs;
+  durationMs: number;
+  singerCount: number;
+  youtubeId: string | null;
+  thumbnail: string;
+  ownerName: string;
+  catalogTrackId: string | null;
+}
+const REGISTRY_COLS = 'r.*, (SELECT COUNT(*) FROM track_access x WHERE x.track_id = r.track_id AND x.count > 0) AS singers, (SELECT COUNT(*) FROM track_access x WHERE x.track_id = r.track_id AND x.copy_refs IS NOT NULL) AS copies';
+const REGISTRY_SELECT = `SELECT ${REGISTRY_COLS} FROM track_registry r`;
+const cleanMeta = (m: { song?: string; artists?: string; movie?: string; year?: number | null; language?: string }) => ({
+  song: String(m.song ?? '').replace(/\s+/g, ' ').trim().slice(0, 160),
+  artists: String(m.artists ?? '').replace(/\s+/g, ' ').trim().slice(0, 160),
+  movie: String(m.movie ?? '').replace(/\s+/g, ' ').trim().slice(0, 120),
+  year: m.year === null || m.year === undefined || !Number.isFinite(Number(m.year)) || Number(m.year) < 1900 || Number(m.year) > 2100 ? null : Math.round(Number(m.year)),
+  language: String(m.language ?? '').replace(/\s+/g, ' ').trim().slice(0, 40),
+});
+const searchText = (m: { song: string; artists: string; movie: string; year: number | null; language: string; source: string; ownerName: string }) => `${m.song} ${songKey(m.song)} ${m.artists} ${m.movie} ${m.year ?? ''} ${m.language} ${m.source} ${m.ownerName}`.toLowerCase();
+
 export class SqlStore {
   private ready: Promise<void> | null = null;
   private db: Driver;
@@ -84,6 +107,7 @@ export class SqlStore {
       await this.db.exec(m.ddl);
       if (m.after) await this.db.exec(m.after);
     }
+    await this.mirrorCatalogIntoRegistry(); // a catalog from before the master database: every entry a record, once
   }
 
   // ---------- users ----------
@@ -190,19 +214,17 @@ export class SqlStore {
   async publishTrack(t: CatalogTrack): Promise<CatalogTrack> {
     const search = `${t.title} ${t.artist} ${t.genre} ${t.language} ${t.ownerName}`.toLowerCase();
     const existing = await this.getCatalogTrack(t.trackId);
+    let out: CatalogTrack;
     if (existing) {
-      const merged = { ...t, publishedAt: existing.publishedAt, pulls: existing.pulls };
-      await this.db.run('UPDATE catalog_tracks SET data=?, search=? WHERE track_id=?', [JSON.stringify(merged), search, t.trackId]);
-      return merged;
+      out = { ...t, publishedAt: existing.publishedAt, pulls: existing.pulls, ...(existing.registryId ? { registryId: existing.registryId } : {}) };
+      await this.db.run('UPDATE catalog_tracks SET data=?, search=? WHERE track_id=?', [JSON.stringify(out), search, t.trackId]);
+    } else {
+      out = t;
+      await this.db.run('INSERT INTO catalog_tracks (track_id, owner_user_id, data, search, published_at, pulls) VALUES (?,?,?,?,?,0)', [t.trackId, t.ownerUserId, JSON.stringify(t), search, t.publishedAt]);
     }
-    await this.db.run('INSERT INTO catalog_tracks (track_id, owner_user_id, data, search, published_at, pulls) VALUES (?,?,?,?,?,0)', [
-      t.trackId,
-      t.ownerUserId,
-      JSON.stringify(t),
-      search,
-      t.publishedAt,
-    ]);
-    return t;
+    // The master database holds every published entry too (the owner's files, the metadata, when it is sung).
+    const record = await this.mirrorCatalogTrack(out);
+    return { ...out, registryId: record.trackId };
   }
 
   async unpublishTrack(trackId: string, ownerUserId: string): Promise<boolean> {
@@ -238,6 +260,275 @@ export class SqlStore {
   async countPull(trackId: string): Promise<number> {
     await this.db.run('UPDATE catalog_tracks SET pulls = pulls + 1 WHERE track_id=?', [trackId]);
     return Number((await this.db.get<{ pulls: number }>('SELECT pulls FROM catalog_tracks WHERE track_id=?', [trackId]))?.pulls ?? 0);
+  }
+
+  /** The catalog entry's `registryId`, kept in its data once the master database holds it. */
+  private async setCatalogRegistryId(catalogTrackId: string, registryId: string): Promise<void> {
+    const r = await this.db.get<{ data: string }>('SELECT data FROM catalog_tracks WHERE track_id=?', [catalogTrackId]);
+    if (!r) return;
+    const data = JSON.parse(r.data) as CatalogTrack;
+    if (data.registryId === registryId) return;
+    await this.db.run('UPDATE catalog_tracks SET data=? WHERE track_id=?', [JSON.stringify({ ...data, registryId }), catalogTrackId]);
+  }
+
+  // ---------- the master track database (registry.ts) ----------
+
+  private registryFromRow(r: RegistryRow, mine?: TrackAccessMine | null): TrackRecord {
+    const data = JSON.parse(r.data) as RegistryData;
+    return {
+      trackId: r.track_id,
+      source: r.source as TrackRecord['source'],
+      sourceKey: r.source_key,
+      song: r.song,
+      artists: r.artists,
+      movie: r.movie,
+      year: r.year === null || r.year === undefined ? null : Number(r.year),
+      language: r.language,
+      driveUrl: r.drive_url,
+      refs: data.refs,
+      durationMs: data.durationMs,
+      singerCount: data.singerCount,
+      hasVideo: Boolean(data.refs.videoId),
+      youtubeId: data.youtubeId ?? null,
+      thumbnail: data.thumbnail ?? '',
+      ownerUserId: r.owner_user_id,
+      ownerName: data.ownerName,
+      catalogTrackId: data.catalogTrackId ?? null,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      lastAccessedAt: r.last_accessed_at ?? null,
+      accessCount: Number(r.access_count ?? 0),
+      singers: Number(r.singers ?? 0),
+      copies: Number(r.copies ?? 0),
+      unavailable: Boolean(r.unavailable),
+      ...(mine !== undefined ? { mine } : {}),
+    };
+  }
+
+  private async mineOf(trackId: string, userId: string | undefined): Promise<TrackAccessMine | null | undefined> {
+    if (!userId) return undefined;
+    const a = await this.db.get<{ last_at: string; count: number; copy_track_id: string | null }>('SELECT last_at, count, copy_track_id FROM track_access WHERE track_id=? AND user_id=?', [trackId, userId]);
+    return a && (Number(a.count) > 0 || a.copy_track_id) ? { lastAccessedAt: a.last_at, count: Number(a.count), copyTrackId: a.copy_track_id ?? null } : null;
+  }
+
+  async getRegistryTrack(trackId: string, forUserId?: string): Promise<TrackRecord | null> {
+    const r = await this.db.get<RegistryRow>(`${REGISTRY_SELECT} WHERE r.track_id=?`, [trackId]);
+    return r ? this.registryFromRow(r, await this.mineOf(trackId, forUserId)) : null;
+  }
+
+  async getRegistryBySource(sourceKey: string, forUserId?: string): Promise<TrackRecord | null> {
+    const r = await this.db.get<RegistryRow>(`${REGISTRY_SELECT} WHERE r.source_key=?`, [sourceKey]);
+    return r ? this.registryFromRow(r, await this.mineOf(r.track_id, forUserId)) : null;
+  }
+
+  /**
+   * Register a track: one record per source (the YouTube video, the Drive folder, the catalog entry). A second
+   * registration of the same source answers the first record, filling in metadata it lacked (never blanking what
+   * it had) — the owner's refresh (or a record with no file ids yet) takes the new file ids and URL.
+   */
+  async registerTrack(input: RegisterTrackRequest & { ownerUserId: string; ownerName: string }, now = new Date()): Promise<{ track: TrackRecord; created: boolean }> {
+    const nowIso = now.toISOString();
+    const key = input.sourceKey || registrySourceKey({ source: input.source, youtubeId: input.youtubeId, catalogTrackId: input.catalogTrackId, refs: input.refs });
+    const clean = cleanMeta({ song: input.song, artists: input.artists, movie: input.movie, year: input.year, language: input.language });
+    // The same source twice is one record — by its key, or by the Drive folder the files live in (a track published to the
+    // catalog after it was registered from Drive, or the other way round, is still that one song).
+    const existing = (await this.db.get<RegistryRow>(`${REGISTRY_SELECT} WHERE r.source_key=?`, [key])) ?? (await this.db.get<RegistryRow>(`${REGISTRY_SELECT} WHERE r.folder_id=? AND r.folder_id<>''`, [input.refs.folderId]));
+    if (existing) {
+      const data = JSON.parse(existing.data) as RegistryData;
+      const takeFiles = existing.owner_user_id === input.ownerUserId || !data.refs.jsonId;
+      const merged: RegistryData = {
+        ...data,
+        refs: takeFiles ? input.refs : data.refs,
+        durationMs: data.durationMs || Number(input.durationMs ?? 0),
+        singerCount: data.singerCount || Number(input.singerCount ?? 1),
+        youtubeId: data.youtubeId ?? input.youtubeId ?? null,
+        thumbnail: data.thumbnail || input.thumbnail || '',
+        catalogTrackId: data.catalogTrackId ?? input.catalogTrackId ?? null,
+      };
+      const song = existing.song || clean.song;
+      const artists = existing.artists || clean.artists;
+      const movie = existing.movie || clean.movie;
+      const year = existing.year ?? clean.year;
+      const language = existing.language || clean.language;
+      await this.db.run('UPDATE track_registry SET song=?, song_key=?, artists=?, movie=?, year=?, language=?, drive_url=?, data=?, search=?, updated_at=?, unavailable=CASE WHEN ? THEN 0 ELSE unavailable END WHERE track_id=?', [
+        song,
+        songKey(song),
+        artists,
+        movie,
+        year,
+        language,
+        takeFiles ? input.driveUrl : existing.drive_url,
+        JSON.stringify(merged),
+        searchText({ song, artists, movie, year, language, source: existing.source, ownerName: merged.ownerName }),
+        nowIso,
+        takeFiles ? 1 : 0,
+        existing.track_id,
+      ]);
+      if (input.copyTrackId) await this.recordTrackCopy(existing.track_id, input.ownerUserId, { refs: input.refs, driveUrl: input.driveUrl, copyTrackId: input.copyTrackId }, now);
+      return { track: (await this.getRegistryTrack(existing.track_id, input.ownerUserId))!, created: false };
+    }
+    const data: RegistryData = {
+      refs: input.refs,
+      durationMs: Math.max(0, Number(input.durationMs ?? 0)),
+      singerCount: Math.max(1, Math.min(10, Number(input.singerCount ?? 1) || 1)),
+      youtubeId: input.youtubeId ?? null,
+      thumbnail: input.thumbnail ?? '',
+      ownerName: input.ownerName,
+      catalogTrackId: input.catalogTrackId ?? null,
+    };
+    let trackId = '';
+    for (let attempt = 0; attempt < 5; attempt++) {
+      trackId = newRegistryId(now);
+      if (!(await this.db.get('SELECT 1 FROM track_registry WHERE track_id=?', [trackId]))) break;
+      trackId = '';
+    }
+    if (!trackId) throw new Error('Could not mint a track id');
+    await this.db.run('INSERT INTO track_registry (track_id, source, source_key, song, song_key, artists, movie, year, language, drive_url, folder_id, owner_user_id, data, search, created_at, updated_at, last_accessed_at, access_count, unavailable) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0)', [
+      trackId,
+      input.source,
+      key,
+      clean.song,
+      songKey(clean.song),
+      clean.artists,
+      clean.movie,
+      clean.year,
+      clean.language,
+      input.driveUrl,
+      input.refs.folderId,
+      input.ownerUserId,
+      JSON.stringify(data),
+      searchText({ ...clean, source: input.source, ownerName: input.ownerName }),
+      nowIso,
+      nowIso,
+    ]);
+    if (input.copyTrackId) await this.recordTrackCopy(trackId, input.ownerUserId, { refs: input.refs, driveUrl: input.driveUrl, copyTrackId: input.copyTrackId }, now);
+    return { track: (await this.getRegistryTrack(trackId, input.ownerUserId))!, created: true };
+  }
+
+  /** A successful access by a singer: the global last-accessed instant and their own history move to now (UTC). */
+  async recordTrackAccess(trackId: string, userId: string, how: 'sing' | 'play', now = new Date()): Promise<TrackRecord | null> {
+    const nowIso = now.toISOString();
+    const r = await this.db.get<{ track_id: string }>('SELECT track_id FROM track_registry WHERE track_id=?', [trackId]);
+    if (!r) return null;
+    await this.db.run('UPDATE track_registry SET last_accessed_at=?, access_count=access_count+1, unavailable=0 WHERE track_id=?', [nowIso, trackId]);
+    await this.db.run(
+      "INSERT INTO track_access (track_id, user_id, first_at, last_at, count, how) VALUES (?,?,?,?,1,?) ON CONFLICT(track_id, user_id) DO UPDATE SET last_at=excluded.last_at, count=track_access.count+1, how=excluded.how",
+      [trackId, userId, nowIso, nowIso, how],
+    );
+    return this.getRegistryTrack(trackId, userId);
+  }
+
+  /** A singer's own shared copy of the track: one more place its files can be fetched from (the owner's refresh sets the record's own). */
+  async recordTrackCopy(trackId: string, userId: string, copy: TrackCopyRequest, now = new Date()): Promise<TrackRecord | null> {
+    const nowIso = now.toISOString();
+    const r = await this.db.get<RegistryRow>('SELECT * FROM track_registry WHERE track_id=?', [trackId]);
+    if (!r) return null;
+    await this.db.run(
+      "INSERT INTO track_access (track_id, user_id, first_at, last_at, count, how, copy_track_id, copy_url, copy_refs, copy_at) VALUES (?,?,?,?,0,'copy',?,?,?,?) ON CONFLICT(track_id, user_id) DO UPDATE SET copy_track_id=excluded.copy_track_id, copy_url=excluded.copy_url, copy_refs=excluded.copy_refs, copy_at=excluded.copy_at",
+      [trackId, userId, nowIso, nowIso, copy.copyTrackId, copy.driveUrl, JSON.stringify(copy.refs), nowIso],
+    );
+    const data = JSON.parse(r.data) as RegistryData;
+    if (r.owner_user_id === userId || !data.refs.jsonId) await this.db.run('UPDATE track_registry SET data=?, drive_url=?, unavailable=0, updated_at=? WHERE track_id=?', [JSON.stringify({ ...data, refs: copy.refs }), copy.driveUrl, nowIso, trackId]);
+    else await this.db.run('UPDATE track_registry SET unavailable=0 WHERE track_id=?', [trackId]);
+    return this.getRegistryTrack(trackId, userId);
+  }
+
+  /** Where a track's files can be fetched from: the record's own (the owner's) first, then every singer's shared copy, the newest first. */
+  async trackFileSources(trackId: string): Promise<{ userId: string; refs: TrackFileRefs; url: string }[]> {
+    const r = await this.db.get<RegistryRow>('SELECT * FROM track_registry WHERE track_id=?', [trackId]);
+    if (!r) return [];
+    const data = JSON.parse(r.data) as RegistryData;
+    const out: { userId: string; refs: TrackFileRefs; url: string }[] = [];
+    if (data.refs.jsonId) out.push({ userId: r.owner_user_id, refs: data.refs, url: r.drive_url });
+    const copies = await this.db.all<{ user_id: string; copy_refs: string; copy_url: string }>('SELECT user_id, copy_refs, copy_url FROM track_access WHERE track_id=? AND copy_refs IS NOT NULL ORDER BY copy_at DESC', [trackId]);
+    for (const c of copies) {
+      const refs = JSON.parse(c.copy_refs) as TrackFileRefs;
+      if (refs.jsonId && !out.some((o) => o.refs.jsonId === refs.jsonId)) out.push({ userId: c.user_id, refs, url: c.copy_url });
+    }
+    return out;
+  }
+
+  async setTrackUnavailable(trackId: string, unavailable: boolean): Promise<void> {
+    await this.db.run('UPDATE track_registry SET unavailable=? WHERE track_id=?', [unavailable ? 1 : 0, trackId]);
+  }
+
+  async patchRegistryTrack(trackId: string, patch: TrackMetaPatch, now = new Date()): Promise<TrackRecord | null> {
+    const r = await this.db.get<RegistryRow>('SELECT * FROM track_registry WHERE track_id=?', [trackId]);
+    if (!r) return null;
+    const clean = cleanMeta({ song: patch.song ?? r.song, artists: patch.artists ?? r.artists, movie: patch.movie ?? r.movie, year: patch.year === undefined ? r.year : patch.year, language: patch.language ?? r.language });
+    if (!clean.song) clean.song = r.song;
+    const data = JSON.parse(r.data) as RegistryData;
+    await this.db.run('UPDATE track_registry SET song=?, song_key=?, artists=?, movie=?, year=?, language=?, search=?, updated_at=? WHERE track_id=?', [clean.song, songKey(clean.song), clean.artists, clean.movie, clean.year, clean.language, searchText({ ...clean, source: r.source, ownerName: data.ownerName }), now.toISOString(), trackId]);
+    return this.getRegistryTrack(trackId);
+  }
+
+  /**
+   * Search the master database: every word must appear (song, artists, movie, year, language, source, owner); the
+   * records with the same song name make one group; the groups are ordered by the latest access in them (the
+   * newest first, the never-sung last), the versions in a group the same way.
+   */
+  async searchRegistry(q: string, offset: number, limit: number, forUserId?: string): Promise<TrackSearchResponse> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    for (const word of q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8)) {
+      where.push("search LIKE ? ESCAPE '\\'");
+      params.push(`%${word.replace(/[%_\\]/g, (c) => `\\${c}`)}%`);
+    }
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const total = Number((await this.db.get<{ n: number }>(`SELECT COUNT(DISTINCT song_key) AS n FROM track_registry ${w}`, params))?.n ?? 0);
+    const keys = await this.db.all<{ song_key: string; la: string | null }>(`SELECT song_key, MAX(last_accessed_at) AS la, MAX(created_at) AS ca FROM track_registry ${w} GROUP BY song_key ORDER BY la DESC, ca DESC LIMIT ? OFFSET ?`, [...params, limit, offset]);
+    const groups: TrackSearchGroup[] = [];
+    for (const k of keys) {
+      const rows = await this.db.all<RegistryRow>(`${REGISTRY_SELECT} ${w ? `${w} AND` : 'WHERE'} r.song_key=? ORDER BY r.last_accessed_at DESC, r.created_at DESC`, [...params, k.song_key]);
+      const versions: TrackRecord[] = [];
+      for (const r of rows) versions.push(this.registryFromRow(r, await this.mineOf(r.track_id, forUserId)));
+      if (versions.length) groups.push({ songKey: k.song_key, song: versions[0]!.song, lastAccessedAt: k.la ?? null, versions });
+    }
+    return { groups, total, nextCursor: offset + keys.length < total ? String(offset + keys.length) : null };
+  }
+
+  /** What a singer sang, the latest first (their own history). */
+  async registryHistory(userId: string, limit = 20): Promise<TrackRecord[]> {
+    const rows = await this.db.all<RegistryRow & { last_at: string; count: number; copy_track_id: string | null }>(`SELECT ${REGISTRY_COLS}, a.last_at AS last_at, a.count AS count, a.copy_track_id AS copy_track_id FROM track_access a JOIN track_registry r ON r.track_id = a.track_id WHERE a.user_id=? AND a.count > 0 ORDER BY a.last_at DESC LIMIT ?`, [userId, limit]);
+    return rows.map((r) => this.registryFromRow(r, { lastAccessedAt: r.last_at, count: Number(r.count), copyTrackId: r.copy_track_id ?? null }));
+  }
+
+  /** A published catalog entry is a record of the master database too (one per entry); the entry learns its registry id. */
+  async mirrorCatalogTrack(t: CatalogTrack, now = new Date()): Promise<TrackRecord> {
+    const { track } = await this.registerTrack(
+      {
+        source: 'catalog',
+        sourceKey: `catalog:${t.trackId}`,
+        song: t.title,
+        artists: t.artist,
+        language: t.language,
+        driveUrl: t.driveFolderLink,
+        refs: { folderId: t.driveFolderId, jsonId: t.trackJsonId, audioId: t.audioId, audioMime: t.audioMime, ...(t.videoId ? { videoId: t.videoId, videoMime: t.videoMime ?? 'video/mp4' } : {}) },
+        durationMs: t.durationMs,
+        singerCount: t.singerCount,
+        catalogTrackId: t.trackId,
+        copyTrackId: t.trackId,
+        ownerUserId: t.ownerUserId,
+        ownerName: t.ownerName,
+      },
+      now,
+    );
+    await this.setCatalogRegistryId(t.trackId, track.trackId);
+    return track;
+  }
+
+  /** Every catalog entry the master database does not hold yet (a database from before it) is mirrored, once, at startup. */
+  async mirrorCatalogIntoRegistry(): Promise<number> {
+    const held = new Set((await this.db.all<{ source_key: string }>("SELECT source_key FROM track_registry WHERE source='catalog'")).map((r) => r.source_key));
+    const rows = await this.db.all<{ data: string; pulls: number }>('SELECT data, pulls FROM catalog_tracks');
+    let n = 0;
+    for (const r of rows) {
+      const t = { ...(JSON.parse(r.data) as CatalogTrack), pulls: Number(r.pulls) };
+      if (held.has(`catalog:${t.trackId}`)) continue;
+      await this.mirrorCatalogTrack(t, new Date(t.publishedAt || Date.now()));
+      n += 1;
+    }
+    return n;
   }
 
   // ---------- meets ----------
