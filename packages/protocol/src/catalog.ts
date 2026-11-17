@@ -22,6 +22,9 @@ export interface CatalogTrack {
   trackJsonId: string;
   audioId: string;
   audioMime: string;
+  /** The karaoke video of a YouTube song track (shared anyone-with-the-link), when the track has one. */
+  videoId?: string;
+  videoMime?: string;
   publishedAt: string;
   updatedAt: string;
   /** How many users pulled it into their Drive. */
@@ -42,6 +45,8 @@ export interface CatalogPublishRequest {
   trackJsonId: string;
   audioId: string;
   audioMime: string;
+  videoId?: string;
+  videoMime?: string;
 }
 
 export interface CatalogListResponse {

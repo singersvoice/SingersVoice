@@ -13,6 +13,8 @@ export interface TrackSummary {
   ref: string;
   link?: string;
   shared?: boolean;
+  /** A karaoke video behind the track (a YouTube song track): the stage shows it in place of the lyrics. */
+  video?: boolean;
 }
 
 export interface LoadedTrack {

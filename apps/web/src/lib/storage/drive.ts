@@ -3,6 +3,7 @@
  *
  *   SingersVoice/
  *     Tracks/<title>/track.json + backing.<ext>
+ *     Tracks/YT/<title>/<title>.mp4 (the karaoke video, shared anyone-with-the-link) + backing.m4a + track.json — a YouTube song track
  *     Performances/Live|Offline/<date time song · meet [meet id] (id)>/manifest.json + vocal.wav + <song · meet · date time>.mp4
  *     Temp/<same as above, deleted after 7 days unless kept>
  *     Config/audio_plugin_settings.json, app_settings.json
@@ -301,7 +302,9 @@ export class DriveProvider implements StorageProvider {
     // Once per device (per tidy version) the tree is walked again instead of trusted from the cache,
     // so folders that were doubled before the build guard existed are folded into one.
     const tidied = localStorage.getItem(`${this.treeKey}.tidy`) === TIDY_VERSION;
-    if (cached && tidied) {
+    // A tree remembered by an older build lacks the folders added since (Tracks/YT): walked again, once.
+    const complete = cached && (Object.keys(DRIVE_FOLDER_PATHS) as DriveFolderKey[]).every((k) => typeof cached[k] === 'string' && cached[k]);
+    if (cached && tidied && complete) {
       try {
         const root = await this.req<DriveFile>(`${API}/files/${cached.root}?fields=id,trashed`);
         if (!root.trashed) {
@@ -373,6 +376,7 @@ export class DriveProvider implements StorageProvider {
           ref: f.parents?.[0] ?? f.id,
           link: f.parents?.[0] ? `https://drive.google.com/drive/folders/${f.parents[0]}` : f.webViewLink,
           shared: p.svShared === '1',
+          ...(p.svVideo === '1' ? { video: true } : {}),
         } satisfies TrackSummary;
       })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -419,6 +423,7 @@ export class DriveProvider implements StorageProvider {
       svDurationMs: String(track.durationMs),
       svSingers: String(track.singerCount),
       svShared: existingJson?.appProperties?.svShared ?? '0',
+      svVideo: track.video ? '1' : '0',
     };
     if (audio) {
       onProgress?.({ label: 'Uploading backing track', fraction: 0.1 });
@@ -461,7 +466,24 @@ export class DriveProvider implements StorageProvider {
       ref: folderId,
       link: `https://drive.google.com/drive/folders/${folderId}`,
       shared: props.svShared === '1',
+      ...(track.video ? { video: true } : {}),
     };
+  }
+
+  /**
+   * The folder of a YouTube song track, made before the relay fills it: `SingersVoice/Tracks/YT/<title>`, stamped
+   * like any track folder (so the track lists, shares, publishes and deletes like every other one). The relay
+   * uploads the video and its sound into it; `saveTrack(track, null)` then writes the track.json beside them.
+   */
+  async createYtTrackFolder(title: string, trackId: string): Promise<{ folderId: string; link: string }> {
+    await this.ready();
+    const folder = await this.createFolder(safeName(title, 'YouTube track'), this.folder('yt'), { [APP_PROPS.type]: 'trackFolder', [APP_PROPS.trackId]: trackId });
+    return { folderId: folder.id, link: `https://drive.google.com/drive/folders/${folder.id}` };
+  }
+
+  /** A folder made for a YouTube song track whose fetch failed: removed again (nothing of the track is kept). */
+  async removeYtTrackFolder(folderId: string): Promise<void> {
+    await this.req(`${API}/files/${folderId}`, { method: 'DELETE' }).catch(() => undefined);
   }
 
   async deleteTrack(trackId: string): Promise<void> {
@@ -496,11 +518,12 @@ export class DriveProvider implements StorageProvider {
   }
 
   /** Drive ids the public catalog needs so other singers can fetch the package (folder must be shared first). */
-  async publicTrackRefs(trackId: string): Promise<{ folderId: string; folderLink: string; trackJsonId: string; audioId: string; audioMime: string; shared: boolean }> {
+  async publicTrackRefs(trackId: string): Promise<{ folderId: string; folderLink: string; trackJsonId: string; audioId: string; audioMime: string; videoId?: string; videoMime?: string; shared: boolean }> {
     await this.ready();
     const files = await this.trackFiles(trackId);
     const json = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'track');
     const audio = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'trackAudio');
+    const video = files.find((f) => f.appProperties?.[APP_PROPS.type] === 'trackVideo');
     const folderId = files.find((f) => f.mimeType === FOLDER_MIME)?.id ?? json?.parents?.[0];
     if (!json || !audio || !folderId) throw new Error('Track files not found in Drive');
     return {
@@ -509,6 +532,7 @@ export class DriveProvider implements StorageProvider {
       trackJsonId: json.id,
       audioId: audio.id,
       audioMime: audio.mimeType || 'audio/mpeg',
+      ...(video ? { videoId: video.id, videoMime: video.mimeType || 'video/mp4' } : {}),
       shared: json.appProperties?.svShared === '1',
     };
   }

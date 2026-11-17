@@ -45,6 +45,24 @@ export interface TrackLayer {
   enabledByDefault: boolean;
 }
 
+/**
+ * A karaoke video behind a track (a YouTube song track, `origin: 'youtube'`): the words are in the picture,
+ * so the stage shows the video where the lyrics would be, muted, following the track — the sound the
+ * singers sing to is the track's own backing layer (the video's sound, taken out into its own file).
+ * The video is a file in the owner's Drive (`SingersVoice/Tracks/YT/<title>/<title>.mp4`), shared
+ * anyone-with-the-link, so every singer of a meet can show it; a pulled copy keeps pointing at it.
+ */
+export interface TrackVideo {
+  fileId: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  /** The YouTube video it came from (its 11-character id) and the page. */
+  youtubeId: string;
+  sourceUrl: string;
+  channel: string;
+}
+
 /** singersvoice.track.v2 — the JSON saved as `track.json` inside `SingersVoice/Tracks/<title>/`. */
 export interface TrackPackageV2 {
   schema: 'singersvoice.track.v2';
@@ -64,8 +82,10 @@ export interface TrackPackageV2 {
   notes: string;
   createdAt: string;
   updatedAt: string;
-  /** Where the package came from (trackmaker, import-v1, import-lrc). */
-  origin: 'trackmaker' | 'import-v1' | 'import-lrc' | 'unknown';
+  /** Where the package came from (trackmaker, import-v1, import-lrc, youtube). */
+  origin: 'trackmaker' | 'import-v1' | 'import-lrc' | 'youtube' | 'unknown';
+  /** A karaoke video the stage shows in place of the lyrics (a YouTube song track). */
+  video?: TrackVideo;
 }
 
 /** The SVOld TrackMaker JSON (singersvoice.trackmaker.v1). Only the fields we read. */
@@ -155,7 +175,16 @@ export function createTrack(partial: Partial<TrackPackageV2> = {}): TrackPackage
     createdAt: partial.createdAt ?? now,
     updatedAt: now,
     origin: partial.origin ?? 'trackmaker',
+    ...(partial.video?.fileId ? { video: { ...partial.video } } : {}),
   };
+}
+
+/** The 11-character id of a YouTube video, from an id or any YouTube page/short link (null for anything else). */
+export function youtubeVideoId(input: string): string | null {
+  const s = String(input ?? '').trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+  const m = s.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/live\/|\/embed\/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])/);
+  return m ? m[1]! : null;
 }
 
 /** Import an SVOld `*.trackmaker.json` into a v2 package (audio layer added by the caller). */
@@ -471,7 +500,7 @@ export function validateTrack(t: TrackPackageV2): TrackIssue[] {
   if (!t.durationMs) issues.push({ level: 'error', message: 'Audio duration unknown' });
   if (t.durationMs > MAX_TRACK_DURATION_MS) issues.push({ level: 'error', message: 'Tracks are limited to 15 minutes' });
   if (!t.layers.length) issues.push({ level: 'error', message: 'A backing track audio file is required' });
-  if (!t.lyrics.length) issues.push({ level: 'warn', message: 'No lyrics yet — the Sing screen will show a blank stage' });
+  if (!t.lyrics.length && !t.video) issues.push({ level: 'warn', message: 'No lyrics yet — the Sing screen will show a blank stage' });
   const unsynced = t.lyrics.filter((l) => l.startMs === 0 && l.endMs === 0).length;
   if (unsynced) issues.push({ level: 'warn', message: `${unsynced} line(s) have no timing` });
   for (let i = 1; i < t.lyrics.length; i++) {

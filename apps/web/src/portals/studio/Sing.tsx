@@ -5,6 +5,7 @@ import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackg
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
+import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { MicStatus } from '../../components/MicStatus.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
@@ -436,7 +437,11 @@ export function Sing(props: { id: string }) {
           )}
           {!camOn && <span class="chip">camera off</span>}
         </section>
-        <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={planParts(track.singerCount, [])} countdown={phase === 'countdown' ? countdown : null} showWho={track.singerCount > 1} title={track.title} />
+        {track.video ? (
+          <KaraokeVideo track={track} tMs={tMs} playing={phase === 'playing'} rate={audio.tempo} countdown={phase === 'countdown' ? countdown : null} />
+        ) : (
+          <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={planParts(track.singerCount, [])} countdown={phase === 'countdown' ? countdown : null} showWho={track.singerCount > 1} title={track.title} />
+        )}
         {app.showCueDeck && track.singerCount > 1 && phase === 'playing' && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={planParts(track.singerCount, [])} />}
         <section class="controls">
           <PresetChips value={audio} onChange={updateAudio} />

@@ -164,7 +164,11 @@ receiving side); the cure on their side is the restart above, by itself or from 
 
 **Performer mode is for singing**: the lyrics are the picture (big; the cue deck shows your next
 lines) and the singers are small — each one's frame as their own camera framed it, in the lower
-part under the lyrics, no zoom of any kind.
+part under the lyrics, no zoom of any kind. A **YouTube song track** (Tracks → YouTube) has its words
+in a karaoke video instead: the video stands where the lyrics would be, muted, on the song's clock
+(it jumps with a seek, pauses with the song), on every singer's device alike — the sound everyone
+sings to is the track's own backing layer, started by the kickstart like any track. The show picture
+and the broadcast carry no lyrics and so no video either.
 
 **Every line in its singer's colour, whole.** The song's parts are divided among the singers who
 are in the song — everyone on stage who joined it, by stage slot — and each singer has one colour

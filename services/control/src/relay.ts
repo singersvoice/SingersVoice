@@ -53,6 +53,30 @@ async function call(cfg: RelayConfig, path: string, init: { method: 'GET' | 'POS
   }
 }
 
+/**
+ * A JSON call to the relay with the answer's body (the YouTube song tracks: a search, a fetch job, a job's
+ * state). `status` 0 = the relay could not be reached in time.
+ */
+export async function relayJson<T>(cfg: RelayConfig, path: string, init: { method: 'GET' | 'POST'; body?: unknown; timeoutMs?: number } = { method: 'GET' }): Promise<{ status: number; body: T | null; error: string }> {
+  const fetchImpl = cfg.fetchImpl ?? fetch;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), init.timeoutMs ?? TIMEOUT_MS);
+  try {
+    const r = await fetchImpl(`${cfg.url.replace(/\/$/, '')}${path}`, {
+      method: init.method,
+      headers: { Authorization: `Bearer ${cfg.secret}`, ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      signal: ctl.signal,
+    });
+    const body = (await r.json().catch(() => null)) as (T & { error?: string }) | null;
+    return { status: r.status, body: r.ok ? body : null, error: r.ok ? '' : (body?.error ?? `relay answered ${r.status}`) };
+  } catch (e) {
+    return { status: 0, body: null, error: e instanceof Error && e.name === 'AbortError' ? 'the relay did not answer in time' : 'the relay is unreachable' };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 export const relayStart = (cfg: RelayConfig, jobId: string, targets: RelayTarget[]): Promise<RelayOutcome> =>
   call(cfg, `/streams/${encodeURIComponent(jobId)}/start`, { method: 'POST', body: JSON.stringify({ targets }), contentType: 'application/json' });
 

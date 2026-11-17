@@ -1,6 +1,8 @@
-# Fly.io: `fly launch --copy-config --no-deploy` once, `fly secrets set RELAY_SECRET=…`, then `fly deploy`.
-# The machine stops when no stream has run for a while and starts again on the first request
-# (the first segment of a show waits a second or two for it) — so an idle relay costs nothing.
+# Fly.io. Deployed by .github/workflows/deploy-relay.yml (one GitHub secret: FLY_API_TOKEN) — or by hand:
+# `fly launch --copy-config --no-deploy` once, `fly secrets set RELAY_SECRET=…`, then `fly deploy`.
+# The machine stops when no stream or download has run for a while and starts again on the first
+# request (the first segment of a show waits a second or two for it) — so an idle relay costs nothing.
+# 1 GB: a YouTube song track whose picture has to be re-encoded (not H.264) runs ffmpeg's x264 here.
 app = "singersvoice-relay"
 primary_region = "iad"
 
@@ -19,4 +21,4 @@ primary_region = "iad"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  memory = "1gb"

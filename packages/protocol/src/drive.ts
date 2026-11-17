@@ -7,6 +7,8 @@ export const DRIVE_ROOT = 'SingersVoice';
 export const DRIVE_TREE = {
   root: DRIVE_ROOT,
   tracks: 'Tracks',
+  /** Under Tracks: the YouTube song tracks, one folder per song (its video, its sound, its track.json). */
+  yt: 'YT',
   /** One level: every performance is one file here ("Song · Meet [id] · date.mp4"). */
   performances: 'Performances',
   temp: 'Temp',
@@ -15,12 +17,13 @@ export const DRIVE_TREE = {
   exports: 'Exports',
 } as const;
 
-export type DriveFolderKey = 'root' | 'tracks' | 'performances' | 'temp' | 'config' | 'backgrounds' | 'exports';
+export type DriveFolderKey = 'root' | 'tracks' | 'yt' | 'performances' | 'temp' | 'config' | 'backgrounds' | 'exports';
 
 /** Folder paths relative to the root, in creation order. */
 export const DRIVE_FOLDER_PATHS: Record<DriveFolderKey, string[]> = {
   root: [],
   tracks: [DRIVE_TREE.tracks],
+  yt: [DRIVE_TREE.tracks, DRIVE_TREE.yt],
   performances: [DRIVE_TREE.performances],
   temp: [DRIVE_TREE.temp],
   config: [DRIVE_TREE.config],
@@ -44,6 +47,7 @@ export type SvFileType =
   | 'trackFolder'
   | 'track'
   | 'trackAudio'
+  | 'trackVideo'
   | 'performanceFolder'
   | 'performance'
   | 'performanceAudio'

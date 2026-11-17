@@ -18,6 +18,7 @@ import { StageBackground, StageBackgroundChoice } from '../../components/Backgro
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
+import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
@@ -1242,7 +1243,11 @@ function LiveStage(props: {
           ))}
           <SaveStatus compact />
         </section>
-        <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={plan} countdown={countdown} showWho={track.singerCount > 1 || plan.singers.length > 1} title={track.title} />
+        {track.video ? (
+          <KaraokeVideo track={track} catalogTrackId={props.track?.source === 'catalog' ? props.track.entry.trackId : meet.catalogTrackId} tMs={tMs} playing={started && !paused && countdown === null} rate={audio.tempo} countdown={countdown} />
+        ) : (
+          <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={plan} countdown={countdown} showWho={track.singerCount > 1 || plan.singers.length > 1} title={track.title} />
+        )}
         {songsOpen && (
           <div class="drawer" role="dialog" aria-label="Songs">
             <div class="row between">

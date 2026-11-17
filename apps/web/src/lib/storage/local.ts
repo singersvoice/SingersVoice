@@ -41,6 +41,7 @@ export class LocalProvider implements StorageProvider {
         singerCount: r.track.singerCount,
         updatedAt: r.track.updatedAt,
         ref: r.track.trackId,
+        ...(r.track.video ? { video: true } : {}),
       }))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
@@ -69,6 +70,7 @@ export class LocalProvider implements StorageProvider {
       singerCount: track.singerCount,
       updatedAt: track.updatedAt,
       ref: track.trackId,
+      ...(track.video ? { video: true } : {}),
     };
   }
 

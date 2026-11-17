@@ -52,6 +52,11 @@ import {
   type LiveStatus,
   type PublishJobLive,
   youtubeWatchUrl,
+  YT_SEARCH_LIMIT,
+  type YtFetchRequest,
+  type YtJob,
+  type YtSearchResponse,
+  type YtStatus,
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
@@ -59,7 +64,7 @@ import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, 
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
 import { checkoutConfigured, createCheckoutSession, createPortalSession, fetchPublisherPrice, PLANS, planFromSubscription, verifyStripeSignature, type BillingConfig, type StripeSubscription } from './billing.ts';
-import { relayNote, relaySegment, relayStart, relayStop, type RelayConfig, type RelayOutcome, type RelayTarget } from './relay.ts';
+import { relayJson, relayNote, relaySegment, relayStart, relayStop, type RelayConfig, type RelayOutcome, type RelayTarget } from './relay.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
 export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -105,6 +110,9 @@ export interface AppDeps {
 
 type Vars = { deps: AppDeps; user: UserRecord };
 type Env = { Bindings: Record<string, unknown>; Variables: Vars };
+
+/** A Drive file or folder id. */
+const DRIVE_FILE_ID = /^[A-Za-z0-9_-]{10,128}$/;
 
 const DEFAULT_ORIGINS = ['https://singersvoice.github.io', 'http://localhost:5173', 'http://localhost:4173', 'http://127.0.0.1:5173', 'http://127.0.0.1:4173'];
 
@@ -278,11 +286,11 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const track = await store.getCatalogTrack(c.req.param('id'));
     if (!track) return err(c, 404, 'no_track', 'Track is not in the catalog');
     const which = c.req.param('which');
-    const fileId = which === 'json' ? track.trackJsonId : which === 'audio' ? track.audioId : '';
-    if (!fileId) return err(c, 400, 'bad_request', 'The file is json or audio');
+    const fileId = which === 'json' ? track.trackJsonId : which === 'audio' ? track.audioId : which === 'video' ? (track.videoId ?? '') : '';
+    if (!fileId) return err(c, which === 'video' ? 404 : 400, which === 'video' ? 'no_video' : 'bad_request', which === 'video' ? 'This track has no video' : 'The file is json, audio or video');
     try {
       const file = await fetchPublicDriveFile(fileId, { apiKey: googleApiKey, fetchImpl });
-      const contentType = which === 'json' ? 'application/json' : track.audioMime || file.contentType;
+      const contentType = which === 'json' ? 'application/json' : which === 'video' ? track.videoMime || 'video/mp4' : track.audioMime || file.contentType;
       return new Response(file.body, { status: 200, headers: { 'Content-Type': contentType, 'Cache-Control': 'private, max-age=3600', ...(file.size ? { 'Content-Length': String(file.size) } : {}) } });
     } catch (e) {
       return err(c, 404, 'not_shared', `This song could not be fetched from ${track.ownerName}'s Drive: ${e instanceof Error ? e.message : String(e)}`);
@@ -312,6 +320,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       trackJsonId: body.trackJsonId,
       audioId: body.audioId,
       audioMime: body.audioMime || 'audio/mpeg',
+      ...(body.videoId && DRIVE_FILE_ID.test(String(body.videoId)) ? { videoId: String(body.videoId), videoMime: String(body.videoMime || 'video/mp4').slice(0, 60) } : {}),
       publishedAt: now,
       updatedAt: now,
       pulls: 0,
@@ -329,6 +338,55 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const t = await store.getCatalogTrack(c.req.param('id'));
     if (!t) return err(c, 404, 'no_track', 'Track is not in the catalog');
     return c.json({ ok: true as const, pulls: await store.countPull(t.trackId) });
+  });
+
+  // ---------- Tracks portal: YouTube song tracks (through the relay) ----------
+
+  const noRelay = (c: Context<Env>) => err(c, 404, 'no_relay', 'YouTube song tracks need the relay (docs/RELAY.md) — it is not deployed');
+  app.get('/yt', async (c) => {
+    const { relay } = c.get('deps');
+    if (!relay) return c.json({ available: false, ytdlp: null, note: 'The relay is not deployed (docs/RELAY.md)' } satisfies YtStatus);
+    const r = await relayJson<YtStatus>(relay, '/yt', { method: 'GET', timeoutMs: 15_000 }); // a stopped Fly machine starts on this call: a few seconds
+    if (!r.body) return c.json({ available: false, ytdlp: null, note: r.error } satisfies YtStatus);
+    return c.json({ available: Boolean(r.body.available), ytdlp: r.body.ytdlp ?? null, note: r.body.note ?? '' } satisfies YtStatus);
+  });
+  app.get('/yt/search', async (c) => {
+    const { relay } = c.get('deps');
+    if (!relay) return noRelay(c);
+    const q = (c.req.query('q') ?? '').trim().slice(0, 120);
+    if (!q) return c.json({ items: [] } satisfies YtSearchResponse);
+    const r = await relayJson<YtSearchResponse>(relay, `/yt/search?q=${encodeURIComponent(q)}`, { method: 'GET', timeoutMs: 50_000 });
+    if (!r.body) return c.json({ error: r.error, code: r.status === 0 ? 'relay_down' : 'search_failed' }, 502);
+    return c.json({ items: Array.isArray(r.body.items) ? r.body.items.slice(0, YT_SEARCH_LIMIT) : [] } satisfies YtSearchResponse);
+  });
+  // The singer's own Google token (the one this request came in with — the same one the browser uses for Drive) goes
+  // with the job, so the relay uploads into the singer's Drive; it travels only between the two services.
+  app.post('/yt/fetch', async (c) => {
+    const { relay } = c.get('deps');
+    if (!relay) return noRelay(c);
+    const body = (await c.req.json().catch(() => null)) as YtFetchRequest | null;
+    const videoId = String(body?.videoId ?? '').trim();
+    const trackId = String(body?.trackId ?? '').trim();
+    const folderId = String(body?.folderId ?? '').trim();
+    const name = String(body?.name ?? '').trim().slice(0, 100);
+    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return err(c, 400, 'bad_request', 'videoId must be a YouTube video id');
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(trackId)) return err(c, 400, 'bad_request', 'trackId is required');
+    if (!DRIVE_FILE_ID.test(folderId)) return err(c, 400, 'bad_request', 'folderId must be a Drive folder id');
+    const auth = c.req.header('authorization') ?? '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    if (!token) return err(c, 400, 'no_token', 'A Google sign-in is needed: the files go into your own Drive');
+    const r = await relayJson<{ job: YtJob }>(relay, '/yt/fetch', { method: 'POST', body: { videoId, trackId, folderId, name, token }, timeoutMs: 15_000 });
+    if (!r.body?.job) return c.json({ error: r.error, code: r.status === 503 ? 'relay_busy' : r.status === 0 ? 'relay_down' : 'fetch_failed' }, r.status === 503 ? 503 : 502);
+    return c.json({ job: r.body.job }, 202);
+  });
+  app.get('/yt/jobs/:id', async (c) => {
+    const { relay } = c.get('deps');
+    if (!relay) return noRelay(c);
+    const id = c.req.param('id');
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(id)) return err(c, 400, 'bad_request', 'Not a job id');
+    const r = await relayJson<{ job: YtJob }>(relay, `/yt/jobs/${encodeURIComponent(id)}`, { method: 'GET', timeoutMs: 8000 });
+    if (!r.body?.job) return r.status === 404 ? err(c, 404, 'no_job', 'That download is not known (jobs are kept for an hour)') : c.json({ error: r.error, code: 'relay_down' }, 502);
+    return c.json({ job: r.body.job });
   });
 
   // ---------- Live Meets ----------

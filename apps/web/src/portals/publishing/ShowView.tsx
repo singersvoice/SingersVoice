@@ -128,8 +128,12 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   const [picked, setPicked] = useState<DestinationKind[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [music, setMusic] = useState(false);
-  /** The broadcast sound: every singer's vocal (after their FX) — on by default; the backing track joins with the music toggle. */
-  const [vocalsOn, setVocalsOn] = useState(true);
+  /**
+   * The publisher's own monitor: silent by default — the show view is run beside the stage, often in the same room,
+   * and a second copy of every voice a few hundred ms late is the echo nobody wants. The headset button turns the
+   * singers on here; the music button adds the track. The broadcast carries every voice and the track regardless.
+   */
+  const [vocalsOn, setVocalsOn] = useState(false);
   const [trackUrl, setTrackUrl] = useState<string | null>(null);
   const [trackNote, setTrackNote] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -531,7 +535,10 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
           <span class="chip" data-mic="off" title="The show view never opens your microphone: it only plays the stage to you and sends it out.">
             <IcMicOff size={14} /> Mic off
           </span>
-          <span class="small faint">{ownOnStage.length ? 'Your own voice stays out of this monitor (you hear it on stage); the broadcast carries it.' : 'The headphone and music buttons change what you hear here, never the broadcast. No microphone is used here.'}</span>
+          <span class="small faint" data-monitor={vocalsOn || music ? 'on' : 'silent'}>
+            {!vocalsOn && !music ? 'Silent here by default — tap the headset to hear the singers, the note for the track. ' : ''}
+            {ownOnStage.length ? 'Your own voice stays out of this monitor (you hear it on stage); the broadcast carries it.' : 'The headphone and music buttons change what you hear here, never the broadcast. No microphone is used here.'}
+          </span>
         </div>
         {job && (
           <div class="jobline small" data-live-state={sending?.state ?? ''} data-live-segments={sending?.segments ?? 0} data-live-youtube={sending?.youtube ?? ''} data-live-relay={sending?.relay ?? ''}>

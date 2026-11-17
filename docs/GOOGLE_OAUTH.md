@@ -42,9 +42,12 @@ Without a client ID the app still runs fully in **device mode** (IndexedDB), so 
 ## 3. What happens on first sign-in
 
 1. "Continue with Google" opens the Google consent (one popup; on iOS Safari it is a sheet).
-2. The app receives a 1-hour access token (kept in session/local storage, never sent anywhere but Google).
-3. It creates, once per account: `SingersVoice/Tracks`, `Performances` (one file per performance),
-   `Temp`, `Config`, `Backgrounds`, `Exports` — every file carries `appProperties` (`svType`, `svId`, …).
+2. The app receives a 1-hour access token (kept in session/local storage). It goes to Google and, as the
+   sign-in, to sv-control; for a **YouTube song track** sv-control hands it on to the relay for that one
+   job, which uploads the video and its sound into the singer's Drive with it (docs/RELAY.md) — nowhere else.
+3. It creates, once per account: `SingersVoice/Tracks` (and `Tracks/YT` for the YouTube song tracks),
+   `Performances` (one file per performance), `Temp`, `Config`, `Backgrounds`, `Exports` — every file
+   carries `appProperties` (`svType`, `svId`, …).
 4. When the token expires a **Reconnect Drive** button appears in the top bar (a tap, no re-consent).
 
 ## 3a. YouTube run by the app (Publishing → Destinations → Connect YouTube)

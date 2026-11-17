@@ -63,6 +63,7 @@ export async function publishTrack(trackId: string, onProgress?: Progress): Prom
     trackJsonId: refs.trackJsonId,
     audioId: refs.audioId,
     audioMime: refs.audioMime,
+    ...(refs.videoId ? { videoId: refs.videoId, videoMime: refs.videoMime ?? 'video/mp4' } : {}),
   });
   onProgress?.({ label: 'Published', fraction: 1 });
   return { link, track: r.track };

@@ -154,8 +154,8 @@ function YoutubeConnect(props: { dest: Destination; onSaved: (d: Destination) =>
           <label class="small row" style="gap:6px">
             Broadcasts are
             <select class="input" value={app.youtubePrivacy} onChange={(e) => updateApp({ youtubePrivacy: (e.currentTarget as HTMLSelectElement).value === 'unlisted' ? 'unlisted' : 'public' })}>
-              <option value="public">public (everyone can find them)</option>
-              <option value="unlisted">unlisted (anyone with the link)</option>
+              <option value="unlisted">unlisted (anyone with the link can watch; not on the channel's page)</option>
+              <option value="public">public (on the channel for everyone to find)</option>
             </select>
           </label>
           <button class="btn ghost sm" disabled={busy} onClick={() => void disconnect()}>

@@ -1,234 +1,9 @@
-/**
- * DriveProvider against an in-memory fake of the Drive v3 endpoints it uses. The fake answers
- * `alt=media` with the file's own content type (track.json → application/json), exactly like Google
- * does — the case that produced "a.text is not a function" on the first real save → publish.
- */
+/** DriveProvider against an in-memory fake of the Drive v3 endpoints it uses (helpers/fakeDrive.ts). */
 import { createTrack } from '@singersvoice/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { md5Hex } from '../src/lib/md5.ts';
 import { DriveProvider } from '../src/lib/storage/drive.ts';
+import { FakeDrive, type FakeFile } from './helpers/fakeDrive.ts';
 
-interface FakeFile {
-  id: string;
-  name: string;
-  mimeType: string;
-  parents: string[];
-  appProperties: Record<string, string>;
-  bytes: Uint8Array | null;
-  trashed: boolean;
-  modifiedTime: string;
-  createdTime: string;
-  permissions: { id: string; type: string; role: string }[];
-  description?: string;
-}
-
-class FakeDrive {
-  files = new Map<string, FakeFile>();
-  calls: string[] = [];
-  private seq = 1;
-  /** Resumable upload sessions: the metadata given at the start and the bytes received so far, in order. */
-  sessions = new Map<string, { meta: Partial<FakeFile>; bytes: Uint8Array[]; size: number }>();
-  /** Answer the next N session PUTs with 503 (an outage on the way). */
-  failPuts = 0;
-
-  private meta(f: FakeFile) {
-    return {
-      id: f.id,
-      name: f.name,
-      mimeType: f.mimeType,
-      parents: f.parents,
-      appProperties: f.appProperties,
-      trashed: this.isTrashed(f),
-      modifiedTime: f.modifiedTime,
-      createdTime: f.createdTime,
-      size: f.bytes ? String(f.bytes.length) : undefined,
-      md5Checksum: f.bytes ? md5Hex(f.bytes) : undefined,
-      webViewLink: `https://drive.google.com/file/d/${f.id}/view`,
-      description: f.description,
-    };
-  }
-
-  private create(meta: Partial<FakeFile>, bytes: Uint8Array | null): FakeFile {
-    const f: FakeFile = {
-      id: `f${this.seq++}`,
-      name: meta.name ?? 'untitled',
-      mimeType: meta.mimeType ?? 'application/octet-stream',
-      parents: meta.parents ?? [],
-      appProperties: meta.appProperties ?? {},
-      bytes,
-      trashed: false,
-      modifiedTime: new Date().toISOString(),
-      createdTime: new Date(1_700_000_000_000 + this.seq * 1000).toISOString(), // creation order is the age order
-      permissions: [],
-      description: meta.description,
-    };
-    this.files.set(f.id, f);
-    return f;
-  }
-
-  /** A folder made outside the provider (another device, an older build) — for the duplicate-folder tests. */
-  addFolder(name: string, parentId: string | null, appProperties: Record<string, string> = {}): FakeFile {
-    return this.create({ name, mimeType: 'application/vnd.google-apps.folder', parents: parentId ? [parentId] : [], appProperties }, null);
-  }
-
-  /** A file made by an older build. */
-  addFile(name: string, parentId: string, mimeType: string, appProperties: Record<string, string>, bytes: Uint8Array): FakeFile {
-    return this.create({ name, mimeType, parents: [parentId], appProperties }, bytes);
-  }
-
-  /** Drive reports a file as trashed when any ancestor folder is. */
-  private isTrashed(f: FakeFile): boolean {
-    if (f.trashed) return true;
-    return f.parents.some((id) => {
-      const parent = this.files.get(id);
-      return parent ? this.isTrashed(parent) : false;
-    });
-  }
-
-  /** The subset of Drive's `q` grammar the provider uses. */
-  private query(q: string): FakeFile[] {
-    let out = [...this.files.values()];
-    const trashed = /trashed\s*=\s*false/.test(q);
-    if (trashed) out = out.filter((f) => !this.isTrashed(f));
-    const name = q.match(/name='([^']*)'/)?.[1];
-    if (name) out = out.filter((f) => f.name === name);
-    const mime = q.match(/mimeType='([^']*)'/)?.[1];
-    if (mime) out = out.filter((f) => f.mimeType === mime);
-    const parent = q.match(/'([^']*)' in parents/)?.[1];
-    if (parent) out = out.filter((f) => (parent === 'root' ? f.parents.length === 0 : f.parents.includes(parent)));
-    const prop = q.match(/appProperties has \{ key='([^']*)' and value='([^']*)' \}/);
-    if (prop) out = out.filter((f) => f.appProperties[prop[1]!] === prop[2]);
-    return out;
-  }
-
-  private json(body: unknown, status = 200): Response {
-    return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=UTF-8' } });
-  }
-
-  async fetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-    const url = new URL(String(input instanceof Request ? input.url : input));
-    const method = (init.method ?? 'GET').toUpperCase();
-    this.calls.push(`${method} ${url.pathname}${url.search}`);
-    const uploadId = url.searchParams.get('upload_id');
-    if (!uploadId && !new Headers(init.headers).get('authorization') && !url.searchParams.has('key') && !url.pathname.includes('/uc')) return this.json({ error: { message: 'unauthorized' } }, 401);
-    const p = url.pathname;
-
-    // resumable upload: start a session (the bytes come by PUT to the session url, no auth needed there — like Drive)
-    if (method === 'POST' && p === '/upload/drive/v3/files' && url.searchParams.get('uploadType') === 'resumable') {
-      const id = `u${this.seq++}`;
-      this.sessions.set(id, { meta: JSON.parse(String(init.body)) as Partial<FakeFile>, bytes: [], size: 0 });
-      return new Response(null, { status: 200, headers: { Location: `https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=${id}` } });
-    }
-    if (uploadId) {
-      const s = this.sessions.get(uploadId);
-      if (!s) return this.json({ error: { message: 'no such session' } }, 404);
-      if (method === 'DELETE') {
-        this.sessions.delete(uploadId);
-        return new Response(null, { status: 499 });
-      }
-      if (this.failPuts > 0) {
-        this.failPuts--;
-        return this.json({ error: { message: 'backend error' } }, 503);
-      }
-      const range = new Headers(init.headers).get('content-range') ?? '';
-      const m = /^bytes (?:(\d+)-(\d+)|\*)\/(\d+|\*)$/.exec(range);
-      if (!m) return this.json({ error: { message: `bad range ${range}` } }, 400);
-      const total = m[3] === '*' ? null : Number(m[3]);
-      if (m[1] !== undefined) {
-        const from = Number(m[1]);
-        const to = Number(m[2]);
-        if (from !== s.size) return this.json({ error: { message: `expected offset ${s.size}, got ${from}` } }, 400);
-        const bytes = new Uint8Array(await (init.body as Blob).arrayBuffer());
-        if (bytes.length !== to - from + 1) return this.json({ error: { message: 'range/body mismatch' } }, 400);
-        if (total === null && bytes.length % (256 * 1024) !== 0) return this.json({ error: { message: 'a piece that is not the last must be a multiple of 256 KiB' } }, 400);
-        s.bytes.push(bytes);
-        s.size += bytes.length;
-      }
-      if (total !== null && s.size === total) {
-        const all = new Uint8Array(s.size);
-        let o = 0;
-        for (const b of s.bytes) {
-          all.set(b, o);
-          o += b.length;
-        }
-        this.sessions.delete(uploadId);
-        return this.json(this.meta(this.create({ ...s.meta, mimeType: s.meta.mimeType ?? 'application/octet-stream' }, all)));
-      }
-      return new Response(null, { status: 308, headers: s.size ? { Range: `bytes=0-${s.size - 1}` } : {} });
-    }
-
-    // list
-    if (method === 'GET' && p === '/drive/v3/files') return this.json({ files: this.query(url.searchParams.get('q') ?? '').map((f) => this.meta(f)) });
-    // create (folder / metadata)
-    if (method === 'POST' && p === '/drive/v3/files') {
-      const body = JSON.parse(String(init.body)) as Partial<FakeFile>;
-      return this.json(this.meta(this.create(body, null)));
-    }
-    // multipart upload
-    if (method === 'POST' && p === '/upload/drive/v3/files' && url.searchParams.get('uploadType') === 'multipart') {
-      const form = init.body as FormData;
-      const meta = JSON.parse(await (form.get('metadata') as Blob).text()) as Partial<FakeFile>;
-      const file = form.get('file') as Blob;
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      return this.json(this.meta(this.create({ ...meta, mimeType: meta.mimeType ?? file.type }, bytes)));
-    }
-    // replace content
-    const up = p.match(/^\/upload\/drive\/v3\/files\/([^/]+)$/);
-    if (method === 'PATCH' && up) {
-      const f = this.files.get(up[1]!);
-      if (!f) return this.json({ error: { message: 'not found' } }, 404);
-      f.bytes = new Uint8Array(await (init.body as Blob).arrayBuffer());
-      f.modifiedTime = new Date().toISOString();
-      return this.json(this.meta(f));
-    }
-    // permissions
-    const perm = p.match(/^\/drive\/v3\/files\/([^/]+)\/permissions(?:\/([^/]+))?$/);
-    if (perm) {
-      const f = this.files.get(perm[1]!);
-      if (!f) return this.json({ error: { message: 'not found' } }, 404);
-      if (method === 'POST') {
-        const body = JSON.parse(String(init.body)) as { type: string; role: string };
-        const id = `p${this.seq++}`;
-        f.permissions.push({ id, ...body });
-        return this.json({ id, ...body });
-      }
-      if (method === 'GET') return this.json({ permissions: f.permissions });
-      if (method === 'DELETE') {
-        f.permissions = f.permissions.filter((x) => x.id !== perm[2]);
-        return new Response(null, { status: 204 });
-      }
-    }
-    // single file: media / metadata / patch / delete
-    const one = p.match(/^\/drive\/v3\/files\/([^/]+)$/);
-    if (one) {
-      const f = this.files.get(one[1]!);
-      if (!f) return this.json({ error: { message: 'File not found' } }, 404);
-      if (method === 'GET' && url.searchParams.get('alt') === 'media') {
-        if (!new Headers(init.headers).get('authorization') && !f.permissions.some((x) => x.type === 'anyone')) return this.json({ error: { message: 'forbidden' } }, 403);
-        return new Response(f.bytes ? new Blob([f.bytes as BlobPart]) : null, { status: 200, headers: { 'content-type': f.mimeType } });
-      }
-      if (method === 'GET') return this.json(this.meta(f));
-      if (method === 'PATCH') {
-        const body = JSON.parse(String(init.body)) as Partial<FakeFile>;
-        if (body.name) f.name = body.name;
-        if (body.appProperties) f.appProperties = body.appProperties;
-        if (typeof body.description === 'string') f.description = body.description;
-        if (typeof body.trashed === 'boolean') f.trashed = body.trashed;
-        const add = url.searchParams.get('addParents');
-        const remove = url.searchParams.get('removeParents');
-        if (remove) f.parents = f.parents.filter((x) => x !== remove);
-        if (add && !f.parents.includes(add)) f.parents.push(add);
-        return this.json(this.meta(f));
-      }
-      if (method === 'DELETE') {
-        f.trashed = true;
-        return new Response(null, { status: 204 });
-      }
-    }
-    if (method === 'GET' && p === '/drive/v3/about') return this.json({ storageQuota: { usage: '123', limit: '1000' } });
-    return this.json({ error: { message: `unhandled ${method} ${p}` } }, 500);
-  }
-}
 
 const token = { accessToken: 'tok', expiresAt: Date.now() + 3600_000, scope: '' } as never;
 let drive: FakeDrive;
@@ -330,9 +105,59 @@ describe('DriveProvider (fake Drive v3)', () => {
   it('many callers asking for the tree at once make every folder exactly once', async () => {
     const p = new DriveProvider(() => token, 'sub1');
     await Promise.all([p.ready(), p.ready(), p.listTracks(), p.ready()]);
-    for (const name of ['SingersVoice', 'Tracks', 'Performances', 'Temp']) expect(folders(name)).toHaveLength(1);
+    for (const name of ['SingersVoice', 'Tracks', 'YT', 'Performances', 'Temp']) expect(folders(name)).toHaveLength(1);
     expect(folders('Live')).toHaveLength(0); // one level: performances are files straight under Performances
-    expect(drive.calls.filter((c) => c.startsWith('POST /drive/v3/files')).length).toBe(7); // root + 6 folders, no repeats
+    expect(drive.calls.filter((c) => c.startsWith('POST /drive/v3/files')).length).toBe(8); // root + 7 folders (Tracks/YT among them), no repeats
+    expect(folders('YT')[0]!.parents).toEqual([folders('Tracks')[0]!.id]);
+  });
+
+  it('a YouTube song track: its folder under Tracks/YT, the relay\'s two files found by their properties, the track.json written beside them; listed as a video track, published with its video, deleted whole', async () => {
+    const p = new DriveProvider(() => token, 'sub1');
+    const { folderId, link } = await p.createYtTrackFolder('Never Gonna Give You Up (Karaoke)', 'trk-yt-1');
+    const yt = folders('YT')[0]!;
+    expect(drive.files.get(folderId)!.parents).toEqual([yt.id]);
+    expect(drive.files.get(folderId)!.appProperties).toEqual({ svType: 'trackFolder', svTrackId: 'trk-yt-1' });
+    expect(link).toContain(folderId);
+    // The relay's uploads, as it stamps them.
+    const video = drive.addFile('Never Gonna Give You Up (Karaoke).mp4', folderId, 'video/mp4', { svType: 'trackVideo', svId: 'trk-yt-1', svTrackId: 'trk-yt-1', svYoutubeId: 'dQw4w9WgXcQ' }, new Uint8Array([9, 9, 9]));
+    const audio = drive.addFile('backing.m4a', folderId, 'audio/mp4', { svType: 'trackAudio', svId: 'trk-yt-1', svTrackId: 'trk-yt-1', svYoutubeId: 'dQw4w9WgXcQ' }, new Uint8Array([1, 2]));
+    const pkg = createTrack({ trackId: 'trk-yt-1', title: 'Never Gonna Give You Up (Karaoke)', artist: 'Sing King', durationMs: 213_400, layers: [{ id: 'L1', kind: 'backing', file: 'backing.m4a', mimeType: 'audio/mp4', gain: 1, enabledByDefault: true }], origin: 'youtube', video: { fileId: video.id, mimeType: 'video/mp4', width: 1280, height: 720, youtubeId: 'dQw4w9WgXcQ', sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', channel: 'Sing King' } });
+    const saved = await p.saveTrack(pkg, null); // no audio handed over: the relay's file is the backing track
+    expect(saved.ref).toBe(folderId);
+    expect(saved.video).toBe(true);
+    const json = [...drive.files.values()].find((f) => f.name === 'track.json' && f.parents[0] === folderId)!;
+    expect(json.appProperties.svVideo).toBe('1');
+    expect([...drive.files.values()].filter((f) => f.mimeType === 'application/vnd.google-apps.folder' && f.name.startsWith('Never Gonna'))).toHaveLength(1); // no second folder
+    const listed = await p.listTracks();
+    expect(listed.find((t) => t.trackId === 'trk-yt-1')).toMatchObject({ title: 'Never Gonna Give You Up (Karaoke)', artist: 'Sing King', video: true, ref: folderId });
+    const loaded = await p.getTrack('trk-yt-1');
+    expect(loaded!.track.video!.fileId).toBe(video.id);
+    expect(loaded!.track.origin).toBe('youtube');
+    expect(new Uint8Array(await loaded!.audio.arrayBuffer())).toEqual(new Uint8Array([1, 2]));
+    expect(loaded!.audioMime).toBe('audio/mp4');
+    const refs = await p.publicTrackRefs('trk-yt-1');
+    expect(refs).toMatchObject({ folderId, trackJsonId: json.id, audioId: audio.id, audioMime: 'audio/mp4', videoId: video.id, videoMime: 'video/mp4' });
+    expect(new Uint8Array(await (await p.download(video.id)).arrayBuffer())).toEqual(new Uint8Array([9, 9, 9]));
+    // A fetch that failed: the folder goes; a finished track deletes with its folder, video and all.
+    const { folderId: failed } = await p.createYtTrackFolder('Gone', 'trk-yt-2');
+    await p.removeYtTrackFolder(failed);
+    expect(drive.files.get(failed)?.trashed ?? true).toBe(true);
+    await p.deleteTrack('trk-yt-1');
+    expect(await p.getTrack('trk-yt-1')).toBeNull();
+    expect((await p.listTracks()).some((t) => t.trackId === 'trk-yt-1')).toBe(false);
+  });
+
+  it('a tree remembered by an older build (no Tracks/YT yet) is walked again and completed', async () => {
+    const p = new DriveProvider(() => token, 'sub1');
+    await p.ready();
+    const remembered = JSON.parse(store.get('sv.drive.tree.sub1')!) as Record<string, string>;
+    expect(remembered.yt).toBe(folders('YT')[0]!.id);
+    delete remembered.yt;
+    store.set('sv.drive.tree.sub1', JSON.stringify(remembered));
+    const q = new DriveProvider(() => token, 'sub1');
+    await q.ready();
+    expect((JSON.parse(store.get('sv.drive.tree.sub1')!) as Record<string, string>).yt).toBe(folders('YT')[0]!.id);
+    expect(folders('YT')).toHaveLength(1); // found, not made again
   });
 
   it('folds duplicate folders (made before the guard, or by another device) into the oldest, files and all', async () => {

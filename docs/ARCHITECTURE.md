@@ -31,7 +31,7 @@ that the code depends on.
 
 | Portal | Route | State it owns | Talks to |
 | --- | --- | --- | --- |
-| Tracks | `/tracks` | track files in Drive, catalog entries | Drive API, `sv-control /catalog/*` |
+| Tracks | `/tracks` | track files in Drive, catalog entries, YouTube song tracks | Drive API, `sv-control /catalog/*`, `/yt/*` (the relay behind it) |
 | Studio | `/studio/*` | tracks, takes, audio settings | Drive API (works offline); the catalog only to publish a saved track or pull one to sing |
 | Live Meets | `/meets`, `/meet/:id` | meet session (poll), personal take, the saved show | `sv-control /meets/*`, Drive for the take and the show |
 | Publishing | `/publishing`, `/publishing/show/:id`, `/watch/:id` | destinations, jobs, the show view | `sv-control /publishing/*`, `/meets/:id/*` (as a publisher), `/watch/*` |
@@ -59,6 +59,45 @@ No portal imports another's screens; they share only `packages/protocol`, `lib/`
 
 `lib/catalog.ts` is the only place that knows how publishing and pulling work; portals call it and never
 each other, so any portal can be removed or replaced without touching the others.
+
+### A YouTube song track (`lib/ytTracks.ts`, `packages/protocol/ytTracks.ts`, `services/relay/src/yt.mjs`)
+
+A karaoke video found on YouTube becomes a track of the singer's own, with its words in the picture:
+
+1. **Search** (Tracks → YouTube): `GET /yt/search?q=` → sv-control → the relay runs `yt-dlp` on the
+   words (`ytsearch12:`; a pasted link or id is that one video) — no YouTube API key anywhere; the first
+   dozen results with title, channel, duration, views and thumbnail.
+2. **Fetch** ("Add to my Drive"): the browser makes the track's folder `SingersVoice/Tracks/YT/<title>`
+   (`DriveProvider.createYtTrackFolder`, stamped `trackFolder`/`svTrackId` like any track folder) and
+   asks `POST /yt/fetch { videoId, trackId, folderId, name }`; sv-control hands the ask to the relay with
+   the singer's own Google token (the request's bearer — the one the browser uses for Drive), which lives
+   in the job for its duration and is never logged or answered back. The relay's job: `yt-dlp` downloads
+   the best H.264 + AAC mp4 at 720p or under (20 minutes at most, no live streams), `ffprobe` reads it,
+   `ffmpeg` takes the sound out (`backing.m4a`, AAC copied) and makes the mp4 start fast (re-encoding
+   only a picture that is not H.264, so every browser plays it), then both files go into the folder by
+   resumable upload with the app's properties (`svType: trackVideo` / `trackAudio`, `svTrackId`,
+   `svYoutubeId`) and the video gets an *anyone with the link* permission. The browser polls
+   `GET /yt/jobs/:id` (the relay's own words on the progress bar: *downloading · 42 %*, *uploading the
+   video · 12 MB of 40 MB*) and, when the job is done, writes the `track.json` beside the two files
+   (`saveTrack(track, null)` — the relay's `backing.m4a` is found by its properties as the backing
+   layer). A failed job removes the folder again; nothing half-made stays. `TrackPackageV2.video`
+   (`TrackVideo`: the Drive file id, size, the YouTube id) and `origin: 'youtube'` mark the track; the
+   list shows a *video* chip.
+3. **Sing** (Studio Sing, the live stage): a track with `video` shows `KaraokeVideo` where the
+   `LyricsPanel` would be — a muted `<video>` kept on the song's clock (a jump whenever it drifts past a
+   fifth of a second, play/pause with the song, the tempo as its playback rate, the count-in over it);
+   the sound the singers hear and record is the backing layer in the audio engine, on the shared clock
+   of a meet, as for any track. The video comes in whole from Drive (`lib/trackVideo.ts`): the owner's
+   token, else the app's API key, else the service (`GET /catalog/tracks/:id/file/video`) — the same
+   three ways a published track's audio comes in — and the last three stay in memory as object URLs.
+   Until it arrives, and if it cannot, the song still runs. The show picture and the broadcast carry no
+   lyrics and so no video either: the performers, as before.
+4. **Share / publish**: the video file's own link plays for anyone (the permission above); publishing
+   to the catalog carries `videoId`/`videoMime` in the entry so every singer of a meet can show it, and
+   a pulled copy keeps pointing at the owner's video.
+
+The relay (docs/RELAY.md) is the one place that can run `yt-dlp`; without it `GET /yt` says so and the
+YouTube section explains what is missing. `yt-dlp` updates itself when the relay starts and once a day.
 
 ## Live meet: who is on stage
 
@@ -411,7 +450,8 @@ link; the first four tiles connect by themselves, the rest on request.
    under Destinations, and from then on by every token request, `youtubeWanted`): Connect finds the
    channel's reusable HLS `liveStream` or makes one (`ensureHlsStream`) and hands its key to the
    service like a pasted one (`PUT /publishing/destinations/youtube` with `auto: true`); **Go live**
-   makes a `liveBroadcast` in the meet's name (public or unlisted, `enableAutoStart`/`AutoStop`,
+   makes a `liveBroadcast` in the meet's name (unlisted by default — anyone with the link can watch,
+   the channel's page does not list it; public is a setting — `enableAutoStart`/`AutoStop`,
    low latency), binds it to the stream (`startBroadcast`) and puts its public page on the job
    (`PublishJob.links.youtube`, `PublishJob.youtube` — `POST /publishing/jobs` takes both; the
    live-link buttons prefer a job's own links to the destination's standing link); while the job

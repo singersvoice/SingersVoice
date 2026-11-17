@@ -11,7 +11,7 @@ Live build: **https://singersvoice.github.io/SingersVoice/**
 
 ## Portals at a glance
 
-- **Tracks** — My Drive / Public catalog tabs; *More → Publish to public catalog* shares the Drive folder and lists the track for everyone; *Add to my Drive* pulls a catalog track.
+- **Tracks** — My Drive / Public catalog / YouTube tabs; *More → Publish to public catalog* shares the Drive folder and lists the track for everyone; *Add to my Drive* pulls a catalog track; **YouTube** — type a song (or paste a link), *Add to my Drive* on a result fetches it through the relay into `Tracks/YT` (progress in the relay's words), then *Sing*: the karaoke video where the lyrics would be, muted, on the song's clock. Needs the relay (docs/RELAY.md); without it the tab says so.
 - **Studio** — Track Maker, Sing, Performances (unchanged flows, now under `/studio`).
 - **Live Meets** — Create meet (pick a *public* track so others can load it) → share the link/code → whoever has the link takes a slot with *Take a stage slot* (the stage is open; the host can switch to deciding each one) → with headphones on, the singers on stage hear each other and the audience hears the stage (talk-back) → *I'm ready* → host *Start the song (8 s count-in)* → everyone's stage starts at the same instant, nobody on stage hears anyone else → the song ends → the take lands as one file in `Performances` and is listed on the meet's ended page; the host's device films the whole meet into their Drive as it goes (*Full meet*, on the ended page too). Only the host can remove someone (*out* on a slot, × on a name). Idle 5 minutes → the meet closes itself.
 - **Publishing** (Publisher plan or admin) — Destinations (stream keys, saved once), Publish a meet, History; **Publish** in the room opens the show view; `/watch/<meetId>` is the public in-house page. With the RTMP relay deployed (docs/RELAY.md) YouTube runs at ultra-low latency and Facebook / Instagram / Twitch go live.
@@ -177,6 +177,18 @@ the whole camera frame while settling, glides once to the stage frame of the med
 it exactly, holds under wobble in place and size for half a minute, ignores a second of a different
 head and follows a singer who moved and stayed in one glide, never follows measurements that
 disagree (a model losing and finding the figure), and holds when nobody is found.
+
+**YouTube song tracks** (`services/relay/test/yt.test.mjs`, `apps/web/test/ytTracks.test.ts`,
+`drive.test.ts`, `services/control/test/app.test.ts`): the relay runs a search and a whole fetch job
+against a stub yt-dlp (a search answered as yt-dlp prints it, a 20 MB "download", YouTube's refusals in
+its words), a stub ffprobe and ffmpeg, and a stand-in for Google's API — the two files reach the folder
+in ordered pieces with the properties the app looks for, the video alone is shared anyone-with-the-link,
+the token is never in an answer, a private video ends the job with the reason. The browser's import
+runs against the fake Drive and a fake service: the folder under `Tracks/YT` first, the relay's words on
+the bar, the track.json written beside the relay's files, a video track listed and loaded, nothing left
+of a failed job; the stage's way to the video (the owner's token, else the service by the catalog entry
+a copy came from), fetched once. sv-control: nothing without the relay, the search and the job through
+it with the singer's own token, the catalog entry carrying the video, the video proxied like the audio.
 
 **What the saved files hold** — the live e2e decodes three of them with ffmpeg at the end of the
 run and measures six seconds of each: the song's saved show (a singer's take), the host's **film of

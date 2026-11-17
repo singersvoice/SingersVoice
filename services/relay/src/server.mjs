@@ -11,7 +11,10 @@
  *   POST /streams/:id/segments  <MPEG-TS bytes>                     → one more segment, in order
  *   POST /streams/:id/stop                                          → ends the stream
  *   GET  /streams/:id                                               → running, bytes, ffmpeg's last words
- *   GET  /health                                                    → ok, ffmpeg version, stream count
+ *   GET  /health                                                    → ok, ffmpeg version, stream count, yt-dlp version
+ *
+ * And the YouTube song tracks (yt.mjs): GET /yt, GET /yt/search?q=, POST /yt/fetch, GET /yt/jobs/:id —
+ * a karaoke video found on YouTube, fetched with yt-dlp into the singer's own Drive.
  *
  * Every call carries `Authorization: Bearer <RELAY_SECRET>` — sv-control is the only caller, and
  * the stream keys travel only between the two services, never through a browser. A stream that
@@ -20,6 +23,7 @@
 import http from 'node:http';
 import { spawn, execFile } from 'node:child_process';
 import { timingSafeEqual } from 'node:crypto';
+import { getJob, jobCount, search, startFetch, startYtdlp, sweepJobs, ytdlpInfo, ytdlpReady } from './yt.mjs';
 
 const PORT = Number(process.env.PORT || 8080);
 const SECRET = process.env.RELAY_SECRET || '';
@@ -156,8 +160,9 @@ execFile(FFMPEG, ['-version'], (e, out) => {
 
 export function handle(req, res) {
   const url = new URL(req.url, 'http://relay');
-  if (url.pathname === '/health') return json(res, 200, { ok: true, ffmpeg: ffmpegVersion, streams: streams.size });
+  if (url.pathname === '/health') return json(res, 200, { ok: true, ffmpeg: ffmpegVersion, streams: streams.size, ytdlp: ytdlpInfo(), ytJobs: jobCount() });
   if (!authorized(req.headers.authorization)) return json(res, 401, { error: 'unauthorized' });
+  if (url.pathname === '/yt' || url.pathname.startsWith('/yt/')) return handleYt(req, res, url);
   const m = /^\/streams\/([^/]+)(?:\/(start|segments|stop))?$/.exec(url.pathname);
   if (!m || !ID.test(m[1])) return json(res, 404, { error: 'not found' });
   const [, id, action] = m;
@@ -187,9 +192,31 @@ export function handle(req, res) {
   })().catch((e) => json(res, e.status ?? 500, { error: e.message }));
 }
 
-/** Streams nobody fed for a minute are closed (a publisher's tab that vanished). */
+/** YouTube song tracks: can we; search; fetch into the singer's Drive; a job as it goes. */
+function handleYt(req, res, url) {
+  (async () => {
+    if (url.pathname === '/yt' && req.method === 'GET') {
+      const v = await ytdlpReady();
+      return json(res, 200, { available: v !== null, ytdlp: v, note: v === null ? 'yt-dlp is not installed on the relay' : '' });
+    }
+    if (url.pathname === '/yt/search' && req.method === 'GET') return json(res, 200, await search(url.searchParams.get('q') ?? ''));
+    if (url.pathname === '/yt/fetch' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req, 64_000)).toString('utf8') || '{}');
+      return json(res, 202, { job: await startFetch(body) });
+    }
+    const m = /^\/yt\/jobs\/([A-Za-z0-9_-]{1,80})$/.exec(url.pathname);
+    if (m && req.method === 'GET') {
+      const job = getJob(m[1]);
+      return json(res, job ? 200 : 404, job ? { job } : { error: 'no such job (jobs are kept for an hour)' });
+    }
+    return json(res, 404, { error: 'not found' });
+  })().catch((e) => json(res, e.status ?? 500, { error: e.message }));
+}
+
+/** Streams nobody fed for a minute are closed (a publisher's tab that vanished); finished YouTube jobs are forgotten after an hour. */
 export function sweep(now = Date.now()) {
   for (const [id, s] of streams) if (now - s.lastAt > IDLE_MS || s.exit !== null) stopStream(id);
+  sweepJobs(now);
 }
 
 export function streamCount() {
@@ -198,6 +225,7 @@ export function streamCount() {
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').split('/').pop())) {
   if (!SECRET) console.warn('[relay] RELAY_SECRET is not set — every call will be refused');
+  startYtdlp();
   setInterval(sweep, 15_000).unref();
   http.createServer(handle).listen(PORT, () => console.log(`[relay] listening on :${PORT} (ffmpeg: ${FFMPEG}, up to ${MAX_STREAMS} streams)`));
 }

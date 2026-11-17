@@ -3,6 +3,7 @@ import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from '.
 import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
 import type { MixBatch } from './mix.ts';
 import type { BillingStatus, Destination, DestinationKind, DestinationUpdate, LiveStatus, PlanId, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
+import type { YtFetchRequest, YtJob, YtSearchResponse, YtStatus } from './ytTracks.ts';
 
 export interface ApiError {
   error: string;
@@ -150,11 +151,16 @@ export interface Routes {
   'POST /admin/plan': { req: { email: string; plan: PlanId; until?: string | null }; res: { user: UserRecord } };
   'GET /catalog/tracks': { res: CatalogListResponse };
   'GET /catalog/tracks/:id': { res: { track: CatalogTrack } };
-  /** The track's file (json | audio), fetched from the owner's Drive by the service. */
+  /** The track's file (json | audio | video), fetched from the owner's Drive by the service. */
   'GET /catalog/tracks/:id/file/:which': { res: never };
   'POST /catalog/tracks': { req: CatalogPublishRequest; res: { track: CatalogTrack } };
   'DELETE /catalog/tracks/:id': { res: { ok: true } };
   'POST /catalog/tracks/:id/pull': { res: { ok: true; pulls: number } };
+  /** YouTube song tracks (through the relay, docs/RELAY.md): can the service fetch them; search; fetch one into my Drive; the job as it goes. */
+  'GET /yt': { res: YtStatus };
+  'GET /yt/search': { res: YtSearchResponse };
+  'POST /yt/fetch': { req: YtFetchRequest; res: { job: YtJob } };
+  'GET /yt/jobs/:id': { res: { job: YtJob } };
   'GET /meets': { res: { meets: Meet[] } };
   'POST /meets': { req: CreateMeetRequest; res: { meet: Meet } };
   'GET /meets/:id': { res: MeetSnapshot };

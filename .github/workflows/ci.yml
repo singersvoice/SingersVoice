@@ -75,6 +75,11 @@ jobs:
       - name: The watch page's player, measured (the browser's own muxer on real H.264 + AAC → hls.js plays it, with sound and without)
         run: node tools/ci/hls-lab.mjs
 
+      - name: YouTube song tracks in the browser (the search through the real relay with a stub yt-dlp; a track's karaoke video on the song's clock)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/yt-track-e2e.mjs screenshots
+
       - name: Live meet with two performers on one stage (cut-outs, WebRTC relay, cued pause/resume, the sound measured)
         env:
           BASE_PATH: /SingersVoice/

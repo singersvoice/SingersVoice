@@ -339,6 +339,30 @@
 .lyric.mine .who {
   outline: 2px solid #fff;
 }
+/* A YouTube song track: the karaoke video stands where the lyrics would be — the top of the stage, over the performers' heads. */
+.lyrics.karaoke {
+  position: relative;
+  justify-items: center;
+  align-content: start;
+  padding-top: 6px;
+}
+.lyrics.karaoke video {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: min(100%, 50dvh);
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-lg, 14px);
+  background: #000;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+}
+.lyrics.karaoke .countdown.over {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 4, 20, 0.45);
+}
 .countdown {
   font-size: clamp(48px, 18vw, 120px);
   font-weight: 900;

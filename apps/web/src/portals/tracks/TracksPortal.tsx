@@ -1,7 +1,8 @@
 /**
- * Tracks portal — your tracks in Drive, the public catalog (SVT DB) and imports.
+ * Tracks portal — your tracks in Drive, the public catalog (SVT DB), YouTube song tracks and imports.
  * Publishing a track = Drive folder shared "anyone with the link" + catalog entry; any signed-in
- * singer can pull a published track into their own Drive. Independent of Studio/Meets/Publishing.
+ * singer can pull a published track into their own Drive. A YouTube song track is a karaoke video
+ * fetched into your Drive (YoutubeTracks.tsx). Independent of Studio/Meets/Publishing.
  */
 import { createTrack, formatMs, importTrackV1, parseLrc, toLrc, type CatalogTrack, type TrackMakerV1, type TrackPackageV2 } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -18,8 +19,9 @@ import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { writeTrackCache } from '../../lib/trackCache.ts';
 import { driveProvider, isDrive, token, withProvider } from '../../state/session.ts';
+import { YoutubeTracks } from './YoutubeTracks.tsx';
 
-type Tab = 'mine' | 'catalog';
+type Tab = 'mine' | 'catalog' | 'youtube';
 
 export function TracksPortal() {
   const [tab, setTab] = useState<Tab>('mine');
@@ -164,6 +166,7 @@ export function TracksPortal() {
             options={[
               { v: 'mine', label: isDrive.value ? 'My Drive' : 'This device' },
               { v: 'catalog', label: 'Public catalog' },
+              { v: 'youtube', label: 'YouTube' },
             ]}
           />
           <a class="btn primary sm" href={href('/studio/trackmaker')}>
@@ -200,7 +203,7 @@ export function TracksPortal() {
                   </a>
                   <div class="meta">
                     <div class="t">
-                      {t.title} {published.has(t.trackId) && <span class="chip ok">public</span>}
+                      {t.title} {published.has(t.trackId) && <span class="chip ok">public</span>} {t.video && <span class="chip">video</span>}
                     </div>
                     <div class="s">
                       {t.artist || 'Unknown artist'} · {formatMs(t.durationMs)} · {t.singerCount} singer{t.singerCount > 1 ? 's' : ''}
@@ -221,6 +224,7 @@ export function TracksPortal() {
         )}
 
         {tab === 'catalog' && <Catalog onPulled={() => void reload()} myIds={new Set((tracks ?? []).map((t) => t.trackId))} />}
+        {tab === 'youtube' && <YoutubeTracks tracks={tracks ?? []} onAdded={() => void reload()} />}
       </div>
 
       <Sheet open={sel !== null} onClose={() => setSel(null)} title={sel?.title}>
@@ -229,6 +233,7 @@ export function TracksPortal() {
             <div class="muted small">
               {sel.artist || 'Unknown artist'} · {formatMs(sel.durationMs)} · updated {new Date(sel.updatedAt).toLocaleDateString()}
             </div>
+            {sel.video && <div class="callout small">A YouTube song track: the karaoke video stands in for the lyrics on stage; its sound is the backing track. The video file in Tracks/YT is shared — anyone with its link can play it.</div>}
             <a class="btn primary block" href={href(`/studio/sing/${encodeURIComponent(sel.trackId)}`)}>
               Sing this track
             </a>

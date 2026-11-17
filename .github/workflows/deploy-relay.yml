@@ -1,0 +1,69 @@
+name: Deploy sv-relay (Fly.io)
+
+# The relay (services/relay, docs/RELAY.md): the RTMP leg of a broadcast (low-latency YouTube, Facebook,
+# Instagram, Twitch) and the fetcher of YouTube song tracks (yt-dlp + ffmpeg into a singer's own Drive).
+#
+# One-time setup (repo → Settings → Secrets and variables → Actions):
+#   Secrets:   FLY_API_TOKEN — from a Fly.io account (`flyctl tokens create deploy -x 999999h`, or the dashboard)
+#              RELAY_SECRET (optional) — pins the shared secret; otherwise each run makes one and sets it on both sides
+#              CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID — already there for sv-control: the run then tells sv-control
+#              where the relay is (RELAY_URL, RELAY_SECRET), and nothing else is left to do by hand
+#   Variables: RELAY_APP (optional) — the Fly app name when "singersvoice-relay" is taken; FLY_REGION (optional)
+# Without FLY_API_TOKEN the run says so and stops (nothing breaks: the app keeps working without a relay).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/relay/**'
+      - 'tools/fly/**'
+      - '.github/workflows/deploy-relay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: ${{ vars.SKIP_RELAY_DEPLOY != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tests (the relay against a stub ffmpeg and a stub yt-dlp; it has no dependencies to install)
+        working-directory: services/relay
+        run: node --test test/*.test.mjs
+      - name: Check the Fly token
+        id: check
+        env:
+          TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::FLY_API_TOKEN secret is not set — skipping the relay deploy (add it to deploy sv-relay; docs/RELAY.md)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.check.outputs.ready == 'true'
+      - name: Deploy the relay and point sv-control at it
+        if: steps.check.outputs.ready == 'true'
+        id: deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          RELAY_SECRET: ${{ secrets.RELAY_SECRET }}
+          RELAY_APP: ${{ vars.RELAY_APP }}
+          FLY_REGION: ${{ vars.FLY_REGION }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node tools/fly/deploy-relay.mjs
+      - name: Where it is
+        if: steps.check.outputs.ready == 'true' && steps.deploy.outputs.url != ''
+        run: echo "sv-relay is live at ${{ steps.deploy.outputs.url }} (health at /health)"

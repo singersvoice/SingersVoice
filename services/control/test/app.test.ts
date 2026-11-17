@@ -102,8 +102,22 @@ describe('sv-control API', () => {
     expect(a.status).toBe(200);
     expect(a.headers.get('content-type')).toBe('audio/mpeg');
     expect(new Uint8Array(await a.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
-    expect((await app.request('/catalog/tracks/trk-2/file/video', { headers: as('bob') })).status).toBe(400);
+    expect((await app.request('/catalog/tracks/trk-2/file/video', { headers: as('bob') })).status).toBe(404); // this track has no video
+    expect((await app.request('/catalog/tracks/trk-2/file/other', { headers: as('bob') })).status).toBe(400);
     expect((await app.request('/catalog/tracks/trk-none/file/json', { headers: as('bob') })).status).toBe(404);
+    // A YouTube song track publishes its video too; another account's device gets it the same way.
+    const withVideo = { ...body, trackId: 'trk-3', title: 'Karaoke one', videoId: 'video000000003', videoMime: 'video/mp4' };
+    expect((await app.request('/catalog/tracks', { method: 'POST', headers: as('alice'), body: JSON.stringify(withVideo) })).status).toBe(201);
+    const listed = await json<{ track: { videoId?: string; videoMime?: string } }>(await app.request('/catalog/tracks/trk-3', { headers: as('bob') }));
+    expect(listed.track.videoId).toBe('video000000003');
+    expect(listed.track.videoMime).toBe('video/mp4');
+    deps.fetchImpl = (async (input: RequestInfo | URL) => (String(input).includes('video000000003') ? new Response(new Uint8Array([9, 9]), { status: 200, headers: { 'content-type': 'video/mp4', 'content-length': '2' } }) : new Response('nope', { status: 404, headers: { 'content-type': 'text/html' } }))) as typeof fetch;
+    const v = await app.request('/catalog/tracks/trk-3/file/video', { headers: as('bob') });
+    expect(v.status).toBe(200);
+    expect(v.headers.get('content-type')).toBe('video/mp4');
+    expect(new Uint8Array(await v.arrayBuffer())).toEqual(new Uint8Array([9, 9]));
+    expect((await app.request('/catalog/tracks/trk-3', { method: 'DELETE', headers: as('alice') })).status).toBe(200);
+    deps.fetchImpl = fetchImpl;
     // With an API key the service asks the Drive API first.
     deps.googleApiKey = 'k';
     asked.length = 0;
@@ -598,6 +612,54 @@ describe('sv-control API', () => {
       expect((await put('r12.ts', 12, seg(32))).status).toBe(409);
     } finally {
       globalThis.fetch = realFetch;
+    }
+  });
+
+  it('YouTube song tracks: nothing without the relay; with it, search and a fetch job go through the relay, the signer\'s own token with the job and never back out', async () => {
+    deps.relay = undefined;
+    expect(await json<{ available: boolean }>(await app.request('/yt', { headers: as('alice') }))).toMatchObject({ available: false });
+    expect((await app.request('/yt/search?q=amma', { headers: as('alice') })).status).toBe(404);
+    expect((await app.request('/yt/fetch', { method: 'POST', headers: as('alice'), body: JSON.stringify({ videoId: 'dQw4w9WgXcQ', trackId: 'trk-y', folderId: 'folder00000001', name: 'x' }) })).status).toBe(404);
+    const calls: { url: string; method: string; auth: string; body: string }[] = [];
+    deps.relay = {
+      url: 'https://relay.test',
+      secret: 'shh-relay',
+      fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, method: init?.method ?? 'GET', auth: new Headers(init?.headers).get('authorization') ?? '', body: typeof init?.body === 'string' ? init.body : '' });
+        if (url.endsWith('/yt')) return Response.json({ available: true, ytdlp: '2025.11.12', note: '' });
+        if (url.includes('/yt/search?q=')) return Response.json({ items: [{ id: 'dQw4w9WgXcQ', title: 'Amma karaoke', channel: 'K', durationMs: 213000, thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg', views: 1, url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }] });
+        if (url.endsWith('/yt/fetch')) return Response.json({ job: { jobId: 'yt-1', state: 'queued', fraction: 0, note: 'starting', videoId: 'dQw4w9WgXcQ', trackId: 'trk-y', startedAt: 'now' } }, { status: 202 });
+        if (url.endsWith('/yt/jobs/yt-1')) return Response.json({ job: { jobId: 'yt-1', state: 'done', fraction: 1, note: 'done', videoId: 'dQw4w9WgXcQ', trackId: 'trk-y', startedAt: 'now', result: { videoFileId: 'v1', audioFileId: 'a1' } } });
+        return Response.json({ error: 'no such job' }, { status: 404 });
+      }) as typeof fetch,
+    };
+    try {
+      expect(await json<{ available: boolean; ytdlp: string }>(await app.request('/yt', { headers: as('alice') }))).toEqual({ available: true, ytdlp: '2025.11.12', note: '' });
+      const found = await json<{ items: { id: string }[] }>(await app.request('/yt/search?q=amma%20karaoke', { headers: as('alice') }));
+      expect(found.items.map((i) => i.id)).toEqual(['dQw4w9WgXcQ']);
+      expect(calls.at(-1)!.url).toBe('https://relay.test/yt/search?q=amma%20karaoke');
+      expect(calls.every((x) => x.auth === 'Bearer shh-relay')).toBe(true);
+      expect((await json<{ items: unknown[] }>(await app.request('/yt/search?q=', { headers: as('alice') }))).items).toEqual([]);
+      // A fetch: validated here, then the relay gets the ask with the singer's Google token (the request's bearer).
+      expect((await app.request('/yt/fetch', { method: 'POST', headers: as('alice'), body: JSON.stringify({ videoId: 'nope', trackId: 'trk-y', folderId: 'folder00000001', name: 'x' }) })).status).toBe(400);
+      expect((await app.request('/yt/fetch', { method: 'POST', headers: as('alice'), body: JSON.stringify({ videoId: 'dQw4w9WgXcQ', trackId: 'trk-y', folderId: 'short', name: 'x' }) })).status).toBe(400);
+      const noToken = await app.request('/yt/fetch', { method: 'POST', headers: as('alice'), body: JSON.stringify({ videoId: 'dQw4w9WgXcQ', trackId: 'trk-y', folderId: 'folder00000001', name: 'x' }) });
+      expect(noToken.status).toBe(400); // a dev identity carries no Google token — the files go into the singer's Drive
+      const r = await app.request('/yt/fetch', { method: 'POST', headers: { ...as('alice'), Authorization: 'Bearer google-token-abc' }, body: JSON.stringify({ videoId: 'dQw4w9WgXcQ', trackId: 'trk-y', folderId: 'folder00000001', name: 'Amma (karaoke)' }) });
+      expect(r.status).toBe(202);
+      const { job } = await json<{ job: { jobId: string; state: string } }>(r);
+      expect(job).toMatchObject({ jobId: 'yt-1', state: 'queued' });
+      expect('token' in job).toBe(false);
+      const sent = JSON.parse(calls.at(-1)!.body) as Record<string, string>;
+      expect(sent).toEqual({ videoId: 'dQw4w9WgXcQ', trackId: 'trk-y', folderId: 'folder00000001', name: 'Amma (karaoke)', token: 'google-token-abc' });
+      const done = await json<{ job: { state: string; result: { videoFileId: string } } }>(await app.request('/yt/jobs/yt-1', { headers: as('alice') }));
+      expect(done.job.state).toBe('done');
+      expect(done.job.result.videoFileId).toBe('v1');
+      expect((await app.request('/yt/jobs/yt-9', { headers: as('alice') })).status).toBe(404);
+      expect((await app.request('/yt/jobs/not%20an%20id', { headers: as('alice') })).status).toBe(400);
+    } finally {
+      deps.relay = undefined;
     }
   });
 
