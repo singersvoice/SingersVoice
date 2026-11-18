@@ -5,6 +5,7 @@ import { FxPanel } from '../components/FxPanel.tsx';
 import { IcDrive } from '../components/icons.tsx';
 import { dbLabel, INSTRUMENT_LEVELS } from '../components/MicStatus.tsx';
 import { Page } from '../components/Shell.tsx';
+import { SongPrefsCard } from '../components/SongPrefs.tsx';
 import { Field, Seg, Switch } from '../components/ui.tsx';
 import { DriveScopeMissingError, googleConfigured, loadGis } from '../lib/google.ts';
 import { idb, STORES } from '../lib/idb.ts';
@@ -173,6 +174,8 @@ export function Settings() {
             <p class="small muted">The catalog, live meets and publishing talk to the SingersVoice service. Audio, video and track files never go through it — they live in each singer's Drive.</p>
           </section>
         )}
+
+        <SongPrefsCard />
 
         <section class="card stack">
           <h2>Display</h2>

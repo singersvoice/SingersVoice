@@ -80,7 +80,7 @@ export function SetListPanel(props: { session: MeetSession; meet: Meet; you: Par
     </div>
   </div>
   {hasSong && !choosing && <TrackStatus track={props.track} host={host} />}
-  {picking && <SongPicker onPick={addSong} placeOf={(song) => songPlace(meet, song)?.place ?? null} onClose={() => setPicking(false)} />}
+  {picking && <SongPicker meetId={meet.meetId} onPick={addSong} placeOf={(song) => songPlace(meet, song)?.place ?? null} onClose={() => setPicking(false)} />}
   {choosing && (
     <ol class="setlist-queue choice" aria-label="Songs picked — choose one">
       {hasSong && (

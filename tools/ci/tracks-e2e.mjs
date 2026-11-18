@@ -3,7 +3,7 @@
 // Google Drive faked per singer (the unit tests' FakeDrive, served to the browser by Playwright routes and to the
 // service over HTTP: the token check, public file reads with the folder's sharing inherited, the download pages).
 //
-//   1. The tabs: All · My Drive · Public catalog · YouTube, in that order; All first.
+//   1. The tabs: All · Recommended · Bookmarks · My Drive · Public catalog · YouTube, in that order; All first.
 //   2. alice imports a song and sings it: the first Sing shares her folder (the shareable URL), registers the song
 //      with a 12-character id and records her access; a second Sing adds nothing new (one record per source).
 //   3. bob finds it under All (the latest sung first — no singer's name on the line), previews it (an access of his), sings it: the
@@ -11,6 +11,13 @@
 //      registered as a copy; the Sing screen records his access; sung again, his copy is used, not copied twice.
 //   4. The tree: bob's own "CI Sample Song" by another artist makes a second version — one song group, two
 //      artists cascading; sorting by the latest access, newest first, on the page and in the database.
+//   4b. Songs you prefer, bookmarks, Recommended: alice picks English and India in Settings (kept on her account);
+//      Recommended shows her the songs in those languages, the most sung first; bob, with nothing set, is asked
+//      with a dropdown there (his pick is the session's, never his account's); the star on any row keeps the song
+//      on the account — a database record from Recommended, his own Drive track, a public catalog entry (alice's,
+//      after she publishes one; the catalog keeps to her languages with "Every language" a tap away); the
+//      Bookmarks tab lists them and sings from them; in a meet, Recommended and the song picker offer every
+//      stage singer's bookmarks together, saying whose, and a pick from there puts the song up.
 //   5. Unavailable links: alice unshares — carol still gets the song from bob's shared copy; with every copy
 //      unshared, dave's Sing fails with the reason, nothing is saved, no access is counted, the row says so.
 //   6. Searches never count: the access counts stand still through all the searching.
@@ -164,7 +171,7 @@ const asUser = async (who, method, route, body) => {
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
-const browser = await pw.chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
+const browser = await pw.chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
 const errors = {};
 async function person(name) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 });
@@ -178,7 +185,7 @@ async function person(name) {
     localStorage.setItem('sv.profile', JSON.stringify({ sub: n, name: n, email: `${n}@dev.local`, picture: '', mode: 'drive' }));
     localStorage.setItem('sv.mode', 'drive');
     localStorage.setItem('sv.google.token', JSON.stringify({ accessToken: `tok-${n}`, expiresAt: Date.now() + 3600_000, scope: 'https://www.googleapis.com/auth/drive.file' }));
-    localStorage.setItem('sv.settings.app', JSON.stringify({ onboarded: true }));
+    localStorage.setItem('sv.settings.app', JSON.stringify({ onboarded: true, cameraOn: false, cutout: false })); // a meet in 4b: the voice alone (no segmentation model on this machine)
     localStorage.setItem('sv.googleApiBase', g); // the browser's Drive API is the fake (drive.ts reads this on a local address only)
   }, [name, googleBase]);
   await page.goto(base + 'home?' + control, { waitUntil: 'networkidle' });
@@ -238,7 +245,7 @@ try {
   // ---- 1. The tabs ----
   await alice.page.goto(`${base}tracks?${control}`, { waitUntil: 'networkidle' });
   const tabs = await alice.page.getByRole('radio').allInnerTexts();
-  check(tabs.map((t) => t.trim()).join(' · ') === 'All · My Drive · Public catalog · YouTube', `the tabs are All · My Drive · Public catalog · YouTube, in that order (${tabs.join(' · ')})`);
+  check(tabs.map((t) => t.trim()).join(' · ') === 'All · Recommended · Bookmarks · My Drive · Public catalog · YouTube', `the tabs are All · Recommended · Bookmarks · My Drive · Public catalog · YouTube, in that order (${tabs.join(' · ')})`);
   check((await alice.page.getByRole('radio', { name: 'All' }).getAttribute('aria-checked')) === 'true', 'All is the tab that opens');
   await alice.page.screenshot({ path: `${out}/tracks-all-empty.png` });
 
@@ -406,6 +413,164 @@ try {
   const aliceHist = (await asUser('alice', 'GET', '/tracks/history')).json?.items.map((i) => i.trackId);
   check(Boolean(aliceHist) && !aliceHist.includes(bobsVersion?.trackId), "alice's history has only what she sang");
   const soFar = (await recordOf('bob', 'CI Sample Song')).record;
+
+  // ---- 4b. Songs you prefer, bookmarks, Recommended ----
+  // alice: Settings → Songs you prefer — English, and India (a country stands for its languages); kept on her account.
+  await alice.page.goto(`${base}settings?${control}`, { waitUntil: 'networkidle' });
+  const prefsCard = alice.page.locator('[data-song-prefs]');
+  await prefsCard.waitFor();
+  await prefsCard.locator('[data-pref-language="English"]').click();
+  await alice.page.waitForFunction(() => document.querySelector('[data-pref-language="English"]')?.getAttribute('aria-pressed') === 'true');
+  await prefsCard.locator('[data-pref-country="India"]').click();
+  const alicePrefs = await until(async () => {
+    const pr = (await asUser('alice', 'GET', '/prefs')).json?.prefs;
+    return pr?.languages.includes('English') && pr?.countries.includes('India') ? pr : null;
+  });
+  check(alicePrefs?.languages.join() === 'English' && alicePrefs?.countries.join() === 'India', `her preference is on her account: ${JSON.stringify(alicePrefs)}`);
+  const prefsLine = (await prefsCard.locator('[data-prefs-line]').innerText()).trim();
+  check(/^Songs in English, Hindi, Telugu/.test(prefsLine), `the card says what it reaches: "${prefsLine}"`);
+  await alice.page.screenshot({ path: `${out}/settings-song-prefs.png`, fullPage: true });
+  // Her "CI Sample Song" is an English song (she corrects the metadata; the owner may); "CI Second Song" names no language.
+  check((await asUser('alice', 'PATCH', `/tracks/${aliceRec.trackId}`, { language: 'English' })).status === 200, 'alice files her song under English');
+  // Recommended, for alice: the songs in her languages, the most sung first — the English one, not the one without a language.
+  await alice.page.goto(`${base}tracks?${control}#recommended`, { waitUntil: 'networkidle' });
+  check((await alice.page.getByRole('radio', { name: 'Recommended' }).getAttribute('aria-checked')) === 'true', 'the address #recommended opens the Recommended tab');
+  const forYou = alice.page.locator('[data-rec-for-you]');
+  await forYou.locator(`[data-version="${aliceRec.trackId}"]`).waitFor({ timeout: 15000 });
+  const recTitle = (await forYou.locator('[data-rec-title]').innerText()).replace(/\s+/g, ' ').trim();
+  check(/^For you · English, Hindi, Telugu/.test(recTitle), `it says whose languages: "${recTitle}"`);
+  const recSongs = await forYou.locator('[data-song-tree] > *').evaluateAll((els) => els.map((e) => (e.querySelector('.t')?.textContent ?? '').trim()));
+  check(recSongs.some((t) => t.startsWith('CI Sample Song')) && !recSongs.some((t) => t.startsWith('CI Second Song')), `recommended for her: ${recSongs.join(' · ') || 'nothing'} (the song in English; not the one without a language)`);
+  check((await forYou.locator(`[data-version="${bobsVersion?.trackId}"]`).count()) === 0, "bob's version of it (no language) is not among the versions");
+  check((await forYou.locator('[data-prefs-pick]').count()) === 0, 'no dropdown for a singer whose preference is set');
+  check((await alice.page.locator('[data-rec-stage]').count()) === 0, 'not in a meet: no stage section');
+  await alice.page.screenshot({ path: `${out}/tracks-recommended-alice.png`, fullPage: true });
+  // bob set nothing: Recommended asks him, right there; his pick is the session's, never his account's.
+  await bob.page.goto(`${base}tracks?${control}#recommended`, { waitUntil: 'networkidle' });
+  const bobFor = bob.page.locator('[data-rec-for-you]');
+  await bobFor.locator('[data-prefs-pick]').waitFor();
+  check(/Which songs do you prefer\?/.test(await bobFor.innerText()), 'with no preference set, Recommended asks which songs he prefers — a dropdown, and Settings offered');
+  await bobFor.locator('[data-prefs-pick]').selectOption('language:English');
+  await bobFor.locator(`[data-version="${aliceRec.trackId}"]`).waitFor({ timeout: 15000 });
+  check(/^For you · English$/.test((await bobFor.locator('[data-rec-title]').innerText()).replace(/\s+/g, ' ').trim()), 'his pick shows the songs in English');
+  check(((await asUser('bob', 'GET', '/prefs')).json?.prefs.languages ?? []).length === 0, "the pick is the session's — his account keeps no preference");
+  // The star: bob bookmarks alice's song from Recommended — the star fills, the bookmark is on his account.
+  const starOn = async (page, sel) => {
+    await page.locator(sel).click();
+    await page.waitForFunction((q) => document.querySelector(q)?.getAttribute('aria-pressed') === 'true', sel, { timeout: 15000 });
+  };
+  await starOn(bob.page, `[data-rec-for-you] [data-version="${aliceRec.trackId}"] [data-bookmark]`);
+  const bobMarks = await until(async () => {
+    const r = (await asUser('bob', 'GET', '/bookmarks')).json;
+    return r?.items?.length ? r.items : null;
+  });
+  check(bobMarks?.length === 1 && bobMarks[0].key === `registry:${aliceRec.trackId}` && bobMarks[0].title === 'CI Sample Song' && bobMarks[0].language === 'English', `the star kept the song on bob's account (${bobMarks?.[0]?.key} · ${bobMarks?.[0]?.title})`);
+  // His own track in My Drive (registered already): the star knows it at once; starred, it is a second bookmark.
+  await bob.page.getByRole('radio', { name: 'My Drive' }).click();
+  const bobOwnId = bobsVersion?.mine?.copyTrackId;
+  const ownStar = `[data-my-track="${bobOwnId}"] [data-bookmark]`;
+  await bob.page.locator(ownStar).waitFor();
+  check((await bob.page.locator(ownStar).getAttribute('data-bookmark')) === `registry:${bobsVersion?.trackId}`, `his own track's star names the record it is (${bobsVersion?.trackId})`);
+  await starOn(bob.page, ownStar);
+  const bobTwo = await until(async () => {
+    const r = (await asUser('bob', 'GET', '/bookmarks')).json;
+    return r?.items?.length === 2 ? r.items : null;
+  });
+  check(bobTwo?.map((b) => b.key).join(' ') === `registry:${bobsVersion?.trackId} registry:${aliceRec.trackId}`, `two bookmarks, the latest first (${bobTwo?.map((b) => b.key).join(' · ')})`);
+  // The Bookmarks tab: both, each saying what it is; Sing from there opens his copy (he has it).
+  await bob.page.getByRole('radio', { name: 'Bookmarks' }).click();
+  await bob.page.locator(`[data-bookmark-row="registry:${aliceRec.trackId}"]`).waitFor();
+  const markRows = await bob.page.locator('[data-bookmark-row]').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-bookmark-kind')}:${(e.querySelector('.t')?.textContent ?? '').replace(/\s+/g, ' ').trim()}`));
+  check(markRows.length === 2 && markRows.every((r) => /^registry:CI Sample Song Track database$/.test(r)), `the Bookmarks tab lists them (${markRows.join(' · ')})`);
+  await bob.page.screenshot({ path: `${out}/tracks-bookmarks-bob.png`, fullPage: true });
+  await bob.page.locator(`[data-bookmark-row="registry:${aliceRec.trackId}"] [data-bookmark-sing]`).click();
+  await bob.page.waitForURL(/\/studio\/sing\//);
+  check(bob.page.url() === bobCopyUrl, 'Sing from a bookmark opens the copy he has (no second copy)');
+  // The star again drops it: the Bookmarks tab is one shorter.
+  await bob.page.goto(`${base}tracks?${control}#bookmarks`, { waitUntil: 'networkidle' });
+  const dropStar = `[data-bookmark-row="registry:${bobsVersion?.trackId}"] [data-bookmark]`;
+  await bob.page.locator(dropStar).waitFor();
+  await bob.page.locator(dropStar).click();
+  await bob.page.locator(`[data-bookmark-row="registry:${bobsVersion?.trackId}"]`).waitFor({ state: 'detached', timeout: 15000 });
+  const bobOne = await until(async () => {
+    const r = (await asUser('bob', 'GET', '/bookmarks')).json;
+    return r?.items?.length === 1 ? r.items : null;
+  });
+  check(bobOne?.map((b) => b.key).join() === `registry:${aliceRec.trackId}`, 'the star tapped again drops the bookmark (on the account too)');
+  // The public catalog: alice publishes "CI Second Song" (no language) — her catalog keeps to her languages, "Every language" a tap away; the star there is a catalog bookmark.
+  await alice.page.goto(`${base}tracks?${control}#mine`, { waitUntil: 'networkidle' });
+  const secondRow = alice.page.locator('[data-my-track]', { hasText: 'CI Second Song' }).first();
+  await secondRow.waitFor();
+  await secondRow.getByRole('button', { name: 'More' }).click();
+  await alice.page.locator('.sheet').getByRole('button', { name: 'Publish to public catalog' }).click();
+  await alice.page.locator('.toast', { hasText: /is in the public catalog/ }).waitFor({ timeout: 30000 });
+  const published = (await asUser('alice', 'GET', '/catalog/tracks?q=ci%20second')).json?.items?.[0];
+  check(Boolean(published) && published.title === 'CI Second Song' && published.registryId === secondRec?.trackId, `alice published "CI Second Song" to the catalog (its registry id ${published?.registryId})`);
+  await alice.page.locator('.sheet').waitFor({ state: 'detached', timeout: 10000 }).catch(() => undefined);
+  await alice.page.getByRole('radio', { name: 'Public catalog' }).click();
+  const catalogSec = alice.page.locator('[data-catalog-section]');
+  await catalogSec.locator('[data-catalog-every="0"]').waitFor();
+  await catalogSec.locator('.empty').waitFor({ timeout: 15000 });
+  check(/0 public tracks in English, Hindi/.test((await catalogSec.locator('[data-catalog-count]').innerText()).replace(/\s+/g, ' ')) && (await catalogSec.locator('[data-catalog-entry]').count()) === 0, 'her catalog keeps to her languages: the entry without a language is not shown');
+  await catalogSec.locator('[data-catalog-every="0"]').click();
+  await catalogSec.locator(`[data-catalog-entry="${published?.trackId}"]`).waitFor({ timeout: 15000 });
+  check(/^Only English, Hindi/.test((await catalogSec.locator('[data-catalog-every="1"]').innerText()).trim()), '"Every language" shows it, and offers her languages back');
+  await starOn(alice.page, `[data-catalog-entry="${published?.trackId}"] [data-bookmark]`);
+  const aliceMarks = await until(async () => {
+    const r = (await asUser('alice', 'GET', '/bookmarks')).json;
+    return r?.items?.length ? r.items : null;
+  });
+  check(aliceMarks?.length === 1 && aliceMarks[0].key === `catalog:${published?.trackId}` && aliceMarks[0].registryId === secondRec?.trackId, `the star on a catalog entry keeps it as one, with its registry id (${aliceMarks?.[0]?.key})`);
+  // bob, with nothing set, is asked in the catalog too; "Every language" (nothing picked) lists the entry.
+  await bob.page.goto(`${base}tracks?${control}#catalog`, { waitUntil: 'networkidle' });
+  await bob.page.locator('[data-catalog-section] [data-prefs-pick]').waitFor();
+  await bob.page.locator('[data-catalog-section] [data-prefs-pick]').selectOption('');
+  await bob.page.locator(`[data-catalog-entry="${published?.trackId}"]`).waitFor({ timeout: 15000 });
+  check(true, 'the catalog asks a singer without a preference, and shows every language when he picks that');
+  await bob.page.locator('[data-catalog-section] [data-prefs-pick]').selectOption('country:India');
+  await bob.page.locator('[data-catalog-section] .empty').waitFor({ timeout: 15000 });
+  check(/in India/.test((await bob.page.locator('[data-catalog-count]').innerText()).replace(/\s+/g, ' ')), 'his pick of a country keeps the catalog to its languages');
+  // A meet: alice hosts (on stage), bob takes a slot — Recommended and the song picker offer every stage singer's bookmarks together, saying whose.
+  const meet = (await asUser('alice', 'POST', '/meets', { title: 'Bookmarks meet' })).json?.meet;
+  check(Boolean(meet?.meetId), `alice opened a meet (${meet?.meetId})`);
+  await alice.page.goto(`${base}meet/${meet.meetId}?${control}`, { waitUntil: 'networkidle' });
+  await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
+  await bob.page.goto(`${base}meet/${meet.meetId}?${control}`, { waitUntil: 'networkidle' });
+  await bob.page.getByRole('button', { name: 'Take a stage slot' }).click();
+  await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 30000 });
+  check(true, 'alice and bob are on the stage');
+  const stageMarks = (await asUser('bob', 'GET', `/meets/${meet.meetId}/bookmarks`)).json?.items ?? [];
+  const byOf = (key) => stageMarks.find((b) => b.key === key)?.by.map((x) => x.displayName).join('+');
+  check(stageMarks.length === 2 && byOf(`registry:${aliceRec.trackId}`) === 'bob' && byOf(`catalog:${published?.trackId}`) === 'alice', `the meet answers both singers' bookmarks, each saying whose (${stageMarks.map((b) => `${b.key} by ${b.by.map((x) => x.displayName).join('+')}`).join(' · ')})`);
+  check((await asUser('carol', 'GET', `/meets/${meet.meetId}/bookmarks`)).status === 403, 'an account that is not in the meet gets nothing');
+  // bob's Recommended, while in the meet (the room stays mounted as he browses): the stage section first, both bookmarks.
+  await bob.page.locator('.topbar a[aria-label="Settings"]').click();
+  await bob.page.getByRole('link', { name: 'Tracks', exact: true }).click();
+  await bob.page.getByRole('radio', { name: 'Recommended' }).click();
+  const stageSec = bob.page.locator('[data-rec-stage]');
+  await stageSec.locator('[data-bookmark-row]').first().waitFor({ timeout: 20000 });
+  const stageRows = await stageSec.locator('[data-bookmark-row]').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-bookmark-row')} ${(e.querySelector('[data-bookmark-by]')?.textContent ?? '').trim()}`));
+  check(stageRows.length === 2 && stageRows.includes(`registry:${aliceRec.trackId} bookmarked by bob`) && stageRows.includes(`catalog:${published?.trackId} bookmarked by alice`), `Recommended shows what the singers on stage bookmarked, saying whose (${stageRows.join(' · ')})`);
+  check(/Bookmarks meet/.test(await stageSec.innerText()), 'and names the meet');
+  await bob.page.screenshot({ path: `${out}/tracks-recommended-stage.png`, fullPage: true });
+  // Back in the room, the picker offers them too; alice's catalog bookmark — not in bob's library — picked from there goes up for the meet.
+  await bob.page.locator('.roompill').getByRole('link', { name: 'Return' }).click();
+  await bob.page.getByRole('button', { name: 'Pick your selection of song' }).click();
+  await bob.page.locator('[data-picker-marks] [data-picker-mark]').first().waitFor({ timeout: 15000 });
+  const pickerMarks = await bob.page.locator('[data-picker-marks] [data-picker-mark]').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-picker-mark')} ${(e.querySelector('.from')?.textContent ?? '').trim()}`));
+  check(pickerMarks.length === 2 && pickerMarks.includes(`catalog:${published?.trackId} bookmarked by alice`), `the song picker offers the stage's bookmarks first (${pickerMarks.join(' · ')})`);
+  await bob.page.screenshot({ path: `${out}/meet-picker-bookmarks.png` });
+  await bob.page.locator(`[data-picker-mark="catalog:${published?.trackId}"] [data-picker-mark-pick]`).click();
+  await bob.page.getByText(/is up —|is put forward/).waitFor({ timeout: 20000 });
+  const meetNow = await until(async () => {
+    const m = (await asUser('bob', 'GET', `/meets/${meet.meetId}`)).json?.meet;
+    return m?.trackTitle === 'CI Second Song' ? m : null;
+  });
+  check(Boolean(meetNow) && meetNow.catalogTrackId === published?.trackId && meetNow.registryId === secondRec?.trackId, `picked from alice's bookmark, "CI Second Song" is up for the meet (catalog ${meetNow?.catalogTrackId}, registry ${meetNow?.registryId})`);
+  await bob.page.screenshot({ path: `${out}/meet-picked-from-bookmark.png` });
+  // Done with the meet: both leave (the slots go), and the room is gone from their tabs.
+  for (const p of [alice, bob]) await p.page.goto(`${base}tracks?${control}`, { waitUntil: 'networkidle' });
+  await asUser('alice', 'POST', `/meets/${meet.meetId}/end`);
 
   // ---- 5. Unavailable links: a copy stands in; with none left, the Sing fails cleanly ----
   const unshare = (d, f) => {

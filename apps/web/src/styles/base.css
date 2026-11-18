@@ -470,6 +470,23 @@ h3 {
 .btn.icon.sm {
   width: 36px;
 }
+/* The bookmark star: gold once kept. */
+.btn.bookmark.on {
+  color: var(--accent);
+}
+/* A row of tabs wider than a phone: scrolls sideways, every tab on one line. */
+.seg-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.seg-scroll::-webkit-scrollbar {
+  display: none;
+}
+.seg-scroll .seg button {
+  white-space: nowrap;
+}
 .btn svg {
   width: var(--icon);
   height: var(--icon);
@@ -615,6 +632,24 @@ input[type='range'] {
 }
 .chip.danger {
   color: var(--danger);
+}
+/* A chip that is a choice (Settings → Songs you prefer): tap to pick, tap again to drop. */
+button.chip.pick {
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85em;
+  font-weight: 650;
+  min-height: 32px;
+}
+button.chip.pick[aria-pressed='true'] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .dot {
   width: 10px;

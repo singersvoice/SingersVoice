@@ -13,6 +13,8 @@ import { cors } from 'hono/cors';
 import {
   DESTINATIONS,
   MAX_OPEN_MEETS,
+  bookmarkKey,
+  type BookmarkKind,
   meetIsOpen,
   newId,
   normalizeWatchUrl,
@@ -328,13 +330,21 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 
   // ---------- Tracks portal: public catalog ----------
 
+  /** `languages=Hindi,Telugu` keeps to the entries in those languages (the singer's preference, prefs.ts). */
+  const languagesQuery = (c: Context<Env>): string[] =>
+    (c.req.query('languages') ?? '')
+      .split(',')
+      .map((l) => l.trim().slice(0, 40))
+      .filter(Boolean)
+      .slice(0, 24);
+
   app.get('/catalog/tracks', async (c) => {
     const { store } = c.get('deps');
     const q = (c.req.query('q') ?? '').trim().slice(0, 80);
     const mine = c.req.query('mine') === '1';
     const limit = Math.min(50, Math.max(1, Number(c.req.query('limit') ?? 24)));
     const offset = Math.max(0, Number(c.req.query('cursor') ?? 0));
-    const { items, total } = await store.listCatalog(q, offset, limit, mine ? c.get('user').userId : undefined);
+    const { items, total } = await store.listCatalog(q, offset, limit, mine ? c.get('user').userId : undefined, languagesQuery(c));
     return c.json({ items, total, nextCursor: offset + items.length < total ? String(offset + items.length) : null });
   });
 
@@ -439,6 +449,38 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   app.get('/tracks/history', async (c) => {
     const limit = Math.min(50, Math.max(1, Number(c.req.query('limit') ?? 20)));
     return c.json({ items: await c.get('deps').store.registryHistory(c.get('user').userId, limit) });
+  });
+
+  /** Recommendations: the songs in the given languages (nothing given: every song), the most sung first, grouped by song. */
+  app.get('/tracks/recommended', async (c) => {
+    const limit = Math.min(50, Math.max(1, Number(c.req.query('limit') ?? 20)));
+    const offset = Math.max(0, Number(c.req.query('cursor') ?? 0));
+    return c.json(await c.get('deps').store.searchRegistry('', offset, limit, c.get('user').userId, { languages: languagesQuery(c), popular: true }));
+  });
+
+  // ---------- songs a singer prefers, bookmarks (prefs.ts) ----------
+
+  app.get('/prefs', async (c) => c.json({ prefs: await c.get('deps').store.getPrefs(c.get('user').userId) }));
+
+  app.put('/prefs', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as unknown;
+    if (!body || typeof body !== 'object') return err(c, 400, 'bad_request', 'Send the languages and countries');
+    return c.json({ prefs: await c.get('deps').store.setPrefs(c.get('user').userId, body) });
+  });
+
+  app.get('/bookmarks', async (c) => c.json({ items: await c.get('deps').store.listBookmarks(c.get('user').userId) }));
+
+  app.put('/bookmarks/:key', async (c) => {
+    const body = (await c.req.json().catch(() => null)) as { kind?: string; ref?: string } | null;
+    if (!body || typeof body !== 'object') return err(c, 400, 'bad_request', 'Send the bookmark');
+    if (bookmarkKey(String(body.kind ?? '') as BookmarkKind, String(body.ref ?? '').trim().slice(0, 120)) !== c.req.param('key')) return err(c, 400, 'bad_request', 'The key is the kind and the ref');
+    const bookmark = await c.get('deps').store.putBookmark(c.get('user').userId, body);
+    return bookmark ? c.json({ bookmark }) : err(c, 400, 'bad_request', 'Not a bookmark: a song of the track database, a catalog entry or a YouTube result');
+  });
+
+  app.delete('/bookmarks/:key', async (c) => {
+    await c.get('deps').store.deleteBookmark(c.get('user').userId, c.req.param('key'));
+    return c.json({ ok: true });
   });
 
   app.get('/tracks/:id', async (c) => {
@@ -686,6 +728,22 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const you = await store.getParticipantByUser(c.req.param('id'), c.get('user').userId);
     const snap = await snapshot(c, c.req.param('id'), you ?? undefined);
     return snap ? c.json(snap) : err(c, 404, 'no_meet', 'Meet not found');
+  });
+
+  /** The bookmarks of every singer on the stage right now, each saying whose — for anyone in the meet (the stage, the audience, the host). */
+  app.get('/meets/:id/bookmarks', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const user = c.get('user');
+    if (meet.hostUserId !== user.userId && !(await store.getParticipantByUser(meet.meetId, user.userId, 'any'))) return err(c, 403, 'not_in_meet', 'Join the meet to see what its singers bookmarked');
+    const onStage = meet.stage.filter((s) => s.participantId);
+    const singers: { userId: string; displayName: string }[] = [];
+    for (const slot of onStage) {
+      const p = await store.getParticipant(meet.meetId, slot.participantId!);
+      if (p && !singers.some((x) => x.userId === p.userId)) singers.push({ userId: p.userId, displayName: slot.displayName || p.displayName });
+    }
+    return c.json({ items: await store.bookmarksOf(singers) });
   });
 
   app.post('/meets/:id/join', async (c) => {

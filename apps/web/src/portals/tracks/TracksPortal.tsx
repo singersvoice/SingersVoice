@@ -1,33 +1,46 @@
 /**
  * Tracks portal — All (one search across the SingersVoice track database, your Drive, the public
- * catalog and YouTube: AllTracks.tsx), your tracks in Drive, the public catalog (SVT DB), YouTube
- * song tracks and imports. Publishing a track = Drive folder shared "anyone with the link" + catalog
+ * catalog and YouTube: AllTracks.tsx), Recommended (what the singers on stage bookmarked; the songs
+ * in the languages you prefer: Recommended.tsx), Bookmarks (what you starred: Bookmarks.tsx), your
+ * tracks in Drive, the public catalog (SVT DB — the songs in your languages first), YouTube song
+ * tracks and imports. Publishing a track = Drive folder shared "anyone with the link" + catalog
  * entry; any signed-in singer can pull a published track into their own Drive. A YouTube song track
  * is a karaoke video fetched into your Drive (YoutubeTracks.tsx). Every Sing registers the song with
  * the track database (lib/registry.ts). Independent of Studio/Meets/Publishing.
  */
-import { createTrack, formatMs, importTrackV1, parseLrc, toLrc, type CatalogTrack, type TrackMakerV1, type TrackPackageV2 } from '@singersvoice/protocol';
+import { createTrack, formatMs, hasPrefs, importTrackV1, languagesLine, parseLrc, toLrc, type CatalogTrack, type TrackMakerV1, type TrackPackageV2 } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { BookmarkButton } from '../../components/BookmarkButton.tsx';
 import { IcDownload, IcDrive, IcPlus, IcShare, IcSliders, IcTrash, IcUpload } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Seg, Sheet, Spinner } from '../../components/ui.tsx';
 import { ApiError, controlConfigured, controlStatus } from '../../lib/api.ts';
+import { loadBookmarks, bookmarkOfCatalog } from '../../lib/bookmarks.ts';
 import { catalogAvailable, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, pullCatalogTrack, searchCatalog, unpublishTrack } from '../../lib/catalog.ts';
 import { probeDuration } from '../../lib/decode.ts';
 import { downloadBlob, shareOrCopy } from '../../lib/download.ts';
 import { GOOGLE_API_KEY, pickFromDrive } from '../../lib/google.ts';
 import { go, href } from '../../lib/nav.ts';
+import { loadPrefs, pickName, preferredLanguages, songPick, songPrefs } from '../../lib/prefs.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { writeTrackCache } from '../../lib/trackCache.ts';
 import { driveProvider, isDrive, token, withProvider } from '../../state/session.ts';
-import { AllTracks } from './AllTracks.tsx';
+import { AllTracks, MyStar } from './AllTracks.tsx';
+import { Bookmarks } from './Bookmarks.tsx';
+import { PrefsPick, Recommended } from './Recommended.tsx';
 import { YoutubeTracks } from './YoutubeTracks.tsx';
 
-type Tab = 'all' | 'mine' | 'catalog' | 'youtube';
+type Tab = 'all' | 'recommended' | 'bookmarks' | 'mine' | 'catalog' | 'youtube';
+const TABS: Tab[] = ['all', 'recommended', 'bookmarks', 'mine', 'catalog', 'youtube'];
+/** The tab the address names (`/tracks#bookmarks`), so a link opens it. */
+const tabFromHash = (): Tab => {
+  const h = location.hash.replace('#', '') as Tab;
+  return TABS.includes(h) ? h : 'all';
+};
 
 export function TracksPortal() {
-  const [tab, setTab] = useState<Tab>('all');
+  const [tab, setTab] = useState<Tab>(tabFromHash);
   const [tracks, setTracks] = useState<TrackSummary[] | null>(null);
   const [published, setPublished] = useState<Set<string>>(new Set());
   const [q, setQ] = useState('');
@@ -47,7 +60,17 @@ export function TracksPortal() {
     });
     if (catalogAvailable()) void myPublishedIds().then(setPublished);
   };
-  useEffect(() => void reload(), []);
+  useEffect(() => {
+    void reload();
+    if (controlConfigured.value) {
+      void loadPrefs();
+      void loadBookmarks().catch(() => undefined);
+    }
+    // A link to a tab (`#bookmarks`) while the portal is open: the tab follows.
+    const onHash = () => setTab(tabFromHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   const filtered = (tracks ?? []).filter((t) => `${t.title} ${t.artist}`.toLowerCase().includes(q.toLowerCase()));
 
@@ -163,16 +186,20 @@ export function TracksPortal() {
     >
       <div class="stack">
         <div class="row between">
-          <Seg<Tab>
-            value={tab}
-            onChange={setTab}
-            options={[
-              { v: 'all', label: 'All' },
-              { v: 'mine', label: isDrive.value ? 'My Drive' : 'This device' },
-              { v: 'catalog', label: 'Public catalog' },
-              { v: 'youtube', label: 'YouTube' },
-            ]}
-          />
+          <div class="seg-scroll" data-tracks-tabs>
+            <Seg<Tab>
+              value={tab}
+              onChange={setTab}
+              options={[
+                { v: 'all', label: 'All' },
+                { v: 'recommended', label: 'Recommended' },
+                { v: 'bookmarks', label: 'Bookmarks' },
+                { v: 'mine', label: isDrive.value ? 'My Drive' : 'This device' },
+                { v: 'catalog', label: 'Public catalog' },
+                { v: 'youtube', label: 'YouTube' },
+              ]}
+            />
+          </div>
           <a class="btn primary sm" href={href('/studio/trackmaker')}>
             <IcPlus size={18} /> New track
           </a>
@@ -180,6 +207,8 @@ export function TracksPortal() {
         {busy && <Progress fraction={busy.fraction} label={busy.label} />}
 
         {tab === 'all' && <AllTracks tracks={tracks ?? []} onChanged={() => void reload()} onMore={setSel} />}
+        {tab === 'recommended' && <Recommended tracks={tracks ?? []} onChanged={() => void reload()} />}
+        {tab === 'bookmarks' && <Bookmarks onChanged={() => void reload()} />}
 
         {tab === 'mine' && (
           <>
@@ -203,7 +232,7 @@ export function TracksPortal() {
             )}
             <div class="list">
               {filtered.map((t) => (
-                <div class="item" key={t.trackId}>
+                <div class="item" key={t.trackId} data-my-track={t.trackId}>
                   <a class="thumb" href={href(`/studio/sing/${encodeURIComponent(t.trackId)}`)} style="text-decoration:none;color:inherit">
                     {t.title.charAt(0).toUpperCase()}
                   </a>
@@ -216,6 +245,7 @@ export function TracksPortal() {
                     </div>
                   </div>
                   <div class="row" style="gap:6px">
+                    <MyStar t={t} />
                     <a class="btn sm primary" href={href(`/studio/sing/${encodeURIComponent(t.trackId)}`)}>
                       Sing
                     </a>
@@ -300,18 +330,26 @@ export function TracksPortal() {
 
 // ---------------- Public catalog ----------------
 
+/**
+ * The public catalog: the entries in the languages the singer prefers (Settings) — or, with no preference set, in
+ * the language or country picked in the dropdown here — with "Every language" one tap away; the search within them.
+ */
 function Catalog(props: { onPulled: () => void; myIds: Set<string> }) {
   const [q, setQ] = useState('');
   const [items, setItems] = useState<CatalogTrack[] | null>(null);
   const [total, setTotal] = useState(0);
   const [cursor, setCursor] = useState<string | null>(null);
   const [pulling, setPulling] = useState<{ id: string; label: string; fraction: number } | null>(null);
+  const [everyLanguage, setEveryLanguage] = useState(false);
   const me = myCatalogUserId();
+  const prefsSet = hasPrefs(songPrefs.value);
+  const langs = everyLanguage ? [] : preferredLanguages.value;
+  const langKey = langs.join(',');
 
   const load = async (append = false) => {
     if (!catalogAvailable()) return setItems([]);
     try {
-      const r = await searchCatalog(q, { cursor: append ? cursor : null, limit: 24 });
+      const r = await searchCatalog(q, { cursor: append ? cursor : null, limit: 24, languages: langs });
       setItems((prev) => (append && prev ? [...prev, ...r.items] : r.items));
       setTotal(r.total);
       setCursor(r.nextCursor);
@@ -323,7 +361,7 @@ function Catalog(props: { onPulled: () => void; myIds: Set<string> }) {
   useEffect(() => {
     const t = setTimeout(() => void load(), 250);
     return () => clearTimeout(t);
-  }, [q]);
+  }, [q, langKey]);
 
   const pull = async (t: CatalogTrack) => {
     setPulling({ id: t.trackId, label: 'Fetching from the owner’s Drive', fraction: 0.1 });
@@ -346,21 +384,28 @@ function Catalog(props: { onPulled: () => void; myIds: Set<string> }) {
     );
 
   return (
-    <div class="stack">
-      <input class="input" placeholder="Search the public catalog (title, artist, language, singer)" value={q} onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)} />
-      <div class="row between small muted">
-        <span>
-          {items ? `${total} public track${total === 1 ? '' : 's'}` : 'Loading…'} {controlStatus.value === 'offline' && <span class="chip warn">service unreachable</span>}
+    <div class="stack" data-catalog-section>
+      <input class="input" placeholder="Search the public catalog (title, artist, language, singer)" value={q} onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)} data-catalog-query />
+      {!prefsSet && <PrefsPick />}
+      <div class="row between small muted wrap">
+        <span data-catalog-count>
+          {items ? `${total} public track${total === 1 ? '' : 's'}${langs.length ? ` in ${prefsSet ? languagesLine(langs) : pickName(songPick.value)}` : ''}` : 'Loading…'} {controlStatus.value === 'offline' && <span class="chip warn">service unreachable</span>}
         </span>
-        <span>Published tracks are shared from their owner's Drive</span>
+        {prefsSet ? (
+          <button type="button" class="btn sm ghost" onClick={() => setEveryLanguage((v) => !v)} data-catalog-every={everyLanguage ? '1' : '0'}>
+            {everyLanguage ? `Only ${languagesLine(preferredLanguages.value)}` : 'Every language'}
+          </button>
+        ) : (
+          <span>Published tracks are shared from their owner's Drive</span>
+        )}
       </div>
-      {items && !items.length && <Empty title="Nothing published yet" body="Publish one of your tracks (My Drive → track → Publish to public catalog) and it shows up here for everyone." />}
+      {items && !items.length && <Empty title={langs.length ? `Nothing published in ${languagesLine(langs)} yet` : 'Nothing published yet'} body={langs.length ? 'Publish one of your tracks in that language, or look at every language.' : 'Publish one of your tracks (My Drive → track → Publish to public catalog) and it shows up here for everyone.'} />}
       <div class="list">
         {items?.map((t) => {
           const mine = t.ownerUserId === me;
           const have = [...props.myIds].some((id) => isSameTrack(id, t.trackId));
           return (
-            <div class="item" key={t.trackId}>
+            <div class="item" key={t.trackId} data-catalog-entry={t.trackId}>
               <div class="thumb">{t.title.charAt(0).toUpperCase()}</div>
               <div class="meta">
                 <div class="t">{t.title}</div>
@@ -371,6 +416,7 @@ function Catalog(props: { onPulled: () => void; myIds: Set<string> }) {
                 {pulling?.id === t.trackId && <Progress fraction={pulling.fraction} label={pulling.label} />}
               </div>
               <div class="row" style="gap:6px">
+                <BookmarkButton input={bookmarkOfCatalog(t)} />
                 {mine || have ? (
                   <span class="chip ok">in my library</span>
                 ) : (

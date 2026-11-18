@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { accessOf, normalizeCode, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { accessOf, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type Bookmark, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
@@ -282,6 +282,71 @@ export class SqlStore {
   /** The coupon an account entered at the gate (kept, so the account stays in across visits while the coupon stands). */
   async setUserCoupon(userId: string, code: string): Promise<void> {
     await this.db.run('UPDATE users SET coupon_code=?, coupon_at=? WHERE user_id=?', [normalizeCode(code), new Date().toISOString(), userId]);
+  }
+
+  // ---------- songs a singer prefers, bookmarks (prefs.ts) ----------
+
+  async getPrefs(userId: string): Promise<SongPrefs> {
+    const r = await this.db.get<{ prefs: string | null }>('SELECT prefs FROM users WHERE user_id=?', [userId]);
+    let raw: unknown = null;
+    try {
+      raw = r?.prefs ? JSON.parse(r.prefs) : null;
+    } catch {
+      raw = null;
+    }
+    return normalizePrefs(raw);
+  }
+
+  /** The preference replaced whole (what is kept is what is known: normalizePrefs). */
+  async setPrefs(userId: string, prefs: unknown): Promise<SongPrefs> {
+    const clean = normalizePrefs(prefs);
+    await this.db.run('UPDATE users SET prefs=? WHERE user_id=?', [JSON.stringify(clean), userId]);
+    return clean;
+  }
+
+  private bookmarkFromRow(r: { key: string; data: string; created_at: string }): Bookmark {
+    const data = JSON.parse(r.data) as BookmarkInput;
+    return { ...data, key: r.key, createdAt: r.created_at };
+  }
+
+  /** A singer's bookmarks, the latest first. */
+  async listBookmarks(userId: string, limit = 500): Promise<Bookmark[]> {
+    const rows = await this.db.all<{ key: string; data: string; created_at: string }>('SELECT key, data, created_at FROM bookmarks WHERE user_id=? ORDER BY created_at DESC, key LIMIT ?', [userId, limit]);
+    return rows.map((r) => this.bookmarkFromRow(r));
+  }
+
+  /** Keep a bookmark (or replace what is kept of it — its place in the list stays); null when the input is no bookmark. */
+  async putBookmark(userId: string, input: unknown, now = new Date()): Promise<Bookmark | null> {
+    const clean = normalizeBookmark(input);
+    if (!clean) return null;
+    const key = bookmarkKey(clean.kind, clean.ref);
+    const data = JSON.stringify(clean);
+    await this.db.run('INSERT INTO bookmarks (user_id, key, data, created_at) VALUES (?,?,?,?) ON CONFLICT(user_id, key) DO UPDATE SET data=excluded.data', [userId, key, data, now.toISOString()]);
+    const r = await this.db.get<{ key: string; data: string; created_at: string }>('SELECT key, data, created_at FROM bookmarks WHERE user_id=? AND key=?', [userId, key]);
+    return r ? this.bookmarkFromRow(r) : null;
+  }
+
+  async deleteBookmark(userId: string, key: string): Promise<boolean> {
+    const had = await this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM bookmarks WHERE user_id=? AND key=?', [userId, key]);
+    await this.db.run('DELETE FROM bookmarks WHERE user_id=? AND key=?', [userId, key]);
+    return Number(had?.n ?? 0) > 0;
+  }
+
+  /** The bookmarks of the given singers together, each saying whose it is (every one of them who kept it), the latest kept first. */
+  async bookmarksOf(singers: { userId: string; displayName: string }[]): Promise<StageBookmark[]> {
+    const ids = [...new Set(singers.map((s) => s.userId).filter(Boolean))];
+    if (!ids.length) return [];
+    const rows = await this.db.all<{ user_id: string; key: string; data: string; created_at: string }>(`SELECT user_id, key, data, created_at FROM bookmarks WHERE user_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at DESC, key`, ids);
+    const out = new Map<string, StageBookmark>();
+    for (const r of rows) {
+      const who = singers.find((s) => s.userId === r.user_id);
+      const by = { userId: r.user_id, displayName: who?.displayName ?? '' };
+      const have = out.get(r.key);
+      if (have) {
+        if (!have.by.some((b) => b.userId === by.userId)) have.by.push(by);
+      } else out.set(r.key, { ...this.bookmarkFromRow(r), by: [by] });
+    }
+    return [...out.values()];
   }
 
   /** The Admin page: every account, newest first. */
@@ -591,7 +656,7 @@ export class SqlStore {
     return r ? { ...(JSON.parse(r.data) as CatalogTrack), pulls: Number(r.pulls) } : null;
   }
 
-  async listCatalog(q: string, offset: number, limit: number, ownerUserId?: string): Promise<{ items: CatalogTrack[]; total: number }> {
+  async listCatalog(q: string, offset: number, limit: number, ownerUserId?: string, languages: string[] = []): Promise<{ items: CatalogTrack[]; total: number }> {
     const where: string[] = [];
     const params: unknown[] = [];
     // Every word of the query must appear (in the title, artist, genre, language or owner), in any order.
@@ -602,6 +667,12 @@ export class SqlStore {
     if (ownerUserId) {
       where.push('owner_user_id=?');
       params.push(ownerUserId);
+    }
+    // The entries in the given languages (the singer's preference), by the language the entry was published with.
+    const langs = [...new Set(languages.map((l) => l.trim().toLowerCase()).filter(Boolean))].slice(0, 24);
+    if (langs.length) {
+      where.push(`LOWER(COALESCE(json_extract(data, '$.language'), '')) IN (${langs.map(() => '?').join(',')})`);
+      params.push(...langs);
     }
     const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const total = Number((await this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM catalog_tracks ${w}`, params))?.n ?? 0);
@@ -819,19 +890,26 @@ export class SqlStore {
    * records with the same song name make one group; the groups are ordered by the latest access in them (the
    * newest first, the never-sung last), the versions in a group the same way.
    */
-  async searchRegistry(q: string, offset: number, limit: number, forUserId?: string): Promise<TrackSearchResponse> {
+  async searchRegistry(q: string, offset: number, limit: number, forUserId?: string, opts: { languages?: string[]; popular?: boolean } = {}): Promise<TrackSearchResponse> {
     const where: string[] = [];
     const params: unknown[] = [];
     for (const word of q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8)) {
       where.push("search LIKE ? ESCAPE '\\'");
       params.push(`%${word.replace(/[%_\\]/g, (c) => `\\${c}`)}%`);
     }
+    // Recommendations: the songs in the singer's languages (prefs.ts), the most sung first.
+    const langs = [...new Set((opts.languages ?? []).map((l) => l.trim().toLowerCase()).filter(Boolean))].slice(0, 24);
+    if (langs.length) {
+      where.push(`LOWER(language) IN (${langs.map(() => '?').join(',')})`);
+      params.push(...langs);
+    }
     const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const order = opts.popular ? 'ac DESC, la DESC, ca DESC' : 'la DESC, ca DESC';
     const total = Number((await this.db.get<{ n: number }>(`SELECT COUNT(DISTINCT song_key) AS n FROM track_registry ${w}`, params))?.n ?? 0);
-    const keys = await this.db.all<{ song_key: string; la: string | null }>(`SELECT song_key, MAX(last_accessed_at) AS la, MAX(created_at) AS ca FROM track_registry ${w} GROUP BY song_key ORDER BY la DESC, ca DESC LIMIT ? OFFSET ?`, [...params, limit, offset]);
+    const keys = await this.db.all<{ song_key: string; la: string | null }>(`SELECT song_key, MAX(last_accessed_at) AS la, MAX(created_at) AS ca, SUM(access_count) AS ac FROM track_registry ${w} GROUP BY song_key ORDER BY ${order} LIMIT ? OFFSET ?`, [...params, limit, offset]);
     const groups: TrackSearchGroup[] = [];
     for (const k of keys) {
-      const rows = await this.db.all<RegistryRow>(`${REGISTRY_SELECT} ${w ? `${w} AND` : 'WHERE'} r.song_key=? ORDER BY r.last_accessed_at DESC, r.created_at DESC`, [...params, k.song_key]);
+      const rows = await this.db.all<RegistryRow>(`${REGISTRY_SELECT} ${w ? `${w} AND` : 'WHERE'} r.song_key=? ORDER BY ${opts.popular ? 'r.access_count DESC, ' : ''}r.last_accessed_at DESC, r.created_at DESC`, [...params, k.song_key]);
       const versions: TrackRecord[] = [];
       for (const r of rows) versions.push(this.registryFromRow(r, await this.mineOf(r.track_id, forUserId)));
       if (versions.length) groups.push({ songKey: k.song_key, song: versions[0]!.song, lastAccessedAt: k.la ?? null, versions });

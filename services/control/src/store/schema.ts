@@ -229,6 +229,14 @@ CREATE TABLE IF NOT EXISTS track_access (
   PRIMARY KEY (track_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_track_access_user ON track_access(user_id, last_at DESC);
+CREATE TABLE IF NOT EXISTS bookmarks (
+  user_id TEXT NOT NULL,
+  key TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS live_segments (
   job_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
@@ -258,7 +266,9 @@ CREATE TABLE IF NOT EXISTS live_segments (
  * name and metadata, the owner's shareable Drive URL, the file ids in `data`, and the global
  * `last_accessed_at` (UTC, the most recent successful access by anyone — never a search);
  * `track_access` is every singer's own history of it (and their shared copy's file ids, so the files
- * can be fetched from any singer's Drive when the owner's is gone).
+ * can be fetched from any singer's Drive when the owner's is gone). `bookmarks` is what each singer
+ * kept with a tap (prefs.ts): one row per song per singer, the song as it was met (a record of the
+ * database, a catalog entry, a YouTube result).
  *
  * Columns added after the first release — put on tables that exist already (`CREATE TABLE IF NOT EXISTS`
  * leaves an existing table as it was): checked and added one by one at startup (`PRAGMA table_info`).
@@ -267,6 +277,7 @@ CREATE TABLE IF NOT EXISTS live_segments (
  *   subscriptions.status       — active / revoked (expired is a matter of the date)
  *   payments.plan, …           — the plan paid for, Stripe's ids, the fee and the net, refunds (plans.ts)
  *   users.coupon_code          — the coupon the account entered at the gate (coupons.ts)
+ *   users.prefs                — the songs the singer prefers (prefs.ts), as JSON
  */
 export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string; after?: string }[] = [
   { table: 'users', column: 'role', ddl: "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'dual'", after: "UPDATE users SET role='super_admin' WHERE privileged=1" },
@@ -281,4 +292,5 @@ export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string; af
   { table: 'payments', column: 'status', ddl: "ALTER TABLE payments ADD COLUMN status TEXT NOT NULL DEFAULT 'paid'" },
   { table: 'users', column: 'coupon_code', ddl: "ALTER TABLE users ADD COLUMN coupon_code TEXT NOT NULL DEFAULT ''" },
   { table: 'users', column: 'coupon_at', ddl: 'ALTER TABLE users ADD COLUMN coupon_at TEXT' },
+  { table: 'users', column: 'prefs', ddl: "ALTER TABLE users ADD COLUMN prefs TEXT NOT NULL DEFAULT ''" },
 ];

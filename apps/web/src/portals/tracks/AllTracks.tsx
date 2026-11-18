@@ -5,13 +5,17 @@
  * inside it the versions — by artist, movie, language, source — each singable on its own; a song with
  * several artists cascades one level more. Sing on any row brings the song into MY Drive (Tracks),
  * shares it and opens the stage; a preview plays the backing track here. An access is on record only
- * once the song really opened or played — never for a search.
+ * once the song really opened or played — never for a search. Every row carries the bookmark star
+ * (components/BookmarkButton.tsx). The rows and the Sing / preview actions (useRecordActions) are
+ * the Recommended tab's too.
  */
 import { formatMs, trackRecordLine, youtubeSearchQuery, type CatalogTrack, type TrackRecord, type TrackSearchGroup, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { BookmarkButton } from '../../components/BookmarkButton.tsx';
 import { IcDownload, IcPlay, IcSliders, IcStop } from '../../components/icons.tsx';
 import { Empty, Progress, Spinner } from '../../components/ui.tsx';
 import { ApiError, controlConfigured, controlStatus } from '../../lib/api.ts';
+import { bookmarkOfCatalog, bookmarkOfMine, bookmarkOfRecord, bookmarkOfYoutube } from '../../lib/bookmarks.ts';
 import { isSameTrack, myCatalogUserId, pullCatalogTrack, searchCatalog } from '../../lib/catalog.ts';
 import { go, href } from '../../lib/nav.ts';
 import { myHistory, myRegistryUserId, previewUrl, recordAccess, searchTracks, singRecord } from '../../lib/registry.ts';
@@ -38,6 +42,71 @@ export function sungAgo(iso: string | null): string {
 
 const sourceName = (s: TrackRecord['source']) => (s === 'youtube' ? 'YouTube' : s === 'catalog' ? 'Catalog' : 'Drive');
 
+export type Busy = { id: string; label: string; fraction: number };
+export type PreviewState = { id: string; state: 'loading' | 'playing' };
+
+/**
+ * Sing and preview on a record of the track database (the All and Recommended tabs): the song comes into my Drive (or
+ * is there already), then the stage; a preview of the backing track plays here, the access on record once it plays.
+ */
+export function useRecordActions(opts: { onChanged: () => void; onFailed?: () => void; onRecord?: (r: TrackRecord) => void }) {
+  const [busy, setBusy] = useState<Busy | null>(null);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const previewSeq = useRef(0);
+  useEffect(
+    () => () => {
+      audioRef.current?.pause();
+      if (audioRef.current?.src) URL.revokeObjectURL(audioRef.current.src);
+    },
+    [],
+  );
+  /** Sing a record: the song comes into my Drive (or is there already), then the stage. */
+  const sing = async (v: TrackRecord) => {
+    setBusy({ id: v.trackId, label: 'Opening', fraction: 0.05 });
+    try {
+      const id = await singRecord(v, (p) => setBusy({ id: v.trackId, ...p }));
+      opts.onChanged();
+      go(`/studio/sing/${encodeURIComponent(id)}`);
+    } catch (e) {
+      toast(e instanceof ApiError && e.code === 'not_shared' ? "This song's files are no longer shared from any singer's Drive — it cannot be sung until somebody shares it again" : errorText(e), 'error', 9000);
+      setBusy(null);
+      opts.onFailed?.();
+    }
+  };
+  /** A preview of the backing track, here; the access is on record once it plays (not when it fails). */
+  const togglePreview = async (v: TrackRecord) => {
+    const a = audioRef.current ?? (audioRef.current = new Audio());
+    if (preview?.id === v.trackId) {
+      a.pause();
+      setPreview(null);
+      return;
+    }
+    const seq = ++previewSeq.current;
+    a.pause();
+    setPreview({ id: v.trackId, state: 'loading' });
+    try {
+      const url = await previewUrl(v);
+      if (seq !== previewSeq.current) return URL.revokeObjectURL(url);
+      if (a.src) URL.revokeObjectURL(a.src);
+      a.src = url;
+      a.onplaying = () => {
+        if (seq !== previewSeq.current) return;
+        setPreview({ id: v.trackId, state: 'playing' });
+        void recordAccess(v.trackId, 'play').then((r) => r && opts.onRecord?.(r));
+        a.onplaying = null; // once per start
+      };
+      a.onended = () => setPreview((p) => (p?.id === v.trackId ? null : p));
+      await a.play();
+    } catch (e) {
+      if (seq !== previewSeq.current) return;
+      setPreview(null);
+      toast(e instanceof ApiError && e.code === 'not_shared' ? "This song's files are no longer shared from any singer's Drive" : errorText(e), 'error', 8000);
+    }
+  };
+  return { busy, setBusy, preview, sing, togglePreview };
+}
+
 export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void; onMore: (t: TrackSummary) => void }) {
   const [q, setQ] = useState('');
   const [groups, setGroups] = useState<TrackSearchGroup[] | null>(null);
@@ -48,20 +117,15 @@ export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void
   const [yt, setYt] = useState<{ q: string; items: YtSearchItem[] } | null>(null);
   const [ytSearching, setYtSearching] = useState(false);
   const [status, setStatus] = useState<YtStatus | null>(null);
-  const [busy, setBusy] = useState<{ id: string; label: string; fraction: number } | null>(null);
-  const [preview, setPreview] = useState<{ id: string; state: 'loading' | 'playing' } | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const previewSeq = useRef(0);
   const input = useRef<HTMLInputElement>(null);
+  /** A record as the service now has it (after an access of mine), in place. */
+  const refreshRecord = (r: TrackRecord) => setGroups((gs) => (gs ? gs.map((g) => ({ ...g, versions: g.versions.map((v) => (v.trackId === r.trackId ? r : v)) })) : gs));
+  const { busy, setBusy, preview, sing, togglePreview } = useRecordActions({ onChanged: props.onChanged, onFailed: () => void load(q.trim()), onRecord: refreshRecord });
 
   useEffect(() => {
     if (!controlConfigured.value) return;
     void ytStatus().then(setStatus);
     void myHistory(8).then(setHistory).catch(() => undefined);
-    return () => {
-      audioRef.current?.pause();
-      if (audioRef.current?.src) URL.revokeObjectURL(audioRef.current.src);
-    };
   }, []);
 
   // The database and the catalog answer as the singer types (a quarter second after the last key); YouTube on Search.
@@ -107,19 +171,6 @@ export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void
   const catalogOnly = catalog.filter((c) => !(c.registryId && inDb.has(c.registryId)));
   const ytOnly = yt && yt.q === q.trim() ? yt.items.filter((it) => !ytInDb.has(it.id)) : null;
 
-  /** Sing a record: the song comes into my Drive (or is there already), then the stage. */
-  const sing = async (v: TrackRecord) => {
-    setBusy({ id: v.trackId, label: 'Opening', fraction: 0.05 });
-    try {
-      const id = await singRecord(v, (p) => setBusy({ id: v.trackId, ...p }));
-      props.onChanged();
-      go(`/studio/sing/${encodeURIComponent(id)}`);
-    } catch (e) {
-      toast(e instanceof ApiError && e.code === 'not_shared' ? "This song's files are no longer shared from any singer's Drive — it cannot be sung until somebody shares it again" : errorText(e), 'error', 9000);
-      setBusy(null);
-      void load(q.trim());
-    }
-  };
   /** A YouTube result: fetched into my Drive as a song track, then the stage. */
   const singYt = async (it: YtSearchItem) => {
     if (!isDrive.value) return toast('YouTube song tracks go into your Google Drive — sign in with Google first', 'warn');
@@ -160,39 +211,6 @@ export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void
       setBusy(null);
     }
   };
-  /** A preview of the backing track, here; the access is on record once it plays (not when it fails). */
-  const togglePreview = async (v: TrackRecord) => {
-    const a = audioRef.current ?? (audioRef.current = new Audio());
-    if (preview?.id === v.trackId) {
-      a.pause();
-      setPreview(null);
-      return;
-    }
-    const seq = ++previewSeq.current;
-    a.pause();
-    setPreview({ id: v.trackId, state: 'loading' });
-    try {
-      const url = await previewUrl(v);
-      if (seq !== previewSeq.current) return URL.revokeObjectURL(url);
-      if (a.src) URL.revokeObjectURL(a.src);
-      a.src = url;
-      a.onplaying = () => {
-        if (seq !== previewSeq.current) return;
-        setPreview({ id: v.trackId, state: 'playing' });
-        void recordAccess(v.trackId, 'play').then((r) => r && refreshRecord(r));
-        a.onplaying = null; // once per start
-      };
-      a.onended = () => setPreview((p) => (p?.id === v.trackId ? null : p));
-      await a.play();
-    } catch (e) {
-      if (seq !== previewSeq.current) return;
-      setPreview(null);
-      toast(e instanceof ApiError && e.code === 'not_shared' ? "This song's files are no longer shared from any singer's Drive" : errorText(e), 'error', 8000);
-    }
-  };
-  /** A record as the service now has it (after an access of mine), in place. */
-  const refreshRecord = (r: TrackRecord) => setGroups((gs) => (gs ? gs.map((g) => ({ ...g, versions: g.versions.map((v) => (v.trackId === r.trackId ? r : v)) })) : gs));
-
   if (!controlConfigured.value)
     return (
       <div class="stack">
@@ -278,6 +296,7 @@ export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void
                     {b && <Progress fraction={b.fraction} label={b.label} />}
                   </div>
                   <div class="actions">
+                    <BookmarkButton input={bookmarkOfCatalog(c)} />
                     {owned || have ? (
                       <span class="chip ok">in my library</span>
                     ) : (
@@ -320,6 +339,7 @@ export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void
                       {b && <Progress fraction={b.fraction} label={b.label} />}
                     </div>
                     <div class="actions">
+                      <BookmarkButton input={bookmarkOfYoutube(it)} />
                       <button class="btn sm primary" disabled={busy !== null || status?.available === false} onClick={() => void singYt(it)} data-yt-sing>
                         <IcPlay size={16} /> Sing
                       </button>
@@ -338,7 +358,8 @@ export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void
   );
 }
 
-function MyRows(props: { tracks: TrackSummary[]; onMore: (t: TrackSummary) => void }) {
+/** My own tracks (Drive): Sing, More — and the star, which registers the song with the database on its first tap (as a Sing would). */
+export function MyRows(props: { tracks: TrackSummary[]; onMore: (t: TrackSummary) => void }) {
   return (
     <div class="list">
       {props.tracks.map((t) => (
@@ -355,6 +376,7 @@ function MyRows(props: { tracks: TrackSummary[]; onMore: (t: TrackSummary) => vo
             </div>
           </div>
           <div class="actions">
+            <MyStar t={t} />
             <a class="btn sm primary" href={href(`/studio/sing/${encodeURIComponent(t.trackId)}`)}>
               Sing
             </a>
@@ -368,13 +390,20 @@ function MyRows(props: { tracks: TrackSummary[]; onMore: (t: TrackSummary) => vo
   );
 }
 
-type RowProps = { tracks: TrackSummary[]; busy: { id: string; label: string; fraction: number } | null; preview: { id: string; state: 'loading' | 'playing' } | null; onSing: (v: TrackRecord) => void; onPreview: (v: TrackRecord) => void };
+/** The star on a track of my own: known at once when the track is registered, resolved (registered, shared) on the first tap otherwise. */
+export function MyStar(props: { t: TrackSummary }) {
+  const t = props.t;
+  const known = t.registryId ? { kind: 'registry' as const, ref: t.registryId, title: t.title, artist: t.artist, language: '', durationMs: t.durationMs, thumbnail: '', registryId: t.registryId, catalogTrackId: null, youtube: null } : null;
+  return <BookmarkButton input={known} resolve={() => bookmarkOfMine(t, (p) => toast(p.label, 'info', 2000))} />;
+}
+
+export type RowProps = { tracks: TrackSummary[]; busy: { id: string; label: string; fraction: number } | null; preview: { id: string; state: 'loading' | 'playing' } | null; onSing: (v: TrackRecord) => void; onPreview: (v: TrackRecord) => void };
 
 /**
  * One song: its versions under it. One version shows as the row itself; several open on a tap (the latest sung first);
  * several artists cascade one level more — an artist (or a movie) with its files under it.
  */
-function SongGroup(props: { g: TrackSearchGroup } & RowProps) {
+export function SongGroup(props: { g: TrackSearchGroup } & RowProps) {
   const { g } = props;
   const [open, setOpen] = useState(false);
   if (g.versions.length === 1) return <VersionRow v={g.versions[0]!} {...props} />;
@@ -432,7 +461,7 @@ function ArtistBranch(props: { name: string; versions: TrackRecord[] } & RowProp
 }
 
 /** One file of a song: what it is (artist · movie · year · language · source), how many sang it, and Sing / a preview — never who (no singer's name on a track line). */
-function VersionRow(props: { v: TrackRecord } & RowProps) {
+export function VersionRow(props: { v: TrackRecord } & RowProps) {
   const { v } = props;
   const haveIt = props.tracks.some((t) => t.registryId === v.trackId || t.trackId === v.mine?.copyTrackId);
   const ownIt = v.ownerUserId === myRegistryUserId(); // mine: in my Drive as any other
@@ -455,6 +484,7 @@ function VersionRow(props: { v: TrackRecord } & RowProps) {
         {b && <Progress fraction={b.fraction} label={b.label} />}
       </div>
       <div class="actions">
+        <BookmarkButton input={bookmarkOfRecord(v)} />
         <button class="btn icon sm" aria-label={pv?.state === 'playing' ? 'Stop the preview' : 'Preview'} disabled={props.busy !== null} onClick={() => props.onPreview(v)} data-version-preview={pv?.state ?? 'idle'}>
           {pv?.state === 'loading' ? <Spinner /> : pv?.state === 'playing' ? <IcStop size={16} /> : <IcPlay size={16} />}
         </button>

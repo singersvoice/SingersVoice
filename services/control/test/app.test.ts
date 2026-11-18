@@ -550,6 +550,80 @@ describe('sv-control API', () => {
     expect((await app.request(`/tracks/${a2}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ language: 'Hindi' }) })).status).toBe(200); // alice: the first account, the super admin
   });
 
+  it("songs a singer prefers and bookmarks: the preference kept on the account (known names only); recommendations are the songs in those languages, the most sung first; the catalog keeps to them too; a bookmark per song per singer, replaced by its key, dropped; a meet answers every stage singer's bookmarks, saying whose, to anyone in it", async () => {
+    // The preference: nothing until set; replaced whole; only what is known is kept.
+    expect(await json<{ prefs: unknown }>(await app.request('/prefs', { headers: as('bob') }))).toEqual({ prefs: { languages: [], countries: [] } });
+    const set = await json<{ prefs: { languages: string[]; countries: string[] } }>(await app.request('/prefs', { method: 'PUT', headers: as('bob'), body: JSON.stringify({ languages: ['Hindi', 'Klingon', 'Hindi'], countries: ['India', 'Atlantis'] }) }));
+    expect(set.prefs).toEqual({ languages: ['Hindi'], countries: ['India'] });
+    expect(await json<{ prefs: unknown }>(await app.request('/prefs', { headers: as('bob') }))).toEqual({ prefs: { languages: ['Hindi'], countries: ['India'] } });
+    expect(await json<{ prefs: unknown }>(await app.request('/prefs', { headers: as('alice') }))).toEqual({ prefs: { languages: [], countries: [] } }); // bob's alone
+    expect((await app.request('/prefs', { method: 'PUT', headers: as('bob'), body: 'nope' })).status).toBe(400);
+    // Recommendations: the songs in the languages asked for, the most sung first (Hey Jude sung twice now, Bole Chudiyan once); none of another language.
+    const search = async (q: string, who = 'bob') => (await (await app.request(`/tracks/search?q=${encodeURIComponent(q)}`, { headers: as(who) })).json()) as { groups: { song: string; versions: { trackId: string; language: string }[] }[] };
+    const jude = (await search('hey jude')).groups[0]!.versions[0]!.trackId;
+    await app.request(`/tracks/${jude}/access`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ how: 'sing' }) });
+    const rec = async (languages: string, who = 'bob') => (await (await app.request(`/tracks/recommended?languages=${encodeURIComponent(languages)}`, { headers: as(who) })).json()) as { groups: { song: string; versions: { trackId: string; language: string; source: string }[] }[]; total: number; nextCursor: string | null };
+    const hindiEnglish = await rec('Hindi,English');
+    expect(hindiEnglish.groups.map((g) => g.song)).toEqual(['Hey Jude', 'Bole Chudiyan']);
+    expect(hindiEnglish.total).toBe(2);
+    const telugu = await rec('telugu'); // the language's case is nobody's concern
+    expect(telugu.groups.map((g) => g.song)).toContain('Ammo Ammaayena');
+    expect(telugu.groups.every((g) => g.versions.every((v) => v.language === 'Telugu'))).toBe(true); // the catalog tests' Telugu entries are here too (a catalog entry is a record), nothing else
+    expect(new Set(telugu.groups.find((g) => g.song === 'Ammo Ammaayena')!.versions.map((v) => v.source))).toEqual(new Set(['youtube', 'catalog'])); // the catalog's entry is among the versions
+    expect((await rec('Klingon')).groups).toEqual([]);
+    expect((await rec('')).total).toBeGreaterThanOrEqual(3); // no language: every song, the most sung first
+    expect((await rec('')).groups[0]!.song).toBe('Hey Jude');
+    // The catalog keeps to the languages asked for too.
+    const cat = async (languages: string) => (await (await app.request(`/catalog/tracks?languages=${encodeURIComponent(languages)}`, { headers: as('bob') })).json()) as CatalogListResponse;
+    expect((await cat('Telugu')).items.map((t) => t.trackId)).toContain('trk-cat-9');
+    expect((await cat('Hindi')).items.map((t) => t.trackId)).not.toContain('trk-cat-9');
+    expect((await cat('Hindi,Telugu')).items.map((t) => t.trackId)).toContain('trk-cat-9');
+    // Bookmarks: one per song per singer by its key; the key is the kind and the ref; what is kept of it is replaced by a second PUT; mine alone.
+    const judeMark = { kind: 'registry', ref: jude, title: 'Hey Jude', artist: 'The Beatles', language: 'English', durationMs: 200000, thumbnail: '', registryId: jude, catalogTrackId: null, youtube: null };
+    const put = await app.request(`/bookmarks/registry:${jude}`, { method: 'PUT', headers: as('bob'), body: JSON.stringify(judeMark) });
+    expect(put.status).toBe(200);
+    const kept = await json<{ bookmark: { key: string; kind: string; ref: string; title: string; createdAt: string } }>(put);
+    expect(kept.bookmark).toMatchObject({ key: `registry:${jude}`, kind: 'registry', ref: jude, title: 'Hey Jude' });
+    expect((await app.request(`/bookmarks/registry:${jude}`, { method: 'PUT', headers: as('bob'), body: JSON.stringify({ ...judeMark, ref: 'other' }) })).status).toBe(400); // the key must be the bookmark's
+    expect((await app.request('/bookmarks/spotify:x', { method: 'PUT', headers: as('bob'), body: JSON.stringify({ ...judeMark, kind: 'spotify', ref: 'x' }) })).status).toBe(400);
+    const ytMark = { kind: 'youtube', ref: 'dQw4w9WgXcQ', title: 'Never Gonna Give You Up', artist: 'Rick Astley', language: 'English', durationMs: 212000, thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hq.jpg', registryId: null, catalogTrackId: null, youtube: { id: 'dQw4w9WgXcQ', title: 'Never Gonna Give You Up (Karaoke)', channel: 'Karaoke', durationMs: 212000, thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hq.jpg', views: 10, url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } };
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await app.request('/bookmarks/youtube:dQw4w9WgXcQ', { method: 'PUT', headers: as('bob'), body: JSON.stringify(ytMark) })).status).toBe(200);
+    const mine = async (who: string) => (await json<{ items: { key: string; title: string; createdAt: string }[] }>(await app.request('/bookmarks', { headers: as(who) }))).items;
+    expect((await mine('bob')).map((b) => b.key)).toEqual(['youtube:dQw4w9WgXcQ', `registry:${jude}`]); // the latest kept first
+    expect(await mine('alice')).toEqual([]);
+    const again = await json<{ bookmark: { title: string; createdAt: string } }>(await app.request(`/bookmarks/registry:${jude}`, { method: 'PUT', headers: as('bob'), body: JSON.stringify({ ...judeMark, title: 'Hey Jude (Beatles)' }) }));
+    expect(again.bookmark.title).toBe('Hey Jude (Beatles)');
+    expect(again.bookmark.createdAt).toBe(kept.bookmark.createdAt); // its place in the list stays
+    expect((await mine('bob')).map((b) => b.key)).toEqual(['youtube:dQw4w9WgXcQ', `registry:${jude}`]);
+    expect((await app.request('/bookmarks/youtube:dQw4w9WgXcQ', { method: 'DELETE', headers: as('bob') })).status).toBe(200);
+    expect((await app.request('/bookmarks/youtube:dQw4w9WgXcQ', { method: 'DELETE', headers: as('bob') })).status).toBe(200); // gone already: still fine
+    expect((await mine('bob')).map((b) => b.key)).toEqual([`registry:${jude}`]);
+    // A meet: the stage singers' bookmarks together, each saying whose — bob's Hey Jude and alice's (bob's too) Bole Chudiyan; the audience sees them too; an outsider does not; a singer off stage is not counted.
+    const bole = (await search('bole')).groups[0]!.versions[0]!.trackId;
+    const boleMark = { ...judeMark, ref: bole, registryId: bole, title: 'Bole Chudiyan', artist: 'Udit Narayan', language: 'Hindi' };
+    await app.request(`/bookmarks/registry:${bole}`, { method: 'PUT', headers: as('alice'), body: JSON.stringify(boleMark) });
+    await app.request(`/bookmarks/registry:${bole}`, { method: 'PUT', headers: as('bob'), body: JSON.stringify(boleMark) });
+    await app.request(`/bookmarks/registry:${jude}`, { method: 'PUT', headers: as('dave'), body: JSON.stringify(judeMark) }); // dave: in the audience
+    const meet = (await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Bookmarks meet' }) }))).meet;
+    const host = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'audience' }) }));
+    expect(host.you.slot).toBe(1);
+    const bob = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ role: 'audience' }) }));
+    await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('dave'), body: JSON.stringify({ role: 'audience' }) });
+    expect((await app.request(`/meets/${meet.meetId}/bookmarks`, { headers: as('carol') })).status).toBe(403); // not in the meet
+    expect((await app.request('/meets/nope/bookmarks', { headers: as('alice') })).status).toBe(404);
+    const stage = async (who: string) => (await json<{ items: { key: string; by: { userId: string; displayName: string }[] }[] }>(await app.request(`/meets/${meet.meetId}/bookmarks`, { headers: as(who) }))).items;
+    let items = await stage('dave');
+    expect(items.map((b) => b.key)).toEqual([`registry:${bole}`]); // alice alone on stage: hers
+    expect(items[0]!.by.map((b) => b.displayName)).toEqual(['alice']);
+    await app.request(`/meets/${meet.meetId}/slot`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, slot: 2 }) }); // the stage is open: bob steps on
+    items = await stage('alice');
+    expect(items.map((b) => b.key).sort()).toEqual([`registry:${bole}`, `registry:${jude}`].sort());
+    expect(items.find((b) => b.key === `registry:${bole}`)!.by.map((b) => b.displayName).sort()).toEqual(['alice', 'bob']);
+    expect(items.find((b) => b.key === `registry:${jude}`)!.by.map((b) => b.displayName)).toEqual(['bob']); // dave's Hey Jude counts for nothing: he is in the audience
+    await app.request(`/meets/${meet.meetId}/end`, { method: 'POST', headers: as('alice') }); // (a host has three open meets at most)
+  });
+
   it("the master track database hands a song's files over from the owner's Drive, then from any singer's shared copy when the owner's is gone — and marks it unavailable when none is left", async () => {
     const reg = async (who: string, body: unknown) => ((await (await app.request('/tracks/register', { method: 'POST', headers: as(who), body: JSON.stringify(body) })).json()) as { track: { trackId: string } }).track.trackId;
     const id = await reg('alice', { source: 'drive', song: 'Fallback song', driveUrl: 'https://drive.google.com/drive/folders/folderfallback', refs: { folderId: 'folderfallback', jsonId: 'jsonowner00001', audioId: 'audioowner0001', audioMime: 'audio/mpeg' } });

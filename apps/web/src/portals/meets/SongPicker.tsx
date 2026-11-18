@@ -10,16 +10,21 @@
  * all the singers sing the same lines at the same time. A track of mine that other devices cannot
  * reach yet is shared on the way (its Drive folder gets an anyone-with-the-link permission and a
  * public catalog entry, through lib/catalog.ts — the same thing the Tracks portal does); nobody is
- * asked about it here.
+ * asked about it here. Above the list: what the singers on stage bookmarked (every stage singer's
+ * bookmarks together, each saying whose — lib/bookmarks.ts), each a Pick away; a YouTube bookmark
+ * is fetched into my Drive first, as a song track.
  */
-import { formatMs, type CatalogTrack, type SongPick } from '@singersvoice/protocol';
+import { formatMs, type CatalogTrack, type SongPick, type StageBookmark } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { IcMusic, IcX } from '../../components/icons.tsx';
 import { Progress, Spinner } from '../../components/ui.tsx';
+import { bookmarkRegistryId, stageBookmarks } from '../../lib/bookmarks.ts';
 import { canPublish, catalogIdOfCopy, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, searchCatalog } from '../../lib/catalog.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { listTracksFresh, readTrackCache } from '../../lib/trackCache.ts';
+import { importYoutubeTrack } from '../../lib/ytTracks.ts';
+import { byLine } from '../tracks/Bookmarks.tsx';
 
 const PAGE = 30;
 const MINE_PAGE = 40;
@@ -46,6 +51,8 @@ export function SongPicker(props: {
   onClose: () => void;
   /** Where a song already is in the meet (up now, put forward): the row says so instead of offering it again. */
   placeOf?: (song: SongPick) => 'current' | 'proposed' | null;
+  /** The meet: what the singers on its stage bookmarked is offered first. */
+  meetId?: string;
 }) {
   // The library as the device remembers it, at once; the fresh listing takes its place when Drive answers.
   const [tracks, setTracks] = useState<TrackSummary[] | null>(() => readTrackCache());
@@ -57,8 +64,15 @@ export function SongPicker(props: {
   const [mineShown, setMineShown] = useState(MINE_PAGE);
   const [busy, setBusy] = useState<string | null>(null);
   const [sharing, setSharing] = useState<{ label: string; fraction: number } | null>(null);
+  const [marks, setMarks] = useState<StageBookmark[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!props.meetId) return;
+    void stageBookmarks(props.meetId)
+      .then(setMarks)
+      .catch(() => undefined);
+  }, [props.meetId]);
   useEffect(() => {
     void listTracksFresh()
       .then((list) => {
@@ -108,6 +122,7 @@ export function SongPicker(props: {
   const me = myCatalogUserId();
   const others = items.filter((c) => c.ownerUserId !== me && !(tracks ?? []).some((t) => isSameTrack(t.trackId, c.trackId)));
 
+  const placeOf = props.placeOf ?? (() => null);
   const deliver = async (song: SongPick) => {
     await props.onPick(song);
     props.onClose();
@@ -148,6 +163,36 @@ export function SongPicker(props: {
       setBusy(null);
     }
   };
+  /** The song a bookmark names, as a pick: the database's record (or the catalog entry); a YouTube bookmark is fetched into my Drive first. */
+  const pickOfMark = (b: StageBookmark): SongPick | null => {
+    const registryId = bookmarkRegistryId(b);
+    const mineByIt = (tracks ?? []).find((t) => (registryId && t.registryId === registryId) || (b.catalogTrackId ? isSameTrack(t.trackId, b.catalogTrackId) : false));
+    if (mineByIt) return { trackId: mineByIt.trackId, catalogTrackId: sharedId(mineByIt), registryId: registryId ?? mineByIt.registryId ?? null, trackTitle: mineByIt.title, durationMs: mineByIt.durationMs };
+    if (!registryId && !b.catalogTrackId) return null;
+    return { trackId: null, catalogTrackId: b.catalogTrackId, registryId, trackTitle: b.title, durationMs: b.durationMs };
+  };
+  const pickMark = async (b: StageBookmark) => {
+    setBusy(b.key);
+    try {
+      if (b.kind === 'youtube') {
+        if (!b.youtube) throw new Error('This YouTube bookmark carries no video');
+        setSharing({ label: 'Fetching the song into your Drive', fraction: 0.05 });
+        const saved = await importYoutubeTrack(b.youtube, setSharing);
+        setSharing(null);
+        setTracks((list) => [saved, ...(list ?? []).filter((t) => t.trackId !== saved.trackId)]);
+        return await pickMine(saved);
+      }
+      const pick = pickOfMark(b);
+      if (!pick) throw new Error('This bookmark names no song the meet can load');
+      await deliver(pick);
+    } catch (e) {
+      toast(errorText(e), 'error', 7000);
+    } finally {
+      setSharing(null);
+      setBusy(null);
+    }
+  };
+  const markRows = marks.filter((b) => !needle || matchesWords(`${b.title} ${b.artist}`, needle)).map((b) => ({ b, place: b.kind === 'youtube' ? null : (pickOfMark(b) && placeOf(pickOfMark(b)!)) || null }));
   /** Enter picks the top match (mine first) — unless it is up or put forward already. */
   const pickTop = () => {
     if (busy) return;
@@ -159,7 +204,6 @@ export function SongPicker(props: {
 
   type Row = { key: string; title: string; artist: string; sub: string; from: string; place: 'current' | 'proposed' | null; pick: () => Promise<void> };
   // One list: my songs first, then the shared ones (never the same song twice), each saying where it comes from.
-  const placeOf = props.placeOf ?? (() => null);
   const rows: Row[] = [
     ...mine.map((t) => ({ key: t.trackId, title: t.title, artist: t.artist || 'Unknown artist', sub: `${formatMs(t.durationMs)} · ${t.video ? 'karaoke video' : `${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`}`, from: 'Your library', place: placeOf({ trackId: t.trackId, catalogTrackId: sharedId(t), trackTitle: t.title, durationMs: t.durationMs }), pick: () => pickMine(t) })),
     ...others.map((c) => ({ key: c.trackId, title: c.title, artist: c.artist || 'Unknown artist', sub: formatMs(c.durationMs), from: 'Shared song', place: placeOf({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs }), pick: () => pickShared(c) })),
@@ -199,6 +243,40 @@ export function SongPicker(props: {
         </div>
       </div>
       {sharing && <Progress fraction={sharing.fraction} label={sharing.label} />}
+      {markRows.length > 0 && (
+        <div class="stack" data-picker-marks>
+          <b class="small">Bookmarked by the singers on stage</b>
+          <div class="list">
+            {markRows.map(({ b, place }) => (
+              <div class="item" key={b.key} data-from="bookmark" data-picker-mark={b.key} data-place={place ?? ''}>
+                <div class="thumb" aria-hidden="true">
+                  ★
+                </div>
+                <div class="meta">
+                  <div class="t">
+                    <Highlight text={b.title} q={needle} />
+                  </div>
+                  <div class="s">
+                    {b.artist ? <Highlight text={b.artist} q={needle} /> : 'Unknown artist'} · {b.durationMs ? `${formatMs(b.durationMs)} · ` : ''}
+                    <span class="from">bookmarked by {byLine(b.by)}</span>
+                  </div>
+                </div>
+                <div class="row" style="gap:6px">
+                  {place === 'current' ? (
+                    <span class="chip ok" title="This song is up on the stage already">Up now</span>
+                  ) : place === 'proposed' ? (
+                    <span class="chip" title="This song is put forward already — the stage chooses it on the song card">Put forward</span>
+                  ) : (
+                    <button class="btn sm primary" disabled={busy !== null} aria-label={`Pick ${b.title}`} onClick={() => void pickMark(b)} data-picker-mark-pick>
+                      {busy === b.key ? <Spinner /> : <IcMusic size={16} />} Pick
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {loading ? (
         <div class="row">
           <Spinner /> Loading your songs…

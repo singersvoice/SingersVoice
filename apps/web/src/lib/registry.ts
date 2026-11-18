@@ -27,6 +27,12 @@ export async function searchTracks(q = '', opts: { cursor?: string | null; limit
   return api.get('GET /tracks/search', `/tracks/search?q=${encodeURIComponent(q)}&limit=${opts.limit ?? 20}${opts.cursor ? `&cursor=${encodeURIComponent(opts.cursor)}` : ''}`);
 }
 
+/** Recommendations: the songs in the given languages (prefs.ts), the most sung first, grouped as a search is. */
+export async function recommendedTracks(languages: string[], opts: { cursor?: string | null; limit?: number } = {}): Promise<TrackSearchResponse> {
+  if (!controlConfigured.value) return { groups: [], total: 0, nextCursor: null };
+  return api.get('GET /tracks/recommended', `/tracks/recommended?languages=${encodeURIComponent(languages.join(','))}&limit=${opts.limit ?? 20}${opts.cursor ? `&cursor=${encodeURIComponent(opts.cursor)}` : ''}`);
+}
+
 /** What I sang, the latest first. */
 export async function myHistory(limit = 12): Promise<TrackRecord[]> {
   if (!controlConfigured.value) return [];

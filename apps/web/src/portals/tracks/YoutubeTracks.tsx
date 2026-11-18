@@ -6,9 +6,11 @@
  */
 import { youtubeSearchQuery, formatMs, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { BookmarkButton } from '../../components/BookmarkButton.tsx';
 import { IcDownload, IcPlay } from '../../components/icons.tsx';
 import { Empty, Progress, Spinner } from '../../components/ui.tsx';
 import { controlConfigured } from '../../lib/api.ts';
+import { bookmarkOfYoutube } from '../../lib/bookmarks.ts';
 import { href } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
@@ -112,6 +114,7 @@ export function YoutubeTracks(props: { tracks: TrackSummary[]; onAdded: () => vo
                   {busy && job && <Progress fraction={job.fraction} label={job.label} />}
                 </div>
                 <div class="row" style="gap:6px">
+                  <BookmarkButton input={bookmarkOfYoutube(it)} />
                   {saved ? (
                     <a class="btn sm primary" href={href(`/studio/sing/${encodeURIComponent(saved.trackId)}`)}>
                       <IcPlay size={16} /> Sing

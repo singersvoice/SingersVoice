@@ -81,9 +81,11 @@ export async function unpublishTrack(trackId: string): Promise<void> {
   if (d) await d.unshareTrack(trackId);
 }
 
-export async function searchCatalog(q = '', opts: { cursor?: string | null; limit?: number } = {}): Promise<CatalogListResponse> {
+/** The catalog searched; `languages` keeps to the entries in those languages (the singer's preference, prefs.ts). */
+export async function searchCatalog(q = '', opts: { cursor?: string | null; limit?: number; languages?: string[] } = {}): Promise<CatalogListResponse> {
   if (!controlConfigured.value) return { items: [], nextCursor: null, total: 0 };
-  const qs = `/catalog/tracks?q=${encodeURIComponent(q)}&limit=${opts.limit ?? 24}${opts.cursor ? `&cursor=${encodeURIComponent(opts.cursor)}` : ''}`;
+  const langs = opts.languages?.length ? `&languages=${encodeURIComponent(opts.languages.join(','))}` : '';
+  const qs = `/catalog/tracks?q=${encodeURIComponent(q)}&limit=${opts.limit ?? 24}${opts.cursor ? `&cursor=${encodeURIComponent(opts.cursor)}` : ''}${langs}`;
   return api.get('GET /catalog/tracks', qs);
 }
 

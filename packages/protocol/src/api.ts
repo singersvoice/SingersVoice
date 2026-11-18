@@ -8,6 +8,7 @@ import type { AdminBillingOverview, BillingSettings, ClubStatus, OrderRecord, Pl
 import type { PaymentRecord } from './roles.ts';
 import type { AdminCouponsResponse, Coupon, CouponSettings } from './coupons.ts';
 import type { RegisterTrackRequest, TrackAccessRequest, TrackCopyRequest, TrackHistoryResponse, TrackMetaPatch, TrackRecord, TrackSearchResponse } from './registry.ts';
+import type { Bookmark, BookmarkInput, SongPrefs, StageBookmark } from './prefs.ts';
 import type { YtFetchRequest, YtJob, YtSearchResponse, YtStatus } from './ytTracks.ts';
 
 export interface ApiError {
@@ -168,6 +169,7 @@ export interface Routes {
   'DELETE /club/members/:email': { res: ClubStatus };
   /** Admin: put an account on a plan by email (a comp, a test, a payment taken elsewhere); `until` or the plan's own period. */
   'POST /admin/plan': { req: { email: string; plan: PlanId | 'publisher'; until?: string | null }; res: { user: UserRecord } };
+  /** The public catalog searched; `languages=Hindi,Telugu` keeps to the entries in those languages (prefs.ts). */
   'GET /catalog/tracks': { res: CatalogListResponse };
   'GET /catalog/tracks/:id': { res: { track: CatalogTrack } };
   /** The track's file (json | audio | video), fetched from the owner's Drive by the service. */
@@ -177,6 +179,17 @@ export interface Routes {
   'POST /catalog/tracks/:id/pull': { res: { ok: true; pulls: number } };
   /** The master track database (registry.ts): what singers have sung, grouped by song, the latest sung first. */
   'GET /tracks/search': { res: TrackSearchResponse };
+  /** Recommendations (prefs.ts): the songs in the given languages (`languages=Hindi,Telugu`), the most sung first — grouped as a search is. */
+  'GET /tracks/recommended': { res: TrackSearchResponse };
+  /** Songs I prefer (prefs.ts): the languages and countries kept on my account; replaced whole. */
+  'GET /prefs': { res: { prefs: SongPrefs } };
+  'PUT /prefs': { req: SongPrefs; res: { prefs: SongPrefs } };
+  /** My bookmarks (prefs.ts), the latest first; one kept or replaced by its key (`<kind>:<ref>`); one dropped. */
+  'GET /bookmarks': { res: { items: Bookmark[] } };
+  'PUT /bookmarks/:key': { req: BookmarkInput; res: { bookmark: Bookmark } };
+  'DELETE /bookmarks/:key': { res: { ok: true } };
+  /** The bookmarks of every singer on the meet's stage, each saying whose it is — for anyone in the meet. */
+  'GET /meets/:id/bookmarks': { res: { items: StageBookmark[] } };
   /** My own history: what I sang, the latest first. */
   'GET /tracks/history': { res: TrackHistoryResponse };
   'GET /tracks/:id': { res: { track: TrackRecord } };

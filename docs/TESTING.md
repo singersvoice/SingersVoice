@@ -113,7 +113,7 @@ Four singers in one browser, each with a **Google Drive of their own faked in th
 tests' FakeDrive, served over HTTP to the browser — `sv.googleApiBase` on the device points
 `drive.ts` at it, a local address only — and to the service: `SV_FAKE_DRIVE_URL` sends sv-control's
 token check and public file reads there, with a folder's sharing inherited by its files as Drive
-does). The tabs are All · My Drive · Public catalog · YouTube, All first. alice imports a song; a
+does). The tabs are All · Recommended · Bookmarks · My Drive · Public catalog · YouTube, All first. alice imports a song; a
 search registers nothing; her first **Sing** shares her folder (checked on the fake: the anyone
 permission is real, and the URL is that folder), registers the song with a 12-character id, her file
 ids and her name, records her first access (now, UTC) and writes the id into her track.json; a second
@@ -125,7 +125,20 @@ it; sung again, his copy is opened, not made twice. His own "CI Sample Song" by 
 .lrc names it) makes the second version: one song group — "2 versions · 2 artists" — folded until
 opened, cascading by artist, every file with Sing; the groups and the versions sort by the latest
 access on the page and in the database, and move when a song is sung again; histories are each
-singer's own. alice **unshares** her folder: carol still gets the song, from bob's shared copy;
+singer's own. **Songs you prefer, bookmarks, Recommended**: alice picks English and India in Settings
+(on her account; the card says what they reach) and files her song under English; her Recommended
+tab lists that song and not the one without a language (nor bob's version without one), no dropdown;
+bob, with nothing set, is asked with a dropdown there — his pick shows the songs in English and his
+account keeps no preference. The star on alice's song fills and the bookmark is on his account; his
+own Drive track's star names the record it is and makes a second; the Bookmarks tab lists both,
+Sing from there opens the copy he has, the star tapped again drops one. alice publishes her second
+song (no language): her catalog keeps to her languages (nothing shown) until *Every language*; the
+star on the entry keeps it as a catalog bookmark with its registry id; bob is asked in the catalog
+too, and a country pick keeps it to that country's languages. In a **meet** alice hosts and bob takes
+a slot (fake microphones; no camera): the service answers both singers' bookmarks, each saying whose,
+and refuses an outsider; bob's Recommended, while the room stays mounted, shows them first, named for
+the meet; back in the room the song picker offers them above the list, and alice's catalog bookmark
+picked from there is the song up for the meet, with its catalog and registry ids. Then alice **unshares** her folder: carol still gets the song, from bob's shared copy;
 with every copy unshared, dave's Sing says the files are no longer shared, nothing is saved, no
 access is counted, the record is marked unavailable and the row says so. A run of searches changes
 no count. Runs in CI before the live meet.

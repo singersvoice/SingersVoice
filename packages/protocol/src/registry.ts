@@ -177,7 +177,9 @@ export function songKey(song: string): string {
 }
 
 /** Languages a karaoke title tends to name (the first found is the song's). */
-const LANGUAGES = ['Telugu', 'Tamil', 'Hindi', 'Kannada', 'Malayalam', 'Marathi', 'Bengali', 'Punjabi', 'Gujarati', 'Odia', 'Urdu', 'English', 'Spanish', 'Portuguese', 'French', 'Italian', 'German', 'Korean', 'Japanese', 'Mandarin', 'Cantonese', 'Arabic', 'Turkish', 'Russian', 'Tagalog', 'Vietnamese', 'Thai', 'Indonesian', 'Sinhala', 'Nepali'];
+/** The languages a song is filed under (read off a karaoke video's title, chosen in the Track Maker, preferred in Settings). */
+export const SONG_LANGUAGES = ['Telugu', 'Tamil', 'Hindi', 'Kannada', 'Malayalam', 'Marathi', 'Bengali', 'Punjabi', 'Gujarati', 'Odia', 'Urdu', 'English', 'Spanish', 'Portuguese', 'French', 'Italian', 'German', 'Korean', 'Japanese', 'Mandarin', 'Cantonese', 'Arabic', 'Turkish', 'Russian', 'Tagalog', 'Vietnamese', 'Thai', 'Indonesian', 'Malay', 'Sinhala', 'Nepali'];
+const LANGUAGES = SONG_LANGUAGES;
 
 export interface SongMeta {
   song: string;

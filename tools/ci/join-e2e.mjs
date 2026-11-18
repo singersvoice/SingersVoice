@@ -384,14 +384,14 @@ try {
   await bob.page.getByRole('button', { name: 'Stage setup' }).click();
   await bob.page.locator('.sheet').waitFor();
   check(/Singer 2/.test(await bob.page.locator('.sheet .btn.accent').first().innerText()), "bob sings the song's second part by default — the one alice did not");
-  await bob.page.keyboard.press('Escape');
-  await bob.page.locator('.sheet').waitFor({ state: 'detached', timeout: 5000 }).catch(() => undefined);
+  await bob.page.locator('.sheet').getByRole('button', { name: 'Close' }).click(); // (Escape reaches the window only once the page has the focus; the X always does)
+  await bob.page.locator('.sheet').waitFor({ state: 'detached', timeout: 10000 });
   check((await bob.page.locator('.lyrics').count()) === 1, 'the lyrics are there: the song came from the track database');
   await bob.page.getByRole('button', { name: 'Voice FX' }).click();
   await bob.page.locator('.sheet').waitFor();
   check((await bob.page.locator('.sheet [data-tempo][disabled]').count()) === 1 && (await bob.page.locator('.sheet [data-key-shift][disabled]').count()) === 1, 'tempo and key are fixed on a join (the show is sung as it was)');
-  await bob.page.keyboard.press('Escape');
-  await bob.page.locator('.sheet').waitFor({ state: 'detached', timeout: 5000 }).catch(() => undefined);
+  await bob.page.locator('.sheet').getByRole('button', { name: 'Close' }).click();
+  await bob.page.locator('.sheet').waitFor({ state: 'detached', timeout: 10000 });
   await bob.page.screenshot({ path: `${out}/bob-join-stage.png` });
   const bobId = await singThrough(bob);
   check(/^perf-/.test(bobId), `bob sang his part through; the take saved itself (${bobId})`);

@@ -101,6 +101,42 @@ own history** (first, last, count) and, when they made one, their **shared copy'
   row; several open on a tap; several artists cascade one level more — beside the singer's own Drive
   matches, the catalog entries the database does not answer with already, and (on Search) YouTube.
 
+### Songs you prefer, bookmarks, Recommended (`packages/protocol/prefs.ts`, `lib/prefs.ts`, `lib/bookmarks.ts`)
+
+- **The preference** (Settings → *Songs you prefer*): the **languages** a singer sings in and the
+  **countries** whose songs they like, as chips — tap to pick, tap again to drop — kept on the account
+  (`users.prefs`, `GET/PUT /prefs`, replaced whole; only known names are kept: `SONG_LANGUAGES`, the
+  list the title parser reads languages off, and `SONG_COUNTRIES`, each country standing for the
+  languages its songs are mostly in). The device remembers a copy (`sv.songPrefs`) so the portal has
+  it the moment it opens. A singer who set nothing is **asked on the spot**: the Recommended tab and
+  the public catalog show a dropdown (*Which songs do you prefer?* — a language or a country, with
+  *Set it once in Settings* beside it); the pick lives in the session on that device (`sv.songPick`),
+  never on the account.
+- **Recommended** (`portals/tracks/Recommended.tsx`, `GET /tracks/recommended?languages=`): the songs
+  of the track database in those languages — `track_registry.language`, as the title parser read it,
+  the Track Maker set it or the owner corrected it — **the most sung first** (`SUM(access_count)` by
+  song, then the latest access), grouped and drawn as the All tab's tree, with the same Sing and
+  preview (`useRecordActions`). The **public catalog** keeps to the same languages (`GET
+  /catalog/tracks?languages=`, by the language the entry was published with), with *Every language*
+  one tap away; with nothing set, the dropdown is there too.
+- **Bookmarks**: the **star on every song's row** — a record of the database (All, Recommended), a
+  public catalog entry, a YouTube result, a track of your own Drive (registered with the database on
+  the first tap, as a Sing would, so the others on a stage can sing it from your bookmark) — keeps the
+  song on the account (`bookmarks`: one row per song per singer, keyed `<kind>:<ref>`, `PUT /bookmarks/
+  :key` to keep or replace, `DELETE` to drop, `GET /bookmarks` the latest first). The browser holds
+  them as one map (`lib/bookmarks.ts`), so every star everywhere shows the same state, kept at once
+  on a tap and put back if the service refuses. The **Bookmarks tab** lists them, each saying what it
+  is (track database · public catalog · YouTube) and singable from there the way its kind is sung
+  (`singBookmark`: the copy you have, else the record fetched and kept, the entry pulled, the video
+  fetched into your Drive).
+- **On a live stage, bookmarks are shared**: `GET /meets/:id/bookmarks` answers every stage singer's
+  bookmarks together (the singers in the stage slots, by account), each saying **whose** (`by`), to
+  anyone in the meet — so five singers on stage see five singers' bookmarks. The Recommended tab, while
+  the room is mounted (the room follows you), shows them first, named for the meet, read every few
+  seconds; the **song picker** in the room offers them above the list (*Bookmarked by the singers on
+  stage*), each a Pick away — a database record or a catalog entry as a pick of its own, a YouTube
+  bookmark fetched into the picker's Drive first and shared on the way like any track of yours.
+
 ### A YouTube song track (`lib/ytTracks.ts`, `packages/protocol/ytTracks.ts`, `services/relay/src/yt.mjs`)
 
 A karaoke video found on YouTube becomes a track of the singer's own, with its words in the picture:

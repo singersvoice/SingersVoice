@@ -208,3 +208,12 @@ export const IcSkipBack = (p: P) => (
     <path d="M18 5v14l-9-7zM6 5v14" />
   </svg>
 );
+/** A bookmark's star: outlined when not kept, filled when it is. */
+export const IcStar = (p: P & { filled?: boolean }) => {
+  const { filled, ...rest } = p;
+  return (
+    <svg {...base(rest)}>
+      <path d="m12 3.2 2.7 5.6 6.1.8-4.5 4.3 1.1 6.1L12 17.1 6.6 20l1.1-6.1L3.2 9.6l6.1-.8z" fill={filled ? 'currentColor' : 'none'} />
+    </svg>
+  );
+};

@@ -11,6 +11,7 @@ export * from './roles.ts';
 export * from './plans.ts';
 export * from './coupons.ts';
 export * from './registry.ts';
+export * from './prefs.ts';
 export * from './ytTracks.ts';
 export * from './api.ts';
 export * from './backgrounds.ts';
