@@ -62,10 +62,22 @@ interface Peer {
   retryAt: number;
   /** The small message channel of this link (null where the browser has none). */
   dc: RTCDataChannel | null;
+  /** Their round trip (speakers out, microphone in), as they announced it over the channel; null until they did. */
+  rtMs: number | null;
+  /** The way here, measured on the link (half the round trip time, the jitter buffer, encode and decode); null until measured. */
+  netMs: number | null;
+  /** The last jitter-buffer counters read, for the recent average. */
+  jb: { delay: number; count: number } | null;
+  /** The hold applied to their voice and picture here (align.ts), ms. */
+  playoutMs: number;
 }
 
-/** What travels over the mesh's message channel. */
-export type MeshMessage = { type: 'changed' };
+/** What travels over the mesh's message channel: "something changed, fetch the state", and a singer's round trip (align.ts). */
+export type MeshMessage = { type: 'changed' } | { type: 'rt'; ms: number };
+/** Encode, decode and the capture pipeline, which the link's own statistics do not see (ms). */
+const CODEC_MS = 30;
+/** How often the links' latency is read (ms). */
+const LATENCY_SAMPLE_MS = 2000;
 /** The channel's negotiated id (the same on both sides of every link). */
 const DC_ID = 1;
 
@@ -97,6 +109,9 @@ export class PerformerMesh {
   /** A message from a peer over the mesh (see `say`). */
   onMessage: ((from: string, message: MeshMessage) => void) | null = null;
   private localAudio: MediaStreamTrack | null = null;
+  /** My round trip, announced to every peer when their channel opens (and again when it changes). */
+  private roundTripMs: number | null = null;
+  private latencyTimer: ReturnType<typeof setInterval> | undefined;
   /** A publisher's show view only receives (never sends a camera). */
   private readonly receiveOnly: boolean;
   /** Ask every singer for their vocal (and offer mine): the saved show needs the whole mix. */
@@ -125,6 +140,84 @@ export class PerformerMesh {
       /* STUN defaults */
     }
     this.schedule(0);
+    clearInterval(this.latencyTimer);
+    this.latencyTimer = setInterval(() => void this.sampleLatency(), LATENCY_SAMPLE_MS);
+  }
+
+  // ---- timing (align.ts): what each singer's voice arrives behind the shared clock by, and the hold applied to it ----
+
+  /** My round trip (speakers out, microphone in): told to every linked peer now, and to each new link as it opens. */
+  announceRoundTrip(ms: number): void {
+    const v = Math.max(0, Math.round(ms));
+    if (this.roundTripMs === v) return;
+    this.roundTripMs = v;
+    this.say({ type: 'rt', ms: v });
+  }
+
+  /** Every singer linked from the stage (never a publisher's view, which sends nothing): how far behind the shared clock their voice reaches this device before the hold applied here (null until known). */
+  arrivals(): { id: string; arrivalMs: number | null }[] {
+    return [...this.peers.values()].filter((p) => p.state === 'connected' && this.wanted.has(p.id)).map((p) => ({ id: p.id, arrivalMs: p.rtMs !== null && p.netMs !== null ? Math.max(0, p.rtMs + p.netMs - p.playoutMs) : null }));
+  }
+
+  /** What one peer's voice is held back by here (ms; 0 = nothing applied). */
+  playoutDelay(id: string): number {
+    return this.peers.get(id)?.playoutMs ?? 0;
+  }
+
+  /**
+   * Hold a peer's voice and picture back by `ms` in the browser's own jitter buffer (`jitterBufferTarget`; the older
+   * `playoutDelayHint` where that is all there is): the two stay together, and the sound is never bent — the buffer
+   * simply plays out that much later.
+   */
+  setPlayoutDelay(id: string, ms: number): void {
+    const p = this.peers.get(id);
+    if (!p || !this.wanted.has(id)) return; // a singer's link alone: a publisher's view is never held
+
+    const v = Math.max(0, Math.min(4000, Math.round(ms)));
+    p.playoutMs = v;
+    for (const r of p.pc.getReceivers()) {
+      const rx = r as unknown as Record<string, unknown>;
+      try {
+        if ('jitterBufferTarget' in rx) rx.jitterBufferTarget = v;
+        else if ('playoutDelayHint' in rx) rx.playoutDelayHint = v / 1000;
+      } catch {
+        /* a receiver that will not take it */
+      }
+    }
+  }
+
+  /** The way here on every link, from its statistics: half the round trip, the jitter buffer's recent average, encode and decode. */
+  private async sampleLatency(): Promise<void> {
+    for (const p of this.peers.values()) {
+      if (p.state !== 'connected') continue;
+      try {
+        const stats = await p.pc.getStats();
+        let rttMs: number | null = null;
+        let jbDelay = 0;
+        let jbCount = 0;
+        const pairs = new Map<string, { currentRoundTripTime?: number; nominated?: boolean; state?: string }>();
+        let selected: string | null = null;
+        stats.forEach((r: { type: string; id: string; kind?: string; selectedCandidatePairId?: string; currentRoundTripTime?: number; nominated?: boolean; state?: string; jitterBufferDelay?: number; jitterBufferEmittedCount?: number }) => {
+          if (r.type === 'transport' && r.selectedCandidatePairId) selected = r.selectedCandidatePairId;
+          if (r.type === 'candidate-pair') pairs.set(r.id, r);
+          if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+            jbDelay += r.jitterBufferDelay ?? 0;
+            jbCount += r.jitterBufferEmittedCount ?? 0;
+          }
+        });
+        const pair = (selected && pairs.get(selected)) ?? [...pairs.values()].find((c) => c.nominated && c.state === 'succeeded') ?? [...pairs.values()].find((c) => c.currentRoundTripTime !== undefined);
+        if (pair?.currentRoundTripTime !== undefined) rttMs = pair.currentRoundTripTime * 1000;
+        // The jitter buffer's delay over the last sample (the counters are lifetime sums), in ms per emitted sample.
+        let jbMs: number | null = null;
+        if (p.jb && jbCount > p.jb.count) jbMs = ((jbDelay - p.jb.delay) / (jbCount - p.jb.count)) * 1000;
+        else if (!p.jb && jbCount > 0) jbMs = (jbDelay / jbCount) * 1000;
+        p.jb = { delay: jbDelay, count: jbCount };
+        if (rttMs !== null && jbMs !== null) p.netMs = Math.round(rttMs / 2 + jbMs + CODEC_MS);
+        else if (rttMs !== null && p.netMs === null && p.audio === null) p.netMs = Math.round(rttMs / 2 + CODEC_MS); // no vocal on this link yet: the network alone
+      } catch {
+        /* stats unavailable */
+      }
+    }
   }
 
   /** The alpha-packed stream to send (replace at any time; null stops sending). */
@@ -246,7 +339,7 @@ export class PerformerMesh {
 
   private connect(id: string, inbound: boolean): void {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers as RTCIceServer[], bundlePolicy: 'max-bundle' });
-    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0, dc: null, token: Math.random().toString(36).slice(2, 10), remoteToken: null };
+    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0, dc: null, token: Math.random().toString(36).slice(2, 10), remoteToken: null, rtMs: null, netMs: null, jb: null, playoutMs: 0 };
     this.peers.set(id, peer);
     // The message channel, made before the first offer on both sides with the same id: part of the link from the start, never a renegotiation.
     try {
@@ -255,8 +348,17 @@ export class PerformerMesh {
         try {
           const m = JSON.parse(String(e.data)) as MeshMessage;
           if (m && m.type === 'changed') this.onMessage?.(id, m);
+          else if (m && m.type === 'rt' && Number.isFinite(Number(m.ms))) peer.rtMs = Math.max(0, Math.round(Number(m.ms)));
         } catch {
           /* not ours */
+        }
+      };
+      dc.onopen = () => {
+        if (this.roundTripMs === null) return;
+        try {
+          dc.send(JSON.stringify({ type: 'rt', ms: this.roundTripMs } satisfies MeshMessage));
+        } catch {
+          /* closing */
         }
       };
       peer.dc = dc;
@@ -385,7 +487,10 @@ export class PerformerMesh {
     p.pc.onicecandidate = null;
     p.pc.ontrack = null;
     p.pc.onconnectionstatechange = null;
-    if (p.dc) p.dc.onmessage = null;
+    if (p.dc) {
+      p.dc.onmessage = null;
+      p.dc.onopen = null;
+    }
     p.pc.close();
     this.onRemote?.(id, null, 'failed');
     if (p.audio) this.onRemoteAudio?.(id, null);
@@ -484,6 +589,7 @@ export class PerformerMesh {
   close(): Promise<void> {
     this.running = false;
     clearTimeout(this.timer);
+    clearInterval(this.latencyTimer);
     return Promise.all([...this.peers.keys()].map((id) => this.drop(id, true))).then(() => undefined);
   }
 }

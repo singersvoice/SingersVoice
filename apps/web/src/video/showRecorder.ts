@@ -15,6 +15,7 @@ import type { BackgroundItem, MixBatch } from '@singersvoice/protocol';
 import type { AudioEngine } from '../audio/engine.ts';
 import { MixBroadcaster } from '../audio/mixBroadcast.ts';
 import { MixBus } from '../audio/mixBus.ts';
+import { LAG_MAX_MS } from './align.ts';
 import { BrandMark } from './brandMark.ts';
 import { CanvasTrack, canvasTracks } from './canvasTrack.ts';
 import { StageCompositor, type StagePerformer } from './stage.ts';
@@ -83,7 +84,8 @@ class DelayedCanvas {
 
   constructor(
     private readonly src: HTMLCanvasElement,
-    private readonly frames: number,
+    /** How many frames back; a change takes effect on the next tick (the ring is remade). */
+    public frames: number,
   ) {}
 
   tick(): void {
@@ -169,7 +171,27 @@ export class ShowRecorder {
   running = false;
   readonly width: number;
   readonly height: number;
-  readonly lagMs = VOCAL_LAG_MS;
+  /** How far this device's own sources are held back to meet the others (align.ts sets it per song; VOCAL_LAG_MS at least). */
+  private lag = VOCAL_LAG_MS;
+  get lagMs(): number {
+    return this.lag;
+  }
+  /**
+   * The lag for the coming song (align.ts): the own voice and picture wait this long, the track this plus the round
+   * trip. Set at the count-in, never while a take is being recorded (a delay that moves mid-song bends the sound).
+   */
+  setLag(ms: number): void {
+    const v = Math.max(VOCAL_LAG_MS, Math.round(ms));
+    if (v === this.lag || this.recording) return;
+    this.lag = v;
+    const frames = Math.max(1, Math.round((v / 1000) * SHOW_FPS));
+    for (const d of this.delayed.values()) d.frames = frames;
+    if (this.audio && this.engine) {
+      const lagS = v / 1000;
+      this.audio.localVocal.delayTime.value = lagS;
+      this.audio.localTrack.delayTime.value = lagS + this.engine.roundTripMs / 1000;
+    }
+  }
 
   constructor(width = SHOW_WIDTH, height = SHOW_HEIGHT) {
     this.width = width;
@@ -581,10 +603,11 @@ export class ShowRecorder {
     const lagS = this.lagMs / 1000;
     // This device's own sources wait for the others; the track also waits the round trip the singer
     // sings against (speakers out, microphone in, the chain), so the voice lands on the beat it was sung to.
-    const localTrack = ctx.createDelay(1);
+    // (The others are each held back by what they are early by, in their link's jitter buffer — align.ts.)
+    const localTrack = ctx.createDelay(LAG_MAX_MS / 1000 + 1);
     localTrack.delayTime.value = lagS + engine.roundTripMs / 1000;
     localTrack.connect(bus.backingIn);
-    const localVocal = ctx.createDelay(1);
+    const localVocal = ctx.createDelay(LAG_MAX_MS / 1000 + 1);
     localVocal.delayTime.value = lagS;
     const taps: { node: AudioNode; to: AudioNode }[] = [];
     const player = engine.player;
@@ -602,7 +625,7 @@ export class ShowRecorder {
     // The audience hears this very mix: the host's device sends it out a second at a time (WebCodecs/Opus).
     if (this.broadcast) {
       const send = this.broadcast;
-      this.broadcaster = new MixBroadcaster(ctx, send, (t) => engine.player?.positionAt(t - lagS) ?? 0);
+      this.broadcaster = new MixBroadcaster(ctx, send, (t) => engine.player?.positionAt(t - this.lagMs / 1000) ?? 0);
       this.broadcaster.start(bus.output);
     }
   }

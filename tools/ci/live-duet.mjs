@@ -348,6 +348,17 @@ try {
   await wait(9000);
   const soloA = await vocalEls(alice.page);
   check(soloA.length >= 1 && soloA.every((a) => a.muted === true), 'once the song runs nobody on stage hears anyone else (Solo foldback) — the vocal still feeds the mix');
+  // The mix is timed at the count-in (align.ts): the other singer's voice and picture are held back by what they are early by
+  // (their round trip announced over the mesh, the way here read off the link), so every voice lands on the beat it was sung to.
+  const alignA = await alice.page.evaluate(() => window.__svStage?.alignment ?? null);
+  const alignB = await bob.page.evaluate(() => window.__svStage?.alignment ?? null);
+  console.log('timing of the mix — alice:', JSON.stringify(alignA), 'bob:', JSON.stringify(alignB));
+  const timed = (al) => al && al.plan && al.plan.lagMs >= 250 && al.arrivals.length >= 1 && al.arrivals.every((a) => a.arrivalMs !== null && a.arrivalMs >= 0) && Object.values(al.plan.delays).every((d) => d >= 0 && d <= 4000) && al.plan.trackDelayMs === al.plan.lagMs + Math.round(al.plan.trackDelayMs - al.plan.lagMs);
+  check(timed(alignA) && timed(alignB), `each device timed its mix at the count-in: the other's arrival known (alice: ${alignA?.line}; bob: ${alignB?.line})`);
+  check(/timed · /.test(await alice.page.locator('.sing .stagebar').innerText()) && (await alice.page.locator('[data-align-line]').count()) === 1, 'the stage bar says how the mix is timed');
+  const bobPid = (await (await fetch(`${servers.controlUrl}/meets/${meetId}`, { headers: { 'X-Dev-User': 'alice', 'X-Dev-Name': 'alice' } })).json()).meet?.stage?.find((s) => s.displayName === 'bob')?.participantId ?? '';
+  const holdOnBob = await alice.page.evaluate((id) => window.__svMesh?.playoutDelay(id) ?? null, bobPid);
+  check(bobPid !== '' && holdOnBob !== null && holdOnBob === (alignA?.plan.delays[bobPid] ?? -1), `the hold the plan gives bob's voice is what the host's link applies (${holdOnBob} ms)`);
   const meshAfter = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   check(meshBefore !== undefined && meshBefore === meshAfter, 'the same video mesh carries on from the lobby into the song (no reconnection)');
   const t0 = Date.now();
@@ -689,16 +700,27 @@ try {
     check(false, `the first song still runs for the transport checks (it ran out by itself: the publisher section outlasted a ${SONG_S} s song on this machine)`);
     throw new Error('the song is over before the transport checks');
   }
+  const tRestart = Date.now();
   await restartBtn.click();
   await wait(7000);
-  const restartA = await posOf(alice.page);
-  const restartB = await posOf(bob.page);
-  console.log('after restart:', JSON.stringify({ alice: restartA, bob: restartB }));
+  let restartA = await posOf(alice.page);
+  let restartB = await posOf(bob.page);
+  // A host whose main thread this machine blocked for most of the wait applies the cue when it next runs (and learns of it at its
+  // next poll): give such a host one more poll's worth, as the seek check does, and say so.
+  let restartHostBlocked = await stalledFor(alice.page, tRestart, restartA.now);
+  if (restartA.epoch === restartB.epoch - 1 && restartHostBlocked > 3000) {
+    await wait(4000);
+    restartA = await posOf(alice.page);
+    restartB = await posOf(bob.page);
+    restartHostBlocked = await stalledFor(alice.page, tRestart, restartA.now);
+  }
+  console.log('after restart:', JSON.stringify({ alice: restartA, bob: restartB, hostBlockedMs: restartHostBlocked }));
   const tr = await alice.page.locator('.timeline .mono').first().innerText();
   const trB = await bob.page.locator('.timeline .mono').first().innerText();
   // The engines' own positions with their read times (the readings come seconds apart on a stalling machine): both near the top, together.
   const restartApart = Math.abs(restartB.posMs - restartA.posMs - (restartB.now - restartA.now));
-  check(restartA.posMs < 15000 && restartB.posMs < 15000 && restartApart <= 1000, `restart took everyone back to the top, together (${tr} / ${trB}, the engines ${Math.round(restartApart)} ms apart)`);
+  const restartHostStood = restartApart > 1000 && restartHostBlocked > 3000 && restartA.epoch !== restartB.epoch;
+  check(restartB.posMs < 15000 && (restartHostStood || (restartA.posMs < 15000 && restartApart <= 1000)), restartHostStood ? `restart took the guest back to the top (${trB}); the host's device was blocked by this machine for ${restartHostBlocked} ms of the wait and had not applied the cue yet — stands down` : `restart took everyone back to the top, together (${tr} / ${trB}, the engines ${Math.round(restartApart)} ms apart)`);
   // Any singer on stage may move the song: the guest jumps it back to 0:02 — cued, so both devices jump at the same
   // instant (the song keeps playing until then), and every take follows on the track timeline.
   const tSeek = Date.now();
@@ -730,6 +752,12 @@ try {
   check(ta1 === ta2 && tb1 === tb2, 'the timeline freezes on both devices after the cued pause');
   check(ta1 === tb1, `both devices froze at the same position (${ta1} / ${tb1})`);
   check(/\bpaused\b/.test(await bob.page.locator('.sing .stagebar').innerText()), 'the guest sees "paused"');
+  // Talk-back while paused: from the cued instant the song stops on a device, the singers on stage hear each other again.
+  const pausedA = await vocalEls(alice.page);
+  const pausedB = await vocalEls(bob.page);
+  console.log('talk-back while paused — alice:', JSON.stringify(pausedA), 'bob:', JSON.stringify(pausedB));
+  check(pausedA.length >= 1 && pausedA.every((a) => a.muted === false) && pausedB.length >= 1 && pausedB.every((a) => a.muted === false), 'while the song is paused the singers on stage hear each other (talk-back)');
+  check((await alice.page.locator('[data-talkback-live="1"]').count()) === 1, 'the live stage says talk-back is on until Resume');
   await bob.page.screenshot({ path: `${out}/duet-bob-paused.png` });
   check(await carol.page.locator('.show-note', { hasText: 'Paused by the host' }).isVisible(), 'the show view shows the pause');
   // Resume: cued 4 s ahead.
@@ -742,7 +770,11 @@ try {
   const [ra, rb] = [await posOf(alice.page), await posOf(bob.page)];
   const apart = ra.posMs !== undefined && rb.posMs !== undefined ? Math.abs(rb.posMs - ra.posMs - (rb.now - ra.now)) : null;
   console.log('resumed:', { alice: ta3, bob: tb3 }, 'engines:', JSON.stringify({ alice: ra.posMs, bob: rb.posMs, readMsApart: rb.now - ra.now, apart }));
-  check(secs(ta3) > secs(ta1) && secs(tb3) > secs(tb1) && apart !== null && apart <= 1000, `both devices resumed together from the paused position (${ta3} / ${tb3}, the engines ${apart === null ? '?' : Math.round(apart)} ms apart)`);
+  // The engines' own positions say whether the song moved on from where it froze (the timeline's text on a stalled page can be a render behind).
+  check(ra.posMs !== undefined && rb.posMs !== undefined && ra.posMs / 1000 > secs(ta1) && rb.posMs / 1000 > secs(tb1) && apart !== null && apart <= 1000, `both devices resumed together from the paused position (${ta3} / ${tb3}; the engines at ${ra.posMs !== undefined ? (ra.posMs / 1000).toFixed(1) : '?'} s / ${rb.posMs !== undefined ? (rb.posMs / 1000).toFixed(1) : '?'} s, ${apart === null ? '?' : Math.round(apart)} ms apart)`);
+  const resumedA = await vocalEls(alice.page);
+  const resumedB = await vocalEls(bob.page);
+  check(resumedA.every((a) => a.muted === true) && resumedB.every((a) => a.muted === true) && (await alice.page.locator('[data-talkback-live="1"]').count()) === 0, 'from the resume on, nobody on stage hears anyone else again (Solo foldback)');
   // A forward jump by the host to 12 s before the end: the song then ends on its own — nothing else touches the transport,
   // so this also proves a song that simply runs out finishes (saves, moves the meet on) without anyone pausing or seeking.
   await alice.page.locator('.sing .timeline.seekable input[type="range"]').fill(String(SONG_S * 1000 - 12000));

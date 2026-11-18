@@ -21,6 +21,7 @@ import type { PerformanceSummary } from '../../lib/storage/types.ts';
 import { media, needsReconnect } from '../../state/session.ts';
 import { appSettings } from '../../state/settings.ts';
 import { chapterCue } from '../../video/chapters.ts';
+import { alignLine, alignPlan, delayFor, type AlignPlan, type PeerArrival } from '../../video/align.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
 import { LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
@@ -64,13 +65,15 @@ export interface RoomStage {
   cameraLine: string;
   /** What each source brings to this device's mix (the host's: what the audience, the film and the takes get), in words, refreshed every second: "mix: you −18 · Team −22 · track −20". */
   mixLine: string;
+  /** The timing of the mix for this song (align.ts): what each other singer is held back by, and the lag — '' before the first count-in. */
+  alignLine: string;
   /** Make the video link to a performer again from scratch (a plain Reconnect for a picture that stands still). */
   reconnect: (id: string) => void;
   /** This account may send its picture (a dual account); an audio-only account sings with sound alone. */
   videoAllowed: boolean;
 }
 
-export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; engine: AudioEngine | null; restartCamera: () => Promise<void> }): RoomStage {
+export function useRoomStage(session: MeetSession, meet: Meet, you: Participant, camera: Camera, opts: { preparing: boolean; engine: AudioEngine | null; /** The song is paused on this device: the stage talks until the resume. */ paused?: boolean; restartCamera: () => Promise<void> }): RoomStage {
   const feed = useMemo(() => new LocalFeed(), []);
   const compositor = useMemo(() => new StageCompositor('show'), []);
   const show = useMemo(() => new ShowRecorder(), []);
@@ -314,12 +317,14 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   useEffect(() => {
     mesh?.setLocalAudio(micOpen && onStage ? (opts.engine?.vocalStream()?.getAudioTracks()[0] ?? null) : null);
   }, [mesh, micOpen, onStage, opts.engine]);
-  // Talk-back: the singers on stage hear each other until the countdown; from then to the end of the
-  // song nobody on stage hears anyone (Solo foldback). The host's device keeps ONE mix going for the
-  // audience the whole time it is on stage with the mic open — the talk between songs, the count-in,
-  // the song (whose recording hooks onto the same bus) — so what the audience hears never breaks off
-  // at a song's start: a torn-down bus used to leave them a silence of a count-in and a restart.
-  const songRunning = meet.state === 'countdown' || meet.state === 'live';
+  // Talk-back: the singers on stage hear each other until the countdown, and again while the song is
+  // paused (from the cued instant it stops on this device until the resume is cued); from the count-in
+  // to the end of the song, and from a resume on, nobody on stage hears anyone (Solo foldback). The
+  // host's device keeps ONE mix going for the audience the whole time it is on stage with the mic open
+  // — the talk between songs, the count-in, the song (whose recording hooks onto the same bus) — so
+  // what the audience hears never breaks off at a song's start: a torn-down bus used to leave them a
+  // silence of a count-in and a restart.
+  const songRunning = meet.state === 'countdown' || (meet.state === 'live' && !opts.paused);
   const host = you.userId === meet.hostUserId;
   useEffect(() => {
     show.setHearOthers(onStage && !songRunning);
@@ -357,9 +362,52 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   // ---- the film of the meet (the host's device): the whole meet as one video in the host's Drive ----
   const film = useMemo(() => new MeetRecorder(show), [show]);
+  // ---- timing the mix (align.ts): at every count-in, each other singer's voice is held back by what it is early by ----
+  const [alignment, setAlignment] = useState<{ plan: AlignPlan; arrivals: PeerArrival[]; line: string } | null>(null);
+  const alignRef = useRef<AlignPlan | null>(null);
+  const nameOf = (id: string) => meet.stage.find((s) => s.participantId === id)?.displayName.split(' ')[0] || 'a singer';
   useEffect(() => {
-    (window as unknown as { __svStage?: unknown }).__svStage = { show, engine: opts.engine, film }; // support / e2e: the mix this device builds, the film of the meet
-  }, [show, opts.engine, film]);
+    const engine = opts.engine;
+    if (mesh && engine) mesh.announceRoundTrip(engine.roundTripMs); // the others fit my voice by it
+  }, [mesh, opts.engine, onStage, peerKey]);
+  useEffect(() => {
+    const engine = opts.engine;
+    if (!mesh || !engine || !onStage || meet.state !== 'countdown') return;
+    // Half a second into the count-in: the round trips announced on fresh links have landed, the links' latency has been read.
+    const t = setTimeout(() => {
+      const arrivals = mesh.arrivals();
+      const plan = alignPlan(engine.roundTripMs, arrivals);
+      show.setLag(plan.lagMs);
+      for (const [id, ms] of Object.entries(plan.delays)) mesh.setPlayoutDelay(id, ms);
+      alignRef.current = plan;
+      setAlignment({ plan, arrivals, line: alignLine(plan, nameOf) });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [mesh, opts.engine, onStage, meet.state, meet.kickstartEpochMs]);
+  // A singer whose voice arrives (or whose latency is first known) during the song is fitted to the plan as it stands; between songs every hold is lifted (talk-back at once).
+  useEffect(() => {
+    if (!mesh) return;
+    if (!songRunning) {
+      for (const { id } of mesh.arrivals()) if (mesh.playoutDelay(id)) mesh.setPlayoutDelay(id, 0);
+      alignRef.current = null;
+      return;
+    }
+    const t = setInterval(() => {
+      const plan = alignRef.current;
+      if (!plan) return;
+      for (const a of mesh.arrivals()) {
+        if (a.arrivalMs === null || a.id in plan.delays) continue;
+        const ms = delayFor(plan, a.arrivalMs);
+        plan.delays[a.id] = ms;
+        mesh.setPlayoutDelay(a.id, ms);
+        setAlignment((x) => (x ? { ...x, line: alignLine(plan, nameOf) } : x));
+      }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [mesh, songRunning]);
+  useEffect(() => {
+    (window as unknown as { __svStage?: unknown }).__svStage = { show, engine: opts.engine, film, alignment }; // support / e2e: the mix this device builds, the film of the meet, the timing plan
+  }, [show, opts.engine, film, alignment]);
   const filmWanted = app.recordMeet;
   const meetOpen = meetIsOpen(meet);
   /** Everyone who stood on stage while the film ran (the manifest names them). */
@@ -395,5 +443,5 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect, cameraLine, mixLine, videoAllowed };
+  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect, cameraLine, mixLine, alignLine: alignment?.line ?? '', videoAllowed };
 }

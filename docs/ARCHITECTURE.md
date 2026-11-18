@@ -523,7 +523,18 @@ performers linked) in the card and never in the frame, with *Show view* and *Pub
 Every publisher view — the show view, each tile — is its own participant resumed only by its own
 token, so monitoring a meet and running its show view at the same time never fight over one video
 link; the first four tiles connect by themselves, the rest on request.
-4. Performers hear only themselves + the track (Solo foldback). **The audience hears the mix**
+4. Performers hear only themselves + the track (Solo foldback) from the count-in to the end of the
+   song — and from a resume on; **while the song is paused** (from the cued instant it stops on a
+   device until the resume is cued) and between songs, the singers on stage hear each other again
+   (talk-back; the live stage bar says *talk-back on until Resume*). **The mix is timed at every
+   count-in** (`video/align.ts`): each singer announces their round trip over the mesh's channel,
+   each link's latency is read off its statistics (half the round trip time, the jitter buffer's
+   recent average, encode and decode), and half a second into the count-in every other singer's voice
+   and picture are held back in the browser's own jitter buffer (`jitterBufferTarget`) by what they
+   are early by against the track in the mix — the lag plus this singer's round trip — so every voice
+   lands on the beat it was sung to; a voice arriving later than the lag allows makes the lag grow
+   for that song (never past 1.5 s); a singer linking up mid-song is fitted to the plan as it stands;
+   the holds are lifted between songs. **The audience hears the mix**
    (`audio/mixBroadcast.ts` → `/meets/:id/mix` → `audio/mixPlayer.ts`): on the host's device an
    AudioWorklet (`sv-mix-tap`) taps the show recorder's limiter output in 20 ms blocks, a WebCodecs
    `AudioEncoder` (Opus, 48 kHz mono, 64 kbps) encodes them, and one batch a second is POSTed to the

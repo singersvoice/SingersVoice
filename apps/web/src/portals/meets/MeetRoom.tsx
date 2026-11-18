@@ -284,7 +284,9 @@ function Room(props: {
   onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>, singers: { slot: number; displayName: string; userId?: string }[]) => void;
 }) {
   const { session, meet, you, track, camera, engine } = props;
-  const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, engine, restartCamera: () => restartCamera(engine, camera) });
+  // The song is paused on THIS device (at the cued instant, not when the next poll says so): talk-back opens for the pause.
+  const [paused, setPaused] = useState(false);
+  const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, engine, paused, restartCamera: () => restartCamera(engine, camera) });
   const onStage = you.slot !== null;
   const live = meet.state === 'countdown' || meet.state === 'live';
   // A take in progress keeps the live stage mounted until it wraps up, even once the meet is back in
@@ -293,7 +295,7 @@ function Room(props: {
   const liveLoaded = useRef<NonNullable<MeetTrack['loaded']> | null>(null);
   if (live && track?.loaded) liveLoaded.current = track.loaded;
 
-  if ((live || singing) && onStage && liveLoaded.current && engine) return <LiveStage session={session} meet={meet} you={you} loaded={liveLoaded.current} engine={engine} camera={camera} stage={stage} track={track} prepared={props.prepared} onPrepare={props.onPrepare} onTake={props.onTake} onSinging={setSinging} participants={props.participants} />;
+  if ((live || singing) && onStage && liveLoaded.current && engine) return <LiveStage session={session} meet={meet} you={you} loaded={liveLoaded.current} engine={engine} camera={camera} stage={stage} track={track} prepared={props.prepared} onPrepare={props.onPrepare} onTake={props.onTake} onSinging={setSinging} onPaused={setPaused} participants={props.participants} />;
 
   if (meet.state === 'ended' || meet.state === 'expired') return <Ended session={session} meet={meet} you={you} />;
 
@@ -945,6 +947,8 @@ function LiveStage(props: {
   onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>, singers: { slot: number; displayName: string; userId?: string }[]) => void;
   /** A take is in progress (from the first cue until it wraps up). */
   onSinging: (singing: boolean) => void;
+  /** The song is paused on this device (from the cued instant to the resume) — the stage talks meanwhile. */
+  onPaused: (paused: boolean) => void;
   participants: Participant[];
 }) {
   const { session, meet, engine, camera, loaded, stage } = props;
@@ -1063,6 +1067,7 @@ function LiveStage(props: {
         player.pause();
       }
       pausedLocally.current = false;
+      props.onPaused(false); // the resume is cued: from this moment nobody on stage hears anyone else again
       player.play(t0, offsetMs);
       engine.recorder?.resume(t0);
       const delta = offsetMs - recPos.current;
@@ -1102,6 +1107,7 @@ function LiveStage(props: {
     const doPause = (ctxAt: number) => {
       if (pausedLocally.current) return;
       pausedLocally.current = true;
+      props.onPaused(true);
       if (player.playing) {
         recPos.current = player.positionAt(ctxAt);
         player.pause();
@@ -1198,6 +1204,7 @@ function LiveStage(props: {
       // cued from where the song is), and the next song starts from the top.
       scheduledEpoch.current = 0;
       pausedLocally.current = false;
+      props.onPaused(false);
       takeOrigin.current = 0;
       setStarted(false);
       setCountdown(null);
@@ -1235,6 +1242,7 @@ function LiveStage(props: {
   const connected = others.filter((s) => peerStates[s.participantId!] === 'connected').length;
   const level = engine.recorder?.level.value ?? 0;
   const paused = pb.state === 'paused';
+  const micOpenNow = engine.micOpen.value;
 
   return (
     <Page title={meet.title} nav={false} full>
@@ -1248,12 +1256,22 @@ function LiveStage(props: {
           {camOn && blend === 'loading' && <span class="chip">blending you into the stage…</span>}
           {camOn && blend === 'oval' && app.cutout && <span class="chip warn">soft-focus mode</span>}
           {paused && <span class="chip warn">paused</span>}
+          {paused && micOpenNow && stage.show.hearingOthers && (
+            <span class="chip ok" data-talkback-live="1" title="While the song is paused the singers on stage hear each other; from the resume to the end of the song nobody on stage hears anyone else">
+              talk-back on until Resume
+            </span>
+          )}
           {!paused && pauseAt !== null && <span class="chip warn">pausing…</span>}
           {seekTarget !== null && !paused && <span class="chip warn">jumping to {formatMs(seekTarget)}…</span>}
           {host && meet.requests.length > 0 && <span class="chip">wait list · {meet.requests.length} — seated when the song is over</span>}
           {stage.mixLine && (
             <span class="chip faint" data-mix-line={stage.mixLine} title="What each source brings to this device's mix right now — what the audience, the film and the takes get from here">
               {stage.mixLine}
+            </span>
+          )}
+          {stage.alignLine && (
+            <span class="chip faint" data-align-line={stage.alignLine} title="The timing of this device's mix for the song: each other singer's voice and picture held back by what they are early by, so every voice lands on the beat it was sung to; the lag is what this device's own voice and picture wait">
+              timed · {stage.alignLine}
             </span>
           )}
           {stage.still.map((id) => (
