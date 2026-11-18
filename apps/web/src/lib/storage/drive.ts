@@ -20,7 +20,9 @@ import {
   normalizeTrack,
   performanceVideoName,
   safeName,
+  singersLine,
   type DriveFolderKey,
+  type FileEntry,
   type PerformanceChapter,
   type PerformanceManifest,
   type SvFileType,
@@ -29,7 +31,7 @@ import {
 import { extFromMime } from '../decode.ts';
 import { AuthExpiredError, freshToken, type GoogleToken } from '../google.ts';
 import { md5Blob } from '../md5.ts';
-import type { LoadedPerformance, LoadedTrack, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
+import type { LoadedPerformance, PerformanceFiles, LoadedTrack, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
 
 /** Google's API host — or, for the browser tests only, a fake standing in for it (`sv.googleApiBase` on the device). */
 const GOOGLE_API = (() => {
@@ -614,7 +616,7 @@ export class DriveProvider implements StorageProvider {
   // ("Song · Meet [id] · date.mp4"). Its summary rides in the file's appProperties (how it is found
   // and listed) and the whole manifest in its `description`. Delete means delete: the file is gone.
 
-  private perfProps(manifest: PerformanceManifest, media: 'video' | 'vocal', shared: string): Record<string, string> {
+  private perfProps(manifest: PerformanceManifest, media: 'video' | 'vocal', shared: string, cutout: { driveId: string; mimeType: string; bytes: number } | null = null): Record<string, string> {
     return {
       [APP_PROPS.type]: 'performance',
       [APP_PROPS.id]: manifest.performanceId,
@@ -631,6 +633,10 @@ export class DriveProvider implements StorageProvider {
       svExpiresAt: manifest.expiresAt ?? '',
       svMedia: media,
       svShared: shared,
+      // The singer's cut-out video beside the show (join.ts): its file, on the show's own properties, so one query lists it.
+      ...(cutout ? { svCutoutId: cutout.driveId, svCutoutMime: cutout.mimeType, svCutoutBytes: String(cutout.bytes) } : {}),
+      // A take sung over another performance: who is on it, for the list.
+      ...(manifest.join ? { svWith: singersLine(manifest.singers ?? []).slice(0, 60) } : {}),
       // A chapter of a filmed event: the Performances list groups the chapters of one filming and orders them.
       ...(manifest.chapter ? { svEvent: manifest.chapter.eventId, svEventTitle: manifest.chapter.eventTitle.slice(0, 40), svChapter: String(manifest.chapter.index), svChapterKind: manifest.chapter.kind, svChapterAt: manifest.chapter.startedAt, svChapterMs: String(manifest.chapter.startMs), svChapterSong: manifest.chapter.trackTitle.slice(0, 60) } : {}),
     };
@@ -666,6 +672,8 @@ export class DriveProvider implements StorageProvider {
       hasVideo: Boolean(video),
       shared: p.svShared === '1',
       ...(this.chapterOf(p) ? { chapter: this.chapterOf(p) } : {}),
+      ...(p.svCutoutId ? { cutout: { driveId: p.svCutoutId, mimeType: p.svCutoutMime ?? 'video/webm', bytes: Number(p.svCutoutBytes ?? 0) } } : {}),
+      ...(p.svWith ? { with: p.svWith } : {}),
     };
   }
 
@@ -710,15 +718,24 @@ export class DriveProvider implements StorageProvider {
     } as PerformanceManifest;
   }
 
-  async getPerformance(performanceId: string): Promise<LoadedPerformance | null> {
+  async describePerformance(performanceId: string): Promise<{ manifest: PerformanceManifest; summary: PerformanceSummary } | null> {
+    await this.ready();
+    const f = await this.perfFile(performanceId);
+    if (!f) return null;
+    const manifest = f.mimeType === 'application/json' ? await this.downloadJson<PerformanceManifest>(f.id) : this.manifestOf(f);
+    return { manifest, summary: this.perfSummary(f) };
+  }
+
+  async getPerformance(performanceId: string, opts: { cutout?: boolean } = {}): Promise<LoadedPerformance | null> {
     await this.ready();
     const f = await this.perfFile(performanceId);
     if (!f) return null;
     if (f.mimeType === 'application/json') return this.getLegacyPerformance(f);
     const manifest = this.manifestOf(f);
-    const blob = await this.download(f.id);
+    const cutoutId = f.appProperties?.svCutoutId;
+    const [blob, cutout] = await Promise.all([this.download(f.id), opts.cutout && cutoutId ? this.download(cutoutId).catch(() => null) : Promise.resolve(null)]);
     const video = f.appProperties?.svMedia === 'video';
-    return { manifest, vocal: video ? new Blob([], { type: 'audio/wav' }) : blob, video: video ? blob : null };
+    return { manifest, vocal: video ? new Blob([], { type: 'audio/wav' }) : blob, video: video ? blob : null, ...(opts.cutout ? { cutout } : {}) };
   }
 
   /** A performance still in a folder of its own (made before the one-file layout; migrated on the next start). */
@@ -731,21 +748,35 @@ export class DriveProvider implements StorageProvider {
     return { manifest, vocal: vocalBlob, video: videoBlob };
   }
 
-  async savePerformance(manifest: PerformanceManifest, files: { vocal: Blob; video: Blob | null }, onProgress?: Progress): Promise<PerformanceSummary> {
+  async savePerformance(manifest: PerformanceManifest, files: PerformanceFiles, onProgress?: Progress): Promise<PerformanceSummary> {
     await this.ready();
     const media = files.video ?? files.vocal;
     const kind: 'video' | 'vocal' = files.video ? 'video' : 'vocal';
     const ext = files.video ? extFromMime(files.video.type, 'webm') : 'wav';
     const parent = this.folder(manifest.state === 'temp' ? 'temp' : 'performances');
+    const cutoutBlob = files.cutout && files.cutout.size ? files.cutout : null;
+    const span = cutoutBlob ? 0.7 : 0.9; // the show's share of the progress when a cut-out follows it
     onProgress?.({ label: kind === 'video' ? 'Uploading the show' : 'Uploading the vocal', fraction: 0.03 });
     // Named for the people a Drive link reaches ("Song · Meet · date.mp4"); found again by its app properties, not its name.
-    const file = await this.upload(performanceVideoName(manifest, ext), media, parent, this.perfProps(manifest, kind, '0'), (f) => onProgress?.({ label: kind === 'video' ? 'Uploading the show' : 'Uploading the vocal', fraction: 0.03 + f * 0.9 }));
+    const file = await this.upload(performanceVideoName(manifest, ext), media, parent, this.perfProps(manifest, kind, '0'), (f) => onProgress?.({ label: kind === 'video' ? 'Uploading the show' : 'Uploading the vocal', fraction: 0.03 + f * span }));
     const entry = manifest.files.find((fe) => (kind === 'video' ? fe.name.startsWith('video.') : fe.name === 'vocal.wav'));
-    const stamped: PerformanceManifest = { ...manifest, files: [{ name: kind === 'video' ? `video.${ext}` : 'vocal.wav', mimeType: media.type, size: media.size, sha256: entry?.sha256 ?? '', driveId: file.id, md5: file.md5Checksum }] };
+    const stampedFiles: FileEntry[] = [{ name: kind === 'video' ? `video.${ext}` : 'vocal.wav', mimeType: media.type, size: media.size, sha256: entry?.sha256 ?? '', driveId: file.id, md5: file.md5Checksum }];
+    // The singer's cut-out beside the show (join.ts): a second file, named with the show's, known from the show's own properties.
+    let cutout: { driveId: string; mimeType: string; bytes: number } | null = null;
+    if (cutoutBlob) {
+      const cext = extFromMime(cutoutBlob.type, 'webm');
+      onProgress?.({ label: 'Uploading your cut-out', fraction: 0.75 });
+      const cf = await this.upload(performanceVideoName(manifest, cext).replace(/\.[^.]+$/, ` · cut-out.${cext}`), cutoutBlob, parent, { [APP_PROPS.type]: 'performanceCutout', svPerfId: manifest.performanceId, svMedia: 'cutout', [APP_PROPS.trackId]: manifest.trackId }, (f) => onProgress?.({ label: 'Uploading your cut-out', fraction: 0.75 + f * 0.18 }));
+      cutout = { driveId: cf.id, mimeType: cutoutBlob.type, bytes: cutoutBlob.size };
+      const centry = manifest.files.find((fe) => fe.name.startsWith('cutout.'));
+      stampedFiles.push({ name: `cutout.${cext}`, mimeType: cutoutBlob.type, size: cutoutBlob.size, sha256: centry?.sha256 ?? '', driveId: cf.id, md5: cf.md5Checksum });
+    }
+    const stamped: PerformanceManifest = { ...manifest, files: stampedFiles };
     onProgress?.({ label: 'Writing the details', fraction: 0.95 });
-    await this.setDescription(file.id, stamped);
+    const props = this.perfProps(manifest, kind, '0', cutout);
+    await this.req(`${API}/files/${file.id}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: JSON.stringify(stamped), ...(cutout ? { appProperties: props } : {}) }) }).catch((e) => console.warn('Drive: performance details not written', e));
     onProgress?.({ label: 'Saved to Drive', fraction: 1 });
-    return this.perfSummary({ ...file, appProperties: this.perfProps(manifest, kind, '0') });
+    return this.perfSummary({ ...file, appProperties: props });
   }
 
   /** The manifest, in the file's description (best effort: the properties already say what the lists need). */
@@ -845,6 +876,9 @@ export class DriveProvider implements StorageProvider {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    // The singer's cut-out goes with the show (a joiner's stage draws them from it); its sharing never fails the show's.
+    const cutoutId = f.appProperties?.svCutoutId;
+    if (cutoutId) await this.req(`${API}/files/${cutoutId}/permissions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch((e) => console.warn('Drive: cut-out not shared', e));
     if (with_.type === 'anyone') {
       await this.req(`${API}/files/${f.id}?fields=id`, {
         method: 'PATCH',
@@ -867,6 +901,8 @@ export class DriveProvider implements StorageProvider {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ appProperties: { ...(f.appProperties ?? {}), [APP_PROPS.state]: 'kept', svExpiresAt: '' }, description: JSON.stringify(manifest) }),
     });
+    const cutoutId = f.appProperties?.svCutoutId;
+    if (cutoutId) await this.req(`${API}/files/${cutoutId}?addParents=${this.folder('performances')}&removeParents=${from}&fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch((e) => console.warn('Drive: cut-out not moved', e));
   }
 
   /** Gone for good: the file is deleted, not trashed (a performance not migrated yet loses its whole folder). */
@@ -876,6 +912,8 @@ export class DriveProvider implements StorageProvider {
     if (!f) return;
     const target = f.mimeType === 'application/json' && f.parents?.[0] ? f.parents[0] : f.id;
     await this.req(`${API}/files/${target}`, { method: 'DELETE' });
+    const cutoutId = f.appProperties?.svCutoutId;
+    if (cutoutId) await this.req(`${API}/files/${cutoutId}`, { method: 'DELETE' }).catch(() => undefined);
   }
 
   async sweepTemp(): Promise<number> {

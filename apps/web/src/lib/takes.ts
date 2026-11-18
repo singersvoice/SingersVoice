@@ -1,5 +1,5 @@
 /** Build and save performance manifests for solo (Studio) and live (Meets) takes. */
-import { newId, tempExpiry, type FileEntry, type PerformanceKind, type PerformanceManifest, type PerformanceSinger, type TrackPackageV2 } from '@singersvoice/protocol';
+import { newId, tempExpiry, type FileEntry, type PerformanceJoin, type PerformanceKind, type PerformanceManifest, type PerformanceSinger, type TrackPackageV2 } from '@singersvoice/protocol';
 import { sha256Blob } from './hash.ts';
 import { appBuild, platformName } from './platform.ts';
 import type { PerformanceSummary, Progress } from './storage/types.ts';
@@ -10,9 +10,13 @@ export interface TakeResult {
   vocal: Blob;
   /** The show: the stage picture with everyone on it and the whole mix (see video/showRecorder.ts). */
   video: Blob | null;
+  /** This singer's own cut-out beside the show, alpha-packed (join.ts: another singer's stage draws them from it). */
+  cutout?: Blob | null;
   durationMs: number;
   vocalOffsetMs: number;
   videoOffsetMs: number | null;
+  /** The cut-out's frame 0 on the take's timeline (like `videoOffsetMs`). */
+  cutoutOffsetMs?: number | null;
   latencyCompMs: number;
   sampleRate: number;
   startedAtEpochMs: number;
@@ -32,12 +36,18 @@ export async function buildManifest(
     meetTitle?: string;
     singers?: PerformanceSinger[];
     hostName?: string;
+    /** A take sung over another performance (join.ts). */
+    join?: PerformanceJoin;
   },
 ): Promise<PerformanceManifest> {
   const files: FileEntry[] = [{ name: 'vocal.wav', mimeType: 'audio/wav', size: take.vocal.size, sha256: await sha256Blob(take.vocal) }];
   if (take.video && take.video.size) {
     const ext = take.video.type.includes('mp4') ? 'mp4' : 'webm';
     files.push({ name: `video.${ext}`, mimeType: take.video.type, size: take.video.size, sha256: await sha256Blob(take.video) });
+  }
+  if (take.cutout && take.cutout.size) {
+    const ext = take.cutout.type.includes('mp4') ? 'mp4' : 'webm';
+    files.push({ name: `cutout.${ext}`, mimeType: take.cutout.type, size: take.cutout.size, sha256: await sha256Blob(take.cutout) });
   }
   const createdAt = new Date(take.startedAtEpochMs || Date.now()).toISOString();
   const a = audioSettings.peek();
@@ -50,6 +60,7 @@ export async function buildManifest(
     ...(opts.meetTitle ? { meetTitle: opts.meetTitle } : {}),
     ...(opts.singers ? { singers: opts.singers } : {}),
     ...(opts.hostName ? { hostName: opts.hostName } : {}),
+    ...(opts.join ? { join: opts.join } : {}),
     createdAt,
     expiresAt: opts.state === 'temp' ? tempExpiry(new Date(createdAt)) : null,
     trackId: track.trackId,
@@ -62,6 +73,7 @@ export async function buildManifest(
       startedAtEpochMs: take.startedAtEpochMs,
       vocalOffsetMs: take.vocalOffsetMs - take.latencyCompMs + (opts.nudgeMs ?? 0),
       videoOffsetMs: take.videoOffsetMs,
+      ...(take.cutout && take.cutout.size ? { cutoutOffsetMs: take.cutoutOffsetMs ?? null } : {}),
       latencyCompMs: take.latencyCompMs,
       sampleRate: take.sampleRate,
     },
@@ -74,5 +86,5 @@ export async function buildManifest(
 }
 
 export async function saveTake(manifest: PerformanceManifest, take: TakeResult, onProgress?: Progress): Promise<PerformanceSummary> {
-  return withProvider((p) => p.savePerformance(manifest, { vocal: take.vocal, video: take.video && take.video.size ? take.video : null }, onProgress));
+  return withProvider((p) => p.savePerformance(manifest, { vocal: take.vocal, video: take.video && take.video.size ? take.video : null, cutout: take.cutout && take.cutout.size ? take.cutout : null }, onProgress));
 }

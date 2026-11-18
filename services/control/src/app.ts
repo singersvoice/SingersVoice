@@ -41,6 +41,9 @@ import {
   type PublishJob,
   type PublishJobRequest,
   type ReadyRequest,
+  type InviteRequest,
+  type JoinLayer,
+  MAX_LAYERS,
   type MeetPerformance,
   type MixBatch,
   type RegisterPerformanceRequest,
@@ -1226,6 +1229,94 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!p) return c.json({ ok: true as const });
     if (p.hostUserId !== c.get('user').userId) return err(c, 403, 'not_host', 'Only the host can remove a saved show');
     await store.deletePerformance(p.performanceId);
+    return c.json({ ok: true as const });
+  });
+
+  // ---------- Joining a performance (join.ts): a take opened for others to sing over ----------
+
+  const DRIVE_FILE_ID = /^[A-Za-z0-9_-]{10,128}$/;
+  const fileRef = (v: unknown): { driveId: string; mimeType: string; bytes: number } | null => {
+    const f = (v ?? null) as { driveId?: unknown; mimeType?: unknown; bytes?: unknown } | null;
+    if (!f || typeof f.driveId !== 'string' || !DRIVE_FILE_ID.test(f.driveId)) return null;
+    return { driveId: f.driveId, mimeType: String(f.mimeType ?? '').slice(0, 80), bytes: Math.max(0, Math.floor(Number(f.bytes) || 0)) };
+  };
+  const num = (v: unknown, fallback = 0): number => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+
+  app.get('/performances/invites', async (c) => {
+    const { store } = c.get('deps');
+    const me = c.get('user').userId;
+    const [mine, joined] = await Promise.all([store.listInvitesOf(me), store.listJoinsOf(me)]);
+    return c.json({ mine, joined });
+  });
+
+  app.put('/performances/:id/invite', async (c) => {
+    const { store } = c.get('deps');
+    const user = c.get('user');
+    const performanceId = c.req.param('id');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<InviteRequest>;
+    const show = fileRef(body.show);
+    const link = String((body.show as { link?: unknown } | undefined)?.link ?? '').slice(0, 300);
+    if (!show || !link) return err(c, 400, 'bad_request', 'The show (its Drive file id, type, size and link) is required');
+    const had = await store.getInvite(performanceId);
+    if (had && had.ownerUserId !== user.userId) return err(c, 403, 'not_owner', 'Only the singer who saved this performance can open it for joining');
+    const layersIn = Array.isArray(body.layers) ? body.layers.slice(0, MAX_LAYERS) : [];
+    const layers: JoinLayer[] = layersIn.map((l) => ({
+      slot: Math.max(1, Math.min(MAX_LAYERS, Math.round(num(l?.slot, 1)))),
+      displayName: String(l?.displayName ?? '').slice(0, 60),
+      userId: String(l?.userId ?? '').slice(0, 80),
+      cutout: fileRef(l?.cutout),
+      atShowMs: Math.round(num(l?.atShowMs)),
+    }));
+    if (!layers.length) return err(c, 400, 'bad_request', 'A performance has at least one singer on it');
+    const joinedFrom = typeof body.joinedFrom === 'string' && body.joinedFrom && body.joinedFrom !== performanceId ? body.joinedFrom.slice(0, 80) : null;
+    const invite = await store.putInvite({
+      performanceId,
+      ownerUserId: user.userId,
+      ownerName: user.name,
+      registryId: String(body.registryId ?? '').slice(0, 80),
+      trackTitle: String(body.trackTitle ?? '').slice(0, 120),
+      trackArtist: String(body.trackArtist ?? '').slice(0, 120),
+      durationMs: Math.max(0, Math.round(num(body.durationMs))),
+      show: { ...show, link },
+      offsetMs: Math.round(num(body.offsetMs)),
+      tempo: Math.min(1.5, Math.max(0.5, num(body.tempo, 1) || 1)),
+      layers,
+      joinedFrom,
+      createdAt: new Date().toISOString(),
+      joins: 0,
+    });
+    if (!had && joinedFrom) await store.countJoin(joinedFrom); // a performance opened for the first time counts as one more join of the one it sang over
+    return c.json({ invite }, had ? 200 : 201);
+  });
+
+  app.get('/performances/:id/invite', async (c) => {
+    const invite = await c.get('deps').store.getInvite(c.req.param('id'));
+    return invite ? c.json({ invite }) : err(c, 404, 'no_invite', 'This performance is not open for joining (or was closed)');
+  });
+
+  // The show and the cut-outs, fetched from their singers' Drives by the service (a browser with another account's token cannot read them).
+  app.get('/performances/:id/invite/file/:which', async (c) => {
+    const { store, googleApiKey, fetchImpl } = c.get('deps');
+    const invite = await store.getInvite(c.req.param('id'));
+    if (!invite) return err(c, 404, 'no_invite', 'This performance is not open for joining (or was closed)');
+    const which = c.req.param('which');
+    const slot = /^cutout-(\d+)$/.exec(which);
+    const ref = which === 'show' ? invite.show : slot ? (invite.layers.find((l) => l.slot === Number(slot[1]))?.cutout ?? null) : null;
+    if (!ref) return err(c, 404, 'no_file', which === 'show' ? 'No show on this performance' : 'No cut-out video for that singer');
+    try {
+      const file = await fetchPublicDriveFile(ref.driveId, { apiKey: googleApiKey, fetchImpl });
+      return new Response(file.body, { status: 200, headers: { 'Content-Type': ref.mimeType || file.contentType, 'Cache-Control': 'private, max-age=3600', ...(file.size ? { 'Content-Length': String(file.size) } : {}) } });
+    } catch (e) {
+      return err(c, 404, 'not_shared', `This file could not be fetched from ${invite.ownerName}'s Drive: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  app.delete('/performances/:id/invite', async (c) => {
+    const { store } = c.get('deps');
+    const invite = await store.getInvite(c.req.param('id'));
+    if (!invite) return c.json({ ok: true as const });
+    if (invite.ownerUserId !== c.get('user').userId) return err(c, 403, 'not_owner', 'Only the singer who opened this performance can close it');
+    await store.deleteInvite(invite.performanceId);
     return c.json({ ok: true as const });
   });
 

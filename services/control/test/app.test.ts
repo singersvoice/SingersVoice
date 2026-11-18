@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { AdminBillingOverview, AdminCouponsResponse, BillingSettings, CatalogListResponse, ClubStatus, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlansResponse, UserRecord } from '@singersvoice/protocol';
+import type { AdminBillingOverview, AdminCouponsResponse, BillingSettings, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlansResponse, UserRecord } from '@singersvoice/protocol';
 import { LIVE_KEEP } from '@singersvoice/protocol';
 import { createApp, type AppDeps } from '../src/app.ts';
 import { edgeCacheControl, edgeCacheTtl } from '../src/worker.ts';
@@ -132,6 +132,62 @@ describe('sv-control API', () => {
     expect(asked[0]).toContain('www.googleapis.com/drive/v3/files/audio000000002?alt=media&key=k');
     deps.googleApiKey = undefined;
     deps.fetchImpl = undefined;
+  });
+
+  it('joining a performance: the owner opens a take (the show, the singers with their cut-outs); anyone signed in reads it and gets its files through the service; a joined take counts as a join of the one it sang over and lists for its owner; only the owner closes it', async () => {
+    const show = { driveId: 'showalice00001', mimeType: 'video/mp4', bytes: 1000, link: 'https://drive.google.com/file/d/showalice00001/view' };
+    const layer = { slot: 1, displayName: 'Alice Singer', userId: 'g-alice', cutout: { driveId: 'cutalice000001', mimeType: 'video/webm', bytes: 500 }, atShowMs: -120 };
+    const body = { performanceId: 'perf-a1', registryId: 'reg000000001', trackTitle: 'Ammo', trackArtist: 'SV', durationMs: 180000, show, offsetMs: -250, tempo: 1, layers: [layer], joinedFrom: null };
+    // Nothing open yet.
+    expect((await app.request('/performances/perf-a1/invite', { headers: as('bob') })).status).toBe(404);
+    // alice opens her take.
+    const opened = await app.request('/performances/perf-a1/invite', { method: 'PUT', headers: as('alice'), body: JSON.stringify(body) });
+    expect(opened.status).toBe(201);
+    const inv = (await json<{ invite: JoinInvite }>(opened)).invite;
+    expect(inv.ownerName).toBe('alice');
+    expect(inv.layers).toEqual([layer]);
+    expect(inv.joins).toBe(0);
+    expect(inv.show.link).toBe(show.link);
+    // bob reads it; a cut-out without a Drive id is refused; nobody but alice may replace it.
+    expect((await json<{ invite: JoinInvite }>(await app.request('/performances/perf-a1/invite', { headers: as('bob') }))).invite.performanceId).toBe('perf-a1');
+    expect((await app.request('/performances/perf-a1/invite', { method: 'PUT', headers: as('bob'), body: JSON.stringify(body) })).status).toBe(403);
+    expect((await app.request('/performances/perf-x/invite', { method: 'PUT', headers: as('bob'), body: JSON.stringify({ ...body, show: { ...show, driveId: 'x' } }) })).status).toBe(400);
+    expect((await app.request('/performances/perf-x/invite', { method: 'PUT', headers: as('bob'), body: JSON.stringify({ ...body, layers: [] }) })).status).toBe(400);
+    // The files come through the service from alice's Drive (the way a published track's do).
+    deps.fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('showalice00001')) return new Response(new Uint8Array([4, 4, 4]), { status: 200, headers: { 'content-type': 'video/mp4', 'content-length': '3' } });
+      if (url.includes('cutalice000001')) return new Response(new Uint8Array([5, 5]), { status: 200, headers: { 'content-type': 'video/webm', 'content-length': '2' } });
+      return new Response('nope', { status: 404, headers: { 'content-type': 'text/html' } });
+    }) as typeof fetch;
+    const sh = await app.request('/performances/perf-a1/invite/file/show', { headers: as('bob') });
+    expect(sh.status).toBe(200);
+    expect(sh.headers.get('content-type')).toBe('video/mp4');
+    expect(new Uint8Array(await sh.arrayBuffer())).toEqual(new Uint8Array([4, 4, 4]));
+    const cu = await app.request('/performances/perf-a1/invite/file/cutout-1', { headers: as('bob') });
+    expect(cu.status).toBe(200);
+    expect(new Uint8Array(await cu.arrayBuffer())).toEqual(new Uint8Array([5, 5]));
+    expect((await app.request('/performances/perf-a1/invite/file/cutout-2', { headers: as('bob') })).status).toBe(404);
+    expect((await app.request('/performances/perf-a1/invite/file/other', { headers: as('bob') })).status).toBe(404);
+    deps.fetchImpl = undefined;
+    // bob's joined take: two layers, alice's moved onto bob's show; it counts as a join of alice's and lists for her.
+    const bobBody = { ...body, performanceId: 'perf-b1', show: { ...show, driveId: 'showbob0000001' }, offsetMs: -250 + 300 - 90, layers: [{ ...layer, atShowMs: -120 - 300 + 90 }, { slot: 2, displayName: 'bob', userId: 'g-bob', cutout: null, atShowMs: 40 }], joinedFrom: 'perf-a1' };
+    expect((await app.request('/performances/perf-b1/invite', { method: 'PUT', headers: as('bob'), body: JSON.stringify(bobBody) })).status).toBe(201);
+    expect((await json<{ invite: JoinInvite }>(await app.request('/performances/perf-a1/invite', { headers: as('carol') }))).invite.joins).toBe(1);
+    // Opening it again (a new link, a Keep) replaces the record and counts nothing twice.
+    expect((await app.request('/performances/perf-b1/invite', { method: 'PUT', headers: as('bob'), body: JSON.stringify(bobBody) })).status).toBe(200);
+    expect((await json<{ invite: JoinInvite }>(await app.request('/performances/perf-a1/invite', { headers: as('carol') }))).invite.joins).toBe(1);
+    const alices = await json<{ mine: JoinInvite[]; joined: JoinInvite[] }>(await app.request('/performances/invites', { headers: as('alice') }));
+    expect(alices.mine.map((i) => i.performanceId)).toEqual(['perf-a1']);
+    expect(alices.joined.map((i) => `${i.performanceId}:${i.ownerName}:${i.layers.length}`)).toEqual(['perf-b1:bob:2']);
+    const bobs = await json<{ mine: JoinInvite[]; joined: JoinInvite[] }>(await app.request('/performances/invites', { headers: as('bob') }));
+    expect(bobs.mine.map((i) => i.performanceId)).toEqual(['perf-b1']);
+    expect(bobs.joined).toEqual([]);
+    // Closing: alice's alone to close hers.
+    expect((await app.request('/performances/perf-a1/invite', { method: 'DELETE', headers: as('bob') })).status).toBe(403);
+    expect((await app.request('/performances/perf-a1/invite', { method: 'DELETE', headers: as('alice') })).status).toBe(200);
+    expect((await app.request('/performances/perf-a1/invite', { headers: as('bob') })).status).toBe(404);
+    expect((await app.request('/performances/perf-a1/invite', { method: 'DELETE', headers: as('alice') })).status).toBe(200); // gone is fine
   });
 
   it('meets: create → join by code → slots → chat → kickstart → recordings → stop', async () => {

@@ -1,5 +1,6 @@
 /** sv-control HTTP API shapes shared by the client and the server. All routes are JSON. */
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
+import type { InviteRequest, JoinInvite } from './join.ts';
 import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
 import type { MixBatch } from './mix.ts';
 import type { AdminUserUpdate, AdminUsersResponse, Destination, DestinationKind, DestinationUpdate, LiveStatus, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
@@ -253,6 +254,13 @@ export interface Routes {
   /** Every saved show of every meet this account hosted or took part in. */
   'GET /performances': { res: { performances: MeetPerformance[] } };
   'DELETE /performances/:id': { res: { ok: true } };
+  /** Joining (join.ts): open one of my performances for others to join (again: the record is replaced), read one by its id, its files through the service, stop it. */
+  'PUT /performances/:id/invite': { req: InviteRequest; res: { invite: JoinInvite } };
+  'GET /performances/:id/invite': { res: { invite: JoinInvite } };
+  'GET /performances/:id/invite/file/:which': { res: never };
+  'DELETE /performances/:id/invite': { res: { ok: true } };
+  /** The performances I opened for joining, and the ones that joined any of mine. */
+  'GET /performances/invites': { res: { mine: JoinInvite[]; joined: JoinInvite[] } };
   'GET /watch/:id': { res: WatchResponse };
   /** `relay`: the RTMP relay is deployed — Facebook, Instagram and Twitch go live, and YouTube at low latency. */
   'GET /publishing/destinations': { res: { destinations: Destination[]; relay: boolean } };

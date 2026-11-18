@@ -98,6 +98,11 @@ jobs:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/roles-e2e.mjs screenshots
 
+      - name: Joining a performance (a Studio take with the singer's cut-out beside the show, opened for others; a free account joins it from the link with the camera on, a third joins the second's, three on one stage; the owner sees who joined; closing)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/join-e2e.mjs screenshots
+
       - name: Live meet with two performers on one stage (cut-outs, WebRTC relay, cued pause/resume, the film in chapters, nothing mirrored, the sound measured)
         env:
           BASE_PATH: /SingersVoice/

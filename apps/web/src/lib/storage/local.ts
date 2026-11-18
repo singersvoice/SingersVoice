@@ -2,10 +2,10 @@
  * Local provider: IndexedDB on this device. Used when Google isn't configured/linked and as
  * the always-available staging area (local-first recording). Same shapes as the Drive provider.
  */
-import { normalizeTrack, type PerformanceManifest, type TrackPackageV2 } from '@singersvoice/protocol';
+import { normalizeTrack, singersLine, type PerformanceManifest, type TrackPackageV2 } from '@singersvoice/protocol';
 import { idb, STORES } from '../idb.ts';
 import { storageEstimate } from '../platform.ts';
-import type { LoadedPerformance, LoadedTrack, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
+import type { LoadedPerformance, LoadedTrack, PerformanceFiles, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
 
 interface TrackRecord {
   track: TrackPackageV2;
@@ -16,6 +16,8 @@ interface PerfRecord {
   manifest: PerformanceManifest;
   vocal: Blob;
   video: Blob | null;
+  /** The singer's cut-out video beside the show (join.ts); missing on records of older builds. */
+  cutout?: Blob | null;
 }
 
 export class LocalProvider implements StorageProvider {
@@ -103,18 +105,26 @@ export class LocalProvider implements StorageProvider {
         ref: r.manifest.performanceId,
         hasVideo: Boolean(r.video),
         ...(r.manifest.chapter ? { chapter: r.manifest.chapter } : {}),
+        ...(r.cutout ? { cutout: { driveId: '', mimeType: r.cutout.type, bytes: r.cutout.size } } : {}),
+        ...(r.manifest.join ? { with: singersLine(r.manifest.singers ?? []) } : {}),
       }))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  async getPerformance(performanceId: string): Promise<LoadedPerformance | null> {
+  async describePerformance(performanceId: string): Promise<{ manifest: PerformanceManifest; summary: PerformanceSummary } | null> {
+    const summary = (await this.listPerformances()).find((p) => p.performanceId === performanceId);
     const r = await idb.get<PerfRecord>(STORES.performances, performanceId);
-    return r ? { manifest: r.manifest, vocal: r.vocal, video: r.video } : null;
+    return r && summary ? { manifest: r.manifest, summary } : null;
   }
 
-  async savePerformance(manifest: PerformanceManifest, files: { vocal: Blob; video: Blob | null }, onProgress?: Progress): Promise<PerformanceSummary> {
+  async getPerformance(performanceId: string, opts: { cutout?: boolean } = {}): Promise<LoadedPerformance | null> {
+    const r = await idb.get<PerfRecord>(STORES.performances, performanceId);
+    return r ? { manifest: r.manifest, vocal: r.vocal, video: r.video, ...(opts.cutout ? { cutout: r.cutout ?? null } : {}) } : null;
+  }
+
+  async savePerformance(manifest: PerformanceManifest, files: PerformanceFiles, onProgress?: Progress): Promise<PerformanceSummary> {
     onProgress?.({ label: 'Saving take on this device', fraction: 0.3 });
-    await idb.put(STORES.performances, manifest.performanceId, { manifest, vocal: files.vocal, video: files.video } satisfies PerfRecord);
+    await idb.put(STORES.performances, manifest.performanceId, { manifest, vocal: files.vocal, video: files.video, cutout: files.cutout ?? null } satisfies PerfRecord);
     onProgress?.({ label: 'Saved', fraction: 1 });
     return {
       performanceId: manifest.performanceId,
@@ -132,6 +142,8 @@ export class LocalProvider implements StorageProvider {
       ref: manifest.performanceId,
       hasVideo: Boolean(files.video),
       ...(manifest.chapter ? { chapter: manifest.chapter } : {}),
+      ...(files.cutout ? { cutout: { driveId: '', mimeType: files.cutout.type, bytes: files.cutout.size } } : {}),
+      ...(manifest.join ? { with: singersLine(manifest.singers ?? []) } : {}),
     };
   }
 

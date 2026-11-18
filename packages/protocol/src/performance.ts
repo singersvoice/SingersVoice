@@ -1,4 +1,5 @@
 import type { VoxForgeParams } from './audio.ts';
+import type { JoinLayer } from './join.ts';
 
 export type PerformanceState = 'temp' | 'kept';
 export type PerformanceMode = 'offline' | 'live';
@@ -55,6 +56,17 @@ export interface PerformanceChapter {
   startMs: number;
 }
 
+/** A joined take's place in the chain: the performance it was sung over and the layers it inherited (join.ts has the arithmetic). */
+export interface PerformanceJoin {
+  fromPerformanceId: string;
+  fromOwnerName: string;
+  /** Every earlier singer, with their cut-out's frame 0 on THIS show's clock. */
+  layers: JoinLayer[];
+  /** This show's frame 0 on the song's timeline (real ms) and the pace the song was first sung at — what the next joiner's lyrics line up by. */
+  offsetMs: number;
+  tempo: number;
+}
+
 /** singersvoice.performance.v2 — `manifest.json` inside each performance folder. */
 export interface PerformanceManifest {
   schema: 'singersvoice.performance.v2';
@@ -69,6 +81,8 @@ export interface PerformanceManifest {
   hostName?: string;
   /** A chapter of a filmed event (see `PerformanceChapter`); absent on a song's show and on a take. */
   chapter?: PerformanceChapter;
+  /** A take sung over another performance (join.ts): which one, and every earlier singer on this show's clock. */
+  join?: PerformanceJoin;
   /** ISO date; Temp performances are deleted after `expiresAt`. */
   createdAt: string;
   expiresAt: string | null;
@@ -86,6 +100,8 @@ export interface PerformanceManifest {
     vocalOffsetMs: number;
     /** Video frame 0 is this many ms after the backing-track start. */
     videoOffsetMs: number | null;
+    /** The singer's cut-out video (`cutout.*`, alpha-packed — what a joiner's stage draws them from): its frame 0 this many ms after the backing-track start. */
+    cutoutOffsetMs?: number | null;
     /** Estimated output latency compensation applied at record time, ms. */
     latencyCompMs: number;
     sampleRate: number;

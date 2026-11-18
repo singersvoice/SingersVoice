@@ -120,6 +120,7 @@ export class BackingPlayer {
       if (this.source === src) {
         this.playing = false;
         this.source = null;
+        this.startOffsetMs = this.durationMs; // the song played to its end: the position is the end (a take's duration), not where this play began
         this.onEnded?.();
       }
     };
@@ -155,6 +156,7 @@ export class BackingPlayer {
       if (this.source === src) {
         this.playing = false;
         this.source = null;
+        this.startOffsetMs = this.durationMs;
         this.onEnded?.();
       }
     };

@@ -134,6 +134,7 @@ export function App() {
           <Route path={r('/studio/trackmaker/:id')} component={guarded((p) => <TrackMaker id={p.id} />)} />
           <Route path={r('/studio/sing')} component={guarded(() => <SingPicker />)} />
           <Route path={r('/studio/sing/:id')} component={guarded((p) => <Sing id={p.id ?? ''} />)} />
+          <Route path={r('/studio/join/:id')} component={guarded((p) => <Sing joinId={p.id ?? ''} />)} />
           <Route path={r('/studio/performances')} component={guarded(() => <Performances />)} />
           {/* Live Meets portal */}
           <Route path={r('/meets')} component={guarded(() => <MeetsHome />)} />

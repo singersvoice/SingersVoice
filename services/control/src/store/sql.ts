@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { accessOf, normalizeCode, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { accessOf, normalizeCode, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
@@ -1035,6 +1035,49 @@ export class SqlStore {
 
   async deletePerformance(performanceId: string): Promise<void> {
     await this.db.run('DELETE FROM performances WHERE performance_id=?', [performanceId]);
+  }
+
+  // ---------- invites: performances open for others to join (join.ts) ----------
+
+  /** Open (or re-open: the record is replaced, the join count kept) a performance for joining. */
+  async putInvite(invite: JoinInvite): Promise<JoinInvite> {
+    const had = await this.getInvite(invite.performanceId);
+    const row: JoinInvite = { ...invite, joins: had?.joins ?? 0, createdAt: had?.createdAt ?? invite.createdAt };
+    await this.db.run(
+      `INSERT INTO invites (performance_id, owner_user_id, joined_from, data, created_at) VALUES (?,?,?,?,?)
+       ON CONFLICT(performance_id) DO UPDATE SET data=excluded.data, joined_from=excluded.joined_from`,
+      [row.performanceId, row.ownerUserId, row.joinedFrom, JSON.stringify(row), row.createdAt],
+    );
+    return row;
+  }
+
+  async getInvite(performanceId: string): Promise<JoinInvite | null> {
+    const r = await this.db.get<{ data: string }>('SELECT data FROM invites WHERE performance_id=?', [performanceId]);
+    return r ? (JSON.parse(r.data) as JoinInvite) : null;
+  }
+
+  /** The performances a user opened for joining, newest first. */
+  async listInvitesOf(ownerUserId: string, limit = 200): Promise<JoinInvite[]> {
+    const rows = await this.db.all<{ data: string }>('SELECT data FROM invites WHERE owner_user_id=? ORDER BY created_at DESC LIMIT ?', [ownerUserId, limit]);
+    return rows.map((r) => JSON.parse(r.data) as JoinInvite);
+  }
+
+  /** The performances that joined any of a user's (one step down the chain), newest first. */
+  async listJoinsOf(ownerUserId: string, limit = 200): Promise<JoinInvite[]> {
+    const rows = await this.db.all<{ data: string }>('SELECT data FROM invites WHERE joined_from IN (SELECT performance_id FROM invites WHERE owner_user_id=?) ORDER BY created_at DESC LIMIT ?', [ownerUserId, limit]);
+    return rows.map((r) => JSON.parse(r.data) as JoinInvite);
+  }
+
+  /** One more performance joined this one. */
+  async countJoin(performanceId: string): Promise<void> {
+    const had = await this.getInvite(performanceId);
+    if (!had) return;
+    const row = { ...had, joins: had.joins + 1 };
+    await this.db.run('UPDATE invites SET data=? WHERE performance_id=?', [JSON.stringify(row), performanceId]);
+  }
+
+  async deleteInvite(performanceId: string): Promise<void> {
+    await this.db.run('DELETE FROM invites WHERE performance_id=?', [performanceId]);
   }
 
   async removeParticipant(meetId: string, participantId: string): Promise<void> {

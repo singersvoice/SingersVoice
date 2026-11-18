@@ -181,10 +181,10 @@ export class UnpackedFrame {
     return this.video.currentTime;
   }
 
-  /** The RGBA canvas of the current frame, or null until the video has one. */
+  /** The RGBA canvas of the current frame, or null until the video has one; through a seek or a stall, the last frame drawn (never a flash of nobody). */
   current(): HTMLCanvasElement | null {
     const v = this.video;
-    if (v.readyState < 2 || !v.videoWidth) return null;
+    if (v.readyState < 2 || !v.videoWidth) return this.unpacker?.canvas ?? null;
     if (!this.unpacker) this.unpacker = new AlphaUnpacker(Math.round(v.videoWidth / 2), v.videoHeight);
     if (v.currentTime !== this.lastTime) {
       this.lastTime = v.currentTime;

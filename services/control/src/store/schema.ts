@@ -93,6 +93,15 @@ CREATE TABLE IF NOT EXISTS performances (
 );
 CREATE INDEX IF NOT EXISTS idx_performances_meet ON performances(meet_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_performances_host ON performances(host_user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS invites (
+  performance_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL,
+  joined_from TEXT,
+  data TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_invites_owner ON invites(owner_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_invites_from ON invites(joined_from, created_at DESC);
 CREATE TABLE IF NOT EXISTS mix (
   meet_id TEXT NOT NULL,
   seq INTEGER NOT NULL,

@@ -1,10 +1,10 @@
-import { formatMs, planParts, SLOT_COLORS, type CatalogTrack, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
+import { createTrack, formatMs, nextSlot, planParts, singersLine, songTimeMs, SLOT_COLORS, type CatalogTrack, type JoinInvite, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { MicStatus } from '../../components/MicStatus.tsx';
@@ -16,10 +16,12 @@ import { catalogAvailable, isSameTrack, myCatalogUserId, pullCatalogTrack, searc
 import { ensureRegistered, recordAccess } from '../../lib/registry.ts';
 import { go, href } from '../../lib/nav.ts';
 import { headphonesLikely, isIOS, keepAwake } from '../../lib/platform.ts';
+import { inviteOf, invitePerformance, inviteShow, JoinLayers, joinOfTake, loadInvite, type JoinMaterial } from '../../lib/joins.ts';
+import { shareOrCopy } from '../../lib/download.ts';
 import { buildManifest, saveTake as persistTake, type TakeResult } from '../../lib/takes.ts';
 import type { LoadedTrack, TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { isDrive, role, withProvider } from '../../state/session.ts';
+import { accountUserId, isDrive, profile, role, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
 import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
@@ -123,10 +125,31 @@ export function SingPicker() {
   );
 }
 
-/** The lyrics-first stage (/sing/:id). */
-export function Sing(props: { id: string }) {
+/** The part a joiner sings by default: the first part of the song nobody on the stage sang, else the parts round again by stage slot. */
+function partFor(join: JoinMaterial, singerCount: number): number {
+  const taken = new Set(join.invite.layers.map((l) => l.slot));
+  for (let part = 1; part <= singerCount; part++) if (!taken.has(part)) return part;
+  return ((join.slot - 1) % Math.max(1, singerCount)) + 1;
+}
+
+/**
+ * The lyrics-first stage (/sing/:id) — and, with `joinId`, the same stage sung over another singer's
+ * performance (/studio/join/:id, lib/joins.ts): the show so far is the backing track, every earlier
+ * singer stands on the stage from their cut-out video, and the take saved has everyone on it. A
+ * joiner's camera is as free as any Studio singer's: a plan gates the picture in live meets alone.
+ */
+export function Sing(props: { id?: string; joinId?: string }) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [loaded, setLoaded] = useState<LoadedTrack | null>(null);
+  const [join, setJoin] = useState<JoinMaterial | null>(null);
+  const [loading, setLoading] = useState<{ label: string; fraction: number } | null>(null);
+  /** A join's landing: the invitation as it stands (watch the performance first), until Join is tapped. */
+  const [preview, setPreview] = useState<JoinInvite | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<{ url: string; blob: Blob } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [joinGo, setJoinGo] = useState(false);
+  /** The earlier singers' cut-outs on my stage (a join), on the show's clock. */
+  const layers = useMemo(() => (join ? new JoinLayers(join.invite.layers, join.cutouts) : null), [join]);
   const [tMs, setTMs] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [fxOpen, setFxOpen] = useState(false);
@@ -147,13 +170,38 @@ export function Sing(props: { id: string }) {
   const app = appSettings.value;
   const audio = audioSettings.value;
   const track: TrackPackageV2 | null = loaded?.track ?? null;
-  const mySlot = Math.min(app.singerSlot, track?.singerCount ?? 1) as SingerSlot;
+  /** The part a joiner sings, chosen on the stage setup (null: the first part nobody on the stage has, else round the parts). */
+  const [joinPart, setJoinPart] = useState<SingerSlot | null>(null);
+  const mySlot = (join ? (joinPart ?? partFor(join, track?.singerCount ?? 1)) : Math.min(app.singerSlot, track?.singerCount ?? 1)) as SingerSlot;
 
-  // Load the track.
+  // Load the track — or, for a join, the performance to sing over: its show (the backing track from here on), the
+  // singers' cut-outs and the song from the track database (its lyrics; the show carries the song without them).
   useEffect(() => {
     setPhase('loading');
+    if (props.joinId && !joinGo) {
+      // The landing first: who sang it, how long it is, a way to watch it — then Join.
+      void inviteOf(decodeURIComponent(props.joinId)).then((inv) => {
+        if (inv) setPreview(inv);
+        else {
+          toast('This performance is not open for joining (or was closed)', 'error', 9000);
+          go('/studio/performances', true);
+        }
+      });
+      return;
+    }
     void withProvider(async (p) => {
-      const id = decodeURIComponent(props.id);
+      if (props.joinId) {
+        const m = await loadInvite(decodeURIComponent(props.joinId), setLoading, { show: previewUrl?.blob });
+        if (!m.slot) throw new Error('This stage is full — ten singers are on it already');
+        const song = m.trackId ? await p.getTrack(m.trackId).catch(() => null) : null;
+        const track = song?.track ?? createTrack({ trackId: `join-${m.invite.performanceId}`, title: m.invite.trackTitle, artist: m.invite.trackArtist, durationMs: m.invite.durationMs, lyrics: [], singerCount: 1 });
+        setJoin(m);
+        setLoaded({ track, audio: m.show, audioMime: m.show.type || m.invite.show.mimeType });
+        setPhase('ready');
+        if (song?.track.registryId) void recordAccess(song.track.registryId, 'sing');
+        return;
+      }
+      const id = decodeURIComponent(props.id ?? '');
       const t = await p.getTrack(id);
       if (!t) throw new Error('Track not found (was it deleted?)');
       setLoaded(t);
@@ -162,8 +210,8 @@ export function Sing(props: { id: string }) {
       // first Sing of a track of my own; not for a failed load) and this access is on record — never a search.
       void (t.track.registryId ? Promise.resolve(t.track.registryId) : ensureRegistered(id, { loaded: t }).catch(() => null)).then((rid) => recordAccess(rid, 'sing'));
     }).catch((e) => {
-      toast(errorText(e), 'error', 7000);
-      go('/studio/sing', true);
+      toast(errorText(e), 'error', 9000);
+      go(props.joinId ? '/studio/performances' : '/studio/sing', true);
     });
     void headphonesLikely().then(setHeadphones);
     return () => {
@@ -175,7 +223,25 @@ export function Sing(props: { id: string }) {
       engineRef.current = null;
       void keepAwake(false);
     };
-  }, [props.id]);
+  }, [props.id, props.joinId, joinGo]);
+  useEffect(() => () => previewUrl && URL.revokeObjectURL(previewUrl.url), [previewUrl]);
+  /** Watch the performance on the landing: the show, fetched once (and handed to the stage when Join follows). */
+  const watch = async () => {
+    if (!props.joinId || previewUrl) return;
+    setPreviewBusy(true);
+    try {
+      const blob = await inviteShow(decodeURIComponent(props.joinId));
+      setPreviewUrl({ url: URL.createObjectURL(blob), blob });
+    } catch (e) {
+      toast(errorText(e), 'error', 8000);
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+  useEffect(() => {
+    (window as unknown as { __svJoin?: unknown }).__svJoin = layers ? { layers } : undefined; // support / e2e: the earlier singers' players
+    return () => layers?.dispose();
+  }, [layers]);
 
   // My cut-out on the virtual stage follows the camera stream, framing and slot.
   const camStream = camera.stream;
@@ -202,11 +268,16 @@ export function Sing(props: { id: string }) {
   // The Track / Vocal volume of the recorded mix (the same controls as the live stage; kept on the device).
   useEffect(() => show.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
   const facing = camera.facing.value;
+  /** My place in the row: a join takes the next slot after everyone on the stage so far; a solo take stands alone at its part's slot. */
+  const stageSlot = join ? join.slot : mySlot;
   useEffect(() => {
-    const me = { id: 'me', slot: mySlot, label: `You · S${mySlot}`, color: SLOT_COLORS[mySlot], source: feed.source, mirror: facing === 'user', isMe: true } as const;
-    compositor.setPerformers([me]);
-    show.setPerformers([{ ...me, label: 'You' }]);
-  }, [camStream, camOn, mySlot, facing]);
+    const me = { id: 'me', slot: stageSlot, label: `You · S${mySlot}`, color: SLOT_COLORS[mySlot], source: feed.source, mirror: facing === 'user', isMe: true } as const;
+    const others = layers?.performers ?? [];
+    compositor.setPerformers([...others, me]);
+    show.setPerformers([...others, { ...me, label: 'You' }]);
+    // My cut-out beside the show (join.ts): what the next singer's stage will draw me from.
+    show.setCutoutSource(camOn && feed.source.kind === 'person' ? { person: feed.canvas, mask: feed.maskCanvas } : null);
+  }, [camStream, camOn, mySlot, stageSlot, facing, layers]);
   // The recording draws the same background the stage shows.
   const bgItems = backgrounds.value;
   useEffect(() => {
@@ -222,9 +293,9 @@ export function Sing(props: { id: string }) {
     e.applyFx(audio.params);
     e.setMonitor(audio.monitor);
     e.player?.setGain(audio.backingGain);
-    e.player?.setTempo(audio.tempo);
-    e.player?.setKeyShift(audio.keyShift);
-  }, [audio]);
+    e.player?.setTempo(join ? 1 : audio.tempo); // a join sings the show as it was sung: no tempo, no key shift
+    e.player?.setKeyShift(join ? 0 : audio.keyShift);
+  }, [audio, join]);
 
   // Camera on/off follows settings while on stage — never for an audio-only account (roles.ts): its takes carry the voice alone.
   const videoAllowed = role.value !== 'audio'; // a solo take with a picture is everyone's; only an audio-only role has none
@@ -255,10 +326,11 @@ export function Sing(props: { id: string }) {
       await engine.resume(); // inside the tap gesture
       await openMicWithCamera(engine, camera); // on iOS the camera comes with it: one capture per page there
       const player = engine.player!;
-      if (!player.buffer) await player.load(loaded.audio, loaded.track.trackId);
+      if (!player.buffer) await player.load(loaded.audio, join ? `join-${join.invite.performanceId}` : loaded.track.trackId);
       player.setGain(audio.backingGain);
-      player.setTempo(audio.tempo);
-      player.setKeyShift(audio.keyShift);
+      player.setTempo(join ? 1 : audio.tempo);
+      player.setKeyShift(join ? 0 : audio.keyShift);
+      await layers?.ready();
       await keepAwake(true);
 
       const lead = app.countIn ? 3 : 0.6;
@@ -270,7 +342,7 @@ export function Sing(props: { id: string }) {
       startedEpoch.current = Date.now() + Math.round((t0 - engine.ctx.currentTime) * 1000);
       void recStart;
 
-      // The show (my cut-out on the stage, with the mix) records from the kickstart.
+      // The show (my cut-out on the stage, with the mix) records from now, ahead of the kickstart: nothing of the first beat is lost to the recorder starting.
       show.start(engine, t0);
       player.onEnded = () => void finishRef.current(); // the latest finish, whatever render set it
       setPhase(app.countIn ? 'countdown' : 'playing');
@@ -278,10 +350,14 @@ export function Sing(props: { id: string }) {
         const ctxNow = engine.ctx.currentTime;
         if (ctxNow < t0) {
           setCountdown(Math.ceil(t0 - ctxNow));
+          layers?.sync(0, 0, false); // the earlier singers wait at their first frame
         } else {
           setCountdown(null);
           setPhase((p) => (p === 'countdown' ? 'playing' : p));
-          setTMs(Math.max(0, player.positionMs() - engine.outputLatencyMs));
+          const heardMs = Math.max(0, player.positionMs() - engine.outputLatencyMs);
+          setTMs(join ? songTimeMs(heardMs, join.invite) : heardMs);
+          // The earlier singers' pictures keep step with their voices in the mix, which holds the show back by the lag and my round trip.
+          layers?.sync(player.positionMs(), show.lagMs + engine.roundTripMs, player.playing);
         }
         raf.current = requestAnimationFrame(tick);
       };
@@ -387,10 +463,14 @@ export function Sing(props: { id: string }) {
       const rec = await show.stop();
       const video = rec?.video ?? null;
       const videoOffsetMs = rec ? (rec.startCtxTime - origin) * 1000 - rec.lagMs : null;
+      // My cut-out beside the show: its frames are live (not held back like the show's own picture), so its offset carries no lag.
+      const cutout = rec?.cutout?.video ?? null;
+      const cutoutOffsetMs = rec?.cutout ? Math.round((rec.cutout.startCtxTime - origin) * 1000) : null;
+      layers?.sync(0, 0, false);
       engine.closeMic();
       await keepAwake(false);
       const latencyCompMs = Math.round(engine.roundTripMs);
-      setTake({ vocal, video, durationMs, vocalOffsetMs: Math.round(vocalOffsetMs), videoOffsetMs: videoOffsetMs === null ? null : Math.round(videoOffsetMs), latencyCompMs, sampleRate, startedAtEpochMs: startedEpoch.current });
+      setTake({ vocal, video, cutout, durationMs, vocalOffsetMs: Math.round(vocalOffsetMs), videoOffsetMs: videoOffsetMs === null ? null : Math.round(videoOffsetMs), cutoutOffsetMs, latencyCompMs, sampleRate, startedAtEpochMs: startedEpoch.current });
       setPhase('review');
     } catch (e) {
       toast(errorText(e), 'error', 8000);
@@ -399,11 +479,64 @@ export function Sing(props: { id: string }) {
   };
   finishRef.current = finish;
 
+  if (props.joinId && !joinGo)
+    return (
+      <Page title="Join a performance">
+        {!preview ? (
+          <div class="row">
+            <Spinner /> Reading the invitation…
+          </div>
+        ) : (
+          <div class="stack" data-join-landing={preview.performanceId}>
+            <section class="card stack">
+              <h2 style="margin:0">
+                {preview.trackTitle}
+                {preview.trackArtist ? <span class="muted"> · {preview.trackArtist}</span> : null}
+              </h2>
+              <div class="muted small">
+                Sung by {singersLine(preview.layers)} · {formatMs(preview.durationMs)} · opened for joining by {preview.ownerName} on {new Date(preview.createdAt).toLocaleDateString()}
+                {preview.joins ? ` · ${preview.joins} joined already` : ''}
+              </div>
+              <div class="row wrap" style="gap:8px">
+                {preview.layers.map((l) => (
+                  <span class="chip" key={l.slot} style={{ borderColor: SLOT_COLORS[Math.min(10, l.slot) as SingerSlot] }}>
+                    <span class="dot" style={{ background: SLOT_COLORS[Math.min(10, l.slot) as SingerSlot] }} /> {l.displayName} · singer {l.slot}
+                    {l.cutout ? '' : ' · voice only'}
+                  </span>
+                ))}
+              </div>
+              {previewUrl ? <video src={previewUrl.url} controls playsInline style="width:100%;border-radius:12px;background:#000;max-height:50dvh" data-join-watch /> : null}
+              <div class="row wrap" style="gap:8px">
+                {!previewUrl && (
+                  <button class="btn" disabled={previewBusy} onClick={() => void watch()} data-join-watch-open>
+                    {previewBusy ? <Spinner /> : <IcPlay />} Watch it first
+                  </button>
+                )}
+                <button class="btn primary lg" disabled={nextSlot(preview.layers) === 0} onClick={() => setJoinGo(true)} data-join-go>
+                  <IcCamera /> Join — sing your part
+                </button>
+              </div>
+              {nextSlot(preview.layers) === 0 ? (
+                <div class="callout warn">This stage is full — ten singers are on it already.</div>
+              ) : (
+                <div class="small faint">
+                  You will be singer {nextSlot(preview.layers)}: the performance so far plays as your backing track, the singers stand on your stage, and your voice and picture go in beside them — the camera is every Studio singer's here. The result is a performance of your own, in your Drive, that others can join in turn.
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+      </Page>
+    );
+
   if (phase === 'loading' || !track)
     return (
-      <Page title="Sing">
-        <div class="row">
-          <Spinner /> Loading track…
+      <Page title={props.joinId ? 'Join a performance' : 'Sing'}>
+        <div class="stack" data-join-loading={props.joinId ? '1' : undefined}>
+          <div class="row">
+            <Spinner /> {props.joinId ? (loading?.label ?? 'Reading the invitation…') : 'Loading track…'}
+          </div>
+          {props.joinId && loading && <Progress fraction={loading.fraction} label={loading.label} />}
         </div>
       </Page>
     );
@@ -413,7 +546,8 @@ export function Sing(props: { id: string }) {
       <Review
         take={take}
         loaded={loaded}
-        slot={mySlot}
+        slot={stageSlot}
+        join={join?.invite ?? null}
         onAgain={() => {
           setTake(null);
           setTMs(0);
@@ -429,11 +563,16 @@ export function Sing(props: { id: string }) {
   const level = engine?.recorder?.level.value ?? 0;
 
   return (
-    <Page title={track.title} nav={false} full>
-      <div class="sing">
+    <Page title={join ? `${track.title} · with ${singersLine(join.invite.layers)}` : track.title} nav={false} full>
+      <div class="sing" data-join={join ? join.invite.performanceId : undefined} data-stage-slot={stageSlot}>
         <StageBackground id={app.backgroundId} />
         <VirtualStage compositor={compositor} />
         <section class="stagebar" data-blend={blend} data-mask={feed.segmenter.maskMode} data-performers={compositor.tiles.length}>
+          {join && (
+            <span class="chip ok" data-join-with>
+              joining {singersLine(join.invite.layers)} · you are singer {stageSlot}
+            </span>
+          )}
           {camOn && blend === 'loading' && <span class="chip">blending you into the stage…</span>}
           {camOn && blend === 'oval' && app.cutout && <span class="chip warn">soft-focus mode (cut-out model unavailable)</span>}
           {camOn && camHealth !== 'ok' && (
@@ -459,7 +598,7 @@ export function Sing(props: { id: string }) {
               void openMicWithCamera(engine, camera).catch((e) => toast(errorText(e), 'error'));
             }}
           />
-          <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={phase === 'playing' || phase === 'paused' ? seek : undefined} />
+          <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={!join && (phase === 'playing' || phase === 'paused') ? seek : undefined} />
           <div class="main">
             <button class={`btn icon ${app.cameraOn && videoAllowed ? 'on' : ''}`} aria-label="Camera" title={videoAllowed ? 'Camera' : 'Your account is audio only — no camera'} onClick={() => updateApp({ cameraOn: !app.cameraOn })} disabled={busy || !videoAllowed}>
               {app.cameraOn && videoAllowed ? <IcCamera /> : <IcCameraOff />}
@@ -528,11 +667,11 @@ export function Sing(props: { id: string }) {
             <Field label={`Backing level in your ears ${Math.round(audio.backingGain * 100)}%`}>
               <input type="range" min={0} max={1} step={0.01} value={audio.backingGain} onInput={(e) => updateAudio({ backingGain: Number((e.currentTarget as HTMLInputElement).value) })} />
             </Field>
-            <Field label={`Tempo ${audio.tempo.toFixed(2)}× (key kept)`}>
-              <input type="range" min={0.5} max={1.5} step={0.01} value={audio.tempo} onInput={(e) => updateAudio({ tempo: Number((e.currentTarget as HTMLInputElement).value) })} />
+            <Field label={join ? 'Tempo 1.00× (a join sings the show as it was sung)' : `Tempo ${audio.tempo.toFixed(2)}× (key kept)`}>
+              <input type="range" min={0.5} max={1.5} step={0.01} value={join ? 1 : audio.tempo} disabled={join !== null} data-tempo onInput={(e) => updateAudio({ tempo: Number((e.currentTarget as HTMLInputElement).value) })} />
             </Field>
-            <Field label={`Key shift ${audio.keyShift > 0 ? '+' : ''}${audio.keyShift} st`}>
-              <input type="range" min={-6} max={6} step={1} value={audio.keyShift} onInput={(e) => updateAudio({ keyShift: Number((e.currentTarget as HTMLInputElement).value) })} />
+            <Field label={join ? 'Key shift 0 st (as it was sung)' : `Key shift ${audio.keyShift > 0 ? '+' : ''}${audio.keyShift} st`}>
+              <input type="range" min={-6} max={6} step={1} value={join ? 0 : audio.keyShift} disabled={join !== null} data-key-shift onInput={(e) => updateAudio({ keyShift: Number((e.currentTarget as HTMLInputElement).value) })} />
             </Field>
             <Switch checked={audio.monitor} onChange={(v) => updateAudio({ monitor: v })} label="Hear myself" hint="Only with headphones — speakers will feed back." />
           </div>
@@ -545,7 +684,7 @@ export function Sing(props: { id: string }) {
           <Field label="I'm singing as">
             <div class="row" style="gap:6px">
               {Array.from({ length: track.singerCount }, (_, i) => (i + 1) as SingerSlot).map((s) => (
-                <button key={s} class={`btn sm ${mySlot === s ? 'accent' : ''}`} onClick={() => updateApp({ singerSlot: s })}>
+                <button key={s} class={`btn sm ${mySlot === s ? 'accent' : ''}`} onClick={() => (join ? setJoinPart(s) : updateApp({ singerSlot: s }))}>
                   <span class="dot" style={{ background: SLOT_COLORS[s] }} /> Singer {s}
                 </button>
               ))}
@@ -581,11 +720,14 @@ export function Sing(props: { id: string }) {
 export function Review(props: {
   take: TakeResult;
   loaded: LoadedTrack;
-  slot: SingerSlot;
+  /** The slot sung: the part, or — for a join — the place taken on the stage. */
+  slot: number;
   onAgain: () => void;
   /** 'live' takes are filed under Performances/Live (a live stage saves its takes by itself; this review is the Studio's). */
   mode?: 'offline' | 'live';
   meetId?: string | null;
+  /** The performance this take was sung over (lib/joins.ts): the take is saved with everyone on it. */
+  join?: JoinInvite | null;
   onSaved?: (summary: { performanceId: string; link?: string; videoLink?: string; state: 'temp' | 'kept' }) => void;
   againLabel?: string;
 }) {
@@ -595,6 +737,8 @@ export function Review(props: {
   const [saving, setSaving] = useState<{ label: string; fraction: number } | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [savedState, setSavedState] = useState<'temp' | 'kept' | null>(null);
+  const [inviting, setInviting] = useState<{ label: string; fraction: number } | null>(null);
+  const [joinLink, setJoinLink] = useState<string | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const nodes = useRef<AudioBufferSourceNode[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -663,6 +807,8 @@ export function Review(props: {
       if (savedId && state === 'kept') {
         await withProvider((p) => p.keepPerformance(savedId));
       } else {
+        const j = props.join;
+        const me = { slot: props.slot, displayName: profile.value?.name || 'You', ...(accountUserId.value ? { userId: accountUserId.value } : {}) };
         const manifest = await buildManifest(take, loaded.track, {
           state,
           mode: props.mode ?? 'offline',
@@ -670,6 +816,8 @@ export function Review(props: {
           meetId: props.meetId ?? null,
           performanceId: savedId ?? undefined,
           nudgeMs: nudge,
+          // A join: the take has everyone on it — the singers it inherited and me — and remembers what it sang over.
+          ...(j ? { kind: 'show' as const, singers: [...j.layers.map((l) => ({ slot: l.slot, displayName: l.displayName, ...(l.userId ? { userId: l.userId } : {}) })), me], join: joinOfTake(j, take) } : {}),
         });
         const s = await persistTake(manifest, take, (pr) => setSaving(pr));
         setSavedId(s.performanceId);
@@ -684,6 +832,23 @@ export function Review(props: {
     }
   }
 
+  /** Open this take for others to sing over (kept, shared, on record) and hand out the link. */
+  const invite = async () => {
+    if (!savedId) return;
+    setInviting({ label: 'Opening for joining', fraction: 0.05 });
+    try {
+      const { url } = await invitePerformance(savedId, setInviting);
+      setSavedState('kept');
+      setJoinLink(url);
+      const r = await shareOrCopy(`Join me on "${loaded.track.title}"`, 'Sing this with me on SingersVoice', url);
+      toast(r === 'copied' ? 'Join link copied — send it to whoever sings next' : r === 'shared' ? 'Join link shared' : 'Open for joining — the link is below', r === 'failed' ? 'warn' : 'ok', 7000);
+    } catch (e) {
+      toast(errorText(e), 'error', 9000);
+    } finally {
+      setInviting(null);
+    }
+  };
+
   const discard = async () => {
     if (!confirm('Discard this take?')) return;
     stop();
@@ -697,12 +862,16 @@ export function Review(props: {
 
   return (
     <Page title="Your take">
-      <div class="stack">
+      <div class="stack" data-review data-saved-id={savedId ?? undefined} data-saved-state={savedState ?? undefined}>
         <div class="review-hero">
-          <h2>{loaded.track.title}</h2>
+          <h2>
+            {loaded.track.title}
+            {props.join ? <span class="muted"> · with {singersLine(props.join.layers)}</span> : null}
+          </h2>
           <div class="muted small">
             {formatMs(take.durationMs)} · vocal {take.vocal.size ? `${(take.vocal.size / 1048576).toFixed(1)} MB WAV` : 'not captured'}
             {take.video && take.video.size ? ` · show video ${(take.video.size / 1048576).toFixed(1)} MB` : ''}
+            {take.cutout && take.cutout.size ? ` · your cut-out ${(take.cutout.size / 1048576).toFixed(1)} MB` : ''}
           </div>
           {savedState === 'temp' && <span class="chip warn">In Temp — auto-deletes in 7 days unless kept</span>}
           {savedState === 'kept' && <span class="chip ok">Kept</span>}
@@ -730,9 +899,28 @@ export function Review(props: {
             Discard
           </button>
         </div>
+        {take.video && take.video.size > 0 && isDrive.value && (props.mode ?? 'offline') === 'offline' && (
+          <section class="card stack pad-sm" data-invite>
+            <h3 style="margin:0">Sing it with others</h3>
+            <div class="small muted">Open this take for others to join: whoever has the link sings their part over it — their voice and picture go on the stage beside {props.join ? 'everyone' : 'you'}, and the result is a performance of its own. The take is kept and shared for that; the camera is every singer's here.</div>
+            {!joinLink ? (
+              <button class="btn primary" disabled={saving !== null || inviting !== null || !savedId} onClick={() => void invite()} data-invite-open>
+                {inviting ? <Spinner /> : <IcShare />} {inviting ? inviting.label : 'Invite others to join'}
+              </button>
+            ) : (
+              <div class="row wrap" style="gap:8px">
+                <input class="input mono" readOnly value={joinLink} style="flex:1;min-width:16em" data-join-link onFocus={(e) => (e.currentTarget as HTMLInputElement).select()} />
+                <button class="btn" onClick={() => void shareOrCopy(`Join me on "${loaded.track.title}"`, 'Sing this with me on SingersVoice', joinLink).then((r) => toast(r === 'copied' ? 'Join link copied' : r === 'shared' ? 'Shared' : joinLink, r === 'failed' ? 'warn' : 'ok'))} data-join-copy>
+                  <IcShare /> Copy link
+                </button>
+              </div>
+            )}
+            {inviting && <Progress fraction={inviting.fraction} label={inviting.label} />}
+          </section>
+        )}
         <div class="row">
           <button class="btn" onClick={() => (stop(), props.onAgain())}>
-            {props.againLabel ?? 'Sing again'}
+            {props.againLabel ?? (props.join ? 'Sing it again' : 'Sing again')}
           </button>
           <a class="btn ghost" href={href('/studio/performances')}>
             All performances

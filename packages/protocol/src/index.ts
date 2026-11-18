@@ -1,6 +1,7 @@
 export * from './ids.ts';
 export * from './track.ts';
 export * from './performance.ts';
+export * from './join.ts';
 export * from './audio.ts';
 export * from './drive.ts';
 export * from './meet.ts';

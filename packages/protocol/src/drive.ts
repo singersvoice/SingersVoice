@@ -52,6 +52,8 @@ export type SvFileType =
   | 'performance'
   | 'performanceAudio'
   | 'performanceVideo'
+  /** The singer's alpha-packed cut-out video beside a show (join.ts). */
+  | 'performanceCutout'
   | 'config'
   | 'background'
   | 'export';

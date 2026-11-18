@@ -153,6 +153,31 @@ one; in production it starts on.
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/coupons-e2e.mjs screenshots
 ```
 
+## Joining a performance (`tools/ci/join-e2e.mjs`)
+
+Three singers, Google Drive faked per singer (as the track e2e), fake cameras with the synthetic
+person (`fake-person.mjs`: the real segmentation model cuts them out) and a fake microphone. alice
+imports a 24-second song and sings it in the Studio with her camera on: the take lands in her Drive
+as the show **and her cut-out video beside it** (alpha-packed, found again from the show's own
+properties, Keep moving both). **Invite others to join**: both files shared anyone-with-the-link,
+the song in the track database, the invite on record with one layer — alice, her cut-out, where its
+frame 0 falls on the show — and the link is the app's own page. bob, a **free account** (voice
+alone in a live meet, `/me` says so), opens the link: the show and alice's cut-out come through the
+service, the song from the track database; his stage says *joining alice · you are singer 2* with
+two performers, alice's picture on it before a note is sung, the song's second part his by default,
+tempo and key fixed; he sings with his camera on (the Studio's camera is every singer's: a plan
+gates live meets alone), keeps: the review says *with alice*, the manifest remembers what it joined
+and both singers in slot order, alice's layer moved onto his clock by the arithmetic join.ts states,
+his saved show has **two cut-outs** on it (the fake person's badge, once per singer, clustered by
+where it is in a frame) and sound. bob opens his: alice's invite counts one join; her Performances
+page lists *Joined yours* (Watch, Join too) and marks her take *open to join · 1 joined*. carol joins
+bob's: three performers, alice, bob, carol left to right in her saved show. alice closes hers: the
+link no longer opens it. ~6 minutes.
+
+```bash
+BASE_PATH=/SingersVoice/ npm run build && node tools/ci/join-e2e.mjs screenshots
+```
+
 ## The first sign-in (`tools/ci/signin-e2e.mjs`)
 
 Google faked in the browser (its sign-in library and the profile and Drive endpoints answered by the

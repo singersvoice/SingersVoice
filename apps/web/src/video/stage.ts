@@ -23,8 +23,8 @@ import type { UnpackedFrame } from './alphaPack.ts';
 
 export type PerformerSource =
   | { kind: 'person'; canvas: HTMLCanvasElement; version: () => number }
-  /** A remote performer's unpacked frames (shared with every other drawer of them). */
-  | { kind: 'frame'; frame: UnpackedFrame }
+  /** A remote performer's unpacked frames (shared with every other drawer of them); `recorded`: a video of them (a join's earlier singer), where a picture that stands still is a picture, never a link that dropped. */
+  | { kind: 'frame'; frame: UnpackedFrame; recorded?: boolean }
   | { kind: 'none' };
 
 export interface StagePerformer {
@@ -298,7 +298,7 @@ export class StageCompositor {
         this.live = true;
         t.fit = fitPerson(t, src.width, src.height, this.mode, H);
         this.drawPerson(c, src, p, t.fit, t);
-        if (p.source.kind === 'frame') this.sampleStill(p.id, src, now);
+        if (p.source.kind === 'frame' && !p.source.recorded) this.sampleStill(p.id, src, now);
         else this.clearStill(p.id);
       } else {
         t.fit = undefined;
@@ -358,6 +358,7 @@ export class StageCompositor {
       const f = p.source.frame;
       const c = f.current();
       if (!c) return null;
+      if (p.source.recorded) return c; // a recording stands still between songs and while paused: still a picture
       // Frames stopped (camera off on their side, link dropped) → placeholder after a short grace;
       // judged by the video clock advancing, which is robust at any frame rate.
       const now = performance.now();

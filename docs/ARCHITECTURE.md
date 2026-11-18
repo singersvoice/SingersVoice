@@ -392,6 +392,51 @@ signs in is in. The Coupons page lists every coupon with who holds the address, 
 code, Delete. Tests: `packages/protocol/test/coupons.test.ts`, `services/control/test/app.test.ts`
 ("coupons"), `tools/ci/coupons-e2e.mjs`.
 
+## Joining a performance (`packages/protocol/join.ts`, `lib/joins.ts`, the Studio)
+
+A solo take is sung alone; anyone with its link can sing their part over it — the Smule idea, on
+the virtual stage. Every Studio take records, beside the show, **the singer's own cut-out**
+(`ShowRecorder.setCutoutSource`: the local feed's person canvas and grey mask, alpha-packed as the
+mesh packs them — `alphaPack.ts` — at 320×426, 15 fps, a second MediaRecorder started and paused
+with the show's; one more file in Drive, `svType performanceCutout`, named from the show's own
+properties `svCutoutId`, shared, kept and deleted with it; `timeline.cutoutOffsetMs` is its frame
+0 on the song). **Invite others to join** (the review after a take, or any take on Performances):
+the take is kept (a Temp take would vanish), both files are shared anyone-with-the-link, the song is
+in the track database (registered on the first Sing of a track of one's own), and the service keeps
+the **invite** (`invites`: `PUT /performances/:id/invite`, the owner's alone; read by anyone signed
+in; its files through `GET …/invite/file/show` and `…/cutout-<slot>`, fetched from the singers'
+Drives by the service as a published track's are): the show's file, its frame 0 on the song and the
+pace it was sung at (`offsetMs`, `tempo`), and one **layer** per singer on it — slot, name, cut-out
+file, and where the cut-out's frame 0 falls on the show's own clock (`atShowMs`). The link is the
+app's own page, `/studio/join/<id>`: a landing first — the song, who sang it, how many joined,
+**Watch it first** (the show played right there) — then **Join — sing your part**. Share is still
+the file's view link; the join link is the one to send.
+
+A joiner's device (`Sing` with `joinId`) fetches the invite, the show and every cut-out, and the
+song from the track database (a copy into their own library, as singing any record does). The show
+is the backing track — its sound is the whole mix so far — played at 1× (tempo and key fixed); the
+lyrics line up by `songTimeMs`; the earlier singers stand on the stage as **recorded frame sources**
+(`JoinLayers`: a <video> per cut-out, unpacked like a remote singer's, `recorded: true` so a still
+picture is a picture, never a dropped link; a MediaRecorder's WebM has no duration in its header,
+so each is sent past its end once to make it seekable), held on the show's clock by `layerTimeS`
+from the stage's tick — behind the show's sound by the lag and the singer's round trip, as the mix
+has it — playing while the song plays, still while it is paused, seeked back whenever they drift.
+The joiner takes the slot after the last one (`nextSlot`; ten is the stage) and, by default, the
+first part of the song nobody sang. No seeking within a join (the layers would lose their place);
+pause, resume and restart work as ever. The camera is the Studio's: **a plan gates the picture in
+live meets alone** — a free account joins with its picture.
+
+The joined take is a show with everyone on it, in the joiner's Drive, with its own cut-out: its
+manifest's `join` names the performance it sang over and carries every earlier layer **moved onto
+its clock** (`inheritLayers`, `inheritOffsetMs`: the saved show's frame 0 fell `videoOffsetMs −
+latencyCompMs` after the show it joined, the recorder's offset already carrying the lag), and its
+own layer at `cutoutOffsetMs − videoOffsetMs` (`ownLayerAt`), the two recorders having run on one
+clock — so a cut-out keeps its place on the song through every generation (the protocol's test
+checks the invariant). Opened for joining in turn, it counts as a join of the one it sang over;
+`GET /performances/invites` lists a singer's open takes and the performances that joined them
+(**Joined yours** on Performances: Watch, Join too). Closing an invite stops the link; the files
+stay with whoever has them.
+
 ## Publishing mode (the show view)
 
 Publishing is its own portal (`/publishing`) for club owners with an active yearly subscription and for super admins (above; docs/BILLING.md for the paid way): per-platform destinations (YouTube, Facebook, Instagram, Twitch — RTMPS ingest URL +
@@ -445,7 +490,9 @@ the alpha-packed video the other singers get go down the same kind of track) —
 first** (`pickShowMime`: H.264 + AAC where the browser has an AAC encoder — Windows, Mac, iOS —
 else H.264 + Opus in MP4, WebM only where MP4 is not offered, i.e. Firefox; audio at 192 kbps) so
 a saved show plays wherever its Drive link is opened; the Drive file is named *song · meet ·
-date.mp4* (`performanceVideoName`), found again by its app property — from the kickstart to the
+date.mp4* (`performanceVideoName`), found again by its app property — from the moment Start is
+tapped (a recorder takes a moment to start; one started at the kickstart loses the first beat, so
+it starts ahead of it, and `videoOffsetMs`, its first frame's place on the song, is negative) to the
 end of the song, paused with the transport. Every frame the recorder draws ends with **the brand's
 mark** (`video/brandMark.ts`): the app's own small animated loop (`brand/sv-loop-sm.mp4`, the one
 the page's corner watermark plays) as a rounded tile in the top-right corner, an eighth of the

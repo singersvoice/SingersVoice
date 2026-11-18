@@ -35,6 +35,20 @@ export interface ShowRecording {
   startCtxTime: number;
   /** The picture at any moment shows this device's own sources this much earlier (they are held back to meet the others). */
   lagMs: number;
+  /** This singer's own cut-out, alpha-packed, recorded beside the show (join.ts): another singer's stage draws them from it. Null without a camera or where the browser cannot record it. */
+  cutout: { video: Blob; mimeType: string; startCtxTime: number } | null;
+}
+
+/** The cut-out video's frame: the person over black on the left, the grey mask on the right (alphaPack.ts), at the packer's size. */
+export const CUTOUT_WIDTH = 320;
+export const CUTOUT_HEIGHT = 426;
+export const CUTOUT_FPS = 15;
+
+/** The best container for the cut-out video on this browser ('' = none): a video track alone, light to encode. */
+export function pickCutoutMime(): string {
+  if (typeof MediaRecorder === 'undefined') return '';
+  const candidates = ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/mp4;codecs="avc1.42E01E"', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm'];
+  return candidates.find((c) => MediaRecorder.isTypeSupported(c)) ?? '';
 }
 
 /**
@@ -121,7 +135,20 @@ export class ShowRecorder {
   }
   private mr: MediaRecorder | null = null;
   private chunks: Blob[] = [];
+  /** The engine's clock at the recorder's `onstart`, then at the first frame pushed after it (the file's frame 0 — what the offsets are measured from). */
   private startCtx: number | null = null;
+  private firstFrameWanted = false;
+  /** This singer's live cut-out and its mask (the local feed's canvases), recorded alpha-packed beside the show while a camera is on. */
+  private cutoutSource: { person: HTMLCanvasElement; mask: HTMLCanvasElement } | null = null;
+  private cutout: { mr: MediaRecorder; track: CanvasTrack; canvas: HTMLCanvasElement; c2d: CanvasRenderingContext2D; chunks: Blob[]; startCtx: number | null; firstFrameWanted: boolean; lastFrameAt: number } | null = null;
+  /** The cut-out beside the show: set by a stage whose singer may be joined later (the Studio); null records the show alone. */
+  setCutoutSource(src: { person: HTMLCanvasElement; mask: HTMLCanvasElement } | null): void {
+    this.cutoutSource = src;
+  }
+  /** A cut-out is being recorded beside the show (tests). */
+  get recordingCutout(): boolean {
+    return this.cutout !== null;
+  }
   /** Every track made from the picture (the recording's, the film's): each drawn frame is pushed down all of them, visible tab or not. */
   private readonly tracks = new Set<CanvasTrack>();
   private recTrack: CanvasTrack | null = null;
@@ -344,10 +371,14 @@ export class ShowRecorder {
 
   /**
    * Start drawing now (if not already — the picture may be running for the film of the meet) and
-   * recording at `atCtxTime` (the song's kickstart on the engine's clock), so the first frames are
-   * already in step when the music starts.
+   * recording now too, ahead of `atCtxTime` (the song's kickstart on the engine's clock): a recorder
+   * takes a moment to start, and one started at the kickstart loses the first beat to it — so it
+   * starts at once, the few seconds of stage before the music go in, and the first frame's clock
+   * (`startCtxTime`, before the kickstart) gives the show's exact place on the song, as the vocal
+   * recorder's does for the voice.
    */
   start(engine: AudioEngine, atCtxTime: number): void {
+    void atCtxTime; // the kickstart is still the song's origin for the offsets; the recording need not wait for it
     if (this.mr) return; // a song is being recorded already
     this.engine = engine;
     this.buildAudio(engine);
@@ -369,9 +400,10 @@ export class ShowRecorder {
     mr.ondataavailable = (e) => e.data.size && this.chunks.push(e.data);
     mr.onstart = () => {
       this.startCtx = engine.ctx.currentTime;
+      this.firstFrameWanted = true; // the next frame drawn is the file's frame 0: its clock is the exact one
     };
     this.mr = mr;
-    const inMs = Math.max(0, (atCtxTime - engine.ctx.currentTime) * 1000);
+    const cut = this.cutoutSource ? this.startCutout(engine) : null;
     clearTimeout(this.startTimer);
     this.startTimer = setTimeout(() => {
       try {
@@ -379,12 +411,80 @@ export class ShowRecorder {
       } catch {
         this.mr = null;
       }
-    }, inMs);
+      try {
+        if (cut && cut.mr.state === 'inactive') cut.mr.start(1000);
+      } catch {
+        this.dropCutout();
+      }
+    }, 0);
+  }
+
+  /** The cut-out's recorder: the packed frame fed from `frame()` at the cut-out's own rate, started with the show's. */
+  private startCutout(engine: AudioEngine): NonNullable<ShowRecorder['cutout']> | null {
+    const mime = pickCutoutMime();
+    if (!mime) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = CUTOUT_WIDTH * 2;
+    canvas.height = CUTOUT_HEIGHT;
+    const c2d = canvas.getContext('2d', { alpha: false });
+    if (!c2d) return null;
+    c2d.fillStyle = '#000';
+    c2d.fillRect(0, 0, canvas.width, canvas.height);
+    const track = new CanvasTrack(canvas, CUTOUT_FPS);
+    let mr: MediaRecorder;
+    try {
+      mr = new MediaRecorder(new MediaStream([track.track]), { mimeType: mime, videoBitsPerSecond: 600_000 });
+    } catch {
+      track.stop();
+      return null;
+    }
+    const cut: NonNullable<ShowRecorder['cutout']> = { mr, track, canvas, c2d, chunks: [], startCtx: null, firstFrameWanted: false, lastFrameAt: 0 };
+    mr.ondataavailable = (e) => e.data.size && cut.chunks.push(e.data);
+    mr.onstart = () => {
+      cut.startCtx = engine.ctx.currentTime;
+      cut.firstFrameWanted = true;
+    };
+    this.cutout = cut;
+    return cut;
+  }
+
+  private dropCutout(): void {
+    const cut = this.cutout;
+    this.cutout = null;
+    if (!cut) return;
+    try {
+      if (cut.mr.state !== 'inactive') cut.mr.stop();
+    } catch {
+      /* already stopped */
+    }
+    cut.track.stop();
+  }
+
+  /** The packed cut-out frame — person left, mask right — at the cut-out's own rate, down its track. */
+  private cutoutFrame(now: number): void {
+    const cut = this.cutout;
+    const src = this.cutoutSource;
+    if (!cut || !src) return;
+    if (now - cut.lastFrameAt < 1000 / CUTOUT_FPS - 2) return;
+    cut.lastFrameAt = now;
+    const c = cut.c2d;
+    c.fillStyle = '#000';
+    c.fillRect(0, 0, CUTOUT_WIDTH * 2, CUTOUT_HEIGHT);
+    if (src.person.width && src.person.height) {
+      c.drawImage(src.person, 0, 0, CUTOUT_WIDTH, CUTOUT_HEIGHT);
+      c.drawImage(src.mask, CUTOUT_WIDTH, 0, CUTOUT_WIDTH, CUTOUT_HEIGHT);
+    }
+    if (cut.firstFrameWanted && this.engine) {
+      cut.firstFrameWanted = false;
+      cut.startCtx = this.engine.ctx.currentTime;
+    }
+    cut.track.push();
   }
 
   pause(): void {
     try {
       if (this.mr?.state === 'recording') this.mr.pause();
+      if (this.cutout?.mr.state === 'recording') this.cutout.mr.pause();
     } catch {
       /* ignore */
     }
@@ -393,6 +493,7 @@ export class ShowRecorder {
   resume(): void {
     try {
       if (this.mr?.state === 'paused') this.mr.resume();
+      if (this.cutout?.mr.state === 'paused') this.cutout.mr.resume();
     } catch {
       /* ignore */
     }
@@ -403,6 +504,7 @@ export class ShowRecorder {
     clearTimeout(this.startTimer);
     const mr = this.mr;
     this.mr = null;
+    this.firstFrameWanted = false;
     let out: ShowRecording | null = null;
     if (mr && mr.state !== 'inactive') {
       await new Promise<void>((resolve) => {
@@ -414,7 +516,25 @@ export class ShowRecorder {
         }
       });
       const video = new Blob(this.chunks, { type: mr.mimeType });
-      if (video.size && this.startCtx !== null) out = { video, mimeType: mr.mimeType, startCtxTime: this.startCtx, lagMs: this.lagMs };
+      if (video.size && this.startCtx !== null) out = { video, mimeType: mr.mimeType, startCtxTime: this.startCtx, lagMs: this.lagMs, cutout: null };
+    }
+    // The cut-out beside it, stopped the same way; a cut-out without a show is nothing.
+    const cut = this.cutout;
+    this.cutout = null;
+    if (cut) {
+      if (cut.mr.state !== 'inactive') {
+        await new Promise<void>((resolve) => {
+          cut.mr.onstop = () => resolve();
+          try {
+            cut.mr.stop();
+          } catch {
+            resolve();
+          }
+        });
+      }
+      cut.track.stop();
+      const video = new Blob(cut.chunks, { type: cut.mr.mimeType });
+      if (out && video.size && cut.startCtx !== null) out.cutout = { video, mimeType: cut.mr.mimeType, startCtxTime: cut.startCtx };
     }
     if (this.recTrack) {
       this.releaseTrack(this.recTrack);
@@ -433,6 +553,7 @@ export class ShowRecorder {
 
   dispose(): void {
     void this.stop();
+    this.dropCutout();
     for (const id of [...this.vocals.keys()]) this.setVocal(id, null);
     this.bgVideo?.pause();
     this.bgVideo = null;
@@ -520,8 +641,13 @@ export class ShowRecorder {
       this.compositor.draw();
       c.drawImage(this.compositor.canvas, 0, 0, W, H);
       this.mark.draw(c, W, H);
+      if (this.cutout) this.cutoutFrame(Date.now());
     } catch (e) {
       console.warn('show frame', e); // one bad frame never stops the recording
+    }
+    if (this.firstFrameWanted && this.engine) {
+      this.firstFrameWanted = false;
+      this.startCtx = this.engine.ctx.currentTime;
     }
     for (const t of this.tracks) t.push(); // the frame goes down every track by hand: a hidden tab records and streams on
   }

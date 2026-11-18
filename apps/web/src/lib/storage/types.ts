@@ -49,12 +49,25 @@ export interface PerformanceSummary {
   shared?: boolean;
   /** A chapter of a filmed event (the film of a meet, the broadcast's footage): which event, which chapter, what kind. */
   chapter?: PerformanceChapter;
+  /** The singer's cut-out video beside the show (join.ts): what another singer's stage draws them from. Drive: the file's id; this device: ''. */
+  cutout?: { driveId: string; mimeType: string; bytes: number };
+  /** A take sung over another performance: everyone on it ("alice & bob"), for the list. */
+  with?: string;
 }
 
 export interface LoadedPerformance {
   manifest: PerformanceManifest;
   vocal: Blob;
   video: Blob | null;
+  /** The singer's cut-out video, when asked for (`getPerformance(id, { cutout: true })`). */
+  cutout?: Blob | null;
+}
+
+/** The files of a take as saved: the vocal, the show (or a camera take), and the singer's cut-out beside the show. */
+export interface PerformanceFiles {
+  vocal: Blob;
+  video: Blob | null;
+  cutout?: Blob | null;
 }
 
 export type Progress = (p: { label: string; fraction: number }) => void;
@@ -102,15 +115,17 @@ export interface StorageProvider {
   shareTrack(trackId: string, with_: { type: 'anyone' } | { type: 'user'; email: string }): Promise<string>;
 
   listPerformances(): Promise<PerformanceSummary[]>;
-  getPerformance(performanceId: string): Promise<LoadedPerformance | null>;
-  savePerformance(manifest: PerformanceManifest, files: { vocal: Blob; video: Blob | null }, onProgress?: Progress): Promise<PerformanceSummary>;
+  /** A performance's details without its files (the manifest, the summary with its file ids). */
+  describePerformance(performanceId: string): Promise<{ manifest: PerformanceManifest; summary: PerformanceSummary } | null>;
+  getPerformance(performanceId: string, opts?: { cutout?: boolean }): Promise<LoadedPerformance | null>;
+  savePerformance(manifest: PerformanceManifest, files: PerformanceFiles, onProgress?: Progress): Promise<PerformanceSummary>;
   /** Start writing a performance's video piece by piece (the film of a whole meet); `manifest.files` names the one video file. */
   beginPerformanceStream(manifest: PerformanceManifest, mimeType: string): Promise<PerformanceStream>;
   keepPerformance(performanceId: string): Promise<void>;
   deletePerformance(performanceId: string): Promise<void>;
   /**
-   * Share a performance folder (manifest, vocal, show video): anyone-with-the-link, or a Google
-   * account (the other singers of a meet). Returns the folder link and the video link.
+   * Share a performance (the show, and the singer's cut-out beside it): anyone-with-the-link, or a
+   * Google account (the other singers of a meet). Returns the file link and the video link.
    */
   sharePerformance(performanceId: string, with_: { type: 'anyone' } | { type: 'user'; email: string }): Promise<{ link: string; videoLink: string | null }>;
   /** Delete Temp performances past their expiry. Returns how many were removed. */

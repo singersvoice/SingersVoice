@@ -10,7 +10,7 @@
  * Deleting is plain: a Delete on every row, and Delete all for a whole section — the files go from
  * your Drive for good (never the trash), and a meet performance is unlisted for everyone in the meet.
  */
-import { formatMs, type MeetPerformance } from '@singersvoice/protocol';
+import { formatMs, joinPath, singersLine, type JoinInvite, type MeetPerformance } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { IcDownload, IcPlay, IcShare, IcStop, IcTrash, IcUsers } from '../../components/icons.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
@@ -19,6 +19,7 @@ import { Empty, Seg, Sheet, Spinner } from '../../components/ui.tsx';
 import { api, controlConfigured } from '../../lib/api.ts';
 import { downloadBlob, shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
+import { closeInvite, invitePerformance, joinUrl } from '../../lib/joins.ts';
 import { groupEvents, type FilmEvent } from '../../lib/filmEvents.ts';
 import type { LoadedPerformance, PerformanceSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
@@ -30,6 +31,9 @@ export function Performances() {
   const [shows, setShows] = useState<MeetPerformance[] | null>(null);
   const [filter, setFilter] = useState<'all' | 'kept' | 'temp'>('all');
   const [open, setOpen] = useState<PerformanceSummary | null>(null);
+  /** Joining (lib/joins.ts): the takes I opened for others, and the performances others made by joining mine. */
+  const [invites, setInvites] = useState<{ mine: JoinInvite[]; joined: JoinInvite[] } | null>(null);
+  const [inviting, setInviting] = useState<string | null>(null);
 
   const reload = () => {
     void withProvider(async (p) => {
@@ -41,12 +45,19 @@ export function Performances() {
       setList([]);
       toast(errorText(e), 'error');
     });
-    if (controlConfigured.value)
+    if (controlConfigured.value) {
       api
         .get('GET /performances', '/performances')
         .then((r) => setShows(r.performances))
         .catch(() => setShows([]));
-    else setShows([]);
+      api
+        .get('GET /performances/invites', '/performances/invites')
+        .then(setInvites)
+        .catch(() => setInvites({ mine: [], joined: [] }));
+    } else {
+      setShows([]);
+      setInvites({ mine: [], joined: [] });
+    }
   };
   useEffect(() => void reload(), []);
 
@@ -63,6 +74,59 @@ export function Performances() {
     if (!url) return toast('No link yet — the host saved this performance without Drive', 'warn');
     const r = await shareOrCopy(title, 'A SingersVoice performance', url);
     toast(r === 'copied' ? 'Link copied' : r === 'shared' ? 'Shared' : url, r === 'failed' ? 'warn' : 'ok');
+  };
+
+  const openFor = useMemo(() => new Map((invites?.mine ?? []).map((i) => [i.performanceId, i])), [invites]);
+  /** Open a take for others to sing over (kept, shared, on record) and hand out its link. */
+  const inviteTake = async (p: PerformanceSummary) => {
+    setInviting(p.performanceId);
+    try {
+      const { url } = await invitePerformance(p.performanceId);
+      const r = await shareOrCopy(`Join me on "${p.trackTitle}"`, 'Sing this with me on SingersVoice', url);
+      toast(r === 'copied' ? 'Join link copied — send it to whoever sings next' : r === 'shared' ? 'Join link shared' : url, r === 'failed' ? 'warn' : 'ok', 7000);
+      reload();
+    } catch (e) {
+      toast(errorText(e), 'error', 9000);
+    } finally {
+      setInviting(null);
+    }
+  };
+  const copyJoin = async (p: { performanceId: string; trackTitle: string }) => {
+    const url = joinUrl(p.performanceId);
+    const r = await shareOrCopy(`Join me on "${p.trackTitle}"`, 'Sing this with me on SingersVoice', url);
+    toast(r === 'copied' ? 'Join link copied' : r === 'shared' ? 'Shared' : url, r === 'failed' ? 'warn' : 'ok', 6000);
+  };
+  const closeJoin = async (p: PerformanceSummary) => {
+    if (!confirm(`Close "${p.trackTitle}" to joining? The link stops opening it (the files stay with whoever has them).`)) return;
+    try {
+      await closeInvite(p.performanceId);
+      toast('Closed to joining', 'ok');
+      reload();
+    } catch (e) {
+      toast(errorText(e), 'error', 8000);
+    }
+  };
+  /** The joining controls on one of my takes: open it, or (open already) its link, how many joined, close. */
+  const joinControls = (p: PerformanceSummary) => {
+    if (!isDrive.value || !p.hasVideo || (p.kind ?? 'take') !== 'show' || !controlConfigured.value) return null;
+    const inv = openFor.get(p.performanceId);
+    return inv ? (
+      <>
+        <span class="chip ok" data-open-to-join={inv.joins}>
+          open to join · {inv.joins} joined
+        </span>
+        <button class="btn sm" aria-label={`Copy the join link for ${p.trackTitle}`} onClick={() => void copyJoin(p)} data-join-link-copy>
+          <IcShare size={14} /> Join link
+        </button>
+        <button class="btn sm" aria-label={`Close ${p.trackTitle} to joining`} onClick={() => void closeJoin(p)} data-join-close>
+          Close
+        </button>
+      </>
+    ) : (
+      <button class="btn sm accent" disabled={inviting !== null} aria-label={`Invite others to join ${p.trackTitle}`} onClick={() => void inviteTake(p)} data-invite-join>
+        {inviting === p.performanceId ? <Spinner /> : <IcUsers size={14} />} Invite to join
+      </button>
+    );
   };
 
   const saving = saveJobs.value;
@@ -258,6 +322,42 @@ export function Performances() {
           </div>
         </section>
 
+        {invites && invites.joined.length > 0 && (
+          <section class="card stack pad-sm" data-section="joined">
+            <div class="row between">
+              <h3 style="margin:0">Joined yours</h3>
+              <span class="chip">{invites.joined.length}</span>
+            </div>
+            <div class="muted small">Performances other singers made by joining one of yours: their part over your take, everyone on one stage. Each lives in its singer's Drive; watch it, or join it too.</div>
+            <div class="list">
+              {invites.joined.map((i) => (
+                <div class="item wide-actions" key={i.performanceId} data-joined={i.performanceId}>
+                  <div class="thumb" style="background:linear-gradient(135deg,#1a4a3a,#2a8a6a)">
+                    <IcUsers size={20} />
+                  </div>
+                  <div class="meta">
+                    <div class="t">
+                      {i.trackTitle} · {singersLine(i.layers)}
+                    </div>
+                    <div class="s">
+                      {new Date(i.createdAt).toLocaleString()} · {formatMs(i.durationMs)} · {i.ownerName} joined · {i.layers.length} on stage
+                      {i.joins ? ` · ${i.joins} joined theirs` : ''}
+                    </div>
+                  </div>
+                  <div class="actions">
+                    <a class="btn sm primary" href={i.show.link} target="_blank" rel="noopener">
+                      <IcPlay size={14} /> Watch
+                    </a>
+                    <a class="btn sm accent" href={href(joinPath(i.performanceId))} data-join-too>
+                      <IcUsers size={14} /> Join too
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section class="card stack pad-sm" data-section="takes">
           <div class="row between">
             <h3 style="margin:0">Your takes</h3>
@@ -284,7 +384,7 @@ export function Performances() {
             </div>
           )}
           {list && !takes.length && (
-            <Empty title="No takes here" body="Takes land here after you finish singing — the video is the show (the stage with everyone, with the mix). Temp takes auto-delete after 7 days unless you keep them.">
+            <Empty title="No takes here" body="Takes land here after you finish singing — the video is the show (the stage with everyone, with the mix). Temp takes auto-delete after 7 days unless you keep them. Invite others to join a take and they sing their part over it.">
               <a class="btn primary" href={href('/studio/sing')}>
                 Sing something
               </a>
@@ -300,6 +400,7 @@ export function Performances() {
                   <div class="t">
                     {p.meetTitle ? `${p.meetTitle} · ` : ''}
                     {p.trackTitle}
+                    {p.with ? <span class="muted"> · with {p.with}</span> : null}
                   </div>
                   <div class="s">
                     {new Date(p.createdAt).toLocaleString()} · {formatMs(p.durationMs)} · {p.mode}
@@ -308,6 +409,7 @@ export function Performances() {
                 </div>
                 <div class="actions">
                   <span class={`chip ${p.state === 'temp' ? 'warn' : 'ok'}`}>{p.state === 'temp' ? `Temp · ${daysLeft(p.expiresAt)}` : 'Kept'}</span>
+                  {joinControls(p)}
                   <button class="btn sm danger" disabled={deleting !== null} aria-label={`Delete ${p.trackTitle}`} title="Delete permanently from your Drive" onClick={() => void deleteRows([{ id: p.performanceId, show: false }], `"${p.trackTitle}"`)}>
                     {deleting?.id === p.performanceId ? <Spinner /> : <IcTrash size={14} />} Delete
                   </button>

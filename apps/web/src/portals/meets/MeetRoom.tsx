@@ -1043,7 +1043,7 @@ function LiveStage(props: {
       player.play(t0, offsetMs);
       takeOrigin.current = player.originCtxTime();
       recPos.current = offsetMs;
-      // The show — the stage with everyone and the whole mix — records from the kickstart.
+      // The show — the stage with everyone and the whole mix — records from now (its first frame's clock places it on the song; the kickstart is the origin).
       show.start(engine, t0);
       setStarted(true);
       props.onSinging(true);

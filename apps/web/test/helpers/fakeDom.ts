@@ -67,7 +67,7 @@ export class FakeStream {
 
 export interface FakeDom {
   contexts: (FakeCtx & Record<string, unknown>)[];
-  video: { readyState: number; videoWidth: number; videoHeight: number; srcObject: unknown; isConnected: boolean; play: () => Promise<void>; pause: () => void; remove: () => void; onpause: unknown; muted: boolean; playsInline: boolean; autoplay: boolean; style: { cssText: string }; setAttribute: () => void; currentTime: number; requestVideoFrameCallback?: (cb: () => void) => number; frame: () => void };
+  video: { readyState: number; videoWidth: number; videoHeight: number; srcObject: unknown; isConnected: boolean; play: () => Promise<void>; pause: () => void; load: () => void; addEventListener: (n: string, cb: EventListener) => void; removeEventListener: (n: string, cb: EventListener) => void; removeAttribute: (n: string) => void; paused: boolean; duration: number; src: string; remove: () => void; onpause: unknown; muted: boolean; playsInline: boolean; autoplay: boolean; style: { cssText: string }; setAttribute: () => void; currentTime: number; requestVideoFrameCallback?: (cb: () => void) => number; frame: () => void };
   document: { visibilityState: string; dispatchEvent: (e: Event) => boolean };
 }
 
@@ -94,6 +94,13 @@ function installFakeDom(): FakeDom {
     isConnected: false,
     play: () => Promise.resolve(),
     pause: () => undefined,
+    load: () => undefined,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    removeAttribute: () => undefined,
+    paused: true,
+    duration: 0,
+    src: '',
     remove: () => undefined,
     onpause: null,
     muted: false,
