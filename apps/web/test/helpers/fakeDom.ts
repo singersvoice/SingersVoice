@@ -7,7 +7,7 @@ import { afterEach, beforeEach } from 'vitest';
 
 const g = globalThis as Record<string, unknown>;
 const saved: Record<string, PropertyDescriptor | undefined> = {};
-const keys = ['document', 'window', 'navigator', 'HTMLCanvasElement', 'MediaStream', 'performance'];
+const keys = ['document', 'window', 'navigator', 'HTMLCanvasElement', 'MediaStream', 'performance', 'requestAnimationFrame', 'cancelAnimationFrame'];
 /** Set a global even where Node defines it with a getter only (navigator). */
 const set = (k: string, v: unknown) => Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true, enumerable: true });
 const restore = () => {
@@ -67,7 +67,7 @@ export class FakeStream {
 
 export interface FakeDom {
   contexts: (FakeCtx & Record<string, unknown>)[];
-  video: { readyState: number; videoWidth: number; videoHeight: number; srcObject: unknown; isConnected: boolean; play: () => Promise<void>; remove: () => void; onpause: unknown; muted: boolean; playsInline: boolean; autoplay: boolean; style: { cssText: string }; setAttribute: () => void; currentTime: number; requestVideoFrameCallback?: (cb: () => void) => number; frame: () => void };
+  video: { readyState: number; videoWidth: number; videoHeight: number; srcObject: unknown; isConnected: boolean; play: () => Promise<void>; pause: () => void; remove: () => void; onpause: unknown; muted: boolean; playsInline: boolean; autoplay: boolean; style: { cssText: string }; setAttribute: () => void; currentTime: number; requestVideoFrameCallback?: (cb: () => void) => number; frame: () => void };
   document: { visibilityState: string; dispatchEvent: (e: Event) => boolean };
 }
 
@@ -93,6 +93,7 @@ function installFakeDom(): FakeDom {
     srcObject: null,
     isConnected: false,
     play: () => Promise.resolve(),
+    pause: () => undefined,
     remove: () => undefined,
     onpause: null,
     muted: false,
@@ -129,6 +130,8 @@ function installFakeDom(): FakeDom {
   set('document', document);
   set('window', { ...(g.window as object | undefined), devicePixelRatio: 1, requestAnimationFrame: () => 0, cancelAnimationFrame: () => undefined });
   set('navigator', { userAgent: 'FakeBrowser', hardwareConcurrency: 8 });
+  set('requestAnimationFrame', () => 0);
+  set('cancelAnimationFrame', () => undefined);
   set('HTMLCanvasElement', class {});
   set('MediaStream', FakeStream);
   return { contexts, video, document };

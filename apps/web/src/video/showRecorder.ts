@@ -1,7 +1,7 @@
 /**
  * The saved performance: a recording of the show — exactly the broadcast picture Publisher mode
- * shows (every singer on stage cut out over the stage background, huge, no lyrics) with the whole
- * mix as its sound (the backing track, this singer's vocal after FX, and every other singer's
+ * shows (every singer on stage cut out over the stage background, huge, no lyrics, the brand's
+ * animated mark in the top-right corner — `brandMark.ts`) with the whole mix as its sound (the backing track, this singer's vocal after FX, and every other singer's
  * vocal as it arrives over the mesh). It runs on a singer's device beside the live stage: its
  * own 1280×720 canvas, its own 'show' compositor over the same cut-outs the stage draws, its own
  * audio bus on the engine's context, one MediaRecorder.
@@ -15,6 +15,7 @@ import type { BackgroundItem, MixBatch } from '@singersvoice/protocol';
 import type { AudioEngine } from '../audio/engine.ts';
 import { MixBroadcaster } from '../audio/mixBroadcast.ts';
 import { MixBus } from '../audio/mixBus.ts';
+import { BrandMark } from './brandMark.ts';
 import { CanvasTrack, canvasTracks } from './canvasTrack.ts';
 import { StageCompositor, type StagePerformer } from './stage.ts';
 
@@ -101,6 +102,8 @@ export class ShowRecorder {
   readonly canvas: HTMLCanvasElement;
   private readonly c2d: CanvasRenderingContext2D;
   private readonly compositor = new StageCompositor('show');
+  /** The brand's mark over every frame (the recording, the film, the broadcast carry it). */
+  readonly mark = new BrandMark();
   private performers: StagePerformer[] = [];
   private delayed = new Map<string, DelayedCanvas>();
   private background: { item: BackgroundItem; src: string } | null = null;
@@ -434,6 +437,7 @@ export class ShowRecorder {
     this.bgVideo?.pause();
     this.bgVideo = null;
     this.compositor.stop();
+    this.mark.dispose();
   }
 
   // ---- the mix: backing track + own vocal (held back by the lag) + every other singer's vocal, through the shared bus ----
@@ -504,7 +508,7 @@ export class ShowRecorder {
     this.audio = null;
   }
 
-  // ---- the picture: background, then the show compositor's transparent stage ----
+  // ---- the picture: background, then the show compositor's transparent stage, then the brand's mark ----
 
   private frame(): void {
     const c = this.c2d;
@@ -515,6 +519,7 @@ export class ShowRecorder {
       for (const d of this.delayed.values()) d.tick();
       this.compositor.draw();
       c.drawImage(this.compositor.canvas, 0, 0, W, H);
+      this.mark.draw(c, W, H);
     } catch (e) {
       console.warn('show frame', e); // one bad frame never stops the recording
     }

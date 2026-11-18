@@ -446,7 +446,11 @@ first** (`pickShowMime`: H.264 + AAC where the browser has an AAC encoder — Wi
 else H.264 + Opus in MP4, WebM only where MP4 is not offered, i.e. Firefox; audio at 192 kbps) so
 a saved show plays wherever its Drive link is opened; the Drive file is named *song · meet ·
 date.mp4* (`performanceVideoName`), found again by its app property — from the kickstart to the
-end of the song, paused with the transport. The take's video
+end of the song, paused with the transport. Every frame the recorder draws ends with **the brand's
+mark** (`video/brandMark.ts`): the app's own small animated loop (`brand/sv-loop-sm.mp4`, the one
+the page's corner watermark plays) as a rounded tile in the top-right corner, an eighth of the
+picture tall — so the saved performance, each chapter of the film of a meet and the broadcast all
+carry it; the loop's poster stands in until it plays. The take's video
 is that recording (`videoOffsetMs` = its first frame's place on the track timeline, lag included).
 A live take never waits for a review: the stage hands it to the **background saver**
 (`lib/saveQueue.ts`, one job at a time, each stage memoised so a retry never uploads twice, three
