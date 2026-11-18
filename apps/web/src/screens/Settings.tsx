@@ -6,7 +6,7 @@ import { IcDrive } from '../components/icons.tsx';
 import { dbLabel, INSTRUMENT_LEVELS } from '../components/MicStatus.tsx';
 import { Page } from '../components/Shell.tsx';
 import { Field, Seg, Switch } from '../components/ui.tsx';
-import { googleConfigured, loadGis } from '../lib/google.ts';
+import { DriveScopeMissingError, googleConfigured, loadGis } from '../lib/google.ts';
 import { idb, STORES } from '../lib/idb.ts';
 import { asset, go, href } from '../lib/nav.ts';
 import { bytes, isStandalone, platformName } from '../lib/platform.ts';
@@ -59,7 +59,7 @@ export function Settings() {
       toast('Google Drive linked', 'ok');
       setLinks(provider.value.links());
     } catch (e) {
-      toast(errorText(e), 'error', 7000);
+      toast(errorText(e), e instanceof DriveScopeMissingError ? 'warn' : 'error', 9000); // the Drive box left unticked is a step, not a failure
     }
   };
   const out = async () => {

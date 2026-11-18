@@ -85,6 +85,9 @@ jobs:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/tracks-e2e.mjs screenshots
 
+      - name: The first sign-in with Google faked (the Drive box left unticked is "One more tick", never an error; a fresh token's refusal asked again; the folders made)
+        run: node tools/ci/signin-e2e.mjs screenshots
+
       - name: Roles, the Admin page and the instrument (audio only on stage, a club owner's year granted, expired, renewed, revoked; a USB input beside the mic)
         env:
           BASE_PATH: /SingersVoice/

@@ -82,7 +82,14 @@ export async function signInWithGoogle(): Promise<void> {
     localStorage.setItem(MODE_KEY, 'drive');
     drive = new DriveProvider(() => token.value, prof.sub);
     busy.value = 'Preparing your SingersVoice folder in Drive…';
-    await drive.ready();
+    // The sign-in is done; the folders are a step of their own (tried a few times inside). Should they still not come,
+    // the set-up screen says so with a Retry — never a sign-in reported as failed when it has succeeded.
+    try {
+      await drive.ready();
+    } catch (e) {
+      if (e instanceof AuthExpiredError) throw e;
+      console.warn('Drive folders not ready after the sign-in', e);
+    }
     needsReconnect.value = false;
   } finally {
     busy.value = null;

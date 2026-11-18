@@ -20,7 +20,7 @@ Live build: **https://singersvoice.github.io/SingersVoice/**
 
 ## 10-minute smoke test
 
-1. **Welcome** → *Continue with Google* (needs the OAuth client, see GOOGLE_OAUTH.md) or *Try it on this device*.
+1. **Welcome** → *Continue with Google* (needs the OAuth client, see GOOGLE_OAUTH.md) or *Try it on this device*. On Google's screen tick the Drive box (none is ticked beforehand); left unticked, the app shows **One more tick** — a step, not an error — and the next tap with the box ticked signs you in.
 2. **Setup** → Test microphone, Test camera, *Go to my stage*.
 3. **Track Maker** → pick an mp3/m4a → paste lyrics (one line each) → choose singers + pattern → *Apply* → Timing:
    play and tap **Mark** on each line → *Review & save* → *Sing it now*.
@@ -130,6 +130,21 @@ no count. Runs in CI before the live meet.
 
 ```bash
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/tracks-e2e.mjs screenshots
+```
+
+## The first sign-in (`tools/ci/signin-e2e.mjs`)
+
+Google faked in the browser (its sign-in library and the profile and Drive endpoints answered by the
+test; the script builds its own copy of the app with a client id, a few seconds). Google's screen
+lists each permission with a box to tick, none ticked beforehand, and the first answer comes back
+without the Drive one — what a first-timer who just taps Continue gets: the sign-in screen shows the
+**One more tick** step (what to tick and why), no error toast, nothing kept from the attempt. The
+second answer has the box ticked: signed in, the set-up screen makes the Drive folders — with the
+first two Drive calls refused (403, the way the moments after a consent can see) and asked again
+without a word. No error toast on the way in, no page errors.
+
+```bash
+node tools/ci/signin-e2e.mjs screenshots
 ```
 
 ## Roles, the Admin page and the instrument (`tools/ci/roles-e2e.mjs`)

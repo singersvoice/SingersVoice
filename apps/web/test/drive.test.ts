@@ -1,6 +1,6 @@
 /** DriveProvider against an in-memory fake of the Drive v3 endpoints it uses (helpers/fakeDrive.ts). */
 import { createTrack } from '@singersvoice/protocol';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DriveProvider } from '../src/lib/storage/drive.ts';
 import { FakeDrive, type FakeFile } from './helpers/fakeDrive.ts';
 
@@ -37,6 +37,38 @@ const sampleTrack = () =>
   });
 
 describe('DriveProvider (fake Drive v3)', () => {
+  it("a refusal in a token's first minute is asked again (the permission just given reaching Drive); the folders are tried three times; an old token's refusal counts", async () => {
+    vi.useFakeTimers();
+    try {
+      // Drive says no to the first calls — the way it can right after the consent screen — then behaves.
+      const realFetch = drive.fetch.bind(drive);
+      let refuse = 0;
+      (globalThis as { fetch: typeof fetch }).fetch = (i, init) => (refuse-- > 0 ? Promise.resolve(Response.json({ error: { message: 'The caller does not have permission' } }, { status: 403 })) : realFetch(i, init));
+      refuse = 5;
+      const fresh = new DriveProvider(() => ({ accessToken: 'tok', expiresAt: Date.now() + 3600_000, scope: '', issuedAt: Date.now() }), 'sub-fresh');
+      const ready = fresh.ready();
+      await vi.runAllTimersAsync();
+      await ready; // five refusals absorbed: the call's own retries, then the folder build's
+      expect([...drive.files.values()].some((f) => f.name === 'SingersVoice')).toBe(true);
+      expect(refuse).toBeLessThanOrEqual(0);
+      // A token from long ago gets no such benefit of the doubt: the folder build still tries three times, then the refusal stands.
+      refuse = 3;
+      const stale = new DriveProvider(() => ({ accessToken: 'tok2', expiresAt: Date.now() + 3600_000, scope: '' }), 'sub-stale');
+      const failing = stale.ready();
+      const outcome = failing.then(
+        () => 'ok',
+        (e: Error) => e.message,
+      );
+      await vi.runAllTimersAsync();
+      expect(await outcome).toMatch(/Drive error 403: The caller does not have permission/);
+      // …and the next attempt (the set-up screen's Retry) goes through.
+      await stale.ready();
+      expect(stale.links().root).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('creates the SingersVoice tree, saves track.json + audio under Tracks/<title>, and reads them back', async () => {
     const p = new DriveProvider(() => token, 'sub1');
     await p.ready();

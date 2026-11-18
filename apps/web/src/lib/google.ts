@@ -18,6 +18,8 @@ export interface GoogleToken {
   /** ms since epoch */
   expiresAt: number;
   scope: string;
+  /** When Google handed it out (ms since epoch): a refusal in its first minute is tried again before it counts. */
+  issuedAt?: number;
 }
 
 export interface GoogleProfile {
@@ -31,6 +33,21 @@ export class AuthExpiredError extends Error {
   constructor() {
     super('Google session expired — reconnect to continue');
     this.name = 'AuthExpiredError';
+  }
+}
+
+/** The Drive box on Google's screen: what the person has to tick for SingersVoice to keep their takes in their Drive. */
+export const DRIVE_TICK = 'See, edit, create and delete only the specific Google Drive files you use with this app';
+
+/**
+ * Google's screen lists each permission with a box to tick, none ticked beforehand. A sign-in that came
+ * back without the Drive one is not an error on anyone's part — one more tap, with the box ticked,
+ * and it is done. The sign-in screen shows this as a step, not as a failure.
+ */
+export class DriveScopeMissingError extends Error {
+  constructor() {
+    super(`One more tick: on Google’s screen, tick “${DRIVE_TICK}” — that is where your takes and tracks are kept — then Continue.`);
+    this.name = 'DriveScopeMissingError';
   }
 }
 
@@ -156,14 +173,13 @@ export async function requestToken(opts: { prompt: '' | 'consent' | 'select_acco
       scope: scopes.join(' '),
       callback: (r) => {
         if (!r.access_token) return reject(new Error(signInError(r.error, r.error_description)));
-        const granted = (r.scope ?? '').split(' ');
-        if (!granted.includes('https://www.googleapis.com/auth/drive.file')) {
-          return reject(new Error('Drive access was not granted — tick "See, edit, create and delete only the specific Google Drive files you use with this app"'));
-        }
-        if (opts.youtube && !granted.includes(YOUTUBE_SCOPE)) {
+        // What was ticked (Google names the scopes it granted; a response without the list is taken at its word).
+        const granted = r.scope ? r.scope.split(' ') : null;
+        if (granted && !granted.includes('https://www.googleapis.com/auth/drive.file')) return reject(new DriveScopeMissingError());
+        if (granted && opts.youtube && !granted.includes(YOUTUBE_SCOPE)) {
           return reject(new Error('YouTube access was not granted — tick "Manage your YouTube account" on the Google screen'));
         }
-        const token = { accessToken: r.access_token, expiresAt: Date.now() + ((r.expires_in ?? 3600) - 60) * 1000, scope: r.scope ?? '' };
+        const token: GoogleToken = { accessToken: r.access_token, expiresAt: Date.now() + ((r.expires_in ?? 3600) - 60) * 1000, scope: r.scope ?? '', issuedAt: Date.now() };
         storeToken(token);
         resolve(token);
       },
@@ -182,12 +198,22 @@ export async function requestToken(opts: { prompt: '' | 'consent' | 'select_acco
   });
 }
 
+/** A token Google handed out within the last minute and a half: its first refusals are tried again before they count. */
+export const freshToken = (t: GoogleToken | null | undefined): boolean => Boolean(t && typeof t.issuedAt === 'number' && Date.now() - t.issuedAt < 90_000);
+
 export async function fetchProfile(token: GoogleToken): Promise<GoogleProfile> {
-  const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${token.accessToken}` } });
-  if (r.status === 401) throw new AuthExpiredError();
-  if (!r.ok) throw new Error(`userinfo failed (${r.status})`);
-  const j = (await r.json()) as Partial<GoogleProfile>;
-  return { sub: j.sub ?? '', name: j.name ?? j.email ?? 'Singer', email: j.email ?? '', picture: j.picture ?? '' };
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${token.accessToken}` } });
+    if (r.status === 401) throw new AuthExpiredError();
+    // A token minted a moment ago can be refused once while Google's own services catch up with it: again, a few times.
+    if (!r.ok && attempt < 3 && (r.status === 403 || r.status === 429 || r.status >= 500)) {
+      await new Promise((f) => setTimeout(f, 700 * 2 ** attempt));
+      continue;
+    }
+    if (!r.ok) throw new Error(`userinfo failed (${r.status})`);
+    const j = (await r.json()) as Partial<GoogleProfile>;
+    return { sub: j.sub ?? '', name: j.name ?? j.email ?? 'Singer', email: j.email ?? '', picture: j.picture ?? '' };
+  }
 }
 
 export async function revokeToken(token: GoogleToken | null): Promise<void> {

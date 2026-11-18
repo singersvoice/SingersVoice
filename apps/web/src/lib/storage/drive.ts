@@ -27,7 +27,7 @@ import {
   type TrackPackageV2,
 } from '@singersvoice/protocol';
 import { extFromMime } from '../decode.ts';
-import { AuthExpiredError, type GoogleToken } from '../google.ts';
+import { AuthExpiredError, freshToken, type GoogleToken } from '../google.ts';
 import { md5Blob } from '../md5.ts';
 import type { LoadedPerformance, LoadedTrack, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
 
@@ -112,6 +112,12 @@ export class DriveProvider implements StorageProvider {
     if (r.status === 401) throw new AuthExpiredError();
     if ((r.status === 429 || r.status >= 500 || (r.status === 403 && (await isRateLimited(r.clone())))) && attempt < 4) {
       await sleep(800 * 2 ** attempt + Math.random() * 300);
+      return this.fetchOk(url, init, attempt + 1);
+    }
+    // Right after a sign-in the permission just given can take a moment to reach the Drive API: a refusal of a token
+    // minted within the minute is asked again, a few times, before it counts (a second time, never a sign-in gone wrong).
+    if (r.status === 403 && attempt < 3 && freshToken(this.getToken())) {
+      await sleep(800 * 2 ** attempt);
       return this.fetchOk(url, init, attempt + 1);
     }
     if (!r.ok) throw new Error(await errorMessage(r));
@@ -296,7 +302,7 @@ export class DriveProvider implements StorageProvider {
   async ready(): Promise<void> {
     if (this.tree) return;
     if (!this.treeReady) {
-      this.treeReady = this.buildTree()
+      this.treeReady = this.buildTreeAgainIfRefused()
         .then(() => {
           void this.finishDanglingFilms().catch(() => undefined); // a film cut short by a dying tab is completed in the background
         })
@@ -305,6 +311,19 @@ export class DriveProvider implements StorageProvider {
         });
     }
     return this.treeReady;
+  }
+
+  /** The folder tree, tried three times over a few seconds: the moments after a sign-in can see a refusal that is gone a second later. */
+  private async buildTreeAgainIfRefused(): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.buildTree();
+      } catch (e) {
+        if (e instanceof AuthExpiredError || attempt >= 2) throw e;
+        console.warn('Drive: folders not ready yet, trying again', e);
+        await sleep(1500 * (attempt + 1));
+      }
+    }
   }
 
   private async buildTree(): Promise<void> {

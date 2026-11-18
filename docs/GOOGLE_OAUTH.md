@@ -41,13 +41,24 @@ Without a client ID the app still runs fully in **device mode** (IndexedDB), so 
 
 ## 3. What happens on first sign-in
 
-1. "Continue with Google" opens the Google consent (one popup; on iOS Safari it is a sheet).
-2. The app receives a 1-hour access token (kept in session/local storage). It goes to Google and, as the
-   sign-in, to sv-control; for a **YouTube song track** sv-control hands it on to the relay for that one
-   job, which uploads the video and its sound into the singer's Drive with it (docs/RELAY.md) — nowhere else.
+1. "Continue with Google" opens the Google consent (one popup; on iOS Safari it is a sheet). Google's
+   screen lists each permission with a **box to tick, none ticked beforehand** (Google's granular
+   consent; an app cannot pre-tick them). The sign-in screen says so under the button — *tick the
+   Google Drive box* — and when a sign-in comes back without the Drive one ticked, the app shows it as
+   a step, **One more tick**, with the button reading *Continue with Google — tick the Drive box*: one
+   more tap with the box ticked, and it is done. It is never reported as an error, and nothing is kept
+   from the attempt without it (`DriveScopeMissingError`, `lib/google.ts`).
+2. The app receives a 1-hour access token (kept in session/local storage, with the moment it was
+   minted). It goes to Google and, as the sign-in, to sv-control; for a **YouTube song track**
+   sv-control hands it on to the relay for that one job, which uploads the video and its sound into the
+   singer's Drive with it (docs/RELAY.md) — nowhere else. In the token's first minute and a half a
+   refusal from Google (a 403 while the permission just given reaches the Drive API, or the profile
+   lookup) is asked again a few times before it counts.
 3. It creates, once per account: `SingersVoice/Tracks` (and `Tracks/YT` for the YouTube song tracks),
    `Performances` (one file per performance), `Temp`, `Config`, `Backgrounds`, `Exports` — every file
-   carries `appProperties` (`svType`, `svId`, …).
+   carries `appProperties` (`svType`, `svId`, …). The folders are a step of their own on the set-up
+   screen (tried three times over a few seconds); should they still not come, that step says so with a
+   **Retry** — the sign-in itself is never reported as failed once it has succeeded.
 4. When the token expires a **Reconnect Drive** button appears in the top bar (a tap, no re-consent).
 
 ## 3a. YouTube run by the app (Publishing → Destinations → Connect YouTube)

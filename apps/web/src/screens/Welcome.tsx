@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { inAppBrowser, openInBrowserUrl } from '../lib/browserEnv.ts';
-import { googleConfigured, loadGis } from '../lib/google.ts';
+import { DRIVE_TICK, DriveScopeMissingError, googleConfigured, loadGis } from '../lib/google.ts';
 import { asset, go } from '../lib/nav.ts';
 import { persistStorage, platformName } from '../lib/platform.ts';
 import { errorText, toast } from '../lib/toast.ts';
@@ -37,13 +37,16 @@ export function Welcome() {
     if (u) window.location.href = u;
   };
 
+  // Google's screen came back without the Drive box ticked: a step to show, not an error to report.
+  const [tick, setTick] = useState(false);
   const onGoogle = async () => {
     try {
       await signInWithGoogle();
       await pullSettings();
       go('/setup', true);
     } catch (e) {
-      toast(errorText(e), 'error', 7000);
+      if (e instanceof DriveScopeMissingError) setTick(true);
+      else toast(errorText(e), 'error', 7000);
     }
   };
 
@@ -62,10 +65,20 @@ export function Welcome() {
         </p>
       </div>
       <div class="actions">
+        {tick && (
+          <div class="callout" data-tick-drive>
+            <b>One more tick.</b> On Google&rsquo;s screen, tick <i>&ldquo;{DRIVE_TICK}&rdquo;</i> &mdash; that is where your takes and tracks are kept &mdash; then Continue.
+          </div>
+        )}
         <button class="btn primary lg block" disabled={busy.value !== null || !googleConfigured} onClick={() => void onGoogle()}>
           {busy.value ? <Spinner /> : <IcDrive />}
           {busy.value ?? 'Continue with Google'}
         </button>
+        {googleConfigured && !tick && (
+          <p class="small faint" style="text-align:center;margin:0" data-drive-hint>
+            On Google&rsquo;s screen, tick the Google Drive box &mdash; your takes and tracks are kept in your own Drive.
+          </p>
+        )}
         {inApp && (
           <div class="callout warn" style="text-align:center" data-in-app-browser>
             <b>You are inside {inApp}&rsquo;s built-in browser</b>, where Google sign-in cannot open. Open SingersVoice in your real browser:
@@ -126,19 +139,25 @@ export function Setup() {
   const [cam, setCam] = useState<Check>('idle');
   const [store, setStore] = useState<Check>('idle');
   const [links, setLinks] = useState<{ root?: string; tracks?: string }>({});
+  const [folderError, setFolderError] = useState<string | null>(null);
 
+  // The SingersVoice folder in Drive: made (or found) now; a refusal shows on its step with a Retry, never as an error of the sign-in.
+  const folders = async () => {
+    setFolderError(null);
+    try {
+      await provider.value.ready();
+      setLinks(provider.value.links());
+    } catch (e) {
+      setFolderError(errorText(e));
+    }
+  };
   useEffect(() => {
     if (!signedIn.value) {
       go('/', true);
       return;
     }
     void (async () => {
-      try {
-        await provider.value.ready();
-        setLinks(provider.value.links());
-      } catch (e) {
-        toast(errorText(e), 'error');
-      }
+      await folders();
       setStore((await persistStorage()) ? 'ok' : 'warn');
     })();
   }, []);
@@ -184,7 +203,7 @@ export function Setup() {
             </div>
             <IcDrive />
           </div>
-          <div class={`step ${isDrive.value && links.root ? 'ok' : ''}`}>
+          <div class={`step ${isDrive.value && links.root ? 'ok' : folderError ? 'warn' : ''}`} data-drive-folders={links.root ? 'ok' : folderError ? 'error' : 'busy'}>
             <div class="n">{isDrive.value && links.root ? <IcCheck size={18} /> : '2'}</div>
             <div>
               <b>SingersVoice folder in Drive</b>
@@ -192,7 +211,9 @@ export function Setup() {
                 {isDrive.value
                   ? links.root
                     ? 'Tracks, Performances/Live, Performances/Offline, Temp, Config, Backgrounds, Exports'
-                    : 'Creating folders…'
+                    : folderError
+                      ? `Not made yet (${folderError}) — tap Retry`
+                      : 'Creating folders…'
                   : 'Skipped in device mode (IndexedDB on this device).'}
               </div>
             </div>
@@ -200,6 +221,11 @@ export function Setup() {
               <a class="btn sm" href={links.root} target="_blank" rel="noopener">
                 Open
               </a>
+            )}
+            {!links.root && folderError && (
+              <button class="btn sm" onClick={() => void folders()} data-drive-folders-retry>
+                Retry
+              </button>
             )}
           </div>
           <div class={`step ${mic}`}>
