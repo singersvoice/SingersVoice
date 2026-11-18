@@ -1032,10 +1032,10 @@ try {
   await dave.page.goto(`${base}publishing?${control}`, { waitUntil: 'networkidle' });
   await dave.page.getByRole('heading', { name: 'Publishing mode is for club owners' }).waitFor({ timeout: 15000 });
   check(/club owner/.test(await dave.page.locator('.empty, main').first().innerText()), 'a singer finds Publishing closed, with the reason: it is for club owners');
-  await dave.page.goto(`${base}plans?${control}`, { waitUntil: 'networkidle' });
-  await dave.page.locator('[data-plan="free"]').waitFor({ timeout: 15000 });
-  check((await dave.page.locator('[data-plan-card="publisher"]').innerText()).includes('Club owner'), 'the Plans page shows Free and the club owner year');
-  check(await dave.page.getByRole('button', { name: 'Ask for a club owner year' }).isVisible(), 'without Stripe configured the year is asked of the admin, not bought');
+  await dave.page.goto(`${base}club-owner?${control}`, { waitUntil: 'networkidle' });
+  await dave.page.locator('[data-club-owner][data-standing="none"] [data-ask-admin]').waitFor({ timeout: 15000 });
+  check(/club owner year/i.test(await dave.page.locator('[data-offer]').innerText()), 'the Club owner page offers the year');
+  check((await dave.page.locator('[data-pay]').count()) === 0, 'without Stripe configured the year is asked of the admin, not bought');
   await alice.page.goto(`${base}admin?${control}`, { waitUntil: 'networkidle' });
   const daveRow = alice.page.locator('[data-admin-user="dave@dev.local"]');
   await daveRow.waitFor({ timeout: 15000 });

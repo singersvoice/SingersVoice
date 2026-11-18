@@ -3,7 +3,7 @@ import { useLocation } from 'preact-iso';
 import { useState } from 'preact/hooks';
 import { asset, href, relPath } from '../lib/nav.ts';
 import { toast } from '../lib/toast.ts';
-import { isSuperAdmin, needsReconnect, profile, reconnect } from '../state/session.ts';
+import { canPublish, isSuperAdmin, needsReconnect, profile, reconnect } from '../state/session.ts';
 import { IcHome, IcLibrary, IcMic, IcMore, IcPlay, IcSettings, IcShare, IcSliders, IcUsers, IcX } from './icons.tsx';
 
 /** The mark, always in motion: the brand loop (two singers on their disc), the still mark where motion is turned off. */
@@ -63,7 +63,13 @@ export function TopBar(props: { title?: string; right?: ComponentChildren }) {
  * The portals, named the same everywhere — the Home cards, the side menu on a wide screen, the tab
  * bar on a phone: Home · Tracks (with Track Maker under it) · Studio · Live Meets · Publishing ·
  * Performances · Settings. A phone's bar holds the first four and More, which opens the rest.
+ *
+ * Who sees what (`when`): Publishing is listed for the accounts it is open to — club owners with an
+ * active year and super admins — and nobody else; Admin for super admins alone; the Club owner page
+ * (become one, pay for a year, renew) for everyone who is not a super admin. The service enforces
+ * the same on every request; the menu only keeps what an account cannot use out of its way.
  */
+type NavWhen = 'super_admin' | 'publish' | 'not_super_admin';
 export interface NavItem {
   to: string;
   label: string;
@@ -71,20 +77,36 @@ export interface NavItem {
   primary?: boolean;
   /** Paths that light this entry besides its own. */
   also?: string[];
-  /** Entries listed under this one on a wide screen (`when`: shown to that role only). */
-  children?: { to: string; label: string; when?: 'super_admin' }[];
+  /** Shown to these accounts only (everyone when unset). */
+  when?: NavWhen;
+  /** Entries listed under this one on a wide screen (`when`: shown to those accounts only). */
+  children?: { to: string; label: string; when?: NavWhen }[];
 }
 export const NAV: NavItem[] = [
   { to: '/home', label: 'Home', Icon: IcHome },
   { to: '/tracks', label: 'Tracks', Icon: IcLibrary, also: ['/library', '/studio/trackmaker'], children: [{ to: '/studio/trackmaker', label: 'Track Maker' }] },
   { to: '/studio', label: 'Studio', Icon: IcMic, primary: true },
   { to: '/meets', label: 'Live Meets', Icon: IcUsers, also: ['/meet/'] },
-  { to: '/publishing', label: 'Publishing', Icon: IcShare, also: ['/watch/'] },
+  { to: '/publishing', label: 'Publishing', Icon: IcShare, also: ['/watch/'], when: 'publish' },
   { to: '/studio/performances', label: 'Performances', Icon: IcPlay },
-  { to: '/settings', label: 'Settings', Icon: IcSettings, also: ['/plans', '/setup', '/admin'], children: [{ to: '/admin', label: 'Admin', when: 'super_admin' }] },
+  {
+    to: '/settings',
+    label: 'Settings',
+    Icon: IcSettings,
+    also: ['/plans', '/club-owner', '/setup', '/admin'],
+    children: [
+      { to: '/club-owner', label: 'Club owner', when: 'not_super_admin' },
+      { to: '/admin', label: 'Admin', when: 'super_admin' },
+    ],
+  },
 ];
 /** On a phone: the first four portals and More. */
 const PHONE_TABS = 4;
+
+/** Is an entry for this account? */
+export const navAllowed = (when: NavWhen | undefined): boolean => (when === 'super_admin' ? isSuperAdmin.value : when === 'not_super_admin' ? !isSuperAdmin.value : when === 'publish' ? canPublish.value || isSuperAdmin.value : true);
+/** The portals this account sees. */
+export const visibleNav = (): NavItem[] => NAV.filter((n) => navAllowed(n.when));
 
 const isActive = (rel: string, n: { to: string; also?: string[] }): boolean => {
   const hit = (p: string) => rel === p || rel.startsWith(p.endsWith('/') ? p : `${p}/`);
@@ -92,20 +114,21 @@ const isActive = (rel: string, n: { to: string; also?: string[] }): boolean => {
   return hit(n.to) || (n.also ?? []).some(hit);
 };
 
-/** The entries this account sees: a child marked for the super admin shows to one only. */
-const visibleChildren = (n: NavItem) => (n.children ?? []).filter((c) => !c.when || (c.when === 'super_admin' && isSuperAdmin.value));
+/** The entries under a portal this account sees. */
+const visibleChildren = (n: NavItem) => (n.children ?? []).filter((c) => navAllowed(c.when));
 
 export function NavBar() {
   const { path } = useLocation();
   const rel = relPath(path);
   const [more, setMore] = useState(false);
-  const rest = NAV.slice(PHONE_TABS);
+  const nav = visibleNav();
+  const rest = nav.slice(PHONE_TABS);
   const moreActive = rest.some((n) => isActive(rel, n));
   // The More panel sits beside the bar, not inside it: the bar is its own stacking layer, and the panel must float above toasts.
   return (
     <>
       <nav class="navbar" aria-label="Primary">
-        {NAV.map((n, i) => {
+        {nav.map((n, i) => {
           const active = isActive(rel, n);
           const children = visibleChildren(n);
           const childActive = children.find((c) => rel === c.to || rel.startsWith(`${c.to}/`));
@@ -148,7 +171,7 @@ export function NavBar() {
               <n.Icon size={18} /> {n.label}
             </a>
           ))}
-          {NAV.flatMap((n) => visibleChildren(n)).map((c) => (
+          {nav.flatMap((n) => visibleChildren(n)).map((c) => (
             <a key={c.to} href={href(c.to)} class={rel.startsWith(c.to) ? 'active' : ''} onClick={() => setMore(false)}>
               <IcSliders size={18} /> {c.label}
             </a>

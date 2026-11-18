@@ -15,7 +15,7 @@ import { TrackMaker } from './portals/studio/TrackMaker.tsx';
 import { TracksPortal } from './portals/tracks/TracksPortal.tsx';
 import { Home } from './screens/Home.tsx';
 import { Settings } from './screens/Settings.tsx';
-import { Plans } from './screens/Plans.tsx';
+import { ClubOwner } from './screens/ClubOwner.tsx';
 import { Admin } from './screens/Admin.tsx';
 import { Setup, Welcome } from './screens/Welcome.tsx';
 import { signedIn } from './state/session.ts';
@@ -135,7 +135,8 @@ export function App() {
           <Route path={r('/publishing')} component={guarded(() => <PublishingPortal />)} />
           <Route path={r('/publishing/show/:id')} component={guarded((p) => <ShowView id={p.id ?? ''} />)} />
           <Route path={r('/watch/:id')} component={(p: P) => <Watch id={p.id ?? ''} />} />
-          <Route path={r('/plans')} component={guarded(() => <Plans />)} />
+          <Route path={r('/club-owner')} component={guarded(() => <ClubOwner />)} />
+          <Route path={r('/plans')} component={guarded(() => <ClubOwner />)} />
           <Route path={r('/admin')} component={guarded(() => <Admin />)} />
           <Route path={r('/settings')} component={guarded(() => <Settings />)} />
           <Route default component={NotFound} />

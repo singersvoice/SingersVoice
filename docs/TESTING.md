@@ -15,7 +15,8 @@ Live build: **https://singersvoice.github.io/SingersVoice/**
 - **Studio** — Track Maker, Sing, Performances (unchanged flows, now under `/studio`).
 - **Live Meets** — Create meet (pick a *public* track so others can load it) → share the link/code → whoever has the link takes a slot with *Take a stage slot* (the stage is open; the host can switch to deciding each one) → with headphones on, the singers on stage hear each other and the audience hears the stage (talk-back) → *I'm ready* → host *Start the song (8 s count-in)* → everyone's stage starts at the same instant, nobody on stage hears anyone else → the song ends → the take lands as one file in `Performances` and is listed on the meet's ended page; the host's device films the whole meet into their Drive as it goes, a chapter per song, pause and stretch of stage (*Full meet 01, 02, …* on the ended page too; under Performances one filming with its chapters and *Play all*) — press Pause, Restart, Stop on the song and the film carries on, each a new chapter. Tick *Instrument* beside the mic to add a USB interface's input to your sound. Only the host can remove someone (*out* on a slot, × on a name). Idle 5 minutes → the meet closes itself.
 - **Publishing** (club owners with an active year, or a super admin) — Destinations (stream keys, saved once), Publish a meet, History; **Publish** in the room opens the show view; `/watch/<meetId>` is the public in-house page. With the RTMP relay deployed (docs/RELAY.md) YouTube runs at ultra-low latency and Facebook / Instagram / Twitch go live. Recording and streaming run from *Go live* to *Stop publishing*, whatever the singers do to the song; the footage lands in chapters like the host's film.
-- **Admin** (super admins: the first account ever, `PRIVILEGED_EMAILS`) — Settings › Admin: every account with its role (*Audio only* → no camera on stage, on their device and on everyone's stage; *Dual*; *Club owner*; *Super admin*), *Grant a year* / *Renew* / *Set dates* / *Revoke* on a club owner's subscription; Publishing opens and closes for them at once (an expired year closes it by itself, with the date on their gate). The last super admin cannot be demoted.
+- **Admin** (super admins: the first account ever, `PRIVILEGED_EMAILS`) — Settings › Admin: the **club owner portal** on top (the price of a year and its currency, self-service on/off, a note for the Club owner page, the expiring-soon and grace margins; every club owner by standing — expired and expiring first, with the days left, the last payment, *Grant* / *Renew* / *Revoke* in the row; every payment and granted year on record), then every account with its role (*Audio only* → no camera on stage, on their device and on everyone's stage; *Dual*; *Club owner*; *Super admin*), *Grant a year* / *Renew* / *Set dates* / *Revoke* on a club owner's subscription; Publishing opens and closes for them at once (an expired year closes it by itself, with the date on their gate). The last super admin cannot be demoted.
+- **Club owner page** (everyone who is not a super admin: More › Club owner, the Home card, Settings) — the account's year and its days left, the price the admin set and the admin's note, *Pay for a year* / *Renew for a year* (Stripe's Checkout, when payments are set up and self-service is on — else *ask the SingersVoice admin*), *Manage subscription* (Stripe's portal), the account's payments. Publishing and Admin are not on a plain singer's menus at all (side menu, More panel, Home, Settings) — the service refuses them to that account anyway.
 
 ## 10-minute smoke test
 
@@ -96,8 +97,8 @@ spanning the whole meet (the film never stopped at a Start, Pause, Stop or Resta
 chapter a sliver — and the guest finds the two shows and the same run of chapters under
 Performances. The first song's chapter must be cut at the song's kickstart as the service had it
 (within a couple of seconds; a moment ahead by design). The club owner flow replaces the old plan
-grant: a plain account finds Publishing closed (*for club owners*), the Plans page offers the
-year, the super admin grants it on the Admin page, and Publishing opens for that account at once
+grant: a plain account finds Publishing closed (*for club owners*), the Club owner page offers the
+year (to be asked of the admin, no Stripe here), the super admin grants it on the Admin page, and Publishing opens for that account at once
 (`tools/ci/roles-e2e.mjs` has the rest). Runs in CI after the viewport screenshots:
 
 ```bash
@@ -137,16 +138,25 @@ A quick run (two minutes) of what every role comes to, read back from the servic
 change, never from the page that made it: the first account (alice) is the super admin and a new
 one (bob) is dual; the service refuses the account list, a role change and every Publishing route
 to anyone else (`403 publishing_closed`); the Admin page lists every account with a count per role
-and turns a singer away. alice makes bob **audio only**: Settings on his device locks *Camera on
-stage* with the reason, on alice's open stage he is seated with the *audio only · no camera* chip,
-and the room carries `media: audio` for him to every device. She grants him a **club owner year**
-on the Admin page: the service opens Publishing at once (a year from today, start and end kept),
-his device opens the portal, his Plans page shows the year's end. She **sets the dates** to a year
-that has run out: the subscription stands *expired*, Publishing is closed on the service with the
-date in words and on his gate; **Renew** gives a year from today and opens it again; **Revoke**
-closes it at once with the reason. The last super admin cannot be demoted (the toast says to make
-another one first); a second super admin made on the page has the Admin page and Publishing on the
-service at once and opens the page. Then the **instrument**: *Instrument* ticked in Settings lists
+and turns a singer away. **The menus**: bob's More panel has no Publishing and no Admin — the Club
+owner page instead — and his Home the Club owner card; the Publishing gate points him at it; alice's
+side menu has Publishing and no Club owner page of her own. **The club owner portal**: alice sets
+the price of a year ($49.00) and a note; the service keeps them (and refuses them to bob); bob's
+Club owner page shows the year at her price with her note and, with no Stripe on the test service,
+says to ask the admin (no Pay button). alice makes bob **audio only**: Settings on his device locks
+*Camera on stage* with the reason, on alice's open stage he is seated with the *audio only · no
+camera* chip, and the room carries `media: audio` for him to every device. She grants him a **club
+owner year** on the Admin page: the service opens Publishing at once (a year from today, start and
+end kept), the overview has him *active · 365 days left* with the grant as his last payment and the
+year on the payments record, his device opens the portal, his Club owner page shows the year, its
+end, the days left and that the admin granted it, and Publishing is now on his Home and in his More
+panel. She **sets the dates** to a year that has run out: the subscription stands *expired*, the
+overview flags it (*expired · 35 days ago*, first in the list), Publishing is closed on the service
+with the date in words and on his gate; **Grant a year** from the overview gives a year from today
+and opens it again, **Renew (+1 year)** there adds a year to the end of it; **Revoke** closes it at
+once with the reason, on the overview too. The last super admin cannot be demoted (the toast says to
+make another one first); a second super admin made on the page has the Admin page and Publishing on
+the service at once and opens the page. Then the **instrument**: *Instrument* ticked in Settings lists
 the audio inputs to pick from and keeps the input and its level on the device; in the room the
 input opens with the microphone and is named on the mic status with its level; unticking closes it.
 

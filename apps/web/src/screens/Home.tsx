@@ -1,4 +1,8 @@
-/** Home — the portals, each usable on its own, named as the menu names them: Tracks (with Track Maker), Studio, Live Meets, Publishing, Performances. */
+/**
+ * Home — the portals, each usable on its own, named as the menu names them: Tracks (with Track Maker), Studio, Live
+ * Meets, Publishing (for the accounts it is open to: club owners with a year, super admins — everyone else finds the
+ * Club owner card in its place), Performances.
+ */
 import { useEffect } from 'preact/hooks';
 import { IcDrive, IcLibrary, IcMic, IcPlay, IcShare, IcUsers } from '../components/icons.tsx';
 import { Page } from '../components/Shell.tsx';
@@ -47,11 +51,19 @@ export function Home() {
             <b>Live Meets</b>
             <span>Shareable room, up to 10 on stage, audience chat, closes after 5 idle minutes</span>
           </a>
-          <a href={href('/publishing')}>
-            <IcShare />
-            <b>Publishing</b>
-            <span>{canPublish.value ? 'Stream meets to YouTube and the in-house watch page' : 'Club owners — stream meets to YouTube and the in-house watch page'}</span>
-          </a>
+          {canPublish.value || role.value === 'super_admin' ? (
+            <a href={href('/publishing')} data-home-publishing>
+              <IcShare />
+              <b>Publishing</b>
+              <span>Stream meets to YouTube and the in-house watch page</span>
+            </a>
+          ) : (
+            <a href={href('/club-owner')} data-home-club-owner>
+              <IcShare />
+              <b>Club owner</b>
+              <span>{role.value === 'club_owner' ? 'Your club owner year — renew it to open Publishing mode again' : 'Become a club owner: a yearly subscription opens Publishing mode — stream meets to YouTube and the in-house watch page'}</span>
+            </a>
+          )}
           <a href={href('/studio/performances')}>
             <IcPlay />
             <b>Performances</b>
@@ -64,7 +76,7 @@ export function Home() {
           <p class="muted small">
             Tracks are files in each singer's Drive; publishing one shares its link through the catalog so anyone can pull it. The Studio works entirely offline. A Live Meet is a link anyone can
             join: performers take stage slots, every device starts the track at the same server instant, each singer's take stays personal in their own Drive. Publishing streams a meet out to the platforms
-            for Publisher subscribers (see <a href={href('/plans')}>Plans</a>).
+            for club owners (a yearly subscription — see <a href={href('/club-owner')}>Club owner</a>).
           </p>
         </section>
       </div>

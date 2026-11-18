@@ -29,8 +29,14 @@ export const PLANS: Record<PlanId, { title: string; blurb: string }> = {
   publisher: { title: 'Club owner', blurb: 'Everything in Free, plus Publishing mode for a year: the show view, YouTube and in-house live streams, destinations and the watch page.' },
 };
 
-/** Checkout and the portal exist only when a key and a price are configured. */
-export const checkoutConfigured = (b: BillingConfig): boolean => Boolean(b.secretKey && b.pricePublisher);
+/** The year's price as the super admin set it on the Admin page (minor units), used in place of a Stripe Price object. */
+export interface YearPrice {
+  amountCents: number;
+  currency: string;
+}
+
+/** Checkout exists when a key is configured and there is a price — the admin's, or a Stripe Price id from the environment. */
+export const checkoutConfigured = (b: BillingConfig, price?: YearPrice | null): boolean => Boolean(b.secretKey && ((price && price.amountCents > 0) || b.pricePublisher));
 
 function form(body: Record<string, string>): string {
   return new URLSearchParams(body).toString();
@@ -49,16 +55,24 @@ async function stripe<T>(b: BillingConfig, path: string, init: { method?: 'GET' 
   return json;
 }
 
-/** A Checkout Session for the Publisher subscription; Stripe hosts the page and sends the user back to the app. */
-export async function createCheckoutSession(b: BillingConfig, who: { userId: string; email: string; customerId?: string | null }): Promise<{ url: string }> {
-  if (!checkoutConfigured(b)) throw new Error('Checkout is not configured on the service');
+/**
+ * A Checkout Session for a club owner year; Stripe hosts the page and sends the user back to the app. The price is
+ * the admin's (inline `price_data`, a yearly subscription of that amount) when one is set, else the Stripe Price id
+ * from the environment.
+ */
+export async function createCheckoutSession(b: BillingConfig, who: { userId: string; email: string; customerId?: string | null }, price?: YearPrice | null, backTo = '/club-owner'): Promise<{ url: string }> {
+  if (!checkoutConfigured(b, price)) throw new Error('Checkout is not configured on the service');
   const back = b.appUrl.replace(/\/$/, '');
+  const line: Record<string, string> =
+    price && price.amountCents > 0
+      ? { 'line_items[0][price_data][currency]': price.currency, 'line_items[0][price_data][unit_amount]': String(Math.round(price.amountCents)), 'line_items[0][price_data][recurring][interval]': 'year', 'line_items[0][price_data][product_data][name]': 'SingersVoice club owner — a year of Publishing mode' }
+      : { 'line_items[0][price]': b.pricePublisher! };
   const body: Record<string, string> = {
     mode: 'subscription',
-    'line_items[0][price]': b.pricePublisher!,
+    ...line,
     'line_items[0][quantity]': '1',
-    success_url: `${back}/plans?billing=success`,
-    cancel_url: `${back}/plans?billing=cancel`,
+    success_url: `${back}${backTo}?billing=success`,
+    cancel_url: `${back}${backTo}?billing=cancel`,
     client_reference_id: who.userId,
     'metadata[userId]': who.userId,
     'subscription_data[metadata][userId]': who.userId,
@@ -72,9 +86,9 @@ export async function createCheckoutSession(b: BillingConfig, who: { userId: str
 }
 
 /** The Customer Portal (change card, cancel, invoices) for an existing Stripe customer. */
-export async function createPortalSession(b: BillingConfig, customerId: string): Promise<{ url: string }> {
+export async function createPortalSession(b: BillingConfig, customerId: string, backTo = '/club-owner'): Promise<{ url: string }> {
   const back = b.appUrl.replace(/\/$/, '');
-  const s = await stripe<{ url?: string }>(b, '/billing_portal/sessions', { body: { customer: customerId, return_url: `${back}/plans` } });
+  const s = await stripe<{ url?: string }>(b, '/billing_portal/sessions', { body: { customer: customerId, return_url: `${back}${backTo}` } });
   if (!s.url) throw new Error('Stripe gave no portal page');
   return { url: s.url };
 }

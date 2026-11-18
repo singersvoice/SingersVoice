@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { CatalogListResponse, JoinMeetResponse, Meet, MeetSnapshot } from '@singersvoice/protocol';
+import type { CatalogListResponse, ClubOwnerOverview, ClubOwnerSettings, ClubOwnerStatus, JoinMeetResponse, Meet, MeetSnapshot } from '@singersvoice/protocol';
 import { LIVE_KEEP } from '@singersvoice/protocol';
 import { createApp, type AppDeps } from '../src/app.ts';
 import { edgeCacheControl, edgeCacheTtl } from '../src/worker.ts';
@@ -541,7 +541,7 @@ describe('sv-control API', () => {
     const erin = await json<{ user: { userId: string; plan: string; canPublish: boolean } }>(await app.request('/me', { headers: as('erin') }));
     expect(erin.user.plan).toBe('free');
     expect(erin.user.canPublish).toBe(false);
-    // Without Stripe configured, the Plans page still knows the plans and that checkout is off.
+    // Without Stripe configured, the (older) billing route still knows the plans and that checkout is off.
     const status = await json<{ checkout: boolean; portal: boolean; plans: Record<string, { title: string }>; price: unknown }>(await app.request('/billing', { headers: as('erin') }));
     expect(status.checkout).toBe(false);
     expect(status.plans.publisher!.title).toBe('Club owner');
@@ -566,7 +566,7 @@ describe('sv-control API', () => {
     const sent = new URLSearchParams(asked.find((a) => a.url.endsWith('/checkout/sessions'))!.body);
     expect(sent.get('client_reference_id')).toBe(erin.user.userId);
     expect(sent.get('line_items[0][price]')).toBe('price_pub');
-    expect(sent.get('success_url')).toBe('https://singersvoice.github.io/SingersVoice/plans?billing=success');
+    expect(sent.get('success_url')).toBe('https://singersvoice.github.io/SingersVoice/club-owner?billing=success');
 
     const webhook = async (event: Record<string, unknown>, secret = 'whsec_test_secret', t = Math.floor(Date.now() / 1000)) => {
       const body = JSON.stringify(event);
@@ -600,6 +600,137 @@ describe('sv-control API', () => {
     const granted = await json<{ user: { plan: string; canPublish: boolean } }>(await app.request('/admin/plan', { method: 'POST', headers: as('alice'), body: JSON.stringify({ email: 'Erin@dev.local', plan: 'publisher' }) }));
     expect(granted.user.canPublish).toBe(true);
     expect((await app.request('/publishing/destinations', { headers: as('erin') })).status).toBe(200);
+    delete deps.billing;
+    resetPriceCache();
+  });
+
+  it("club owners: the super admin sets the price and the rules; a singer sees the offer and pays for a year on Stripe (the admin's price inline) or is told to ask; payments and grants are on record; the overview puts the expired and the expiring first; grace days keep a late renewal open", async () => {
+    // The portal is the super admin's alone; the defaults sell nothing.
+    expect((await app.request('/admin/club-owners', { headers: as('bob') })).status).toBe(403);
+    expect((await app.request('/admin/club-owners/settings', { method: 'PUT', headers: as('bob'), body: JSON.stringify({ priceCents: 100 }) })).status).toBe(403);
+    const before = await json<ClubOwnerOverview>(await app.request('/admin/club-owners', { headers: as('alice') }));
+    expect(before.settings).toMatchObject({ priceCents: 0, currency: 'usd', selfService: true, expiringSoonDays: 30, graceDays: 0 });
+    expect(before.stripe).toBe(false);
+    // A singer without a year: the Club owner page says Publishing is for club owners and to ask the admin — no price, no Checkout.
+    const frank = await json<ClubOwnerStatus>(await app.request('/club-owner', { headers: as('frank') }));
+    expect(frank).toMatchObject({ role: 'dual', canPublish: false, checkout: false, portal: false, price: null, selfService: true, payments: [], daysLeft: null });
+    expect(frank.publishingNote).toMatch(/Club owner page/);
+    expect((await json<{ code: string }>(await app.request('/club-owner/checkout', { method: 'POST', headers: as('frank'), body: '{}' }))).code).toBe('billing_unconfigured');
+    // The super admin sets a price and a note; values out of bounds are kept within them.
+    const set = await json<{ settings: ClubOwnerSettings }>(await app.request('/admin/club-owners/settings', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ priceCents: 4900, currency: 'USD', note: 'A year of Publishing mode for your club.', expiringSoonDays: 45, graceDays: 1000, updatedAt: 'ignored' }) }));
+    expect(set.settings).toMatchObject({ priceCents: 4900, currency: 'usd', note: 'A year of Publishing mode for your club.', expiringSoonDays: 45, graceDays: 90 });
+    expect(set.settings.updatedAt).not.toBe('ignored');
+    expect(Date.parse(set.settings.updatedAt!)).toBeGreaterThan(Date.now() - 10_000);
+    await app.request('/admin/club-owners/settings', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ graceDays: 0 }) });
+    const priced = await json<ClubOwnerStatus>(await app.request('/club-owner', { headers: as('frank') }));
+    expect(priced.price).toEqual({ amount: 4900, currency: 'usd', interval: 'year' });
+    expect(priced.note).toBe('A year of Publishing mode for your club.');
+    expect(priced.checkout).toBe(false); // a price, but no Stripe yet
+
+    // Stripe arrives: Checkout carries the admin's price inline — no Stripe Price object needed — and sends the singer back to the Club owner page.
+    const asked: { url: string; body: string }[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      asked.push({ url, body: String(init?.body ?? '') });
+      if (url.endsWith('/checkout/sessions')) return Response.json({ id: 'cs_2', url: 'https://checkout.stripe.com/c/pay/cs_2' });
+      if (url.endsWith('/billing_portal/sessions')) return Response.json({ url: 'https://billing.stripe.com/p/session/2' });
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    deps.billing = { secretKey: 'sk_test_x', webhookSecret: 'whsec_test_secret', appUrl: 'https://singersvoice.github.io/SingersVoice', fetchImpl };
+    expect((await json<ClubOwnerOverview>(await app.request('/admin/club-owners', { headers: as('alice') }))).stripe).toBe(true);
+    const open = await json<ClubOwnerStatus>(await app.request('/club-owner', { headers: as('frank') }));
+    expect(open.checkout).toBe(true);
+    const co = await json<{ url: string }>(await app.request('/club-owner/checkout', { method: 'POST', headers: as('frank'), body: '{}' }));
+    expect(co.url).toContain('checkout.stripe.com');
+    const sent = new URLSearchParams(asked.find((a) => a.url.endsWith('/checkout/sessions'))!.body);
+    expect(sent.get('mode')).toBe('subscription');
+    expect(sent.get('line_items[0][price_data][unit_amount]')).toBe('4900');
+    expect(sent.get('line_items[0][price_data][currency]')).toBe('usd');
+    expect(sent.get('line_items[0][price_data][recurring][interval]')).toBe('year');
+    expect(sent.get('line_items[0][price]')).toBeNull();
+    expect(sent.get('success_url')).toBe('https://singersvoice.github.io/SingersVoice/club-owner?billing=success');
+    expect(sent.get('cancel_url')).toBe('https://singersvoice.github.io/SingersVoice/club-owner?billing=cancel');
+    // A super admin has nothing to buy.
+    expect((await json<{ code: string }>(await app.request('/club-owner/checkout', { method: 'POST', headers: as('alice'), body: '{}' }))).code).toBe('super_admin');
+
+    // frank pays: the year opens, the payment is on record once — a retried event and the first invoice add nothing.
+    const webhook = async (event: Record<string, unknown>) => {
+      const body = JSON.stringify(event);
+      return app.request('/billing/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Stripe-Signature': await signStripePayload('whsec_test_secret', body, Math.floor(Date.now() / 1000)) }, body });
+    };
+    const frankId = (await json<{ user: { userId: string } }>(await app.request('/me', { headers: as('frank') }))).user.userId;
+    expect((await webhook({ id: 'evt_f1', type: 'checkout.session.completed', data: { object: { id: 'cs_frank', client_reference_id: frankId, customer: 'cus_frank', subscription: 'sub_frank', amount_total: 4900, currency: 'usd' } } })).status).toBe(200);
+    expect((await webhook({ id: 'evt_f1', type: 'checkout.session.completed', data: { object: { id: 'cs_frank', client_reference_id: frankId, customer: 'cus_frank', subscription: 'sub_frank', amount_total: 4900, currency: 'usd' } } })).status).toBe(200);
+    expect((await webhook({ id: 'evt_f2', type: 'invoice.paid', data: { object: { id: 'in_first', customer: 'cus_frank', amount_paid: 4900, currency: 'usd', billing_reason: 'subscription_create' } } })).status).toBe(200);
+    const end = Math.floor(Date.now() / 1000) + 365 * 86400;
+    expect((await webhook({ id: 'evt_f3', type: 'customer.subscription.updated', data: { object: { id: 'sub_frank', customer: 'cus_frank', status: 'active', current_period_end: end } } })).status).toBe(200);
+    const paid = await json<ClubOwnerStatus>(await app.request('/club-owner', { headers: as('frank') }));
+    expect(paid).toMatchObject({ role: 'club_owner', canPublish: true, portal: true, publishingNote: '' });
+    expect(paid.subscription).toMatchObject({ status: 'active', source: 'stripe' });
+    expect(paid.daysLeft).toBeGreaterThan(360);
+    expect(paid.payments).toHaveLength(1);
+    expect(paid.payments[0]).toMatchObject({ amountCents: 4900, currency: 'usd', source: 'stripe', ref: 'cs_frank' });
+    expect((await app.request('/publishing/destinations', { headers: as('frank') })).status).toBe(200);
+    expect((await json<{ url: string }>(await app.request('/club-owner/portal', { method: 'POST', headers: as('frank'), body: '{}' }))).url).toContain('billing.stripe.com');
+    // A year on, Stripe renews: the invoice is a payment of its own, with the period it paid for.
+    expect((await webhook({ id: 'evt_f4', type: 'invoice.paid', data: { object: { id: 'in_renew', customer: 'cus_frank', amount_paid: 4900, currency: 'usd', billing_reason: 'subscription_cycle', lines: { data: [{ period: { start: end, end: end + 365 * 86400 } }] } } } })).status).toBe(200);
+    const renewed = await json<ClubOwnerStatus>(await app.request('/club-owner', { headers: as('frank') }));
+    expect(renewed.payments.map((p) => p.ref)).toEqual(['in_renew', 'cs_frank']);
+    expect(renewed.payments[0]!.periodEnd).toBe(new Date((end + 365 * 86400) * 1000).toISOString());
+
+    // Self-service off: the page says to ask, Checkout is refused even with Stripe and a price.
+    await app.request('/admin/club-owners/settings', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ selfService: false }) });
+    const closed = await json<ClubOwnerStatus>(await app.request('/club-owner', { headers: as('grace') }));
+    expect(closed).toMatchObject({ checkout: false, selfService: false });
+    expect(closed.price).toEqual({ amount: 4900, currency: 'usd', interval: 'year' }); // the price still shows
+    expect((await json<{ code: string }>(await app.request('/club-owner/checkout', { method: 'POST', headers: as('grace'), body: '{}' }))).code).toBe('self_service_off');
+    await app.request('/admin/club-owners/settings', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ selfService: true }) });
+
+    // The overview: a year granted is a payment of 0 on record; one about to run out stands "expiring", one past "expired" — both ahead of the active ones.
+    for (const who of ['grace', 'heidi', 'ivan']) await app.request('/me', { headers: as(who) });
+    const all = await json<{ users: { userId: string; email: string }[] }>(await app.request('/admin/users', { headers: as('alice') }));
+    const idOf = (email: string) => all.users.find((u) => u.email === email)!.userId;
+    expect((await app.request(`/admin/users/${idOf('grace@dev.local')}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'grant' } }) })).status).toBe(200);
+    const soon = new Date(Date.now() + 10 * 86400000).toISOString();
+    expect((await app.request(`/admin/users/${idOf('heidi@dev.local')}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'set', startedAt: '2026-01-01T00:00:00Z', expiresAt: soon } }) })).status).toBe(200);
+    expect((await app.request(`/admin/users/${idOf('ivan@dev.local')}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'set', startedAt: '2024-01-01T00:00:00Z', expiresAt: '2025-01-01T00:00:00Z' } }) })).status).toBe(200);
+    const overview = await json<ClubOwnerOverview>(await app.request('/admin/club-owners', { headers: as('alice') }));
+    const row = (email: string) => overview.owners.find((o) => o.user.email === email)!;
+    expect(row('frank@dev.local').standing).toBe('active');
+    expect(row('grace@dev.local').standing).toBe('active');
+    expect(row('heidi@dev.local')).toMatchObject({ standing: 'expiring' });
+    expect(row('heidi@dev.local').daysLeft).toBeLessThanOrEqual(10);
+    expect(row('ivan@dev.local').standing).toBe('expired');
+    expect(row('ivan@dev.local').daysLeft).toBeLessThan(-600);
+    const order = overview.owners.map((o) => o.standing);
+    expect(order.indexOf('expired')).toBeLessThan(order.indexOf('expiring'));
+    expect(order.indexOf('expiring')).toBeLessThan(order.indexOf('active'));
+    expect(overview.owners.every((o) => o.user.role === 'club_owner' || o.user.subscription)).toBe(true);
+    expect(row('grace@dev.local').lastPayment).toMatchObject({ amountCents: 0, source: 'grant', ref: `admin:${idOf('alice@dev.local')}` });
+    expect(row('frank@dev.local').lastPayment).toMatchObject({ ref: 'in_renew', source: 'stripe' });
+    expect(overview.payments.filter((p) => p.userId === idOf('grace@dev.local'))).toHaveLength(1);
+    expect((await json<ClubOwnerStatus>(await app.request('/club-owner', { headers: as('grace') }))).payments[0]).toMatchObject({ source: 'grant', amountCents: 0 });
+
+    // Grace days: a year a day past its end is closed — unless the admin allows grace; then it is open and flagged "expiring" to act on.
+    const yesterday = new Date(Date.now() - 86400000).toISOString();
+    await app.request(`/admin/users/${idOf('heidi@dev.local')}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'set', startedAt: '2025-11-01T00:00:00Z', expiresAt: yesterday } }) });
+    expect((await json<{ user: { canPublish: boolean } }>(await app.request('/me', { headers: as('heidi') }))).user.canPublish).toBe(false);
+    expect((await app.request('/publishing/destinations', { headers: as('heidi') })).status).toBe(403);
+    await app.request('/admin/club-owners/settings', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ graceDays: 7 }) });
+    const graced = await json<{ user: { canPublish: boolean; subscription: { status: string } } }>(await app.request('/me', { headers: as('heidi') }));
+    expect(graced.user.canPublish).toBe(true);
+    expect(graced.user.subscription.status).toBe('active');
+    expect((await app.request('/publishing/destinations', { headers: as('heidi') })).status).toBe(200);
+    const flagged = await json<ClubOwnerOverview>(await app.request('/admin/club-owners', { headers: as('alice') }));
+    expect(flagged.owners.find((o) => o.user.email === 'heidi@dev.local')).toMatchObject({ standing: 'expiring', daysLeft: -1 });
+    await app.request('/admin/club-owners/settings', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ graceDays: 0 }) });
+    expect((await json<{ user: { canPublish: boolean } }>(await app.request('/me', { headers: as('heidi') }))).user.canPublish).toBe(false);
+    // Revoked: closed whatever the dates, and the overview says so; a revoke is no payment.
+    const paymentsBefore = (await json<ClubOwnerOverview>(await app.request('/admin/club-owners', { headers: as('alice') }))).payments.length;
+    await app.request(`/admin/users/${idOf('grace@dev.local')}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'revoke' } }) });
+    const after = await json<ClubOwnerOverview>(await app.request('/admin/club-owners', { headers: as('alice') }));
+    expect(after.owners.find((o) => o.user.email === 'grace@dev.local')!.standing).toBe('revoked');
+    expect(after.payments.length).toBe(paymentsBefore);
     delete deps.billing;
     resetPriceCache();
   });
@@ -868,7 +999,7 @@ describe('sv-control API', () => {
 
   it('with the RTMP relay deployed: RTMP destinations stream through it (keys service-to-service only), YouTube skips HLS ingestion, a lost stream is started again, stop ends it', async () => {
     const calls: { url: string; method: string; auth: string; type: string; body: string | Uint8Array }[] = [];
-    let answer: (url: string) => Response = () => Response.json({ ok: true });
+    let answer: (url: string) => Response | Promise<Response> = () => Response.json({ ok: true });
     deps.relay = {
       url: 'https://relay.test/',
       secret: 'shh-relay',
@@ -938,6 +1069,23 @@ describe('sv-control API', () => {
       expect(stopped.job.live.relay).toBe('off');
       expect(calls.at(-1)!.url).toBe(`https://relay.test/streams/${job.jobId}/stop`);
       expect(outside).toEqual([]);
+      // A segment still on its way when Stop lands (here: the relay's answer pending; in the browser's case its body still
+      // arriving): the stop wins — the segment is refused, nothing of it is kept, the job stays stopped, the portal dark.
+      answer = () => Response.json({ ok: true });
+      const made2 = await json<{ job: { jobId: string } }>(await app.request('/publishing/jobs', { method: 'POST', headers: as('alice'), body: JSON.stringify({ meetId: meet.meet.meetId, destinations: ['youtube', 'inhouse'], title: 'Show again' }) }));
+      const job2 = made2.job;
+      const put2 = (name: string, seq: number, bytes: Uint8Array) => app.request(`/publishing/jobs/${job2.jobId}/live/${name}?seq=${seq}&dur=2000`, { method: 'PUT', headers: { 'X-Dev-User': 'alice', 'X-Dev-Name': 'alice', 'Content-Type': 'video/MP2T' }, body: bytes as unknown as BodyInit });
+      expect((await put2('t0.ts', 0, seg(10))).status).toBe(200);
+      expect((await json<{ live: boolean }>(await app.request(`/watch/${meet.meet.meetId}/live`))).live).toBe(true);
+      answer = (url) => (url.endsWith('/segments') ? Promise.resolve(app.request(`/publishing/jobs/${job2.jobId}/stop`, { method: 'POST', headers: as('alice') })).then(() => Response.json({ ok: true })) : Response.json({ ok: true }));
+      const raced = await put2('t1.ts', 1, seg(11));
+      expect(raced.status).toBe(409);
+      expect((await json<{ code: string }>(raced)).code).toBe('not_live');
+      expect((await json<{ live: boolean }>(await app.request(`/watch/${meet.meet.meetId}/live`))).live).toBe(false);
+      expect((await app.request(`/watch/${meet.meet.meetId}/live.m3u8`)).status).toBe(404);
+      const jobs = await json<{ jobs: { jobId: string; state: string }[] }>(await app.request('/publishing/jobs', { headers: as('alice') }));
+      expect(jobs.jobs.find((j) => j.jobId === job2.jobId)?.state).toBe('stopped');
+      expect((await put2('t2.ts', 2, seg(12))).status).toBe(409); // and the next one is refused outright
     } finally {
       globalThis.fetch = realFetch;
       deps.relay = undefined;

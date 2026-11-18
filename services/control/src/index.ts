@@ -5,7 +5,7 @@
  *   GOOGLE_CLIENT_ID=…        tokens must be issued to this OAuth client (recommended)
  *   ALLOWED_ORIGINS=a,b       extra browser origins
  *   PRIVILEGED_EMAILS=a,b     admin accounts: Publishing mode without a plan, and the right to grant plans (the first account ever seen is one too)
- *   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PUBLISHER, APP_URL — the Publisher plan through Stripe (docs/BILLING.md)
+ *   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_URL (STRIPE_PRICE_PUBLISHER: a fallback price) — the club owner year through Stripe; the price itself is set on the Admin page (docs/BILLING.md)
  *   PUBLISH_KEY_SECRET=…      base64 32-byte key for stream keys at rest (generate once: node -e "…randomSecretB64()")
  *   DEV_AUTH=1                accept X-Dev-User headers (local dev / CI only)
  *   ICE_SERVERS=[…]           JSON array of RTCIceServer for performer video (default: Google STUN; add TURN for strict NATs)

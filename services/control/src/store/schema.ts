@@ -117,6 +117,25 @@ CREATE TABLE IF NOT EXISTS publish_jobs (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_owner ON publish_jobs(owner_user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS payments (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'usd',
+  paid_at TEXT NOT NULL,
+  source TEXT NOT NULL,
+  ref TEXT NOT NULL DEFAULT '',
+  period_start TEXT,
+  period_end TEXT,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id, paid_at DESC);
+CREATE INDEX IF NOT EXISTS idx_payments_at ON payments(paid_at DESC);
 CREATE TABLE IF NOT EXISTS track_registry (
   track_id TEXT PRIMARY KEY,
   source TEXT NOT NULL,
@@ -168,6 +187,11 @@ CREATE TABLE IF NOT EXISTS live_segments (
 `;
 
 /**
+ * `settings` holds the service's few knobs as JSON by key (`club_owner`: the year's price and currency,
+ * self-service on/off, the admin's note, the expiring-soon and grace days — roles.ts
+ * ClubOwnerSettings); `payments` is every payment for a club owner year (Stripe's, by the webhook;
+ * a year the admin granted, amount 0), so the admin sees who paid and when.
+ *
  * The master track database (registry.ts): `track_registry` is one row per source file — the YouTube
  * video, the singer's Drive folder, the catalog entry (`source_key`, unique) — with the song's search
  * name and metadata, the owner's shareable Drive URL, the file ids in `data`, and the global

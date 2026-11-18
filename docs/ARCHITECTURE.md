@@ -338,17 +338,31 @@ on stage on their device, and every other device draws their name card whatever 
 admin** (everything, always: Publishing without a subscription, and the **Admin page**). The first
 account ever seen is the super admin; an address in `PRIVILEGED_EMAILS` is one whatever its row
 says. A club owner's **subscription** is a row with a start, an expiry and a status (`active`,
-`revoked`, or `none`; `expired` is computed from the date on every read, so a year runs out by
-itself with nobody touching anything) — granted for a year on the Admin page (`/admin`, super
-admins only: every account, its role in a select, *Grant a year* / *Renew (+1 year)* / *Set dates*
-/ *Revoke*; `GET /admin/users`, `PATCH /admin/users/:id`, the last super admin cannot be demoted),
-or opened by Stripe (docs/BILLING.md). `canPublish` is computed from the two on the service — a
-super admin, or a club owner whose subscription is active today — and enforced there: every
-`/publishing/*` route and the publisher join answer `403 publishing_closed` with the reason in
-words (*expired on …*, *was revoked*, *is for club owners*), which the app shows on its gate. The
-app only mirrors the verdict (`role`, `media`, `subscription`, `publishingNote` from `/me`, refreshed
-on every portal and when entering a room). Tests: `services/control/test/app.test.ts` (roles,
-the guard, the dates), `tools/ci/roles-e2e.mjs` (the whole life of a subscription in the browser).
+`revoked`, or `none`; `expired` is computed from the date on every read — after the **grace days**
+the super admin allows, none by default — so a year runs out by itself with nobody touching
+anything) — granted for a year on the Admin page (`/admin`, super admins only: every account, its
+role in a select, *Grant a year* / *Renew (+1 year)* / *Set dates* / *Revoke*; `GET /admin/users`,
+`PATCH /admin/users/:id`, the last super admin cannot be demoted), or **paid for on the Club owner
+page** (`/club-owner`, self-service: the price the super admin set, Stripe's Checkout, the
+account's payments; docs/BILLING.md). The super admin's **club owner portal** (the top of the Admin
+page; `GET /admin/club-owners`, `PUT /admin/club-owners/settings`) holds the price of a year and
+the rules (self-service, the note on the Club owner page, the expiring-soon margin, the grace days)
+and lists every club owner by what needs doing — *expired* first, then *expiring* with the days
+left, then *active*, then *revoked* — with the last payment and the actions in the row, and every
+payment on record (Stripe's, and the years granted: `settings`, `payments` rows). `canPublish` is
+computed from the role and the subscription on the service — a super admin, or a club owner whose
+subscription is active today — and enforced there: every `/publishing/*` route and the publisher
+join answer `403 publishing_closed` with the reason in words (*expired on …*, *was revoked*, *is for
+club owners*), which the app shows on its gate. The app only mirrors the verdict (`role`, `media`,
+`subscription` with the service's status, `publishingNote` from `/me`, refreshed on every portal and
+when entering a room) — and keeps what an account cannot use off its menus: Publishing is listed
+(side menu, More panel, Home card, Settings) only for the accounts it is open to, Admin for super
+admins alone, the Club owner page for everyone else (`components/Shell.tsx`, `NAV[].when`). Tests:
+`packages/protocol/test/roles.test.ts` (the standing with grace, the days left, the reasons),
+`apps/web/test/navGating.test.ts` (the menus by account), `services/control/test/app.test.ts`
+(roles, the guard, the dates; the club owner portal, Checkout with the admin's price, payments and
+grants on record, the overview's order, grace days), `tools/ci/roles-e2e.mjs` (the whole life of a
+subscription in the browser, the menus, the portal and the Club owner page).
 
 ## Publishing mode (the show view)
 
@@ -483,7 +497,11 @@ link; the first four tiles connect by themselves, the rest on request.
    PUTs the segment then a four-entry media playlist to `YOUTUBE_HLS_BASE` (default
    `https://a.upload.youtube.com/http_upload_hls`) with `cid=<stream key>` — 200/202 ok, 401 key
    rejected, 400 refused, 5xx error — recorded on the job (`live.youtube`, `youtubeNote`). The job
-   goes `live` on the first segment and is off air 20 s after the last. The audience plays the
+   goes `live` on the first segment and is off air 20 s after the last; *Stop publishing* ends it at
+   once and clears the window, and a segment still on its way when the stop lands (its body arriving,
+   the relay or YouTube being asked) is refused with `409 not_live` and nothing of it kept — the
+   handler reads the job again after every wait, so its stale copy can never be saved as live over
+   the stop (the sender takes the 409 as the end it already knows about). The audience plays the
    playlist with hls.js (lazy chunk; Safari natively) in `components/LiveShow.tsx`, on the watch
    page and in the room's audience view — no lyrics there. Beside the encoder, the broadcast films
    itself: `Broadcast.film` is a `MeetRecorder` (`video/meetRecorder.ts`, the same recorder as the

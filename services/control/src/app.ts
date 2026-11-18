@@ -63,8 +63,15 @@ import {
   youtubeWatchUrl,
   YT_SEARCH_LIMIT,
   yearFrom,
+  daysLeft,
   type AdminUserUpdate,
   type AdminUsersResponse,
+  type ClubOwnerOverview,
+  type ClubOwnerRow,
+  type ClubOwnerSettings,
+  type ClubOwnerStanding,
+  type ClubOwnerStatus,
+  type PaymentRecord,
   type PerformanceChapter,
   type YtFetchRequest,
   type YtJob,
@@ -76,7 +83,7 @@ import type { SecretBox } from './crypto.ts';
 import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setBackground, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
-import { checkoutConfigured, createCheckoutSession, createPortalSession, fetchPublisherPrice, PLANS, planFromSubscription, verifyStripeSignature, type BillingConfig, type StripeSubscription } from './billing.ts';
+import { checkoutConfigured, createCheckoutSession, createPortalSession, fetchPublisherPrice, PLANS, planFromSubscription, verifyStripeSignature, type BillingConfig, type StripeSubscription, type YearPrice } from './billing.ts';
 import { relayJson, relayNote, relaySegment, relayStart, relayStop, type RelayConfig, type RelayOutcome, type RelayTarget } from './relay.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
@@ -113,7 +120,7 @@ export interface AppDeps {
   googleApiKey?: string;
   /** Tests: how the service reaches Drive for a published track's files. */
   fetchImpl?: typeof fetch;
-  /** Stripe (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PUBLISHER, APP_URL); without a key the Plans page shows the plans and an admin grants them. */
+  /** Stripe (STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_URL; STRIPE_PRICE_PUBLISHER as the fallback price); without a key the Club owner page shows the year and says to ask the admin, who grants it. */
   billing?: BillingConfig;
   /** The RTMP relay (RELAY_URL, RELAY_SECRET — services/relay, docs/RELAY.md): low-latency YouTube, and Facebook / Instagram / Twitch at all. */
   relay?: RelayConfig;
@@ -1168,42 +1175,61 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json({ ok: true as const });
   });
 
-  // ---------- Billing: the Publisher plan ----------
+  // ---------- Billing: the club owner year (the Publisher plan) ----------
 
   const billingOf = (deps: AppDeps): BillingConfig => deps.billing ?? { appUrl: 'https://singersvoice.github.io/SingersVoice' };
+  /** The year's price as the admin set it (null when unset: a Stripe Price id from the environment may still apply). */
+  const yearPriceOf = (s: ClubOwnerSettings): YearPrice | null => (s.priceCents > 0 ? { amountCents: s.priceCents, currency: s.currency } : null);
+  /** What the Club owner page shows as the price: the admin's, else the Stripe Price's. */
+  const priceFor = async (b: BillingConfig, s: ClubOwnerSettings): Promise<ClubOwnerStatus['price']> => (s.priceCents > 0 ? { amount: s.priceCents, currency: s.currency, interval: 'year' } : await fetchPublisherPrice(b));
+
+  /** A payment on record for a club owner year: Stripe's, once per Stripe id; or a year granted (amount 0, the granter named). */
+  const recordYear = async (deps: AppDeps, p: Omit<PaymentRecord, 'id'> & { id?: string }) => deps.store.recordPayment(p);
+  const recordGrant = async (deps: AppDeps, granter: UserRecord, userId: string, note: string) => {
+    const sub = await deps.store.getSubscription(userId);
+    const now = new Date().toISOString();
+    await recordYear(deps, { id: `pay-grant-${userId}-${Date.now()}`, userId, amountCents: 0, currency: (await deps.store.getClubOwnerSettings()).currency, paidAt: now, source: 'grant', ref: `admin:${granter.userId}`, periodStart: sub?.startedAt ?? null, periodEnd: sub?.planUntil ?? null, note });
+  };
 
   app.get('/billing', async (c) => {
     const deps = c.get('deps');
     const user = c.get('user');
     const b = billingOf(deps);
+    const settings = await deps.store.getClubOwnerSettings();
     const sub = await deps.store.getSubscription(user.userId);
     const status: BillingStatus = {
       plan: user.plan,
       planUntil: user.planUntil,
       canPublish: user.canPublish,
       privileged: user.privileged,
-      checkout: checkoutConfigured(b),
+      checkout: settings.selfService && checkoutConfigured(b, yearPriceOf(settings)),
       portal: Boolean(b.secretKey && sub?.customerId),
-      price: await fetchPublisherPrice(b),
+      price: await priceFor(b, settings),
       plans: PLANS,
     };
     return c.json(status);
   });
 
-  app.post('/billing/checkout', async (c) => {
+  /** Stripe's Checkout for a year, for the signed-in singer (self-service on, a price, a Stripe key). */
+  const checkoutFor = async (c: Context<Env>) => {
     const deps = c.get('deps');
     const user = c.get('user');
     const b = billingOf(deps);
-    if (!checkoutConfigured(b)) return err(c, 409, 'billing_unconfigured', 'Payments are not set up on this service yet — ask the admin for the Publisher plan');
+    const settings = await deps.store.getClubOwnerSettings();
+    if (!settings.selfService) return err(c, 409, 'self_service_off', 'Club owner years are granted by the SingersVoice admin — ask them');
+    if (!checkoutConfigured(b, yearPriceOf(settings))) return err(c, 409, 'billing_unconfigured', 'Payments are not set up on this service yet — ask the SingersVoice admin for a club owner year');
+    if (user.role === 'super_admin') return err(c, 409, 'super_admin', 'A super admin has Publishing mode already — nothing to pay for');
     const sub = await deps.store.getSubscription(user.userId);
     try {
-      return c.json(await createCheckoutSession(b, { userId: user.userId, email: user.email, customerId: sub?.customerId ?? null }));
+      return c.json(await createCheckoutSession(b, { userId: user.userId, email: user.email, customerId: sub?.customerId ?? null }, yearPriceOf(settings)));
     } catch (e) {
       return err(c, 409, 'stripe', e instanceof Error ? e.message : 'Stripe did not answer');
     }
-  });
+  };
+  app.post('/billing/checkout', checkoutFor);
+  app.post('/club-owner/checkout', checkoutFor);
 
-  app.post('/billing/portal', async (c) => {
+  const portalFor = async (c: Context<Env>) => {
     const deps = c.get('deps');
     const b = billingOf(deps);
     const sub = await deps.store.getSubscription(c.get('user').userId);
@@ -1213,6 +1239,31 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     } catch (e) {
       return err(c, 409, 'stripe', e instanceof Error ? e.message : 'Stripe did not answer');
     }
+  };
+  app.post('/billing/portal', portalFor);
+  app.post('/club-owner/portal', portalFor);
+
+  /** The Club owner page: where I stand, what a year costs and whether I can buy it here, my payments. */
+  app.get('/club-owner', async (c) => {
+    const deps = c.get('deps');
+    const user = c.get('user');
+    const b = billingOf(deps);
+    const settings = await deps.store.getClubOwnerSettings();
+    const sub = await deps.store.getSubscription(user.userId);
+    const status: ClubOwnerStatus = {
+      role: user.role,
+      subscription: user.subscription,
+      canPublish: user.canPublish,
+      publishingNote: user.publishingNote,
+      daysLeft: daysLeft(user.subscription),
+      price: await priceFor(b, settings),
+      checkout: settings.selfService && checkoutConfigured(b, yearPriceOf(settings)),
+      portal: Boolean(b.secretKey && sub?.customerId),
+      selfService: settings.selfService,
+      note: settings.note,
+      payments: await deps.store.listPayments({ userId: user.userId, limit: 24 }),
+    };
+    return c.json(status);
   });
 
   /**
@@ -1229,14 +1280,29 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const event = JSON.parse(raw) as { id: string; type: string; data: { object: Record<string, unknown> } };
     if (!(await deps.store.markBillingEvent(event.id))) return c.json({ ok: true as const, seen: true });
     const obj = event.data.object;
+    const money = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0);
     if (event.type === 'checkout.session.completed') {
       const userId = (obj.client_reference_id as string | null) ?? (obj.metadata as { userId?: string } | undefined)?.userId ?? null;
       const customerId = typeof obj.customer === 'string' ? obj.customer : null;
       const subscriptionId = typeof obj.subscription === 'string' ? obj.subscription : null;
       if (userId && (await deps.store.getUser(userId))) {
-        await deps.store.setSubscription({ userId, plan: 'publisher', planUntil: null, startedAt: new Date().toISOString(), status: 'active', customerId, subscriptionId, source: 'stripe' });
+        const now = new Date().toISOString();
+        await deps.store.setSubscription({ userId, plan: 'publisher', planUntil: null, startedAt: now, status: 'active', customerId, subscriptionId, source: 'stripe' });
         const u = await deps.store.getUser(userId);
         if (u && (u.role === 'audio' || u.role === 'dual')) await deps.store.setRole(userId, 'club_owner'); // a paying subscriber is a club owner
+        // The first year's payment, as the session says (its invoice comes too, and is left out below: one payment, once).
+        const sessionId = typeof obj.id === 'string' ? obj.id : event.id;
+        await recordYear(deps, { id: `pay-stripe-${sessionId}`, userId, amountCents: money(obj.amount_total), currency: String(obj.currency ?? 'usd'), paidAt: now, source: 'stripe', ref: sessionId, periodStart: now, periodEnd: null, note: 'Stripe Checkout' });
+      }
+    } else if (event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded') {
+      // A renewal's invoice (the first invoice belongs to the Checkout above); the period it paid for.
+      const inv = obj as { id?: string; customer?: string; amount_paid?: number; currency?: string; billing_reason?: string; period_start?: number; period_end?: number; subscription_details?: { metadata?: { userId?: string } }; lines?: { data?: { period?: { start?: number; end?: number } }[] } };
+      const userId = inv.subscription_details?.metadata?.userId || (typeof inv.customer === 'string' ? await deps.store.userIdByCustomer(inv.customer) : null);
+      if (userId && inv.billing_reason !== 'subscription_create' && (await deps.store.getUser(userId))) {
+        const period = inv.lines?.data?.[0]?.period ?? { start: inv.period_start, end: inv.period_end };
+        const at = (s: number | undefined) => (typeof s === 'number' ? new Date(s * 1000).toISOString() : null);
+        const invoiceId = inv.id ?? event.id;
+        await recordYear(deps, { id: `pay-stripe-${invoiceId}`, userId, amountCents: money(inv.amount_paid), currency: String(inv.currency ?? 'usd'), paidAt: new Date().toISOString(), source: 'stripe', ref: invoiceId, periodStart: at(period.start), periodEnd: at(period.end), note: 'Stripe renewal' });
       }
     } else if (event.type.startsWith('customer.subscription.')) {
       const sub = obj as unknown as StripeSubscription;
@@ -1265,7 +1331,45 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const until = body.until ? new Date(body.until).toISOString() : plan === 'publisher' ? yearFrom(new Date()) : null;
     await store.setSubscription({ userId: target.userId, plan, planUntil: plan === 'free' ? null : until, startedAt: plan === 'free' ? null : new Date().toISOString(), status: 'active', source: 'grant' });
     if (plan === 'publisher' && (target.role === 'audio' || target.role === 'dual')) await store.setRole(target.userId, 'club_owner');
+    if (plan === 'publisher') await recordGrant(c.get('deps'), c.get('user'), target.userId, 'A year granted on the Admin page');
     return c.json({ user: (await store.getUser(target.userId))! });
+  });
+
+  /**
+   * The super admin's club owner portal: the price of a year and the rules (self-service, the note on the Club owner
+   * page, the expiring-soon and grace margins); every club owner — and every account with a subscription — by expiry,
+   * the ones to act on first; the payments on record.
+   */
+  app.get('/admin/club-owners', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const deps = c.get('deps');
+    const settings = await deps.store.getClubOwnerSettings();
+    const users = await deps.store.listUsers();
+    const latest = await deps.store.latestPayments();
+    const now = Date.now();
+    const rank: Record<ClubOwnerStanding, number> = { expired: 0, expiring: 1, active: 2, revoked: 3, none: 4 };
+    const owners: ClubOwnerRow[] = users
+      .filter((u) => u.role === 'club_owner' || (u.subscription && u.subscription.status !== 'none'))
+      .map((u) => {
+        const left = daysLeft(u.subscription, now);
+        const status = u.subscription?.status ?? 'none';
+        const standing: ClubOwnerStanding = status === 'active' && left !== null && left <= settings.expiringSoonDays ? 'expiring' : status;
+        return { user: u, standing, daysLeft: left, lastPayment: latest.get(u.userId) ?? null };
+      })
+      .sort((a, b) => rank[a.standing] - rank[b.standing] || (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity) || a.user.name.localeCompare(b.user.name));
+    const overview: ClubOwnerOverview = { settings, stripe: Boolean(billingOf(deps).secretKey), owners, payments: await deps.store.listPayments({ limit: 100 }) };
+    return c.json(overview);
+  });
+
+  app.put('/admin/club-owners/settings', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const body = ((await c.req.json().catch(() => null)) ?? null) as Partial<ClubOwnerSettings> | null;
+    if (!body || typeof body !== 'object') return err(c, 400, 'bad_request', 'The settings go in the body as JSON');
+    const { updatedAt: _u, ...patch } = body;
+    const settings = await c.get('deps').store.setClubOwnerSettings(patch);
+    return c.json({ settings });
   });
 
   app.get('/admin/users', async (c) => {
@@ -1321,9 +1425,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         default:
           return err(c, 400, 'bad_request', 'subscription.action must be grant, renew, set or revoke');
       }
-      // A subscription makes a club owner of a singer; a super admin keeps the role.
+      // A subscription makes a club owner of a singer; a super admin keeps the role. A year given is on the payments record (amount 0).
       const after = await store.getUser(id);
       if (sub.action !== 'revoke' && after && (after.role === 'audio' || after.role === 'dual')) await store.setRole(id, 'club_owner');
+      if (sub.action !== 'revoke') await recordGrant(c.get('deps'), c.get('user'), id, sub.action === 'renew' ? 'A year renewed on the Admin page' : sub.action === 'set' ? 'Dates set on the Admin page' : 'A year granted on the Admin page');
     }
     return c.json({ user: (await store.getUser(id))! });
   });
@@ -1509,12 +1614,17 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 
   // One segment of the show from the publisher's browser: kept for the portal, handed to the RTMP relay
   // (YouTube at low latency, Facebook, Instagram, Twitch) when there is one, else to YouTube's HLS ingestion.
+  // A Stop that lands while a segment is on its way (its body still arriving, or the relay's answer pending) wins:
+  // the job as stored is read again after every wait, and a stopped one takes no more segments — else the segment's
+  // handler would save its stale copy of the job as live again and the portal would stay on after the stop.
+  const over = (j: PublishJob | null): boolean => !j || j.state === 'stopped' || j.state === 'failed' || j.state === 'stopping';
   app.put('/publishing/jobs/:id/live/:name', async (c) => {
     const deps = c.get('deps');
     const { store, secrets, youtubeHlsBase, relay } = deps;
-    const job = await store.getJob(c.req.param('id'));
-    if (!job || job.ownerUserId !== c.get('user').userId) return err(c, 404, 'no_job', 'Job not found');
-    if (job.state === 'stopped' || job.state === 'failed' || job.state === 'stopping') return err(c, 409, 'not_live', `This broadcast is ${job.state}`);
+    const found = await store.getJob(c.req.param('id'));
+    if (!found || found.ownerUserId !== c.get('user').userId) return err(c, 404, 'no_job', 'Job not found');
+    if (over(found)) return err(c, 409, 'not_live', `This broadcast is ${found.state}`);
+    let job: PublishJob = found;
     const name = c.req.param('name');
     if (!SEGMENT_NAME.test(name)) return err(c, 400, 'bad_name', 'Segment names are letters, digits, - and _, ending in .ts');
     const seq = Math.floor(Number(c.req.query('seq')));
@@ -1523,6 +1633,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const bytes = new Uint8Array(await c.req.arrayBuffer());
     if (!bytes.length || bytes.length > 6_000_000) return err(c, 400, 'too_big', 'A segment is a couple of seconds of video (up to 6 MB)');
     if (bytes[0] !== 0x47) return err(c, 400, 'not_ts', 'Not an MPEG-TS segment');
+    // The body took its time: the job as it stands now carries on (a Stop meanwhile ends it here).
+    const fresh = await store.getJob(job.jobId);
+    if (!fresh || over(fresh)) return err(c, 409, 'not_live', `This broadcast is ${fresh?.state ?? 'gone'}`);
+    job = fresh;
     const now = new Date().toISOString();
     const info: LiveSegmentInfo = { seq, name, durationMs, createdAt: now };
     await store.addLiveSegment(job.jobId, info, bytes);
@@ -1570,6 +1684,11 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
           await store.patchJobYoutube(jobId, verdict, r.note, r.status === 401 ? r.note : verdict === 'ok' ? null : undefined);
         };
       }
+    }
+    // A Stop that landed while the relay or YouTube was being asked wins: nothing of this segment is kept.
+    if (over(await store.getJob(job.jobId))) {
+      await store.clearLiveSegments(job.jobId);
+      return err(c, 409, 'not_live', 'This broadcast is stopped');
     }
     job.live = live;
     if (job.state !== 'live') {

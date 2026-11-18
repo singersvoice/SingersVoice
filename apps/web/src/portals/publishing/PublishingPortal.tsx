@@ -57,8 +57,8 @@ export function PublishingPortal() {
             </div>
           )}
           <Empty title="Publishing mode is for club owners" body={`${publishingNote.value || 'Streaming meets to YouTube and the in-house watch page — the show view, destinations, going live — is for club owners with an active yearly subscription, and for the SingersVoice admins.'} Singing, hosting and joining meets stay open to everyone.`}>
-            <a class="btn primary" href={href('/plans')}>
-              Your account and plan
+            <a class="btn primary" href={href('/club-owner')}>
+              Become a club owner
             </a>
             <a class="btn" href={href('/meets')}>
               Back to Live Meets

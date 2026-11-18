@@ -1,13 +1,16 @@
 /**
- * The Admin page (/admin) — the super admin's: every account with its role and its club owner
- * subscription, changed in place and kept in the SVT DB; the service enforces every change on its
- * next request (Publishing mode opens and closes with the subscription by itself, an audio-only
- * account gets no camera on stage).
+ * The Admin page (/admin) — the super admin's: the club owner portal (AdminClubOwners.tsx — the price
+ * of a year, self-service, the margins; every club owner by standing with the days left; the payments)
+ * and every account with its role and its club owner subscription, changed in place and kept in the
+ * SVT DB; the service enforces every change on its next request (Publishing mode opens and closes
+ * with the subscription by itself, an audio-only account gets no camera on stage).
  *
  *   Role          — Audio only · Dual (audio + video) · Club owner · Super admin
  *   Subscription  — a club owner's year: Grant a year · Renew (a year on) · Set the dates · Revoke
+ *
+ * A subscription's standing (`expired`, after the grace days) is the service's verdict, never recomputed here.
  */
-import { roleTitle, subscriptionStatus, USER_ROLES, type UserRecord, type UserRole } from '@singersvoice/protocol';
+import { roleTitle, USER_ROLES, type UserRecord, type UserRole } from '@singersvoice/protocol';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { Page } from '../components/Shell.tsx';
 import { Empty, Spinner } from '../components/ui.tsx';
@@ -15,6 +18,7 @@ import { api, controlConfigured, refreshAccount } from '../lib/api.ts';
 import { href } from '../lib/nav.ts';
 import { errorText, toast } from '../lib/toast.ts';
 import { accountUserId, isSuperAdmin } from '../state/session.ts';
+import { AdminClubOwners } from './AdminClubOwners.tsx';
 
 const day = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleDateString() : '—');
 
@@ -23,6 +27,7 @@ export function Admin() {
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [dates, setDates] = useState<Record<string, { startedAt: string; expiresAt: string }>>({});
+  const [tick, setTick] = useState(0); // a change below: the club owner overview above reloads
 
   const load = async () => {
     try {
@@ -52,6 +57,7 @@ export function Admin() {
     try {
       const r = await api.patch('PATCH /admin/users/:id', `/admin/users/${encodeURIComponent(u.userId)}`, body);
       setUsers((list) => (list ?? []).map((x) => (x.userId === r.user.userId ? r.user : x)));
+      if (body.subscription) setTick((t) => t + 1);
       toast(`${r.user.name || r.user.email}: ${done}`, 'ok');
       if (r.user.userId === accountUserId.value) void refreshAccount(); // my own account changed: the app follows at once
     } catch (e) {
@@ -99,6 +105,7 @@ export function Admin() {
   return (
     <Page title="Admin">
       <div class="stack" data-admin>
+        <AdminClubOwners onChanged={() => void load()} tick={tick} />
         <section class="card stack pad-sm">
           <div class="row between wrap">
             <div>
@@ -123,7 +130,7 @@ export function Admin() {
           <div class="list">
             {shown.map((u) => {
               const sub = u.subscription;
-              const standing = subscriptionStatus(sub);
+              const standing = sub?.status ?? 'none';
               const d = dates[u.userId] ?? { startedAt: (sub?.startedAt ?? '').slice(0, 10), expiresAt: (sub?.expiresAt ?? '').slice(0, 10) };
               const me = u.userId === accountUserId.value;
               const working = busy === u.userId;

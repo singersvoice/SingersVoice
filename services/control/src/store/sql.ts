@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { LIVE_KEEP, MIX_KEEP, mediaOfRole, newRegistryId, publishingClosedReason, publishingOpen, registrySourceKey, songKey, subscriptionStatus, type CatalogTrack, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { DEFAULT_CLUB_OWNER_SETTINGS, LIVE_KEEP, MIX_KEEP, mediaOfRole, newRegistryId, publishingClosedReason, publishingOpen, registrySourceKey, songKey, subscriptionStatus, type CatalogTrack, type ClubOwnerSettings, type PaymentRecord, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
@@ -21,18 +21,18 @@ type UserRow = { user_id: string; email: string; name: string; picture: string; 
 const ROLES: UserRole[] = ['audio', 'dual', 'club_owner', 'super_admin'];
 export const asRole = (v: unknown, fallback: UserRole = 'dual'): UserRole => (ROLES.includes(v as UserRole) ? (v as UserRole) : fallback);
 
-/** The subscription a joined row carries (null when the account never had one), its status as it stands now (`expired` once the date has passed). */
-function subscriptionFromRow(r: UserRow, now: number): UserSubscription | null {
+/** The subscription a joined row carries (null when the account never had one), its status as it stands now (`expired` once the date — and the grace days — have passed). */
+function subscriptionFromRow(r: UserRow, now: number, graceDays: number): UserSubscription | null {
   if (!r.plan) return null;
   const stored = { startedAt: r.started_at ?? null, expiresAt: r.plan_until ?? null, status: r.plan !== 'publisher' ? ('none' as const) : r.sub_status === 'revoked' ? ('revoked' as const) : ('active' as const), source: r.sub_source === 'stripe' ? ('stripe' as const) : ('grant' as const), updatedAt: r.sub_updated_at ?? null };
-  return { ...stored, status: subscriptionStatus(stored, now) };
+  return { ...stored, status: subscriptionStatus(stored, now, graceDays) };
 }
 
 /** A user row (joined with its subscription) as the record the service hands out: the role, the subscription, and whether Publishing is open right now. */
-export function userFromRow(r: UserRow, now = Date.now()): UserRecord {
+export function userFromRow(r: UserRow, now = Date.now(), graceDays = 0): UserRecord {
   const privileged = !!r.privileged;
   const role = asRole(r.role, privileged ? 'super_admin' : 'dual');
-  const subscription = subscriptionFromRow(r, now);
+  const subscription = subscriptionFromRow(r, now, graceDays);
   const plan: PlanId = r.plan === 'publisher' ? 'publisher' : 'free';
   return {
     userId: r.user_id,
@@ -45,8 +45,8 @@ export function userFromRow(r: UserRow, now = Date.now()): UserRecord {
     privileged: role === 'super_admin',
     plan,
     planUntil: r.plan_until ?? null,
-    canPublish: publishingOpen(role, subscription, now),
-    publishingNote: publishingClosedReason(role, subscription, now),
+    canPublish: publishingOpen(role, subscription, now, graceDays),
+    publishingNote: publishingClosedReason(role, subscription, now, graceDays),
     createdAt: r.created_at,
     lastSeenAt: r.last_seen_at,
   };
@@ -61,6 +61,22 @@ export interface StoredParticipant extends Participant {
 
 export interface StoredDestination extends Destination {
   keyEnc: string;
+}
+
+type PaymentRow = { id: string; user_id: string; amount_cents: number; currency: string; paid_at: string; source: string; ref: string; period_start: string | null; period_end: string | null; note: string };
+const paymentFromRow = (r: PaymentRow): PaymentRecord => ({ id: r.id, userId: r.user_id, amountCents: Number(r.amount_cents), currency: r.currency, paidAt: r.paid_at, source: r.source === 'stripe' ? 'stripe' : 'grant', ref: r.ref, periodStart: r.period_start ?? null, periodEnd: r.period_end ?? null, note: r.note });
+/** The settings within bounds: a price in whole minor units, a known-looking currency, days that are days. */
+function cleanClubOwnerSettings(s: ClubOwnerSettings): ClubOwnerSettings {
+  const num = (v: unknown, lo: number, hi: number, fallback: number) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : fallback);
+  return {
+    priceCents: num(s.priceCents, 0, 100_000_000, 0),
+    currency: /^[a-z]{3}$/i.test(String(s.currency ?? '')) ? String(s.currency).toLowerCase() : 'usd',
+    selfService: Boolean(s.selfService),
+    note: String(s.note ?? '').slice(0, 500),
+    expiringSoonDays: num(s.expiringSoonDays, 0, 365, DEFAULT_CLUB_OWNER_SETTINGS.expiringSoonDays),
+    graceDays: num(s.graceDays, 0, 90, DEFAULT_CLUB_OWNER_SETTINGS.graceDays),
+    updatedAt: s.updatedAt ?? null,
+  };
 }
 
 /** A master-database row as selected (`REGISTRY_SELECT` adds the singer and copy counts). */
@@ -108,6 +124,7 @@ export class SqlStore {
       if (m.after) await this.db.exec(m.after);
     }
     await this.mirrorCatalogIntoRegistry(); // a catalog from before the master database: every entry a record, once
+    await this.getClubOwnerSettings(); // the grace days in force, for every standing read from now on
   }
 
   // ---------- users ----------
@@ -139,7 +156,50 @@ export class SqlStore {
   /** The Admin page: every account, newest first. */
   async listUsers(limit = 500): Promise<UserRecord[]> {
     const rows = await this.db.all<UserRow>(`${USER_SELECT} ORDER BY u.created_at DESC LIMIT ?`, [limit]);
-    return rows.map((r) => userFromRow(r));
+    return rows.map((r) => userFromRow(r, Date.now(), this.graceDays));
+  }
+
+  // ---------- settings (the club owner year) and payments ----------
+
+  /** The grace days in force (read with the settings at startup and on every change): the standing of every subscription uses them. */
+  private graceDays = DEFAULT_CLUB_OWNER_SETTINGS.graceDays;
+
+  async getClubOwnerSettings(): Promise<ClubOwnerSettings> {
+    const r = await this.db.get<{ value: string; updated_at: string }>("SELECT value, updated_at FROM settings WHERE key='club_owner'", []);
+    const stored = r ? (JSON.parse(r.value) as Partial<ClubOwnerSettings>) : {};
+    const s = cleanClubOwnerSettings({ ...DEFAULT_CLUB_OWNER_SETTINGS, ...stored, updatedAt: r?.updated_at ?? null });
+    this.graceDays = s.graceDays;
+    return s;
+  }
+
+  async setClubOwnerSettings(patch: Partial<ClubOwnerSettings>): Promise<ClubOwnerSettings> {
+    const current = await this.getClubOwnerSettings();
+    const next = cleanClubOwnerSettings({ ...current, ...patch });
+    const now = new Date().toISOString();
+    const { updatedAt: _u, ...value } = next;
+    await this.db.run("INSERT INTO settings (key, value, updated_at) VALUES ('club_owner', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", [JSON.stringify(value), now]);
+    this.graceDays = next.graceDays;
+    return { ...next, updatedAt: now };
+  }
+
+  /** A payment for a club owner year, once per Stripe id (a retried webhook adds nothing); a grant has its own id. */
+  async recordPayment(p: Omit<PaymentRecord, 'id'> & { id?: string }): Promise<PaymentRecord> {
+    const id = p.id ?? `pay-${p.source}-${p.userId}-${Date.parse(p.paidAt) || Date.now()}`;
+    await this.db.run('INSERT OR IGNORE INTO payments (id, user_id, amount_cents, currency, paid_at, source, ref, period_start, period_end, note) VALUES (?,?,?,?,?,?,?,?,?,?)', [id, p.userId, Math.max(0, Math.round(p.amountCents)), (p.currency || 'usd').toLowerCase(), p.paidAt, p.source, p.ref, p.periodStart, p.periodEnd, p.note]);
+    return { ...p, id };
+  }
+
+  /** Every account's latest payment (the overview's "last paid" column), keyed by user id. */
+  async latestPayments(): Promise<Map<string, PaymentRecord>> {
+    const rows = await this.db.all<PaymentRow>('SELECT p.* FROM payments p WHERE p.paid_at = (SELECT MAX(q.paid_at) FROM payments q WHERE q.user_id = p.user_id) ORDER BY p.paid_at DESC');
+    const out = new Map<string, PaymentRecord>();
+    for (const r of rows) if (!out.has(r.user_id)) out.set(r.user_id, paymentFromRow(r));
+    return out;
+  }
+
+  async listPayments(opts: { userId?: string; limit?: number } = {}): Promise<PaymentRecord[]> {
+    const rows = opts.userId ? await this.db.all<PaymentRow>('SELECT * FROM payments WHERE user_id=? ORDER BY paid_at DESC LIMIT ?', [opts.userId, opts.limit ?? 50]) : await this.db.all<PaymentRow>('SELECT * FROM payments ORDER BY paid_at DESC LIMIT ?', [opts.limit ?? 100]);
+    return rows.map(paymentFromRow);
   }
 
   /** A Super Admin sets an account's role; `privileged` follows it for older code paths. */
@@ -154,12 +214,12 @@ export class SqlStore {
 
   async getUser(userId: string): Promise<UserRecord | null> {
     const r = await this.db.get<UserRow>(`${USER_SELECT} WHERE u.user_id=?`, [userId]);
-    return r ? userFromRow(r) : null;
+    return r ? userFromRow(r, Date.now(), this.graceDays) : null;
   }
 
   async getUserByEmail(email: string): Promise<UserRecord | null> {
     const r = await this.db.get<UserRow>(`${USER_SELECT} WHERE lower(u.email)=? ORDER BY u.last_seen_at DESC`, [email.toLowerCase()]);
-    return r ? userFromRow(r) : null;
+    return r ? userFromRow(r, Date.now(), this.graceDays) : null;
   }
 
   // ---------- plans (billing) ----------
@@ -646,7 +706,7 @@ export class SqlStore {
 
   async listMembers(meetId: string): Promise<UserRecord[]> {
     const rows = await this.db.all<UserRow>(`SELECT u.*, s.plan AS plan, s.plan_until AS plan_until, s.started_at AS started_at, s.status AS sub_status, s.source AS sub_source, s.updated_at AS sub_updated_at FROM meet_members m JOIN users u ON u.user_id = m.user_id LEFT JOIN subscriptions s ON s.user_id = u.user_id WHERE m.meet_id=? ORDER BY m.joined_at ASC`, [meetId]);
-    return rows.map(userFromRow);
+    return rows.map((r) => userFromRow(r, Date.now(), this.graceDays));
   }
 
   // ---------- performances: the saved shows (one per song, registered by the host) ----------

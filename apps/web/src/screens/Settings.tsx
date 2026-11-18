@@ -137,17 +137,21 @@ export function Settings() {
             </span>
             <span class={`chip ${role.value === 'super_admin' || canPublish.value ? 'ok' : ''}`}>{roleTitle(role.value)}</span>
             {role.value === 'club_owner' && <span class={`chip ${canPublish.value ? 'ok' : 'warn'}`}>{canPublish.value ? 'subscription active' : 'subscription closed'}</span>}
-            <a class="btn sm" href={href('/plans')}>
-              Account & plan
-            </a>
+            {!isSuperAdmin.value && (
+              <a class="btn sm" href={href('/club-owner')} data-club-owner-link>
+                Club owner
+              </a>
+            )}
             {isSuperAdmin.value && (
               <a class="btn sm" href={href('/admin')}>
                 Admin
               </a>
             )}
-            <a class="btn sm" href={href('/publishing')}>
-              Publishing portal
-            </a>
+            {(canPublish.value || isSuperAdmin.value) && (
+              <a class="btn sm" href={href('/publishing')}>
+                Publishing portal
+              </a>
+            )}
           </div>
           <Field label="Service URL" hint="Set at build time by VITE_CONTROL_URL; override here to test another deployment (leave empty to reset).">
             <input class="input mono" value={controlUrl.value} placeholder="https://sv-control.<account>.workers.dev" onChange={(e) => setControlUrl((e.currentTarget as HTMLInputElement).value)} />

@@ -3,6 +3,7 @@ import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from '.
 import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
 import type { MixBatch } from './mix.ts';
 import type { AdminUserUpdate, AdminUsersResponse, BillingStatus, Destination, DestinationKind, DestinationUpdate, LiveStatus, PlanId, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
+import type { ClubOwnerOverview, ClubOwnerSettings, ClubOwnerStatus } from './roles.ts';
 import type { RegisterTrackRequest, TrackAccessRequest, TrackCopyRequest, TrackHistoryResponse, TrackMetaPatch, TrackRecord, TrackSearchResponse } from './registry.ts';
 import type { YtFetchRequest, YtJob, YtSearchResponse, YtStatus } from './ytTracks.ts';
 
@@ -174,6 +175,13 @@ export interface Routes {
   'PATCH /tracks/:id': { req: TrackMetaPatch; res: { track: TrackRecord } };
   /** The Admin page (super admins): every account; one account's role and subscription changed. */
   'GET /admin/users': { res: AdminUsersResponse };
+  /** The super admin's club owner portal: the price and the rules, every club owner by expiry, the payments. */
+  'GET /admin/club-owners': { res: ClubOwnerOverview };
+  'PUT /admin/club-owners/settings': { req: Partial<ClubOwnerSettings>; res: { settings: ClubOwnerSettings } };
+  /** The Club owner page (self-service): my standing, the offer, my payments; a Checkout for a year; Stripe's portal. */
+  'GET /club-owner': { res: ClubOwnerStatus };
+  'POST /club-owner/checkout': { req: Record<string, never>; res: { url: string } };
+  'POST /club-owner/portal': { req: Record<string, never>; res: { url: string } };
   'PATCH /admin/users/:id': { req: AdminUserUpdate; res: { user: UserRecord } };
   /** YouTube song tracks (through the relay, docs/RELAY.md): can the service fetch them; search; fetch one into my Drive; the job as it goes. */
   'GET /yt': { res: YtStatus };
