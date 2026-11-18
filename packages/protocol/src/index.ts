@@ -7,6 +7,8 @@ export * from './meet.ts';
 export * from './catalog.ts';
 export * from './publishing.ts';
 export * from './roles.ts';
+export * from './plans.ts';
+export * from './coupons.ts';
 export * from './registry.ts';
 export * from './ytTracks.ts';
 export * from './api.ts';

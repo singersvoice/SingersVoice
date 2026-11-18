@@ -66,8 +66,8 @@ export function ShowView(props: { id: string }) {
           </div>
         ) : (
           <Empty title="Publishing mode is for club owners" body={publishingNote.value || 'The show view streams a meet to YouTube and the in-house watch page — for club owners with an active subscription, and the SingersVoice admins.'}>
-            <a class="btn primary" href={href('/club-owner')}>
-              Become a club owner
+            <a class="btn primary" href={href('/plans')}>
+              See the plans
             </a>
             <a class="btn" href={href('/meets')}>
               Back to Live Meets

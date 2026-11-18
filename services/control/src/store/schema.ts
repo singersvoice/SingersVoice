@@ -132,10 +132,55 @@ CREATE TABLE IF NOT EXISTS payments (
   ref TEXT NOT NULL DEFAULT '',
   period_start TEXT,
   period_end TEXT,
-  note TEXT NOT NULL DEFAULT ''
+  note TEXT NOT NULL DEFAULT '',
+  plan TEXT NOT NULL DEFAULT 'club',
+  payment_intent_id TEXT,
+  charge_id TEXT,
+  fee_cents INTEGER,
+  net_cents INTEGER,
+  refunded_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'paid'
 );
 CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id, paid_at DESC);
 CREATE INDEX IF NOT EXISTS idx_payments_at ON payments(paid_at DESC);
+CREATE TABLE IF NOT EXISTS orders (
+  order_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  session_id TEXT,
+  payment_intent_id TEXT,
+  status TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orders_session ON orders(session_id);
+CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS club_members (
+  owner_user_id TEXT NOT NULL,
+  email TEXT NOT NULL,
+  added_at TEXT NOT NULL,
+  PRIMARY KEY (owner_user_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_club_members_email ON club_members(email);
+CREATE TABLE IF NOT EXISTS coupons (
+  email TEXT PRIMARY KEY,
+  code TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS video_usage (
+  pool_user_id TEXT NOT NULL,
+  period TEXT NOT NULL,
+  seconds REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (pool_user_id, period)
+);
 CREATE TABLE IF NOT EXISTS track_registry (
   track_id TEXT PRIMARY KEY,
   source TEXT NOT NULL,
@@ -187,10 +232,17 @@ CREATE TABLE IF NOT EXISTS live_segments (
 `;
 
 /**
- * `settings` holds the service's few knobs as JSON by key (`club_owner`: the year's price and currency,
- * self-service on/off, the admin's note, the expiring-soon and grace days — roles.ts
- * ClubOwnerSettings); `payments` is every payment for a club owner year (Stripe's, by the webhook;
- * a year the admin granted, amount 0), so the admin sees who paid and when.
+ * `settings` holds the service's few knobs as JSON by key (`billing`: the plans with their prices per
+ * currency, period, video hours, seats, self-service; the admin's note; the expiring-soon and grace
+ * days — plans.ts BillingSettings; an older `club_owner` entry is read once into it); `payments` is
+ * every payment for a plan (Stripe's, by the webhook, with the ids a refund needs and what Stripe kept
+ * of it; a period the admin granted, amount 0); `orders` every Checkout started and what became of it
+ * (pending → paid / processing / failed / canceled / expired — the webhook's word, never the browser's);
+ * `club_members` the email addresses a club owner named to share the club's video hours; `video_usage`
+ * the seconds of video on stage per pool (an account, or the club owner's for the whole club) and
+ * calendar month (UTC); `coupons` the gate (coupons.ts): one per email address — the code, the expiry,
+ * who issued it — with the code an account entered on `users.coupon_code`, and the requirement itself
+ * under `settings` key `coupons`.
  *
  * The master track database (registry.ts): `track_registry` is one row per source file — the YouTube
  * video, the singer's Drive folder, the catalog entry (`source_key`, unique) — with the song's search
@@ -204,9 +256,20 @@ CREATE TABLE IF NOT EXISTS live_segments (
  *   users.role                 — the account's role (roles.ts); a privileged row becomes a super admin
  *   subscriptions.started_at   — when the club owner's year started
  *   subscriptions.status       — active / revoked (expired is a matter of the date)
+ *   payments.plan, …           — the plan paid for, Stripe's ids, the fee and the net, refunds (plans.ts)
+ *   users.coupon_code          — the coupon the account entered at the gate (coupons.ts)
  */
 export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string; after?: string }[] = [
   { table: 'users', column: 'role', ddl: "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'dual'", after: "UPDATE users SET role='super_admin' WHERE privileged=1" },
   { table: 'subscriptions', column: 'started_at', ddl: 'ALTER TABLE subscriptions ADD COLUMN started_at TEXT' },
   { table: 'subscriptions', column: 'status', ddl: "ALTER TABLE subscriptions ADD COLUMN status TEXT NOT NULL DEFAULT 'active'", after: "UPDATE users SET role='club_owner' WHERE role='dual' AND user_id IN (SELECT user_id FROM subscriptions WHERE plan='publisher')" },
+  { table: 'payments', column: 'plan', ddl: "ALTER TABLE payments ADD COLUMN plan TEXT NOT NULL DEFAULT 'club'" },
+  { table: 'payments', column: 'payment_intent_id', ddl: 'ALTER TABLE payments ADD COLUMN payment_intent_id TEXT' },
+  { table: 'payments', column: 'charge_id', ddl: 'ALTER TABLE payments ADD COLUMN charge_id TEXT' },
+  { table: 'payments', column: 'fee_cents', ddl: 'ALTER TABLE payments ADD COLUMN fee_cents INTEGER' },
+  { table: 'payments', column: 'net_cents', ddl: 'ALTER TABLE payments ADD COLUMN net_cents INTEGER' },
+  { table: 'payments', column: 'refunded_cents', ddl: 'ALTER TABLE payments ADD COLUMN refunded_cents INTEGER NOT NULL DEFAULT 0' },
+  { table: 'payments', column: 'status', ddl: "ALTER TABLE payments ADD COLUMN status TEXT NOT NULL DEFAULT 'paid'" },
+  { table: 'users', column: 'coupon_code', ddl: "ALTER TABLE users ADD COLUMN coupon_code TEXT NOT NULL DEFAULT ''" },
+  { table: 'users', column: 'coupon_at', ddl: 'ALTER TABLE users ADD COLUMN coupon_at TEXT' },
 ];

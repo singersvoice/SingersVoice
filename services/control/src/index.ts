@@ -5,7 +5,7 @@
  *   GOOGLE_CLIENT_ID=…        tokens must be issued to this OAuth client (recommended)
  *   ALLOWED_ORIGINS=a,b       extra browser origins
  *   PRIVILEGED_EMAILS=a,b     admin accounts: Publishing mode without a plan, and the right to grant plans (the first account ever seen is one too)
- *   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_URL (STRIPE_PRICE_PUBLISHER: a fallback price) — the club owner year through Stripe; the price itself is set on the Admin page (docs/BILLING.md)
+ *   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_URL — the plans through Stripe; the prices themselves are set on the Admin page (docs/BILLING.md)
  *   PUBLISH_KEY_SECRET=…      base64 32-byte key for stream keys at rest (generate once: node -e "…randomSecretB64()")
  *   DEV_AUTH=1                accept X-Dev-User headers (local dev / CI only)
  *   ICE_SERVERS=[…]           JSON array of RTCIceServer for performer video (default: Google STUN; add TURN for strict NATs)
@@ -25,6 +25,7 @@ import { SqlStore } from './store/sql.ts';
 const PORT = Number(process.env.PORT ?? 8787);
 const db = await openNodeSqlite(process.env.SV_DB ?? './sv-control.sqlite');
 const store = new SqlStore(nodeSqliteDriver(db));
+store.couponsRequiredDefault = process.env.COUPONS_REQUIRED !== '0'; // the gate (coupons.ts): on unless told otherwise; the Admin page decides from then on
 await store.migrate();
 
 /** Browser tests only: Google (Drive, the token check) stands in for itself at this address. */
@@ -41,7 +42,7 @@ const deps: AppDeps = {
   version: '2.1.0',
   youtubeHlsBase: process.env.YOUTUBE_HLS_BASE || undefined,
   googleApiKey: process.env.GOOGLE_API_KEY || undefined,
-  billing: { secretKey: process.env.STRIPE_SECRET_KEY || undefined, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined, pricePublisher: process.env.STRIPE_PRICE_PUBLISHER || undefined, appUrl: process.env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
+  billing: { secretKey: process.env.STRIPE_SECRET_KEY || undefined, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined, appUrl: process.env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
   relay: process.env.RELAY_URL && process.env.RELAY_SECRET ? { url: process.env.RELAY_URL, secret: process.env.RELAY_SECRET } : undefined,
   fakeYoutubeDir: process.env.SV_FAKE_YOUTUBE_DIR || undefined,
   fetchImpl: fakeGoogle,

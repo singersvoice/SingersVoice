@@ -3,7 +3,7 @@ import { useLocation } from 'preact-iso';
 import { useState } from 'preact/hooks';
 import { asset, href, relPath } from '../lib/nav.ts';
 import { toast } from '../lib/toast.ts';
-import { canPublish, isSuperAdmin, needsReconnect, profile, reconnect } from '../state/session.ts';
+import { canPublish, isSuperAdmin, needsReconnect, ownsClub, profile, reconnect } from '../state/session.ts';
 import { IcHome, IcLibrary, IcMic, IcMore, IcPlay, IcSettings, IcShare, IcSliders, IcUsers, IcX } from './icons.tsx';
 
 /** The mark, always in motion: the brand loop (two singers on their disc), the still mark where motion is turned off. */
@@ -65,11 +65,12 @@ export function TopBar(props: { title?: string; right?: ComponentChildren }) {
  * Performances · Settings. A phone's bar holds the first four and More, which opens the rest.
  *
  * Who sees what (`when`): Publishing is listed for the accounts it is open to — club owners with an
- * active year and super admins — and nobody else; Admin for super admins alone; the Club owner page
- * (become one, pay for a year, renew) for everyone who is not a super admin. The service enforces
- * the same on every request; the menu only keeps what an account cannot use out of its way.
+ * active plan and super admins — and nobody else; Admin for super admins alone; the Plans page
+ * (pick a plan, pay, renew) for everyone who is not a super admin; My club for club owners. The
+ * service enforces the same on every request; the menu only keeps what an account cannot use out
+ * of its way.
  */
-type NavWhen = 'super_admin' | 'publish' | 'not_super_admin';
+type NavWhen = 'super_admin' | 'publish' | 'not_super_admin' | 'club_owner';
 export interface NavItem {
   to: string;
   label: string;
@@ -93,10 +94,12 @@ export const NAV: NavItem[] = [
     to: '/settings',
     label: 'Settings',
     Icon: IcSettings,
-    also: ['/plans', '/club-owner', '/setup', '/admin'],
+    also: ['/plans', '/club-owner', '/club', '/billing/', '/setup', '/admin'],
     children: [
-      { to: '/club-owner', label: 'Club owner', when: 'not_super_admin' },
+      { to: '/plans', label: 'Plans', when: 'not_super_admin' },
+      { to: '/club', label: 'My club', when: 'club_owner' },
       { to: '/admin', label: 'Admin', when: 'super_admin' },
+      { to: '/admin/coupons', label: 'Coupons', when: 'super_admin' },
     ],
   },
 ];
@@ -104,7 +107,7 @@ export const NAV: NavItem[] = [
 const PHONE_TABS = 4;
 
 /** Is an entry for this account? */
-export const navAllowed = (when: NavWhen | undefined): boolean => (when === 'super_admin' ? isSuperAdmin.value : when === 'not_super_admin' ? !isSuperAdmin.value : when === 'publish' ? canPublish.value || isSuperAdmin.value : true);
+export const navAllowed = (when: NavWhen | undefined): boolean => (when === 'super_admin' ? isSuperAdmin.value : when === 'not_super_admin' ? !isSuperAdmin.value : when === 'publish' ? canPublish.value || isSuperAdmin.value : when === 'club_owner' ? ownsClub.value && !isSuperAdmin.value : true);
 /** The portals this account sees. */
 export const visibleNav = (): NavItem[] => NAV.filter((n) => navAllowed(n.when));
 

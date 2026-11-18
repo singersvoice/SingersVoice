@@ -15,10 +15,14 @@ import { TrackMaker } from './portals/studio/TrackMaker.tsx';
 import { TracksPortal } from './portals/tracks/TracksPortal.tsx';
 import { Home } from './screens/Home.tsx';
 import { Settings } from './screens/Settings.tsx';
-import { ClubOwner } from './screens/ClubOwner.tsx';
+import { Plans } from './screens/Plans.tsx';
+import { BillingReturn } from './screens/BillingReturn.tsx';
+import { Club } from './screens/Club.tsx';
+import { CouponGate } from './screens/CouponGate.tsx';
+import { AdminCoupons } from './screens/AdminCoupons.tsx';
 import { Admin } from './screens/Admin.tsx';
 import { Setup, Welcome } from './screens/Welcome.tsx';
-import { signedIn } from './state/session.ts';
+import { couponNeeded, signedIn } from './state/session.ts';
 import { appSettings } from './state/settings.ts';
 
 /** Signed-in area. A deep link (e.g. a meet invite) is remembered and resumed after sign-in. */
@@ -36,6 +40,8 @@ function Guard(props: { children: preact.ComponentChildren }) {
     } else if (!appSettings.value.onboarded && relPath(loc.path) !== '/setup') loc.route(href('/setup'), true);
   }, [ok, loc.path]);
   if (!ok) return null;
+  // The coupon gate: an account the service says is out sees the Coupon screen in place of every page (coupons.ts).
+  if (couponNeeded.value) return <CouponGate />;
   return <>{props.children}</>;
 }
 
@@ -64,11 +70,12 @@ function RoomLayer() {
   const ok = signedIn.value;
   const here = Boolean(id) && relPath(loc.path) === `/meet/${id}`;
   const over = info?.state === 'ended' || info?.state === 'expired';
+  const gated = couponNeeded.value;
   useEffect(() => {
-    if (!ok && id) leaveRoom();
+    if ((!ok || gated) && id) leaveRoom(); // signed out, or the coupon gate closed: the room goes
     else if (id && !here && over) leaveRoom(); // a finished meet does not follow you around
-  }, [ok, id, here, over]);
-  if (!id || !ok) return null;
+  }, [ok, gated, id, here, over]);
+  if (!id || !ok || gated) return null;
   // Keyed, room first: the pill coming and going must never re-create the room's element (a
   // re-mount would restart the session, the camera and every video link).
   return (
@@ -135,9 +142,12 @@ export function App() {
           <Route path={r('/publishing')} component={guarded(() => <PublishingPortal />)} />
           <Route path={r('/publishing/show/:id')} component={guarded((p) => <ShowView id={p.id ?? ''} />)} />
           <Route path={r('/watch/:id')} component={(p: P) => <Watch id={p.id ?? ''} />} />
-          <Route path={r('/club-owner')} component={guarded(() => <ClubOwner />)} />
-          <Route path={r('/plans')} component={guarded(() => <ClubOwner />)} />
+          <Route path={r('/plans')} component={guarded(() => <Plans />)} />
+          <Route path={r('/club-owner')} component={guarded(() => <Plans />)} />
+          <Route path={r('/billing/return')} component={guarded(() => <BillingReturn />)} />
+          <Route path={r('/club')} component={guarded(() => <Club />)} />
           <Route path={r('/admin')} component={guarded(() => <Admin />)} />
+          <Route path={r('/admin/coupons')} component={guarded(() => <AdminCoupons />)} />
           <Route path={r('/settings')} component={guarded(() => <Settings />)} />
           <Route default component={NotFound} />
         </Router>

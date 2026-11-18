@@ -52,7 +52,7 @@ jobs:
       - name: Secret scan (no credentials in the repo)
         run: |
           set -e
-          if git grep -nE 'AIza[0-9A-Za-z_-]{30,}|[0-9]+-[0-9a-z]{32}\.apps\.googleusercontent\.com|GOCSPX-[0-9A-Za-z_-]{20,}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----' -- ':!package-lock.json' ; then
+          if git grep -nE 'AIza[0-9A-Za-z_-]{30,}|[0-9]+-[0-9a-z]{32}\.apps\.googleusercontent\.com|GOCSPX-[0-9A-Za-z_-]{20,}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----|(sk|rk)_(live|test)_[0-9A-Za-z]{20,}|whsec_[0-9A-Za-z]{20,}' -- ':!package-lock.json' ; then
             echo "::error::Possible credential committed"; exit 1; fi
           echo "no credentials found"
 
@@ -88,7 +88,12 @@ jobs:
       - name: The first sign-in with Google faked (the Drive box left unticked is "One more tick", never an error; a fresh token's refusal asked again; the folders made)
         run: node tools/ci/signin-e2e.mjs screenshots
 
-      - name: Roles, the Admin page and the instrument (audio only on stage, a club owner's year granted, expired, renewed, revoked; a USB input beside the mic)
+      - name: Coupons (the gate on who may use SingersVoice: a singer out until the coupon issued to their address is entered; the code or the date changed by the admin puts them out at once; the gate off)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/coupons-e2e.mjs screenshots
+
+      - name: Roles and plans (a free singer with the voice alone, SVV putting the picture on stage, the hours metered and used up, the plans priced, a club and its members, a club owner's plan granted, expired, renewed, revoked; a USB input beside the mic)
         env:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/roles-e2e.mjs screenshots

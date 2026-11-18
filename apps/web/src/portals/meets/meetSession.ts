@@ -18,6 +18,8 @@ const POLL_SETTLED_MS = 5000;
 export class MeetSession {
   readonly snapshot = signal<MeetSnapshot | null>(null);
   readonly you = signal<Participant | null>(null);
+  /** From every heartbeat: the video hours left to this account this month (null = without limit), and why the picture is off when it is. */
+  readonly yourVideo = signal<{ leftSeconds: number | null; note: string; reason: '' | 'role' | 'plan' | 'hours' } | null>(null);
   readonly chat = signal<ChatMessage[]>([]);
   readonly error = signal<string | null>(null);
   /** Set when the meet is over for this device for good (removed by the host, the meet ended or expired): the room shows why and offers the way out. */
@@ -103,6 +105,7 @@ export class MeetSession {
   private apply(snap: MeetSnapshot): void {
     this.snapshot.value = snap;
     if (snap.you) this.you.value = snap.you;
+    if (snap.yourVideo) this.yourVideo.value = snap.yourVideo;
     if (snap.chat.length) {
       const known = new Set(this.chat.value.map((c) => c.seq));
       const fresh = snap.chat.filter((c) => !known.has(c.seq));

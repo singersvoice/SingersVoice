@@ -53,6 +53,7 @@ export async function startServers({ base = '/SingersVoice/', logDir = process.e
       SV_DB: ':memory:',
       ALLOWED_ORIGINS: `http://localhost:${port}`,
       PRIVILEGED_EMAILS: 'carol@dev.local',
+      COUPONS_REQUIRED: process.env.COUPONS_REQUIRED ?? '0', // the coupon gate is tried in its own e2e; every other e2e signs its singers in without one
       // YouTube stands in for itself: the control server's own fake ingestion endpoint keeps the segments in a directory.
       ...(fakeYoutubeDir ? { SV_FAKE_YOUTUBE_DIR: fakeYoutubeDir, YOUTUBE_HLS_BASE: `http://localhost:${controlPort}/fake/youtube/http_upload_hls` } : {}),
     },

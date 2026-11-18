@@ -7,7 +7,7 @@
  * stage for the next song. The host's take of each song is the meet's saved performance, shared
  * with everyone who was in the meet. Nothing here ever waits for a review or an approval.
  */
-import { clampSlot, formatMs, MAX_PERFORMERS, planParts, playbackPositionMs, SLOT_COLORS, songChoicePending, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
+import { clampSlot, formatMs, hoursLabel, MAX_PERFORMERS, planParts, playbackPositionMs, SLOT_COLORS, songChoicePending, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
 import { activeRoomInfo } from './activeRoom.ts';
 import { useRoomStage, type RoomStage } from './roomStage.ts';
 import { SetListPanel } from './SetListPanel.tsx';
@@ -609,7 +609,7 @@ function Lobby(props: {
         {tab === 'stage' && (
           <section class="stack">
             {/* The stage is live from the start: whoever steps on appears here at once (own cut-out; other performers' video on stage devices). */}
-            <StageStrip stage={stage} meet={meet} onStage={onStage} />
+            <StageStrip stage={stage} meet={meet} onStage={onStage} session={session} />
             {(host || onStage) && (
               <div class="row" style="justify-content:flex-end">
                 <button class="btn sm" aria-label="Stage background" title="Switch the stage background for everyone — every device and the show follow at once" onClick={() => setBgOpen(true)}>
@@ -800,10 +800,13 @@ function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; on
 }
 
 /** The virtual stage in the lobby: everyone on stage, cut out of their cameras (own video; others' on stage devices). */
-function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
+function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean; session: MeetSession }) {
   const { stage, meet } = props;
   const app = appSettings.value;
   const n = meet.stage.filter((s) => s.participantId).length;
+  // The plan's video hours, as the service counts them (every heartbeat): the chip says what is left, or why there is no picture.
+  const video = props.session.yourVideo.value;
+  const videoNote = video?.note || (stage.videoAllowed ? '' : 'Your account sings with sound only in live meets — a picture on stage comes with a plan (the Plans page)');
   return (
     <div class="stagestrip" data-blend={stage.blend} data-mask={stage.feed.segmenter.maskMode} data-performers={n} data-linked={stage.linked} data-onstage={props.onStage ? '1' : '0'}>
       <div class="showpic">
@@ -821,7 +824,21 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean }) {
           <IcUsers size={14} /> {n} on stage{props.onStage && stage.others ? ` · ${stage.linked}/${stage.others} video linked` : ''}
         </span>
         {props.onStage && stage.camOn && stage.blend === 'loading' && <span class="chip">blending you into the stage…</span>}
-        {props.onStage && !stage.videoAllowed && <span class="chip" title="Your account sings with sound only — no camera on stage. The SingersVoice admin can change that." data-audio-only>audio only · no camera</span>}
+        {props.onStage && !stage.videoAllowed && (
+          <span class="chip" title={videoNote} data-audio-only data-video-note={video?.reason || 'plan'}>
+            audio only · no camera
+          </span>
+        )}
+        {props.onStage && !stage.videoAllowed && videoNote && (
+          <a class="chip warn" href={href('/plans')} style="pointer-events:auto" data-video-reason>
+            {videoNote.length > 90 ? `${videoNote.slice(0, 88)}…` : videoNote}
+          </a>
+        )}
+        {props.onStage && stage.videoAllowed && video && video.leftSeconds !== null && (
+          <span class={`chip ${video.leftSeconds < 1800 ? 'warn' : ''}`} title="Video hours left this month under your plan (the clock runs while you are on stage with the picture on)" data-video-left={video.leftSeconds}>
+            video · {hoursLabel(video.leftSeconds)} left this month
+          </span>
+        )}
         {props.onStage && !stage.camOn && app.cameraOn && stage.videoAllowed && (
           <button class="btn sm accent" style="pointer-events:auto" onClick={() => void stage.openCamera()}>
             <IcCamera size={16} /> Turn the camera on
@@ -1298,7 +1315,7 @@ function LiveStage(props: {
           <MicStatus engine={engine} onChange={() => void reopenMic(engine, camera)} />
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={started && props.prepared ? (ms) => void seek(ms) : undefined} pending={seekTarget} disabled={countdown !== null} />
           <div class="main">
-            <button class={`btn icon ${app.cameraOn && stage.videoAllowed ? 'on' : ''}`} aria-label="Camera" disabled={!stage.videoAllowed} title={stage.videoAllowed ? 'Camera' : 'Your account is audio only — no camera on stage'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
+            <button class={`btn icon ${app.cameraOn && stage.videoAllowed ? 'on' : ''}`} aria-label="Camera" disabled={!stage.videoAllowed} title={stage.videoAllowed ? 'Camera' : session.yourVideo.value?.note || 'No picture on stage under your plan — see the Plans page'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
               {app.cameraOn && stage.videoAllowed ? <IcCamera /> : <IcCameraOff />}
             </button>
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" onClick={() => updateAudio({ monitor: !audio.monitor })}>

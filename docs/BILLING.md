@@ -1,138 +1,123 @@
-# Billing — the club owner year
+# Billing — the plans
 
-Publishing mode (the show view, destinations, going live to YouTube and the in-house watch page) is
-for **club owners** with an active **yearly subscription** (and for super admins, always). Singing,
-hosting and joining meets stay free. A **super admin** (the first account ever seen, plus
-`PRIVILEGED_EMAILS`) runs the **Admin page** (`/admin`): every account's role (audio only, dual,
-club owner, super admin) and the club owners' years — *Grant a year*, *Renew (+1 year)*, *Set
-dates*, *Revoke* — kept in the SVT DB with a start date, an expiry date and a status; a year that
-runs out closes Publishing by itself, with the date on the gate (docs/ARCHITECTURE.md, *Roles*).
-Stripe below is the paid way to the same subscription.
+Four plans, priced by the super admin (Admin → **Plans & payments**) and paid through Stripe
+(docs/stripe-setup.md; the architecture in docs/global-payments-architecture.md; the test plan in
+docs/payments-test-plan.md). The defaults, which the super admin can change at any time — the
+prices (in USD, and in INR for UPI), the period (a month or a year), the video hours, the seats,
+whether a plan is for sale on the Plans page or granted by hand:
 
-**Who sees what.** Publishing and Admin are not on a plain singer's menus at all: the side menu,
-the phone's More panel, the Home cards and Settings list Publishing only for the accounts it is
-open to (a club owner with an active year, a super admin) and Admin for super admins alone; a
-singer finds the **Club owner** card and menu entry in their place. The service enforces the same
-on every request whatever a device shows (`403 publishing_closed`, `403 not_super_admin`).
+| Plan | Default price | Live meets | More |
+| --- | --- | --- | --- |
+| **Free** | — | with the voice (no picture on stage) | the Studio with the camera, Track Maker, every take in your own Drive |
+| **SVV** | $5.00 / month | your picture on stage, **10 hours** a calendar month | |
+| **SVVPro** | $50.00 / month | your picture on stage, **100 hours** a month | |
+| **Club owner** | $250.00 / month | **300 hours** a month shared by the owner and up to **15 members** the owner names by email | **Publishing mode** (the show view, YouTube and the in-house watch page) |
 
-## The Club owner page — self-service (`/club-owner`)
+What an account may do is computed on the service on every request (`entitlementOf`,
+`packages/protocol/src/plans.ts`): the plan in force is the account's own active subscription, else
+the club it is a member of (by email) while that club's plan is active, else Free; a super admin has
+everything without limit. **Video hours** count while a singer is on stage with the picture on, by the
+calendar month (UTC), into the account's own pool or the club's; at the limit the next heartbeat takes
+the picture away (every device draws the name card) with the reason on the chip, and the first of the
+month starts the count again. An *audio only* role has no picture whatever the plan. A member's own
+paid plan takes precedence over the club's; members never get Publishing mode.
 
-Every account that is not a super admin has it (More › Club owner, the Home card, Settings): where
-the account stands (the year, its dates, the days left, why Publishing is closed), **what a year
-costs** — the price the super admin set (below) — and one button, **Pay for a year** (*Renew for a
-year* once one has run out), which opens Stripe's Checkout with that price; back on the page the
-year shows within seconds (the webhook). A paid year renews itself until cancelled from **Manage
-subscription** (Stripe's portal: the card, the invoices, cancelling). The page lists the account's
-payments — Stripe's, and the years the admin granted (amount 0). When Stripe is not configured, the
-admin has set no price, or self-service is off, the page says to ask the SingersVoice admin, and a
-year granted on the Admin page shows there the same way.
+**Who sees what.** Publishing and Admin are not on a plain singer's menus at all: the side menu, the
+phone's More panel, the Home cards and Settings list Publishing only for the accounts it is open to (a
+club owner with an active plan, a super admin) and Admin for super admins alone; a singer finds
+**Plans** in their place, and a club owner **My club** beside it. The service enforces the same on
+every request whatever a device shows (`403 publishing_closed`, `403 not_super_admin`, `403 no_club`).
 
-## The super admin's club owner portal (Admin › Club owners)
+## The Plans page — self-service (`/plans`)
 
-The top of the Admin page: the **price of a year** and its **currency** (0.00 = not for sale: years
-are granted), **self-service** on or off, a **note** shown on the Club owner page (what a club owner
-gets, how to reach you), the **expiring-soon** margin (days before the end a year is flagged) and
-the **grace days** after an expiry during which Publishing stays open (0 = closed on the day — a
-renewal on its way is not cut off when you allow a few). Under it, **who has a year**: every club
-owner (and every account that ever had a subscription) sorted by what needs doing — *expired*
-first, then *expiring* with the days left, then *active*, then *revoked* — with the dates, the
-source (Stripe or granted), the last payment, and *Grant a year* / *Renew (+1 year)* / *Revoke* in
-the row; the standing of every subscription is the service's verdict (the grace days included), never
-recomputed on a device. Then the **payments**: every Stripe payment (the first year with its Checkout
-session, renewals with their invoice and the period they paid for) and every year granted, renewed
-or set by hand on the Admin page (amount 0, with who did it). Everything is kept in the SVT DB
-(`settings`, `payments`) and read back on every visit.
+Every account that is not a super admin has it (More › Plans, the Home card, Settings): where the
+account stands (the plan in force, the video hours used and left this month, when they start again,
+Publishing), the four plans at the admin's prices with **Choose** on each — in the currency the singer
+picks when plans are priced in more than one (**Pay in USD / INR**; a price in INR takes UPI through
+Stripe) — Stripe's own page for the payment, and the **return page** that waits for Stripe's word
+(paid at once, or *Waiting for the bank's confirmation* for UPI and some wallets, or failed/expired
+with the way back). **Manage subscription** opens Stripe's portal (the card, the invoices,
+cancelling); the account's payments are listed. When Stripe is not configured, or a plan is not for
+sale, the page says to ask the SingersVoice admin, and a plan granted on the Admin page shows there
+the same way.
+
+## My club (`/club`)
+
+A club owner names the members (Google email addresses) who share the club's video hours: a plain
+box and **Add**, **Remove** on each, the seats used (up to the plan's 15), the club's hours used and
+left this month. Whoever signs in with a named address has the club's picture on stage from their
+next visit. A member of several clubs draws on the first club (by the date named) whose plan is
+active.
+
+## The super admin's portal (Admin → Plans & payments)
+
+The top of the Admin page: every plan's **price in USD and in INR** (0.00 = not for sale in that
+currency), its **period** (a month or a year), its **video hours** a month, its **seats**, and
+whether it is **for sale** on the Plans page or granted here only; a **note** for the Plans page; the
+**expiring-soon** margin and the **grace days** after an expiry during which the plan stays open.
+Under it, **who has a plan**: every subscriber sorted by what needs doing — *expired* first, then
+*expiring* with the days left, then *active*, then *revoked* — with the plan, the dates, the source
+(Stripe or granted), the video hours used this month (and the members, for a club), the last payment,
+and *Grant again* / *Renew* / *Revoke* in the row; then the **payments** (every Stripe payment with
+the fee Stripe kept, every period granted; a **Refund** button on Stripe's) and the **Checkouts
+without a payment** (processing, failed, expired). On every account's row below, a **Grant** of a
+plan for its own period or for a number of months, *Renew*, *Set dates*, *Revoke*.
 
 ## How money is collected: Stripe
 
-Stripe Checkout takes the card on Stripe's own page (the card never touches the app or the
-service), Stripe's Customer Portal lets a subscriber change the card or cancel, and a signed webhook
-tells sv-control when a subscription starts, renews or ends. The service keeps one row per account:
-the plan and until when. Fees: 2.9 % + 30¢ per successful card charge in the US (Stripe's standard
-pricing); no monthly fee.
+Stripe Checkout takes the payment on Stripe's own page — the card, the wallet, or the UPI app for a
+singer in India paying in INR; nothing of it touches the app or the service —, Stripe's Customer
+Portal lets a subscriber change the card or cancel, and a signed webhook tells sv-control what became
+of every payment. The service keeps one subscription row per account (the plan and until when), an
+order per Checkout started, and a payment per Stripe charge with the fee Stripe kept. Which payment
+methods Checkout shows is Stripe's call from what the Dashboard enables and the session's currency
+(dynamic payment methods); the app never names a method and never claims every country.
 
 Why Stripe and not the alternatives, for SingersVoice today:
 
-| Option | Fees | Handles sales tax / VAT for you | Fit |
+| Option | Fees (indicative — verify) | Handles sales tax / VAT for you | Fit |
 | --- | --- | --- | --- |
-| **Stripe** (Checkout + Billing) | 2.9 % + 30¢ | No (Stripe Tax adds 0.5 % per transaction when you want it) | The default: hosted pages, subscriptions, portal, webhooks — all set up in an afternoon |
+| **Stripe** (Checkout + Billing) | 2.9 % + 30¢ US cards; + 1.5 % international; + 1 % conversion; UPI at Stripe's rate | No (Stripe Tax adds a per-transaction fee when you want it) | The default: hosted pages, subscriptions, portal, webhooks, UPI for India — set up in an afternoon (docs/stripe-setup.md) |
 | Lemon Squeezy / Paddle (merchant of record) | ~5 % + 50¢ | **Yes** — they are the seller, they file the taxes worldwide | Worth it once subscribers come from many countries and tax filings become a chore |
-| Razorpay (India) | ~2 % | No | Add later for an Indian audience paying in rupees / UPI; the webhook pattern is the same |
+| Razorpay (India) | ~2 % | No | Only if Stripe cannot offer UPI to the account; the webhook pattern is the same (a second processor would sit behind a feature flag — never to route around a refusal) |
 | App-store subscriptions | 15–30 % | Yes | Not needed: SingersVoice is a web app, no store in between |
 
-Start with Stripe; switch to a merchant of record if international tax ever becomes the main cost
-of running the business.
-
-## Setting it up (once, about 20 minutes)
-
-1. **The price** — set it on the Admin page (Club owners › *Price of a year*): Checkout is created
-   with that price inline (a yearly subscription of that amount), so no Stripe product or price is
-   needed. (A Stripe Price id in `STRIPE_PRICE_PUBLISHER` still works as the fallback when no price
-   is set on the Admin page.)
-2. **API key** — Developers → API keys → *Secret key* (`sk_live_…`; use `sk_test_…` first if you
-   want to try it with Stripe's test cards, 4242 4242 4242 4242).
-3. **Webhook** — Developers → Webhooks → *Add endpoint*: URL
-   `https://sv-control.singersvoice.workers.dev/billing/webhook`, events
-   `checkout.session.completed`, `invoice.paid`, `customer.subscription.created`,
-   `customer.subscription.updated`, `customer.subscription.deleted`. Save and copy the *Signing
-   secret* (`whsec_…`).
-4. **Customer portal** — Settings → Billing → Customer portal → *Activate* (allow cancelling and
-   updating the payment method).
-5. **Give the service the secrets** (never in the repo). In `services/control`:
-
-   ```
-   npx wrangler secret put STRIPE_SECRET_KEY
-   npx wrangler secret put STRIPE_WEBHOOK_SECRET
-   npx wrangler secret put APP_URL          # https://singersvoice.github.io/SingersVoice
-   ```
-
-   Each command asks for the value and stores it on the Worker. The next request after the last
-   one turns the Club owner page's *ask the SingersVoice admin* into **Pay for a year** (with the
-   price from the Admin page, and self-service on).
-6. **Try it**: open the app with a second Google account → More → Club owner → Pay for a year →
-   pay with a test card → you land back on the Club owner page and, within seconds (the webhook),
-   the account is a *club owner* with its year, the payment is on its list and on the Admin page's,
-   and Publishing appears on its menus.
-
-Until step 5 is done, the Club owner page still works: it shows the year and its price, says to
-ask the SingersVoice admin, and the super admin grants the year on the Admin page.
+Setting it up — the Dashboard checklist, the webhook events, the secrets, the test cards, UPI's
+caveats — is docs/stripe-setup.md.
 
 ## What the service does
 
-- `GET /club-owner` — the Club owner page: the account's role and subscription (status as the
-  service sees it, grace days included), the days left, the price (the Admin page's, else the
-  Stripe Price's), whether Checkout is open to it (self-service on, a price, a Stripe key) and the
-  portal (a Stripe customer), the admin's note, the account's payments.
-- `POST /club-owner/checkout` — a Checkout Session (subscription mode; the admin's price as inline
-  `price_data`, yearly; the account's id as `client_reference_id`; promotion codes allowed; back to
-  `/club-owner?billing=success|cancel`) → the page to send the browser to. `409 self_service_off`,
-  `409 billing_unconfigured`, `409 super_admin` (nothing to buy).
-- `POST /club-owner/portal` — a Customer Portal session for the account's Stripe customer.
-- `POST /billing/webhook` — no sign-in; the `Stripe-Signature` header (HMAC-SHA256 of
-  `t.body` with the signing secret, 5-minute tolerance) is checked, and each event id is handled
-  once. `checkout.session.completed` ties the Stripe customer to the account, opens the plan and
-  records the first year's payment (`amount_total`); `invoice.paid` records a renewal with the
-  period it paid for (the first invoice, `billing_reason: subscription_create`, is the Checkout's
-  and is not counted twice); `customer.subscription.*` set the plan and its period end (`active`,
-  `trialing` and `past_due` keep it; `canceled` / `deleted` close it).
-- `GET /admin/club-owners` — super admin only: the settings, whether Stripe is configured, every
-  club owner with their standing (`expired` / `expiring` / `active` / `revoked` / `none`, in that
-  order, the days left, the last payment), the payments. `PUT /admin/club-owners/settings` —
-  `{ priceCents, currency, selfService, note, expiringSoonDays, graceDays }`, any subset, kept
-  within bounds (a price up to 1 000 000.00, 3-letter currency, 0–365 days, 0–90 grace days).
-- `POST /admin/plan` — super admin only: `{ email, plan, until? }` (a year from now when `until`
-  is left out; the account becomes a club owner). `GET /admin/users` and
-  `PATCH /admin/users/:id` (`{ role }`, `{ subscription: { action: grant | renew | set | revoke,
-  startedAt?, expiresAt? } }`) are the Admin page's; a grant, a renewal and dates set by hand go on
-  the payments record (amount 0, `ref: admin:<user id>`).
-- `GET /billing`, `POST /billing/checkout`, `POST /billing/portal` — older clients; the same
-  answers, the same Checkout.
+- `GET /plans` — the plans as priced, the currencies, whether Checkout and the portal are available,
+  the account's entitlement and subscription, its payments.
+- `POST /plans/checkout` `{ planId, currency }` — a Checkout Session for a plan priced in that
+  currency (the price is the admin's, never the browser's; a super admin has nothing to buy; a plan
+  not for sale answers `409 self_service_off`; no Stripe answers `409 billing_unconfigured`): an
+  order is opened first (pending), its id goes on the session's metadata and on the `Idempotency-Key`;
+  the session is a subscription of the plan's period with the price inline (`price_data`), back to
+  `/billing/return?session_id=…` or `/plans?billing=cancel`.
+- `GET /billing/session/:id` — the order's status (the webhook's word); while pending or processing
+  the service also asks Stripe for the session itself and opens a paid one (a missed webhook).
+- `POST /billing/portal` — a Customer Portal session for the account's Stripe customer.
+- `POST /billing/webhook` — no sign-in; `Stripe-Signature` (HMAC-SHA256 of `t.body`, 5-minute
+  tolerance) checked; each event id handled once. `checkout.session.completed` /
+  `async_payment_succeeded` with `payment_status: paid` open the plan (the subscription row with
+  Stripe's ids, the period's end from Stripe's subscription, the role, the order paid, the payment on
+  record once with the fee); `unpaid` marks the order processing; `async_payment_failed` /
+  `expired` close the order; `invoice.paid` (not the first invoice) records a renewal and extends the
+  period; `invoice.payment_failed` is noted; `customer.subscription.updated/deleted` set the period's
+  end or close the plan; `charge.refunded` lands on the payment.
+- `GET /club`, `POST /club/members` `{ email }`, `DELETE /club/members/:email` — the owner's club.
+- `GET /admin/billing`, `PUT /admin/billing/settings` (`plans` merged by id, `note`,
+  `expiringSoonDays`, `graceDays`; kept within bounds), `POST /admin/payments/:id/refund`
+  `{ amountCents? }` — super admin only.
+- `POST /admin/plan` `{ email, plan, until? }` (older clients) and `PATCH /admin/users/:id`
+  (`{ role }`, `{ subscription: { action: grant | renew | set | revoke, plan?, months?, startedAt?,
+  expiresAt? } }`) — the Admin page's; a grant, a renewal and dates set by hand go on the payments
+  record (amount 0, `ref: admin:<user id>`). `PUT /admin/users/:id/video-usage` `{ seconds }` sets
+  the month's count (tests, and an admin's correction).
 
-Rows: `users (…, role)`, `subscriptions (user_id, plan, started_at, plan_until, status, customer_id,
-subscription_id, source, updated_at)`, `billing_events (event_id)`, `settings (key, value JSON,
-updated_at)` — `club_owner` holds the price and the rules — and `payments (id, user_id,
-amount_cents, currency, paid_at, source, ref, period_start, period_end, note)`, one row per Stripe
-session or invoice (an id Stripe retries lands once) and per year granted. `/me` carries `role`,
-`media`, `subscription` (start, expiry, status as of today — `expired` after the grace days),
-`canPublish` and `publishingNote`; every publishing route and the publisher join check
-`canPublish` on the service.
+Rows: `users (…, role)`, `subscriptions`, `orders`, `payments`, `billing_events`, `settings`
+(`billing`), `club_members`, `video_usage` — docs/global-payments-architecture.md has the columns.
+`/me` carries `role`, `media` (the picture in a live meet right now), `entitlement`, `subscription`,
+`canPublish` and `publishingNote`; every publishing route, the publisher join and every meet
+heartbeat go by them on the service.

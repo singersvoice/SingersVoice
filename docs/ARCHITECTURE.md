@@ -337,32 +337,60 @@ on stage on their device, and every other device draws their name card whatever 
 **club owner** (dual, and Publishing mode while the yearly subscription is active) and **super
 admin** (everything, always: Publishing without a subscription, and the **Admin page**). The first
 account ever seen is the super admin; an address in `PRIVILEGED_EMAILS` is one whatever its row
-says. A club owner's **subscription** is a row with a start, an expiry and a status (`active`,
-`revoked`, or `none`; `expired` is computed from the date on every read — after the **grace days**
-the super admin allows, none by default — so a year runs out by itself with nobody touching
-anything) — granted for a year on the Admin page (`/admin`, super admins only: every account, its
-role in a select, *Grant a year* / *Renew (+1 year)* / *Set dates* / *Revoke*; `GET /admin/users`,
-`PATCH /admin/users/:id`, the last super admin cannot be demoted), or **paid for on the Club owner
-page** (`/club-owner`, self-service: the price the super admin set, Stripe's Checkout, the
-account's payments; docs/BILLING.md). The super admin's **club owner portal** (the top of the Admin
-page; `GET /admin/club-owners`, `PUT /admin/club-owners/settings`) holds the price of a year and
-the rules (self-service, the note on the Club owner page, the expiring-soon margin, the grace days)
-and lists every club owner by what needs doing — *expired* first, then *expiring* with the days
-left, then *active*, then *revoked* — with the last payment and the actions in the row, and every
-payment on record (Stripe's, and the years granted: `settings`, `payments` rows). `canPublish` is
-computed from the role and the subscription on the service — a super admin, or a club owner whose
-subscription is active today — and enforced there: every `/publishing/*` route and the publisher
-join answer `403 publishing_closed` with the reason in words (*expired on …*, *was revoked*, *is for
-club owners*), which the app shows on its gate. The app only mirrors the verdict (`role`, `media`,
-`subscription` with the service's status, `publishingNote` from `/me`, refreshed on every portal and
-when entering a room) — and keeps what an account cannot use off its menus: Publishing is listed
-(side menu, More panel, Home card, Settings) only for the accounts it is open to, Admin for super
-admins alone, the Club owner page for everyone else (`components/Shell.tsx`, `NAV[].when`). Tests:
-`packages/protocol/test/roles.test.ts` (the standing with grace, the days left, the reasons),
+says. Beside the role, every account is on a **plan** (`packages/protocol/src/plans.ts`,
+docs/BILLING.md): **Free** (live meets with the voice; the Studio with the camera is everyone's),
+**SVV** (a picture on stage in live meets, 10 hours a calendar month), **SVVPro** (100 hours) and
+**Club owner** (300 hours a month shared with up to 15 members named by email, and Publishing mode)
+— the prices per currency (USD; INR for UPI), the period (a month or a year), the hours, the seats
+and whether a plan is for sale are the super admin's (`settings.billing`, Admin → Plans & payments).
+The **subscription** row is the plan with a start, an expiry and a status (`active`, `revoked`, or
+`none`; `expired` is computed from the date on every read — after the **grace days** the super admin
+allows, none by default — so a period runs out by itself with nobody touching anything) — paid for
+through Stripe on the Plans page (`/plans`: Checkout at the admin's price, the webhook's word opens
+the plan; docs/global-payments-architecture.md) or granted on the Admin page (`/admin`, super admins
+only: a plan for its period or for months, *Renew*, *Set dates*, *Revoke*; `GET /admin/users`,
+`PATCH /admin/users/:id`, the last super admin cannot be demoted). What an account may do is the
+**entitlement** computed on the service on every request (`entitlementOf`): the plan in force is the
+account's own active subscription, else the club it belongs to by email (`club_members`) while that
+club's plan is active, else Free; a super admin has everything without limit. `media` — the picture
+in a live meet — follows it: the plan has video hours and some are left this month, and the role is
+not audio only. **Video hours** are counted on the service on every heartbeat while a singer is on
+stage with the picture on (`video_usage`, by pool — the account's, or the club owner's — and
+calendar month, UTC; two minutes at most per gap); at the limit the next heartbeat sets the
+participant's `media` to `audio` (every device draws the name card, the singer's camera closes) with
+the reason on the room's chip (`yourVideo` on the snapshot), and the first of the month starts the
+count again. `canPublish` is the entitlement's: a super admin, or an own active plan that carries
+Publishing (Club owner) — enforced on every `/publishing/*` route and the publisher join
+(`403 publishing_closed` with the reason in words, which the app shows on its gate). The app only
+mirrors the verdict (`role`, `media`, `entitlement`, `subscription`, `publishingNote` from `/me`,
+refreshed on every portal and when entering a room) — and keeps what an account cannot use off its
+menus: Publishing is listed (side menu, More panel, Home card, Settings) only for the accounts it is
+open to, Admin for super admins alone, Plans for everyone else, My club for club owners
+(`components/Shell.tsx`, `NAV[].when`). Tests: `packages/protocol/test/plans.test.ts` and
+`roles.test.ts` (the plans, the entitlement, the standing with grace, the reasons),
 `apps/web/test/navGating.test.ts` (the menus by account), `services/control/test/app.test.ts`
-(roles, the guard, the dates; the club owner portal, Checkout with the admin's price, payments and
-grants on record, the overview's order, grace days), `tools/ci/roles-e2e.mjs` (the whole life of a
-subscription in the browser, the menus, the portal and the Club owner page).
+("plans": the settings, grants, the metering, the club; "payments through Stripe": Checkout, the
+webhook's every event, refunds, reconciliation), `tools/ci/roles-e2e.mjs` (the whole of it in the
+browser: the picture coming and going with the plan and the hours, the Plans page, the club, the
+Admin page), `tools/ci/live-duet.mjs` (two performers with video on SVV).
+
+## Coupons: who may use SingersVoice
+
+The super admin's gate (`packages/protocol/src/coupons.ts`, `coupons` and `settings.coupons` rows,
+Admin → **Coupons**): a coupon — a code and an expiry date (and a note) — is issued per **email
+address**. A singer signing in with that address meets the **Coupon screen** before anything else of
+the app (`app.tsx` Guard: every page shows it while the account is out) and enters the code; the
+service keeps it on the account (`users.coupon_code`) and decides on **every request**
+(`accessOf` → `UserRecord.access`): the gate on, the coupon issued for the address, the code entered
+is the one issued, the date not passed — else `403 coupon_required` with the reason in words on every
+route but `/me` and `/coupon`. So the admin changing the code or the date, or deleting the coupon,
+puts the holder out on their very next request (the app lands on the Coupon screen from any 403
+`coupon_required`, and a room leaves). Super admins are never out. The requirement itself is a switch
+on the Coupons page (`COUPONS_REQUIRED` is only its start value: on unless `0`); off, everyone who
+signs in is in. The Coupons page lists every coupon with who holds the address, whether they are in
+(the code they entered matches, the date stands), the days left, and Save (a new code or date), New
+code, Delete. Tests: `packages/protocol/test/coupons.test.ts`, `services/control/test/app.test.ts`
+("coupons"), `tools/ci/coupons-e2e.mjs`.
 
 ## Publishing mode (the show view)
 

@@ -5,7 +5,7 @@
  */
 import { computed, signal } from '@preact/signals';
 import { bestClockOffset, clockOffsetMs, type Routes } from '@singersvoice/protocol';
-import { needsReconnect, profile, reconnect, setAccountUserId, setPlan, setPrivileged, setRole, token } from '../state/session.ts';
+import { access, needsReconnect, profile, reconnect, setAccess, setAccountUserId, setPlan, setPrivileged, setRole, token } from '../state/session.ts';
 import { toast } from './toast.ts';
 
 const OVERRIDE_KEY = 'sv.controlUrl';
@@ -99,6 +99,11 @@ async function request<T>(method: string, path: string, body?: unknown, raw?: Ra
       needsReconnect.value = true;
       offerReconnect();
       throw new ApiError(401, 'reconnect', 'Your Google session expired — tap Reconnect and try again');
+    }
+    if (r.status === 403 && e.code === 'coupon_required') {
+      // The coupon gate closed (a coupon changed, expired or withdrawn by the admin): every page shows the Coupon screen now.
+      const cur = access.value;
+      setAccess({ required: true, ok: false, standing: cur?.standing === 'ok' || !cur ? 'wrong' : cur.standing, expiresAt: cur?.expiresAt ?? null, entered: cur?.entered ?? '', note: e.error ?? 'A coupon is needed to use SingersVoice' });
     }
     throw new ApiError(r.status, e.code ?? `http_${r.status}`, e.error ?? `Request failed (${r.status})`);
   }
@@ -205,8 +210,9 @@ export async function refreshAccount(): Promise<void> {
   try {
     const { user } = await api.get('GET /me', '/me');
     setPrivileged(user.privileged);
-    setPlan(user.plan ?? 'free', user.planUntil ?? null, user.canPublish ?? user.privileged);
-    setRole(user.role ?? (user.privileged ? 'super_admin' : 'dual'), user.subscription ?? null, user.publishingNote ?? '');
+    setPlan(user.entitlement?.plan ?? user.plan ?? 'free', user.planUntil ?? null, user.canPublish ?? user.privileged);
+    setRole(user.role ?? (user.privileged ? 'super_admin' : 'dual'), user.subscription ?? null, user.publishingNote ?? '', user.media ?? (user.role === 'audio' ? 'audio' : 'dual'), user.entitlement ?? null);
+    setAccess(user.access ?? null);
     setAccountUserId(user.userId);
   } catch {
     /* offline or not signed in */

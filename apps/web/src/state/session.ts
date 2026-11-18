@@ -3,7 +3,7 @@
  * and the Google token lifecycle. Signals keep every screen in sync.
  */
 import { computed, signal } from '@preact/signals';
-import { mediaOfRole, type MediaPermission, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { asPlanId, type AccessStatus, type Entitlement, type MediaPermission, type PlanId, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import {
   AuthExpiredError,
   fetchProfile,
@@ -128,6 +128,7 @@ export async function signOut(): Promise<void> {
   storeToken(null);
   localStorage.removeItem(PROFILE_KEY);
   localStorage.removeItem(MODE_KEY);
+  setAccess(null);
   await revokeToken(t);
 }
 
@@ -149,11 +150,11 @@ export async function withProvider<T>(fn: (p: StorageProvider) => Promise<T>): P
 
 /** Admin flag from the SVT DB (Publishing without a plan, the right to grant plans) — refreshed by refreshAccount(). */
 export const privileged = signal<boolean>(localStorage.getItem('sv.privileged') === '1');
-/** The account's plan and whether Publishing mode is open to it (an admin, or an active Publisher plan). */
-export const plan = signal<'free' | 'publisher'>(localStorage.getItem('sv.plan') === 'publisher' ? 'publisher' : 'free');
+/** The plan in force (plans.ts) and whether Publishing mode is open to this account (a super admin, or the Club owner plan). */
+export const plan = signal<PlanId>(asPlanId(localStorage.getItem('sv.plan')));
 export const planUntil = signal<string | null>(localStorage.getItem('sv.planUntil') || null);
 export const canPublish = signal<boolean>(localStorage.getItem('sv.canPublish') === '1');
-export function setPlan(p: 'free' | 'publisher', until: string | null, publish: boolean): void {
+export function setPlan(p: PlanId, until: string | null, publish: boolean): void {
   plan.value = p;
   planUntil.value = until;
   canPublish.value = publish;
@@ -166,22 +167,46 @@ export function setPlan(p: 'free' | 'publisher', until: string | null, publish: 
   }
 }
 /**
- * The account's role (roles.ts) and the club owner's subscription, from /me — what this device may send and
- * record of its singer (`media`: an audio-only account has no camera on stage) and why Publishing is closed.
+ * The account's role (roles.ts), its subscription and where it stands (plans.ts: the plan in force, a picture in live
+ * meets and the hours left this month), from /me. `media` is what this device may send of its singer in a live meet
+ * right now — the service's verdict (an audio-only role, a free plan or hours used up: the voice alone); the Studio's
+ * own camera goes by the role alone (`role !== 'audio'`): a solo take with a picture is everyone's.
  */
 export const role = signal<UserRole>(asRole(localStorage.getItem('sv.role')));
-export const media = computed<MediaPermission>(() => mediaOfRole(role.value));
+export const media = signal<MediaPermission>(localStorage.getItem('sv.media') === 'dual' ? 'dual' : 'audio');
+export const entitlement = signal<Entitlement | null>(readJson<Entitlement>('sv.entitlement'));
 export const subscription = signal<UserSubscription | null>(readJson<UserSubscription>('sv.subscription'));
 export const publishingNote = signal<string>(localStorage.getItem('sv.publishingNote') ?? '');
 export const isSuperAdmin = computed(() => role.value === 'super_admin');
-export function setRole(r: UserRole, sub: UserSubscription | null, note: string): void {
+/**
+ * The coupon gate (coupons.ts), as the service last said: when the gate is on and this account is not in, every page
+ * shows the Coupon screen instead (app.tsx Guard) until the code the admin gave is entered. A 403 coupon_required from
+ * any request lands here too, so a coupon changed or withdrawn by the admin shows the gate at once.
+ */
+export const access = signal<AccessStatus | null>(readJson<AccessStatus>('sv.access'));
+export const couponNeeded = computed(() => Boolean(access.value && access.value.required && !access.value.ok));
+export function setAccess(a: AccessStatus | null): void {
+  access.value = a;
+  try {
+    localStorage.setItem('sv.access', a ? JSON.stringify(a) : '');
+  } catch {
+    /* ignore */
+  }
+}
+/** A club owner with a plan of their own that has seats: the My club page is theirs. */
+export const ownsClub = computed(() => (entitlement.value?.via === 'own' && entitlement.value.seats > 0) || isSuperAdmin.value);
+export function setRole(r: UserRole, sub: UserSubscription | null, note: string, m: MediaPermission = r === 'audio' ? 'audio' : 'dual', ent: Entitlement | null = null): void {
   role.value = r;
   subscription.value = sub;
   publishingNote.value = note;
+  media.value = m;
+  entitlement.value = ent;
   try {
     localStorage.setItem('sv.role', r);
     localStorage.setItem('sv.subscription', sub ? JSON.stringify(sub) : '');
     localStorage.setItem('sv.publishingNote', note);
+    localStorage.setItem('sv.media', m);
+    localStorage.setItem('sv.entitlement', ent ? JSON.stringify(ent) : '');
   } catch {
     /* ignore */
   }

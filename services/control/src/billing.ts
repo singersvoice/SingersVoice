@@ -1,21 +1,27 @@
 /**
- * Billing — the Publisher plan, paid through Stripe.
+ * Billing — the plans, paid through Stripe.
  *
- * Stripe does the money: its hosted Checkout page takes the card (we never see it), its Customer
- * Portal lets a subscriber change or cancel, and a signed webhook tells us when a subscription
- * starts, renews, lapses or ends. We keep one row per user: the plan and until when. Nothing here
- * needs the Stripe SDK — three REST calls and one HMAC — so it runs unchanged on Node and on the
- * Cloudflare Worker.
+ * Stripe does the money: its hosted Checkout page takes the payment (the card, the UPI app, the
+ * wallet — nothing of it touches the app or the service), its Customer Portal lets a subscriber change
+ * the card or cancel, and a signed webhook tells us what became of every payment. We keep one
+ * subscription row per account (the plan and until when), an order per Checkout started, and a
+ * payment per Stripe charge. Nothing here needs the Stripe SDK — a handful of REST calls and one HMAC
+ * — so it runs unchanged on Node and on the Cloudflare Worker.
+ *
+ * Prices are the admin's (plans.ts, per currency): every Checkout carries its price inline
+ * (`price_data`), so no Stripe product or price object has to exist. Which payment methods Checkout
+ * shows is Stripe's call from what the Dashboard enables and the session's currency and country —
+ * cards and wallets everywhere they are eligible, UPI for a session in INR when the account has it
+ * (docs/stripe-setup.md); the service never names a method.
  *
  * Secrets (never in the repo): STRIPE_SECRET_KEY (sk_live_… / sk_test_…), STRIPE_WEBHOOK_SECRET
- * (whsec_…), STRIPE_PRICE_PUBLISHER (price_…), APP_URL (where Checkout sends people back).
+ * (whsec_…), APP_URL (where Checkout sends people back).
  */
-import type { PlanId } from '@singersvoice/protocol';
+import type { PlanId, PlanInterval } from '@singersvoice/protocol';
 
 export interface BillingConfig {
   secretKey?: string;
   webhookSecret?: string;
-  pricePublisher?: string;
   /** The app's URL, for Checkout's success / cancel pages (default: the GitHub Pages site). */
   appUrl: string;
   fetchImpl?: typeof fetch;
@@ -23,101 +29,147 @@ export interface BillingConfig {
 
 export const STRIPE_API = 'https://api.stripe.com/v1';
 
-/** The plans a user can be on; `publisher` unlocks Publishing mode (the show view, destinations, going live). */
-export const PLANS: Record<PlanId, { title: string; blurb: string }> = {
-  free: { title: 'Free', blurb: 'Sing in the Studio, host and join live meets, keep every take in your own Drive.' },
-  publisher: { title: 'Club owner', blurb: 'Everything in Free, plus Publishing mode for a year: the show view, YouTube and in-house live streams, destinations and the watch page.' },
-};
-
-/** The year's price as the super admin set it on the Admin page (minor units), used in place of a Stripe Price object. */
-export interface YearPrice {
-  amountCents: number;
-  currency: string;
-}
-
-/** Checkout exists when a key is configured and there is a price — the admin's, or a Stripe Price id from the environment. */
-export const checkoutConfigured = (b: BillingConfig, price?: YearPrice | null): boolean => Boolean(b.secretKey && ((price && price.amountCents > 0) || b.pricePublisher));
+/** Stripe is configured: Checkout, the portal, refunds and reconciliation can be asked of it. */
+export const stripeConfigured = (b: BillingConfig): boolean => Boolean(b.secretKey);
 
 function form(body: Record<string, string>): string {
   return new URLSearchParams(body).toString();
 }
 
-async function stripe<T>(b: BillingConfig, path: string, init: { method?: 'GET' | 'POST'; body?: Record<string, string> } = {}): Promise<T> {
+async function stripe<T>(b: BillingConfig, path: string, init: { method?: 'GET' | 'POST'; body?: Record<string, string>; idempotencyKey?: string } = {}): Promise<T> {
   if (!b.secretKey) throw new Error('Stripe is not configured');
   const fetchImpl = b.fetchImpl ?? fetch;
-  const r = await fetchImpl(`${STRIPE_API}${path}`, {
-    method: init.method ?? 'POST',
-    headers: { Authorization: `Bearer ${b.secretKey}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: init.body ? form(init.body) : undefined,
-  });
+  const headers: Record<string, string> = { Authorization: `Bearer ${b.secretKey}`, 'Content-Type': 'application/x-www-form-urlencoded' };
+  if (init.idempotencyKey) headers['Idempotency-Key'] = init.idempotencyKey;
+  const r = await fetchImpl(`${STRIPE_API}${path}`, { method: init.method ?? 'POST', headers, body: init.body ? form(init.body) : undefined });
   const json = (await r.json().catch(() => ({}))) as T & { error?: { message?: string } };
   if (!r.ok) throw new Error(json.error?.message ?? `Stripe answered ${r.status}`);
   return json;
 }
 
+export interface CheckoutLine {
+  plan: PlanId;
+  planTitle: string;
+  currency: string;
+  /** The price of one period, in the currency's minor unit. */
+  amountCents: number;
+  interval: PlanInterval;
+  intervalCount: number;
+  /** Our order's id: on the session's metadata, and the idempotency key (a retried request opens no second session). */
+  orderId: string;
+}
+
 /**
- * A Checkout Session for a club owner year; Stripe hosts the page and sends the user back to the app. The price is
- * the admin's (inline `price_data`, a yearly subscription of that amount) when one is set, else the Stripe Price id
- * from the environment.
+ * A Checkout Session for a plan: a subscription of the admin's price (inline `price_data`), the singer's id and our
+ * order on the session, Stripe's own page, and the way back to the app with the session id on the URL (the return
+ * page asks the service what became of it — the webhook's word, never the URL's). Which payment methods the page
+ * shows is Stripe's call (dynamic payment methods: the Dashboard's enabled methods that fit the currency).
  */
-export async function createCheckoutSession(b: BillingConfig, who: { userId: string; email: string; customerId?: string | null }, price?: YearPrice | null, backTo = '/club-owner'): Promise<{ url: string }> {
-  if (!checkoutConfigured(b, price)) throw new Error('Checkout is not configured on the service');
+export async function createCheckoutSession(b: BillingConfig, who: { userId: string; email: string; customerId?: string | null }, line: CheckoutLine): Promise<{ url: string; sessionId: string }> {
+  if (!stripeConfigured(b)) throw new Error('Checkout is not configured on the service');
   const back = b.appUrl.replace(/\/$/, '');
-  const line: Record<string, string> =
-    price && price.amountCents > 0
-      ? { 'line_items[0][price_data][currency]': price.currency, 'line_items[0][price_data][unit_amount]': String(Math.round(price.amountCents)), 'line_items[0][price_data][recurring][interval]': 'year', 'line_items[0][price_data][product_data][name]': 'SingersVoice club owner — a year of Publishing mode' }
-      : { 'line_items[0][price]': b.pricePublisher! };
   const body: Record<string, string> = {
     mode: 'subscription',
-    ...line,
+    'line_items[0][price_data][currency]': line.currency.toLowerCase(),
+    'line_items[0][price_data][unit_amount]': String(Math.round(line.amountCents)),
+    'line_items[0][price_data][recurring][interval]': line.interval,
+    'line_items[0][price_data][recurring][interval_count]': String(Math.max(1, Math.round(line.intervalCount))),
+    'line_items[0][price_data][product_data][name]': `SingersVoice ${line.planTitle}`,
     'line_items[0][quantity]': '1',
-    success_url: `${back}${backTo}?billing=success`,
-    cancel_url: `${back}${backTo}?billing=cancel`,
+    success_url: `${back}/billing/return?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${back}/plans?billing=cancel`,
     client_reference_id: who.userId,
     'metadata[userId]': who.userId,
+    'metadata[planId]': line.plan,
+    'metadata[orderId]': line.orderId,
     'subscription_data[metadata][userId]': who.userId,
+    'subscription_data[metadata][planId]': line.plan,
     allow_promotion_codes: 'true',
   };
   if (who.customerId) body.customer = who.customerId;
   else body.customer_email = who.email;
-  const s = await stripe<{ url?: string }>(b, '/checkout/sessions', { body });
-  if (!s.url) throw new Error('Stripe gave no checkout page');
-  return { url: s.url };
+  const s = await stripe<{ id?: string; url?: string }>(b, '/checkout/sessions', { body, idempotencyKey: `checkout-${line.orderId}` });
+  if (!s.url || !s.id) throw new Error('Stripe gave no checkout page');
+  return { url: s.url, sessionId: s.id };
 }
 
 /** The Customer Portal (change card, cancel, invoices) for an existing Stripe customer. */
-export async function createPortalSession(b: BillingConfig, customerId: string, backTo = '/club-owner'): Promise<{ url: string }> {
+export async function createPortalSession(b: BillingConfig, customerId: string, backTo = '/plans'): Promise<{ url: string }> {
   const back = b.appUrl.replace(/\/$/, '');
   const s = await stripe<{ url?: string }>(b, '/billing_portal/sessions', { body: { customer: customerId, return_url: `${back}${backTo}` } });
   if (!s.url) throw new Error('Stripe gave no portal page');
   return { url: s.url };
 }
 
-export interface PriceInfo {
-  amount: number;
-  currency: string;
-  interval: 'day' | 'week' | 'month' | 'year';
+/** A Checkout Session as Stripe has it now (reconciliation: a webhook that never came, or not yet). */
+export interface StripeCheckoutSession {
+  id: string;
+  status?: 'open' | 'complete' | 'expired';
+  payment_status?: 'paid' | 'unpaid' | 'no_payment_required';
+  customer?: string | null;
+  subscription?: string | null;
+  payment_intent?: string | null;
+  amount_total?: number | null;
+  currency?: string | null;
+  client_reference_id?: string | null;
+  metadata?: Record<string, string>;
 }
 
-let priceCache: { at: number; price: PriceInfo | null } | null = null;
+export async function retrieveCheckoutSession(b: BillingConfig, sessionId: string): Promise<StripeCheckoutSession> {
+  return stripe<StripeCheckoutSession>(b, `/checkout/sessions/${encodeURIComponent(sessionId)}`, { method: 'GET' });
+}
 
-/** What the Publisher plan costs, from the Stripe Price itself (cached an hour), so the app never hard-codes a number. */
-export async function fetchPublisherPrice(b: BillingConfig): Promise<PriceInfo | null> {
-  if (!checkoutConfigured(b)) return null;
-  if (priceCache && Date.now() - priceCache.at < 3600_000) return priceCache.price;
+export interface StripeSubscription {
+  id: string;
+  customer: string;
+  status: string;
+  current_period_start?: number;
+  current_period_end?: number;
+  cancel_at_period_end?: boolean;
+  metadata?: { userId?: string; planId?: string };
+}
+
+export async function retrieveSubscription(b: BillingConfig, subscriptionId: string): Promise<StripeSubscription> {
+  return stripe<StripeSubscription>(b, `/subscriptions/${encodeURIComponent(subscriptionId)}`, { method: 'GET' });
+}
+
+/** What Stripe kept of a payment and the ids behind it, from the charge's balance transaction (best effort: null when unknown). */
+export interface ChargeFacts {
+  paymentIntentId: string | null;
+  chargeId: string | null;
+  feeCents: number | null;
+  netCents: number | null;
+}
+
+export async function chargeFacts(b: BillingConfig, ids: { paymentIntent?: string | null; charge?: string | null }): Promise<ChargeFacts | null> {
   try {
-    const p = await stripe<{ unit_amount?: number | null; currency?: string; recurring?: { interval?: PriceInfo['interval'] } }>(b, `/prices/${encodeURIComponent(b.pricePublisher!)}`, { method: 'GET' });
-    const price = typeof p.unit_amount === 'number' && p.currency ? { amount: p.unit_amount, currency: p.currency, interval: p.recurring?.interval ?? 'month' } : null;
-    priceCache = { at: Date.now(), price };
-    return price;
+    if (ids.charge) {
+      const ch = await stripe<{ id: string; payment_intent?: string | null; balance_transaction?: { fee?: number; net?: number } | string | null }>(b, `/charges/${encodeURIComponent(ids.charge)}?expand[]=balance_transaction`, { method: 'GET' });
+      const bt = typeof ch.balance_transaction === 'object' ? ch.balance_transaction : null;
+      return { paymentIntentId: ch.payment_intent ?? ids.paymentIntent ?? null, chargeId: ch.id, feeCents: typeof bt?.fee === 'number' ? bt.fee : null, netCents: typeof bt?.net === 'number' ? bt.net : null };
+    }
+    if (ids.paymentIntent) {
+      const pi = await stripe<{ id: string; latest_charge?: { id?: string; balance_transaction?: { fee?: number; net?: number } | string | null } | string | null }>(b, `/payment_intents/${encodeURIComponent(ids.paymentIntent)}?expand[]=latest_charge.balance_transaction`, { method: 'GET' });
+      const ch = typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
+      const bt = ch && typeof ch.balance_transaction === 'object' ? ch.balance_transaction : null;
+      return { paymentIntentId: pi.id, chargeId: ch?.id ?? (typeof pi.latest_charge === 'string' ? pi.latest_charge : null), feeCents: typeof bt?.fee === 'number' ? bt.fee : null, netCents: typeof bt?.net === 'number' ? bt.net : null };
+    }
   } catch {
-    return priceCache?.price ?? null;
+    /* the payment stands without its fee */
   }
+  return null;
 }
 
-/** Tests: forget the cached price. */
-export function resetPriceCache(): void {
-  priceCache = null;
+/** A refund through Stripe (the whole payment, or `amountCents` of it), once per key. */
+export async function createRefund(b: BillingConfig, ids: { paymentIntent?: string | null; charge?: string | null }, amountCents: number | undefined, idempotencyKey: string): Promise<{ id: string; amount: number; status: string }> {
+  const body: Record<string, string> = {};
+  if (ids.paymentIntent) body.payment_intent = ids.paymentIntent;
+  else if (ids.charge) body.charge = ids.charge;
+  else throw new Error('Nothing of Stripe to refund: the payment carries no payment intent or charge id');
+  if (amountCents !== undefined) body.amount = String(Math.round(amountCents));
+  const r = await stripe<{ id?: string; amount?: number; status?: string }>(b, '/refunds', { body, idempotencyKey });
+  if (!r.id) throw new Error('Stripe gave no refund');
+  return { id: r.id, amount: r.amount ?? amountCents ?? 0, status: r.status ?? 'pending' };
 }
 
 const enc = new TextEncoder();
@@ -152,28 +204,13 @@ export async function verifyStripeSignature(secret: string, body: string, header
   return sigs.some((s) => equalHex(s, expected));
 }
 
-export interface StripeSubscription {
-  id: string;
-  customer: string;
-  status: string;
-  current_period_end?: number;
-  cancel_at_period_end?: boolean;
-  metadata?: { userId?: string };
-}
-
 /**
- * The plan a Stripe subscription grants: active and trialing subscriptions are Publisher until the
- * end of the period they paid for (a cancelled one stays active until then — Stripe keeps the
- * status `active` with `cancel_at_period_end`); anything else is Free.
+ * What a Stripe subscription's status means for the plan: active and trialing subscriptions (and one past due, while
+ * Stripe retries the card) keep the plan until the end of the period paid for — a cancelled one stays active until
+ * then (Stripe keeps the status `active` with `cancel_at_period_end`); anything else closes it.
  */
-export function planFromSubscription(sub: Pick<StripeSubscription, 'status' | 'current_period_end'>): { plan: PlanId; until: string | null } {
-  const paid = sub.status === 'active' || sub.status === 'trialing' || sub.status === 'past_due';
-  if (!paid) return { plan: 'free', until: null };
-  return { plan: 'publisher', until: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null };
+export function subscriptionKeepsPlan(sub: Pick<StripeSubscription, 'status'>): boolean {
+  return sub.status === 'active' || sub.status === 'trialing' || sub.status === 'past_due';
 }
 
-/** Is a plan in force right now? */
-export function planActive(plan: PlanId, until: string | null, now = Date.now()): boolean {
-  if (plan === 'free') return false;
-  return until === null || Date.parse(until) + 24 * 3600_000 > now; // a day of grace for a renewal that is on its way
-}
+export const unixIso = (s: number | undefined | null): string | null => (typeof s === 'number' && Number.isFinite(s) ? new Date(s * 1000).toISOString() : null);

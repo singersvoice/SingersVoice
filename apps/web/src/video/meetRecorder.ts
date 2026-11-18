@@ -157,6 +157,8 @@ export class MeetRecorder {
   private stopping: Promise<PerformanceSummary | null> | null = null;
   /** The cut the stage asked for, waiting for its instant. */
   private scheduled: { cue: ChapterCue; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** The chapter whose recorder is starting right now (a slow device takes seconds): the same cue again starts no second one. */
+  private startingCue: ChapterCue | null = null;
   /** The chapter the stage last asked for (`cue`), applied when the film starts if it is not running yet. */
   private wanted: ChapterCue | null = null;
   /** The chapters' uploads still finishing (a cut leaves the previous chapter's last piece on its way). */
@@ -261,12 +263,12 @@ export class MeetRecorder {
     this.wanted = c;
     if (!this.current) return;
     const base = (k: string) => k.split('#')[0]; // a chapter cut into parts is still that chapter
-    if (base(this.current.cue.key) === c.key || (this.scheduled && base(this.scheduled.cue.key) === c.key)) return;
+    if (base(this.current.cue.key) === c.key || (this.scheduled && base(this.scheduled.cue.key) === c.key) || (this.startingCue && base(this.startingCue.key) === c.key)) return;
     if (this.scheduled) clearTimeout(this.scheduled.timer);
     const wait = Math.max(0, c.at - CUT_LEAD_MS - Date.now());
     const timer = setTimeout(() => {
       this.scheduled = null;
-      if (this.current && this.current.cue.key !== c.key) void this.startChunk(c);
+      if (this.current && this.current.cue.key !== c.key && !(this.startingCue && base(this.startingCue.key) === c.key)) void this.startChunk(c);
     }, wait);
     this.scheduled = { cue: c, timer };
   }
@@ -310,6 +312,16 @@ export class MeetRecorder {
    * recorder is running (false when it could not start — the film carries on in the previous chapter).
    */
   private async startChunk(cue: ChapterCue): Promise<boolean> {
+    if (!this.media || !this.spec) return false;
+    this.startingCue = cue;
+    try {
+      return await this.startChunkNow(cue);
+    } finally {
+      if (this.startingCue === cue) this.startingCue = null;
+    }
+  }
+
+  private async startChunkNow(cue: ChapterCue): Promise<boolean> {
     if (!this.media || !this.spec) return false;
     const index = ++this.chunkCount;
     const startedAt = Date.now();

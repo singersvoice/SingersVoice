@@ -223,7 +223,8 @@ export interface PublishJobRequest {
 }
 
 /** The plans an account can be on. `publisher` is the club owner's subscription (see roles.ts); Publishing mode needs the club_owner role with it active, or a super admin. */
-export type PlanId = 'free' | 'publisher';
+import type { Entitlement, PlanId } from './plans.ts';
+import type { AccessStatus } from './coupons.ts';
 
 /** Account record kept in the SVT DB (name/picture mirror the Google profile). */
 export interface UserRecord {
@@ -233,15 +234,19 @@ export interface UserRecord {
   picture: string;
   /** The account's role (roles.ts): what it may send, record and open. */
   role: UserRole;
-  /** The club owner's yearly subscription (null when none was ever granted). */
+  /** The account's own subscription (null when it never had one). */
   subscription: UserSubscription | null;
-  /** What this account may send and record of itself (from the role). */
+  /** Where the account stands (plans.ts): the plan in force, video in live meets and the hours left, publishing. */
+  entitlement: Entitlement;
+  /** The coupon gate (coupons.ts): whether this account is in right now, and why not when it is not. */
+  access: AccessStatus;
+  /** What this account may send of itself in a live meet right now: the picture only while the plan in force allows it and the role is not audio only. */
   media: MediaPermission;
   /** A super admin (kept for older clients: `role === 'super_admin'`). */
   privileged: boolean;
-  /** `publisher` while a subscription row exists (older clients); the role and `subscription` are the truth. */
+  /** The plan in force (`entitlement.plan`). */
   plan: PlanId;
-  /** The subscription's expiry (older clients), ISO or null. */
+  /** The own subscription's expiry, ISO or null. */
   planUntil: string | null;
   /** Publishing mode is open to this account right now: a super admin, or a club owner whose subscription is active. */
   canPublish: boolean;
@@ -260,21 +265,10 @@ export interface AdminUsersResponse {
 /** A Super Admin's change to one account: its role, and/or what happens to its subscription. */
 export interface AdminUserUpdate {
   role?: UserRole;
-  /** grant: a year from now (or from `startedAt`); renew: a year on from the current expiry (or from now when it has passed); set: the dates given; revoke: closed now. */
-  subscription?: { action: 'grant' | 'renew' | 'set' | 'revoke'; startedAt?: string; expiresAt?: string | null };
-}
-
-/** `GET /billing`: where this account stands and what the Publisher plan costs. */
-export interface BillingStatus {
-  plan: PlanId;
-  planUntil: string | null;
-  canPublish: boolean;
-  privileged: boolean;
-  /** The service can start a Checkout (Stripe is configured). */
-  checkout: boolean;
-  /** This account has a Stripe customer, so the portal (change card, cancel, invoices) is available. */
-  portal: boolean;
-  /** The Publisher price as Stripe has it (minor units, e.g. 1499 = $14.99), or null when unknown. */
-  price: { amount: number; currency: string; interval: 'day' | 'week' | 'month' | 'year' } | null;
-  plans: Record<PlanId, { title: string; blurb: string }>;
+  /**
+   * grant: the plan (`plan`, the Club owner plan when not named) for `months` months (the plan's own period when not
+   * named) from now or from `startedAt`; renew: the same length on from the current expiry (or from now when it has
+   * passed); set: the plan and the dates given; revoke: closed now.
+   */
+  subscription?: { action: 'grant' | 'renew' | 'set' | 'revoke'; plan?: PlanId; months?: number; startedAt?: string; expiresAt?: string | null };
 }

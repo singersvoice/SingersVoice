@@ -85,8 +85,12 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   const camStream = camera.stream;
   const camOn = camera.on.value;
   const facing = camera.facing.value;
-  /** An audio-only account (roles.ts) has no camera on stage: nothing of its picture is captured, sent, recorded or streamed. */
-  const videoAllowed = media.value === 'dual';
+  /**
+   * The picture on stage is the service's verdict for this device in this meet (`you.media`, refreshed by every heartbeat:
+   * an audio-only role, a free plan, the month's video hours used up — plans.ts): nothing of its picture is captured,
+   * sent, recorded or streamed without it; the account's own standing stands in before the room answered.
+   */
+  const videoAllowed = (you.media ?? media.value) === 'dual';
 
   // ---- camera follows the stage: open when I step on (if my setting says so), close when I step off ----
   /** A camera opened from a tap stays open a moment even before the slot is confirmed (no open/close flicker). */

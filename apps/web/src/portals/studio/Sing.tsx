@@ -19,7 +19,7 @@ import { headphonesLikely, isIOS, keepAwake } from '../../lib/platform.ts';
 import { buildManifest, saveTake as persistTake, type TakeResult } from '../../lib/takes.ts';
 import type { LoadedTrack, TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { isDrive, media, withProvider } from '../../state/session.ts';
+import { isDrive, role, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
 import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
@@ -227,7 +227,7 @@ export function Sing(props: { id: string }) {
   }, [audio]);
 
   // Camera on/off follows settings while on stage — never for an audio-only account (roles.ts): its takes carry the voice alone.
-  const videoAllowed = media.value === 'dual';
+  const videoAllowed = role.value !== 'audio'; // a solo take with a picture is everyone's; only an audio-only role has none
   useEffect(() => {
     if (phase === 'loading' || phase === 'review') return;
     if (app.cameraOn && videoAllowed && !camera.on.value) {

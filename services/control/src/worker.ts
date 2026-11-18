@@ -4,7 +4,7 @@
  *
  * Bindings (wrangler.jsonc): SVT_DB (Durable Object namespace, class SvtDb)
  * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH, ICE_SERVERS, YOUTUBE_HLS_BASE, GOOGLE_API_KEY (optional),
- * STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_PUBLISHER, APP_URL (the Publisher plan — docs/BILLING.md),
+ * STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_URL (the plans through Stripe — docs/BILLING.md),
  * RELAY_URL, RELAY_SECRET (the RTMP relay for low-latency YouTube, Facebook, Instagram, Twitch — docs/RELAY.md)
  */
 import { createApp, parseIceServers, sweepMeets, type AppDeps } from './app.ts';
@@ -25,10 +25,11 @@ interface Env {
   GOOGLE_API_KEY?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
-  STRIPE_PRICE_PUBLISHER?: string;
   APP_URL?: string;
   RELAY_URL?: string;
   RELAY_SECRET?: string;
+  /** The coupon gate's default (coupons.ts): on unless '0'; the Admin page decides from then on. */
+  COUPONS_REQUIRED?: string;
 }
 
 interface DurableState {
@@ -45,7 +46,7 @@ export class SvtDb {
 
   constructor(state: DurableState, env: Env) {
     this.deps = {
-      store: new SqlStore(durableSqlDriver(state.storage.sql)),
+      store: Object.assign(new SqlStore(durableSqlDriver(state.storage.sql)), { couponsRequiredDefault: env.COUPONS_REQUIRED !== '0' }),
       auth: createAuthenticator({ googleClientId: env.GOOGLE_CLIENT_ID, devAuth: env.DEV_AUTH === '1' }),
       secrets: new SecretBox(env.PUBLISH_KEY_SECRET ?? ''),
       runtime: 'cloudflare',
@@ -55,7 +56,7 @@ export class SvtDb {
       version: '2.1.0',
       youtubeHlsBase: env.YOUTUBE_HLS_BASE || undefined,
       googleApiKey: env.GOOGLE_API_KEY || undefined,
-      billing: { secretKey: env.STRIPE_SECRET_KEY || undefined, webhookSecret: env.STRIPE_WEBHOOK_SECRET || undefined, pricePublisher: env.STRIPE_PRICE_PUBLISHER || undefined, appUrl: env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
+      billing: { secretKey: env.STRIPE_SECRET_KEY || undefined, webhookSecret: env.STRIPE_WEBHOOK_SECRET || undefined, appUrl: env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
       relay: env.RELAY_URL && env.RELAY_SECRET ? { url: env.RELAY_URL, secret: env.RELAY_SECRET } : undefined,
       // Work after the answer (YouTube's PUTs): the object stays up while it has work; waitUntil where the runtime offers it.
       background: (p) => (state as unknown as { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(p) ?? void p,

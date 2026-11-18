@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { DEFAULT_CLUB_OWNER_SETTINGS, LIVE_KEEP, MIX_KEEP, mediaOfRole, newRegistryId, publishingClosedReason, publishingOpen, registrySourceKey, songKey, subscriptionStatus, type CatalogTrack, type ClubOwnerSettings, type PaymentRecord, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PlanId, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { accessOf, normalizeCode, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
@@ -16,7 +16,7 @@ export interface Subscription {
   updatedAt: string;
 }
 
-type UserRow = { user_id: string; email: string; name: string; picture: string; privileged: number; role?: string | null; created_at: string; last_seen_at: string; plan?: string | null; plan_until?: string | null; started_at?: string | null; sub_status?: string | null; sub_source?: string | null; sub_updated_at?: string | null };
+type UserRow = { user_id: string; email: string; name: string; picture: string; privileged: number; role?: string | null; created_at: string; last_seen_at: string; coupon_code?: string | null; coupon_at?: string | null; plan?: string | null; plan_until?: string | null; started_at?: string | null; sub_status?: string | null; sub_source?: string | null; sub_updated_at?: string | null };
 
 const ROLES: UserRole[] = ['audio', 'dual', 'club_owner', 'super_admin'];
 export const asRole = (v: unknown, fallback: UserRole = 'dual'): UserRole => (ROLES.includes(v as UserRole) ? (v as UserRole) : fallback);
@@ -24,16 +24,35 @@ export const asRole = (v: unknown, fallback: UserRole = 'dual'): UserRole => (RO
 /** The subscription a joined row carries (null when the account never had one), its status as it stands now (`expired` once the date — and the grace days — have passed). */
 function subscriptionFromRow(r: UserRow, now: number, graceDays: number): UserSubscription | null {
   if (!r.plan) return null;
-  const stored = { startedAt: r.started_at ?? null, expiresAt: r.plan_until ?? null, status: r.plan !== 'publisher' ? ('none' as const) : r.sub_status === 'revoked' ? ('revoked' as const) : ('active' as const), source: r.sub_source === 'stripe' ? ('stripe' as const) : ('grant' as const), updatedAt: r.sub_updated_at ?? null };
+  const plan = asPlanId(r.plan);
+  const stored = { plan, startedAt: r.started_at ?? null, expiresAt: r.plan_until ?? null, status: plan === 'free' ? ('none' as const) : r.sub_status === 'revoked' ? ('revoked' as const) : ('active' as const), source: r.sub_source === 'stripe' ? ('stripe' as const) : ('grant' as const), updatedAt: r.sub_updated_at ?? null };
   return { ...stored, status: subscriptionStatus(stored, now, graceDays) };
 }
 
-/** A user row (joined with its subscription) as the record the service hands out: the role, the subscription, and whether Publishing is open right now. */
-export function userFromRow(r: UserRow, now = Date.now(), graceDays = 0): UserRecord {
+/** What the record needs beside its row: the plans as priced, the club it belongs to, the month's usage, its members. */
+export interface UserContext {
+  now: number;
+  graceDays: number;
+  plans: readonly PlanDef[];
+  club: EntitlementInput['club'];
+  usedSeconds: number;
+  seatsUsed: number;
+  /** The coupon gate: on or off, and the coupon issued for this address (null when none). */
+  couponsRequired: boolean;
+  coupon: Pick<Coupon, 'code' | 'expiresAt'> | null;
+}
+
+/**
+ * A user row (joined with its subscription) as the record the service hands out: the role, the subscription, where
+ * the account stands (plans.ts), what it may send of itself in a meet, and whether Publishing is open right now.
+ */
+export function userFromRow(r: UserRow, ctx: UserContext): UserRecord {
   const privileged = !!r.privileged;
   const role = asRole(r.role, privileged ? 'super_admin' : 'dual');
-  const subscription = subscriptionFromRow(r, now, graceDays);
-  const plan: PlanId = r.plan === 'publisher' ? 'publisher' : 'free';
+  const subscription = subscriptionFromRow(r, ctx.now, ctx.graceDays);
+  const entitlement = entitlementOf({ role, subscription, plans: ctx.plans, club: ctx.club, usedSeconds: ctx.usedSeconds, seatsUsed: ctx.seatsUsed, now: ctx.now, graceDays: ctx.graceDays });
+  const ownPlan = planOf(ctx.plans, subscription?.plan);
+  const access = accessOf({ required: ctx.couponsRequired, superAdmin: role === 'super_admin', coupon: ctx.coupon, entered: r.coupon_code ?? '', now: ctx.now });
   return {
     userId: r.user_id,
     email: r.email,
@@ -41,12 +60,14 @@ export function userFromRow(r: UserRow, now = Date.now(), graceDays = 0): UserRe
     picture: r.picture,
     role,
     subscription,
-    media: mediaOfRole(role),
+    entitlement,
+    access,
+    media: role === 'audio' ? 'audio' : mediaOfEntitlement(entitlement),
     privileged: role === 'super_admin',
-    plan,
+    plan: entitlement.plan,
     planUntil: r.plan_until ?? null,
-    canPublish: publishingOpen(role, subscription, now, graceDays),
-    publishingNote: publishingClosedReason(role, subscription, now, graceDays),
+    canPublish: entitlement.publishing,
+    publishingNote: publishingClosedReason(role, subscription, ownPlan.publishing, ctx.now, ctx.graceDays),
     createdAt: r.created_at,
     lastSeenAt: r.last_seen_at,
   };
@@ -57,27 +78,49 @@ const USER_SELECT = 'SELECT u.*, s.plan AS plan, s.plan_until AS plan_until, s.s
 export interface StoredParticipant extends Participant {
   meetId: string;
   resumeToken: string;
+  /** On stage with the picture on: when the video hours were last counted (the next heartbeat adds the seconds since). */
+  videoTickAt?: string;
 }
 
 export interface StoredDestination extends Destination {
   keyEnc: string;
 }
 
-type PaymentRow = { id: string; user_id: string; amount_cents: number; currency: string; paid_at: string; source: string; ref: string; period_start: string | null; period_end: string | null; note: string };
-const paymentFromRow = (r: PaymentRow): PaymentRecord => ({ id: r.id, userId: r.user_id, amountCents: Number(r.amount_cents), currency: r.currency, paidAt: r.paid_at, source: r.source === 'stripe' ? 'stripe' : 'grant', ref: r.ref, periodStart: r.period_start ?? null, periodEnd: r.period_end ?? null, note: r.note });
-/** The settings within bounds: a price in whole minor units, a known-looking currency, days that are days. */
-function cleanClubOwnerSettings(s: ClubOwnerSettings): ClubOwnerSettings {
+type PaymentRow = { id: string; user_id: string; amount_cents: number; currency: string; paid_at: string; source: string; ref: string; period_start: string | null; period_end: string | null; note: string; plan?: string | null; payment_intent_id?: string | null; charge_id?: string | null; fee_cents?: number | null; net_cents?: number | null; refunded_cents?: number | null; status?: string | null };
+const paymentFromRow = (r: PaymentRow): PaymentRecord => ({
+  id: r.id,
+  userId: r.user_id,
+  plan: asPlanId(r.plan ?? 'club'),
+  amountCents: Number(r.amount_cents),
+  currency: r.currency,
+  paidAt: r.paid_at,
+  source: r.source === 'stripe' ? 'stripe' : 'grant',
+  ref: r.ref,
+  periodStart: r.period_start ?? null,
+  periodEnd: r.period_end ?? null,
+  note: r.note,
+  paymentIntentId: r.payment_intent_id ?? null,
+  chargeId: r.charge_id ?? null,
+  feeCents: r.fee_cents === null || r.fee_cents === undefined ? null : Number(r.fee_cents),
+  netCents: r.net_cents === null || r.net_cents === undefined ? null : Number(r.net_cents),
+  refundedCents: Number(r.refunded_cents ?? 0),
+  status: r.status === 'refunded' ? 'refunded' : r.status === 'partly_refunded' ? 'partly_refunded' : 'paid',
+});
+type OrderRow = { order_id: string; user_id: string; plan: string; currency: string; amount_cents: number; session_id: string | null; payment_intent_id: string | null; status: string; note: string; created_at: string; updated_at: string };
+const ORDER_STATUSES: OrderStatus[] = ['pending', 'processing', 'paid', 'failed', 'canceled', 'expired'];
+const orderFromRow = (r: OrderRow): OrderRecord => ({ orderId: r.order_id, userId: r.user_id, plan: asPlanId(r.plan), currency: r.currency, amountCents: Number(r.amount_cents), sessionId: r.session_id ?? null, paymentIntentId: r.payment_intent_id ?? null, status: ORDER_STATUSES.includes(r.status as OrderStatus) ? (r.status as OrderStatus) : 'pending', note: r.note, createdAt: r.created_at, updatedAt: r.updated_at });
+/** The billing settings within bounds: every plan present and clean, a note of a size, days that are days. */
+function cleanBillingSettings(s: Partial<BillingSettings>): BillingSettings {
   const num = (v: unknown, lo: number, hi: number, fallback: number) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : fallback);
   return {
-    priceCents: num(s.priceCents, 0, 100_000_000, 0),
-    currency: /^[a-z]{3}$/i.test(String(s.currency ?? '')) ? String(s.currency).toLowerCase() : 'usd',
-    selfService: Boolean(s.selfService),
+    plans: completePlans(s.plans),
     note: String(s.note ?? '').slice(0, 500),
-    expiringSoonDays: num(s.expiringSoonDays, 0, 365, DEFAULT_CLUB_OWNER_SETTINGS.expiringSoonDays),
-    graceDays: num(s.graceDays, 0, 90, DEFAULT_CLUB_OWNER_SETTINGS.graceDays),
+    expiringSoonDays: num(s.expiringSoonDays, 0, 365, DEFAULT_BILLING_SETTINGS.expiringSoonDays),
+    graceDays: num(s.graceDays, 0, 90, DEFAULT_BILLING_SETTINGS.graceDays),
     updatedAt: s.updatedAt ?? null,
   };
 }
+const lowerEmail = (e: string) => e.trim().toLowerCase();
 
 /** A master-database row as selected (`REGISTRY_SELECT` adds the singer and copy counts). */
 type RegistryRow = { track_id: string; source: string; source_key: string; song: string; song_key: string; artists: string; movie: string; year: number | null; language: string; drive_url: string; folder_id: string; owner_user_id: string; data: string; search: string; created_at: string; updated_at: string; last_accessed_at: string | null; access_count: number; unavailable: number; singers?: number; copies?: number };
@@ -124,7 +167,8 @@ export class SqlStore {
       if (m.after) await this.db.exec(m.after);
     }
     await this.mirrorCatalogIntoRegistry(); // a catalog from before the master database: every entry a record, once
-    await this.getClubOwnerSettings(); // the grace days in force, for every standing read from now on
+    await this.getBillingSettings(); // the plans and the grace days in force, for every standing read from now on
+    await this.getCouponSettings(); // the gate as it stands
   }
 
   // ---------- users ----------
@@ -153,40 +197,181 @@ export class SqlStore {
     return (await this.getUser(u.userId))!;
   }
 
+  /**
+   * A row as the record the service hands out, with what the entitlement needs looked up: the club the account belongs
+   * to by email (only when it has no active plan of its own), the month's usage of the pool in force, its members.
+   */
+  private async enrich(r: UserRow, now = Date.now()): Promise<UserRecord> {
+    const grace = this.billing.graceDays;
+    const own = subscriptionFromRow(r, now, grace);
+    const ownActive = own !== null && own.status === 'active' && own.plan !== 'free';
+    const role = asRole(r.role, r.privileged ? 'super_admin' : 'dual');
+    const club = ownActive || role === 'super_admin' ? null : await this.clubFor(r.email, now);
+    const poolId = club ? club.ownerUserId : r.user_id;
+    const usedSeconds = role === 'super_admin' ? 0 : await this.videoUsed(poolId, periodKey(now));
+    const ownPlan = planOf(this.billing.plans, own?.plan);
+    const seatsUsed = (ownActive && ownPlan.seats > 0) || role === 'super_admin' ? await this.countClubMembers(r.user_id) : 0;
+    const coupon = this.coupons.required && role !== 'super_admin' ? await this.getCoupon(r.email) : null;
+    return userFromRow(r, { now, graceDays: grace, plans: this.billing.plans, club, usedSeconds, seatsUsed, couponsRequired: this.coupons.required, coupon });
+  }
+
+  // ---------- coupons: the gate (coupons.ts) ----------
+
+  /** The requirement as it stands (read at startup and on every change); `couponsRequiredDefault` is the environment's word for a service that never set it. */
+  private coupons: CouponSettings = { required: true, updatedAt: null };
+  couponsRequiredDefault = true;
+  couponSettings(): CouponSettings {
+    return this.coupons;
+  }
+
+  async getCouponSettings(): Promise<CouponSettings> {
+    const r = await this.db.get<{ value: string; updated_at: string }>("SELECT value, updated_at FROM settings WHERE key='coupons'", []);
+    const stored = r ? (JSON.parse(r.value) as Partial<CouponSettings>) : {};
+    this.coupons = { required: typeof stored.required === 'boolean' ? stored.required : this.couponsRequiredDefault, updatedAt: r?.updated_at ?? null };
+    return this.coupons;
+  }
+
+  async setCouponSettings(patch: Partial<CouponSettings>): Promise<CouponSettings> {
+    const current = await this.getCouponSettings();
+    const next = { required: typeof patch.required === 'boolean' ? patch.required : current.required };
+    const now = new Date().toISOString();
+    await this.db.run("INSERT INTO settings (key, value, updated_at) VALUES ('coupons', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", [JSON.stringify(next), now]);
+    this.coupons = { ...next, updatedAt: now };
+    return this.coupons;
+  }
+
+  async getCoupon(email: string): Promise<Coupon | null> {
+    const r = await this.db.get<{ email: string; code: string; expires_at: string; note: string; created_at: string; updated_at: string; created_by: string }>('SELECT * FROM coupons WHERE email=?', [lowerEmail(email)]);
+    return r ? { email: r.email, code: r.code, expiresAt: r.expires_at, note: r.note, createdAt: r.created_at, updatedAt: r.updated_at, createdBy: r.created_by } : null;
+  }
+
+  /** A coupon issued or changed for an address: the code (kept as given, compared normalized), the expiry, the note. */
+  async setCoupon(c: { email: string; code: string; expiresAt: string; note: string; createdBy: string }): Promise<Coupon> {
+    const now = new Date().toISOString();
+    await this.db.run(
+      'INSERT INTO coupons (email, code, expires_at, note, created_at, updated_at, created_by) VALUES (?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET code=excluded.code, expires_at=excluded.expires_at, note=excluded.note, updated_at=excluded.updated_at',
+      [lowerEmail(c.email), c.code, c.expiresAt, c.note, now, now, c.createdBy],
+    );
+    return (await this.getCoupon(c.email))!;
+  }
+
+  async deleteCoupon(email: string): Promise<void> {
+    await this.db.run('DELETE FROM coupons WHERE email=?', [lowerEmail(email)]);
+  }
+
+  /** Every coupon with the account that holds the address (the latest signed in) and whether it is in, newest first. */
+  async listCoupons(now = Date.now()): Promise<CouponRow[]> {
+    const rows = await this.db.all<{ email: string; code: string; expires_at: string; note: string; created_at: string; updated_at: string; created_by: string; user_id: string | null; name: string | null; picture: string | null; last_seen_at: string | null; coupon_code: string | null }>(
+      'SELECT c.*, u.user_id, u.name, u.picture, u.last_seen_at, u.coupon_code FROM coupons c LEFT JOIN users u ON lower(u.email) = c.email ORDER BY c.updated_at DESC, u.last_seen_at DESC',
+      [],
+    );
+    const seen = new Set<string>();
+    const out: CouponRow[] = [];
+    for (const r of rows) {
+      if (seen.has(r.email)) continue;
+      seen.add(r.email);
+      const coupon: Coupon = { email: r.email, code: r.code, expiresAt: r.expires_at, note: r.note, createdAt: r.created_at, updatedAt: r.updated_at, createdBy: r.created_by };
+      const daysLeft = Math.ceil((Date.parse(coupon.expiresAt) - now) / 86_400_000);
+      const standing = daysLeft <= 0 ? 'expired' : daysLeft <= 7 ? 'expiring' : 'active';
+      const entered = r.coupon_code ?? '';
+      out.push({ coupon, standing, daysLeft, user: r.user_id ? { userId: r.user_id, name: r.name ?? '', picture: r.picture ?? '', lastSeenAt: r.last_seen_at ?? '', entered, ok: daysLeft > 0 && normalizeCode(entered) === normalizeCode(coupon.code) } : null });
+    }
+    return out;
+  }
+
+  /** The coupon an account entered at the gate (kept, so the account stays in across visits while the coupon stands). */
+  async setUserCoupon(userId: string, code: string): Promise<void> {
+    await this.db.run('UPDATE users SET coupon_code=?, coupon_at=? WHERE user_id=?', [normalizeCode(code), new Date().toISOString(), userId]);
+  }
+
   /** The Admin page: every account, newest first. */
   async listUsers(limit = 500): Promise<UserRecord[]> {
     const rows = await this.db.all<UserRow>(`${USER_SELECT} ORDER BY u.created_at DESC LIMIT ?`, [limit]);
-    return rows.map((r) => userFromRow(r, Date.now(), this.graceDays));
+    const now = Date.now();
+    const out: UserRecord[] = [];
+    for (const r of rows) out.push(await this.enrich(r, now));
+    return out;
   }
 
-  // ---------- settings (the club owner year) and payments ----------
+  // ---------- billing settings (the plans), payments, orders ----------
 
-  /** The grace days in force (read with the settings at startup and on every change): the standing of every subscription uses them. */
-  private graceDays = DEFAULT_CLUB_OWNER_SETTINGS.graceDays;
+  /** The settings in force (read at startup and on every change): every standing and entitlement uses them. */
+  private billing: BillingSettings = DEFAULT_BILLING_SETTINGS;
+  /** `getBillingSettings` as it stands now, without a read (the plans, the grace days). */
+  billingSettings(): BillingSettings {
+    return this.billing;
+  }
 
-  async getClubOwnerSettings(): Promise<ClubOwnerSettings> {
-    const r = await this.db.get<{ value: string; updated_at: string }>("SELECT value, updated_at FROM settings WHERE key='club_owner'", []);
-    const stored = r ? (JSON.parse(r.value) as Partial<ClubOwnerSettings>) : {};
-    const s = cleanClubOwnerSettings({ ...DEFAULT_CLUB_OWNER_SETTINGS, ...stored, updatedAt: r?.updated_at ?? null });
-    this.graceDays = s.graceDays;
+  async getBillingSettings(): Promise<BillingSettings> {
+    const r = await this.db.get<{ value: string; updated_at: string }>("SELECT value, updated_at FROM settings WHERE key='billing'", []);
+    let stored: Partial<BillingSettings> = r ? (JSON.parse(r.value) as Partial<BillingSettings>) : {};
+    if (!r) {
+      // A service from before the plans kept the club owner year alone: its price, note and margins carry over, once.
+      const old = await this.db.get<{ value: string }>("SELECT value FROM settings WHERE key='club_owner'", []);
+      if (old) {
+        const o = JSON.parse(old.value) as { priceCents?: number; currency?: string; selfService?: boolean; note?: string; expiringSoonDays?: number; graceDays?: number };
+        const club = { ...planOf(DEFAULT_PLANS, 'club'), interval: 'year' as const, prices: o.priceCents && o.priceCents > 0 ? { [o.currency ?? 'usd']: o.priceCents } : {}, selfService: o.selfService !== false };
+        stored = { plans: completePlans([club]), note: o.note, expiringSoonDays: o.expiringSoonDays, graceDays: o.graceDays };
+      }
+    }
+    const s = cleanBillingSettings({ ...stored, updatedAt: r?.updated_at ?? null });
+    this.billing = s;
     return s;
   }
 
-  async setClubOwnerSettings(patch: Partial<ClubOwnerSettings>): Promise<ClubOwnerSettings> {
-    const current = await this.getClubOwnerSettings();
-    const next = cleanClubOwnerSettings({ ...current, ...patch });
+  /** The settings changed: the plans given merge by id (a plan left out keeps as it is), the rest replace. */
+  async setBillingSettings(patch: Partial<BillingSettings>): Promise<BillingSettings> {
+    const current = await this.getBillingSettings();
+    const plans = patch.plans ? current.plans.map((p) => ({ ...p, ...(patch.plans!.find((x) => x.id === p.id) ?? {}), id: p.id })) : current.plans;
+    const next = cleanBillingSettings({ ...current, ...patch, plans });
     const now = new Date().toISOString();
     const { updatedAt: _u, ...value } = next;
-    await this.db.run("INSERT INTO settings (key, value, updated_at) VALUES ('club_owner', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", [JSON.stringify(value), now]);
-    this.graceDays = next.graceDays;
-    return { ...next, updatedAt: now };
+    await this.db.run("INSERT INTO settings (key, value, updated_at) VALUES ('billing', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", [JSON.stringify(value), now]);
+    this.billing = { ...next, updatedAt: now };
+    return this.billing;
   }
 
-  /** A payment for a club owner year, once per Stripe id (a retried webhook adds nothing); a grant has its own id. */
-  async recordPayment(p: Omit<PaymentRecord, 'id'> & { id?: string }): Promise<PaymentRecord> {
+  /** A payment for a plan, once per Stripe id (a retried webhook adds nothing); a grant has its own id. */
+  async recordPayment(p: Omit<PaymentRecord, 'id' | 'paymentIntentId' | 'chargeId' | 'feeCents' | 'netCents' | 'refundedCents' | 'status'> & Partial<Pick<PaymentRecord, 'id' | 'paymentIntentId' | 'chargeId' | 'feeCents' | 'netCents'>>): Promise<PaymentRecord> {
     const id = p.id ?? `pay-${p.source}-${p.userId}-${Date.parse(p.paidAt) || Date.now()}`;
-    await this.db.run('INSERT OR IGNORE INTO payments (id, user_id, amount_cents, currency, paid_at, source, ref, period_start, period_end, note) VALUES (?,?,?,?,?,?,?,?,?,?)', [id, p.userId, Math.max(0, Math.round(p.amountCents)), (p.currency || 'usd').toLowerCase(), p.paidAt, p.source, p.ref, p.periodStart, p.periodEnd, p.note]);
-    return { ...p, id };
+    await this.db.run('INSERT OR IGNORE INTO payments (id, user_id, amount_cents, currency, paid_at, source, ref, period_start, period_end, note, plan, payment_intent_id, charge_id, fee_cents, net_cents, refunded_cents, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)', [
+      id,
+      p.userId,
+      Math.max(0, Math.round(p.amountCents)),
+      (p.currency || 'usd').toLowerCase(),
+      p.paidAt,
+      p.source,
+      p.ref,
+      p.periodStart,
+      p.periodEnd,
+      p.note,
+      asPlanId(p.plan),
+      p.paymentIntentId ?? null,
+      p.chargeId ?? null,
+      p.feeCents ?? null,
+      p.netCents ?? null,
+      'paid',
+    ]);
+    return (await this.getPayment(id))!;
+  }
+
+  async getPayment(id: string): Promise<PaymentRecord | null> {
+    const r = await this.db.get<PaymentRow>('SELECT * FROM payments WHERE id=?', [id]);
+    return r ? paymentFromRow(r) : null;
+  }
+
+  async paymentByCharge(chargeId: string): Promise<PaymentRecord | null> {
+    const r = await this.db.get<PaymentRow>('SELECT * FROM payments WHERE charge_id=? OR payment_intent_id=? ORDER BY paid_at DESC', [chargeId, chargeId]);
+    return r ? paymentFromRow(r) : null;
+  }
+
+  /** What Stripe said of a payment after the fact: its ids, its fee, a refund. */
+  async updatePayment(id: string, patch: Partial<Pick<PaymentRecord, 'paymentIntentId' | 'chargeId' | 'feeCents' | 'netCents' | 'refundedCents' | 'status'>>): Promise<PaymentRecord | null> {
+    const cur = await this.getPayment(id);
+    if (!cur) return null;
+    const next = { ...cur, ...patch };
+    await this.db.run('UPDATE payments SET payment_intent_id=?, charge_id=?, fee_cents=?, net_cents=?, refunded_cents=?, status=? WHERE id=?', [next.paymentIntentId, next.chargeId, next.feeCents, next.netCents, Math.max(0, Math.round(next.refundedCents)), next.status, id]);
+    return this.getPayment(id);
   }
 
   /** Every account's latest payment (the overview's "last paid" column), keyed by user id. */
@@ -202,6 +387,108 @@ export class SqlStore {
     return rows.map(paymentFromRow);
   }
 
+  /** A Checkout started: pending until Stripe says what became of it. */
+  async createOrder(o: Pick<OrderRecord, 'orderId' | 'userId' | 'plan' | 'currency' | 'amountCents'>): Promise<OrderRecord> {
+    const now = new Date().toISOString();
+    await this.db.run('INSERT INTO orders (order_id, user_id, plan, currency, amount_cents, session_id, payment_intent_id, status, note, created_at, updated_at) VALUES (?,?,?,?,?,NULL,NULL,?,?,?,?)', [o.orderId, o.userId, o.plan, o.currency.toLowerCase(), Math.round(o.amountCents), 'pending', '', now, now]);
+    return (await this.getOrder(o.orderId))!;
+  }
+
+  async getOrder(orderId: string): Promise<OrderRecord | null> {
+    const r = await this.db.get<OrderRow>('SELECT * FROM orders WHERE order_id=?', [orderId]);
+    return r ? orderFromRow(r) : null;
+  }
+
+  async getOrderBySession(sessionId: string): Promise<OrderRecord | null> {
+    const r = await this.db.get<OrderRow>('SELECT * FROM orders WHERE session_id=?', [sessionId]);
+    return r ? orderFromRow(r) : null;
+  }
+
+  async updateOrder(orderId: string, patch: Partial<Pick<OrderRecord, 'sessionId' | 'paymentIntentId' | 'status' | 'note'>>): Promise<OrderRecord | null> {
+    const cur = await this.getOrder(orderId);
+    if (!cur) return null;
+    const next = { ...cur, ...patch };
+    await this.db.run('UPDATE orders SET session_id=?, payment_intent_id=?, status=?, note=?, updated_at=? WHERE order_id=?', [next.sessionId, next.paymentIntentId, next.status, next.note, new Date().toISOString(), orderId]);
+    return this.getOrder(orderId);
+  }
+
+  /** Checkouts that did not end in a payment (or not yet), newest first. */
+  async listOpenOrders(limit = 50): Promise<OrderRecord[]> {
+    const rows = await this.db.all<OrderRow>("SELECT * FROM orders WHERE status <> 'paid' ORDER BY created_at DESC LIMIT ?", [limit]);
+    return rows.map(orderFromRow);
+  }
+
+  // ---------- clubs: the members a club owner named, and the video hours ----------
+
+  async listClubMembers(ownerUserId: string): Promise<ClubMember[]> {
+    const rows = await this.db.all<{ email: string; added_at: string; user_id: string | null; name: string | null; picture: string | null }>(
+      'SELECT m.email, m.added_at, u.user_id, u.name, u.picture FROM club_members m LEFT JOIN users u ON lower(u.email) = m.email WHERE m.owner_user_id=? ORDER BY m.added_at ASC',
+      [ownerUserId],
+    );
+    const seen = new Set<string>();
+    const out: ClubMember[] = [];
+    for (const r of rows) {
+      if (seen.has(r.email)) continue; // two accounts with one address (an old row): the first signed in
+      seen.add(r.email);
+      out.push({ email: r.email, addedAt: r.added_at, user: r.user_id ? { userId: r.user_id, name: r.name ?? '', picture: r.picture ?? '' } : null });
+    }
+    return out;
+  }
+
+  async countClubMembers(ownerUserId: string): Promise<number> {
+    const r = await this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM club_members WHERE owner_user_id=?', [ownerUserId]);
+    return Number(r?.n ?? 0);
+  }
+
+  /** True when the address was not on the list before. */
+  async addClubMember(ownerUserId: string, email: string): Promise<boolean> {
+    const e = lowerEmail(email);
+    const had = await this.db.get<{ email: string }>('SELECT email FROM club_members WHERE owner_user_id=? AND email=?', [ownerUserId, e]);
+    if (had) return false;
+    await this.db.run('INSERT INTO club_members (owner_user_id, email, added_at) VALUES (?,?,?)', [ownerUserId, e, new Date().toISOString()]);
+    return true;
+  }
+
+  async removeClubMember(ownerUserId: string, email: string): Promise<void> {
+    await this.db.run('DELETE FROM club_members WHERE owner_user_id=? AND email=?', [ownerUserId, lowerEmail(email)]);
+  }
+
+  /** The club an address belongs to whose owner's plan is active right now and has seats — the first such, by the date named. */
+  async clubFor(email: string, now = Date.now()): Promise<EntitlementInput['club']> {
+    if (!email) return null;
+    const rows = await this.db.all<{ owner_user_id: string; name: string; plan: string | null; plan_until: string | null; started_at: string | null; status: string | null; source: string | null; updated_at: string | null }>(
+      'SELECT m.owner_user_id, u.name, s.plan, s.plan_until, s.started_at, s.status, s.source, s.updated_at FROM club_members m JOIN users u ON u.user_id = m.owner_user_id LEFT JOIN subscriptions s ON s.user_id = m.owner_user_id WHERE m.email=? ORDER BY m.added_at ASC',
+      [lowerEmail(email)],
+    );
+    for (const r of rows) {
+      if (!r.plan) continue;
+      const plan = asPlanId(r.plan);
+      const stored: UserSubscription = { plan, startedAt: r.started_at ?? null, expiresAt: r.plan_until ?? null, status: plan === 'free' ? 'none' : r.status === 'revoked' ? 'revoked' : 'active', source: r.source === 'stripe' ? 'stripe' : 'grant', updatedAt: r.updated_at ?? null };
+      const sub = { ...stored, status: subscriptionStatus(stored, now, this.billing.graceDays) };
+      if (sub.status !== 'active' || planOf(this.billing.plans, plan).seats <= 0) continue;
+      return { ownerUserId: r.owner_user_id, ownerName: r.name, subscription: sub };
+    }
+    return null;
+  }
+
+  /** Seconds of video on stage this month, by pool (an account, or a club owner's for the club). */
+  async videoUsed(poolUserId: string, period: string): Promise<number> {
+    const r = await this.db.get<{ seconds: number }>('SELECT seconds FROM video_usage WHERE pool_user_id=? AND period=?', [poolUserId, period]);
+    return Number(r?.seconds ?? 0);
+  }
+
+  /** Seconds of video on stage added to the month's count; the new total. */
+  async addVideoSeconds(poolUserId: string, period: string, seconds: number): Promise<number> {
+    const add = Math.max(0, seconds);
+    await this.db.run('INSERT INTO video_usage (pool_user_id, period, seconds, updated_at) VALUES (?,?,?,?) ON CONFLICT(pool_user_id, period) DO UPDATE SET seconds = seconds + excluded.seconds, updated_at = excluded.updated_at', [poolUserId, period, add, new Date().toISOString()]);
+    return this.videoUsed(poolUserId, period);
+  }
+
+  /** Tests and the admin: the month's count set outright. */
+  async setVideoSeconds(poolUserId: string, period: string, seconds: number): Promise<void> {
+    await this.db.run('INSERT INTO video_usage (pool_user_id, period, seconds, updated_at) VALUES (?,?,?,?) ON CONFLICT(pool_user_id, period) DO UPDATE SET seconds = excluded.seconds, updated_at = excluded.updated_at', [poolUserId, period, Math.max(0, seconds), new Date().toISOString()]);
+  }
+
   /** A Super Admin sets an account's role; `privileged` follows it for older code paths. */
   async setRole(userId: string, role: UserRole): Promise<void> {
     await this.db.run('UPDATE users SET role=?, privileged=? WHERE user_id=?', [role, role === 'super_admin' ? 1 : 0, userId]);
@@ -214,23 +501,28 @@ export class SqlStore {
 
   async getUser(userId: string): Promise<UserRecord | null> {
     const r = await this.db.get<UserRow>(`${USER_SELECT} WHERE u.user_id=?`, [userId]);
-    return r ? userFromRow(r, Date.now(), this.graceDays) : null;
+    return r ? this.enrich(r) : null;
   }
 
   async getUserByEmail(email: string): Promise<UserRecord | null> {
     const r = await this.db.get<UserRow>(`${USER_SELECT} WHERE lower(u.email)=? ORDER BY u.last_seen_at DESC`, [email.toLowerCase()]);
-    return r ? userFromRow(r, Date.now(), this.graceDays) : null;
+    return r ? this.enrich(r) : null;
   }
 
-  // ---------- plans (billing) ----------
+  // ---------- subscriptions ----------
 
   async getSubscription(userId: string): Promise<Subscription | null> {
     const r = await this.db.get<{ user_id: string; plan: string; plan_until: string | null; started_at: string | null; status: string | null; customer_id: string | null; subscription_id: string | null; source: string; updated_at: string }>('SELECT * FROM subscriptions WHERE user_id=?', [userId]);
-    return r ? { userId: r.user_id, plan: r.plan === 'publisher' ? 'publisher' : 'free', startedAt: r.started_at ?? null, planUntil: r.plan_until, status: r.status === 'revoked' ? 'revoked' : 'active', customerId: r.customer_id, subscriptionId: r.subscription_id, source: r.source === 'grant' ? 'grant' : 'stripe', updatedAt: r.updated_at } : null;
+    return r ? { userId: r.user_id, plan: asPlanId(r.plan), startedAt: r.started_at ?? null, planUntil: r.plan_until, status: r.status === 'revoked' ? 'revoked' : 'active', customerId: r.customer_id, subscriptionId: r.subscription_id, source: r.source === 'grant' ? 'grant' : 'stripe', updatedAt: r.updated_at } : null;
   }
 
   async userIdByCustomer(customerId: string): Promise<string | null> {
     const r = await this.db.get<{ user_id: string }>('SELECT user_id FROM subscriptions WHERE customer_id=?', [customerId]);
+    return r?.user_id ?? null;
+  }
+
+  async userIdBySubscription(subscriptionId: string): Promise<string | null> {
+    const r = await this.db.get<{ user_id: string }>('SELECT user_id FROM subscriptions WHERE subscription_id=?', [subscriptionId]);
     return r?.user_id ?? null;
   }
 
@@ -243,7 +535,7 @@ export class SqlStore {
     const existing = await this.getSubscription(s.userId);
     const customerId = s.customerId === undefined ? (existing?.customerId ?? null) : s.customerId;
     const subscriptionId = s.subscriptionId === undefined ? (existing?.subscriptionId ?? null) : s.subscriptionId;
-    const startedAt = s.startedAt === undefined ? (existing?.startedAt ?? (s.plan === 'publisher' ? now : null)) : s.startedAt;
+    const startedAt = s.startedAt === undefined ? (existing?.startedAt ?? (s.plan !== 'free' ? now : null)) : s.startedAt;
     const status = s.status ?? 'active';
     await this.db.run(
       'INSERT INTO subscriptions (user_id, plan, plan_until, started_at, status, customer_id, subscription_id, source, updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan, plan_until=excluded.plan_until, started_at=excluded.started_at, status=excluded.status, customer_id=excluded.customer_id, subscription_id=excluded.subscription_id, source=excluded.source, updated_at=excluded.updated_at',
@@ -706,7 +998,10 @@ export class SqlStore {
 
   async listMembers(meetId: string): Promise<UserRecord[]> {
     const rows = await this.db.all<UserRow>(`SELECT u.*, s.plan AS plan, s.plan_until AS plan_until, s.started_at AS started_at, s.status AS sub_status, s.source AS sub_source, s.updated_at AS sub_updated_at FROM meet_members m JOIN users u ON u.user_id = m.user_id LEFT JOIN subscriptions s ON s.user_id = u.user_id WHERE m.meet_id=? ORDER BY m.joined_at ASC`, [meetId]);
-    return rows.map((r) => userFromRow(r, Date.now(), this.graceDays));
+    const now = Date.now();
+    const out: UserRecord[] = [];
+    for (const r of rows) out.push(await this.enrich(r, now));
+    return out;
   }
 
   // ---------- performances: the saved shows (one per song, registered by the host) ----------

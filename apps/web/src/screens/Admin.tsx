@@ -1,16 +1,16 @@
 /**
- * The Admin page (/admin) — the super admin's: the club owner portal (AdminClubOwners.tsx — the price
- * of a year, self-service, the margins; every club owner by standing with the days left; the payments)
- * and every account with its role and its club owner subscription, changed in place and kept in the
- * SVT DB; the service enforces every change on its next request (Publishing mode opens and closes
- * with the subscription by itself, an audio-only account gets no camera on stage).
+ * The Admin page (/admin) — the super admin's: the billing portal (AdminBilling.tsx — the plans with
+ * their prices, periods, hours and seats; every subscriber by standing; the payments and refunds) and
+ * every account with its role and its subscription, changed in place and kept in the SVT DB; the
+ * service enforces every change on its next request (the picture on stage and Publishing open and
+ * close with the plan by themselves, an audio-only account gets no camera anywhere).
  *
  *   Role          — Audio only · Dual (audio + video) · Club owner · Super admin
- *   Subscription  — a club owner's year: Grant a year · Renew (a year on) · Set the dates · Revoke
+ *   Subscription  — a plan (SVV, SVVPro, Club owner) for a period: Grant · Renew · Set the dates · Revoke
  *
  * A subscription's standing (`expired`, after the grace days) is the service's verdict, never recomputed here.
  */
-import { roleTitle, USER_ROLES, type UserRecord, type UserRole } from '@singersvoice/protocol';
+import { hoursLabel, roleTitle, USER_ROLES, type PlanId, type UserRecord, type UserRole } from '@singersvoice/protocol';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { Page } from '../components/Shell.tsx';
 import { Empty, Spinner } from '../components/ui.tsx';
@@ -18,7 +18,7 @@ import { api, controlConfigured, refreshAccount } from '../lib/api.ts';
 import { href } from '../lib/nav.ts';
 import { errorText, toast } from '../lib/toast.ts';
 import { accountUserId, isSuperAdmin } from '../state/session.ts';
-import { AdminClubOwners } from './AdminClubOwners.tsx';
+import { AdminBilling } from './AdminBilling.tsx';
 
 const day = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleDateString() : '—');
 
@@ -27,6 +27,9 @@ export function Admin() {
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [dates, setDates] = useState<Record<string, { startedAt: string; expiresAt: string }>>({});
+  /** The plan and the months picked per account for a grant (the plan's own period when no months are given). */
+  const [grants, setGrants] = useState<Record<string, { plan: PlanId; months: string }>>({});
+  const PLAN_TITLES: Record<PlanId, string> = { free: 'Free', svv: 'SVV', svvpro: 'SVVPro', club: 'Club owner' };
   const [tick, setTick] = useState(0); // a change below: the club owner overview above reloads
 
   const load = async () => {
@@ -88,7 +91,7 @@ export function Admin() {
   if (!isSuperAdmin.value)
     return (
       <Page title="Admin">
-        <Empty title="Super admins only" body="This page manages every account's role, publishing access and club owner subscription.">
+        <Empty title="Super admins only" body="This page manages the plans and their prices, every account's role and plan, the payments.">
           <a class="btn" href={href('/home')}>
             Home
           </a>
@@ -105,7 +108,18 @@ export function Admin() {
   return (
     <Page title="Admin">
       <div class="stack" data-admin>
-        <AdminClubOwners onChanged={() => void load()} tick={tick} />
+        <section class="card stack pad-sm" data-coupons-link>
+          <div class="row between wrap">
+            <div>
+              <h3 style="margin:0">Coupons</h3>
+              <div class="small muted">Who may use SingersVoice: a coupon with an expiry date per email address, checked on every request.</div>
+            </div>
+            <a class="btn primary" href={href('/admin/coupons')}>
+              Open Coupons
+            </a>
+          </div>
+        </section>
+        <AdminBilling onChanged={() => void load()} tick={tick} />
         <section class="card stack pad-sm">
           <div class="row between wrap">
             <div>
@@ -132,6 +146,9 @@ export function Admin() {
               const sub = u.subscription;
               const standing = sub?.status ?? 'none';
               const d = dates[u.userId] ?? { startedAt: (sub?.startedAt ?? '').slice(0, 10), expiresAt: (sub?.expiresAt ?? '').slice(0, 10) };
+              const g = grants[u.userId] ?? { plan: (sub?.plan && sub.plan !== 'free' ? sub.plan : 'club') as PlanId, months: '' };
+              const months = Number(g.months) > 0 ? Math.round(Number(g.months)) : undefined;
+              const e = u.entitlement;
               const me = u.userId === accountUserId.value;
               const working = busy === u.userId;
               return (
@@ -141,7 +158,13 @@ export function Admin() {
                   </div>
                   <div class="meta">
                     <div class="t">
-                      {u.name || u.email} {me && <span class="chip">you</span>} {u.role === 'super_admin' && <span class="chip ok">super admin</span>} {u.canPublish && u.role !== 'super_admin' && <span class="chip ok">publishing open</span>}
+                      {u.name || u.email} {me && <span class="chip">you</span>} {u.role === 'super_admin' && <span class="chip ok">super admin</span>} {u.canPublish && u.role !== 'super_admin' && <span class="chip ok">publishing open</span>}{' '}
+                      {u.role !== 'super_admin' && (
+                        <span class={`chip ${e.video ? 'ok' : ''}`} data-user-plan={e.plan} data-user-via={e.via}>
+                          {e.via === 'club' ? `${e.planTitle} · ${e.clubOwner?.name ?? 'a club'}'s member` : e.planTitle}
+                          {e.videoHours > 0 ? ` · video ${hoursLabel(e.videoUsedSeconds)} of ${e.videoHours} h` : ' · voice only'}
+                        </span>
+                      )}
                     </div>
                     <div class="s">
                       {u.email} · joined {day(u.createdAt)} · last seen {day(u.lastSeenAt)}
@@ -157,44 +180,44 @@ export function Admin() {
                       </select>
                       <span class="small faint">{USER_ROLES.find((r) => r.role === u.role)?.blurb}</span>
                     </div>
-                    {(u.role === 'club_owner' || sub) && (
-                      <div class="stack" style="gap:6px;margin-top:8px" data-subscription={standing}>
+                    {u.role !== 'super_admin' && (
+                      <div class="stack" style="gap:6px;margin-top:8px" data-subscription={standing} data-subscription-plan={sub?.plan ?? ''}>
                         <div class="row wrap small" style="gap:8px;align-items:center">
-                          <b>Club owner subscription</b>
+                          <b>Plan</b>
+                          {sub && standing !== 'none' && <span class="chip">{PLAN_TITLES[(sub.plan as PlanId) ?? 'free'] ?? sub.plan}</span>}
                           <span class={`chip ${standing === 'active' ? 'ok' : standing === 'none' ? '' : 'warn'}`}>{standing === 'none' ? 'none yet' : standing}</span>
-                          {sub?.startedAt && <span class="muted">from {day(sub.startedAt)}</span>}
-                          {sub?.expiresAt ? <span class="muted">until {day(sub.expiresAt)}</span> : sub && standing === 'active' ? <span class="muted">no end date</span> : null}
-                          {sub?.source === 'stripe' && <span class="chip">Stripe</span>}
+                          {sub?.startedAt && standing !== 'none' && <span class="muted">from {day(sub.startedAt)}</span>}
+                          {sub?.expiresAt && standing !== 'none' ? <span class="muted">until {day(sub.expiresAt)}</span> : sub && standing === 'active' ? <span class="muted">no end date</span> : null}
+                          {sub?.source === 'stripe' && standing !== 'none' && <span class="chip">Stripe</span>}
                         </div>
-                        <div class="row wrap" style="gap:6px">
-                          {standing !== 'active' && (
-                            <button class="btn sm primary" disabled={working} data-sub-grant onClick={() => void change(u, { subscription: { action: 'grant' } }, 'a year granted — Publishing is open')}>
-                              Grant a year
-                            </button>
-                          )}
-                          {sub && standing !== 'revoked' && (
-                            <button class="btn sm accent" disabled={working} data-sub-renew onClick={() => void change(u, { subscription: { action: 'renew' } }, 'renewed for a year')}>
-                              Renew (+1 year)
+                        <div class="row wrap" style="gap:6px;align-items:center">
+                          <select class="input" style="width:auto" value={g.plan} disabled={working} aria-label="Plan to grant" data-grant-plan onChange={(e) => setGrants((x) => ({ ...x, [u.userId]: { ...g, plan: (e.currentTarget as HTMLSelectElement).value as PlanId } }))}>
+                            {(['svv', 'svvpro', 'club'] as PlanId[]).map((id) => (
+                              <option value={id} key={id}>
+                                {PLAN_TITLES[id]}
+                              </option>
+                            ))}
+                          </select>
+                          <input class="input" type="number" min="1" max="120" style="width:6em" placeholder="months" value={g.months} disabled={working} aria-label="Months" data-grant-months onInput={(e) => setGrants((x) => ({ ...x, [u.userId]: { ...g, months: (e.currentTarget as HTMLInputElement).value } }))} />
+                          <button class="btn sm primary" disabled={working} data-sub-grant onClick={() => void change(u, { subscription: { action: 'grant', plan: g.plan, months } }, `${PLAN_TITLES[g.plan]} granted${months ? ` for ${months} month${months === 1 ? '' : 's'}` : ''}`)}>
+                            Grant
+                          </button>
+                          {sub && standing !== 'revoked' && standing !== 'none' && (
+                            <button class="btn sm accent" disabled={working} data-sub-renew onClick={() => void change(u, { subscription: { action: 'renew', months } }, months ? `renewed for ${months} month${months === 1 ? '' : 's'}` : 'renewed for a period')}>
+                              Renew
                             </button>
                           )}
                           <input class="input" type="date" style="width:auto" value={d.startedAt} disabled={working} aria-label="Start date" onInput={(e) => setDates((x) => ({ ...x, [u.userId]: { ...d, startedAt: (e.currentTarget as HTMLInputElement).value } }))} />
                           <input class="input" type="date" style="width:auto" value={d.expiresAt} disabled={working} aria-label="Expiry date" onInput={(e) => setDates((x) => ({ ...x, [u.userId]: { ...d, expiresAt: (e.currentTarget as HTMLInputElement).value } }))} />
-                          <button class="btn sm" disabled={working || !d.startedAt} data-sub-set onClick={() => void change(u, { subscription: { action: 'set', startedAt: `${d.startedAt}T00:00:00Z`, expiresAt: d.expiresAt ? `${d.expiresAt}T23:59:59Z` : null } }, 'dates set')}>
+                          <button class="btn sm" disabled={working || !d.startedAt} data-sub-set onClick={() => void change(u, { subscription: { action: 'set', plan: g.plan, startedAt: `${d.startedAt}T00:00:00Z`, expiresAt: d.expiresAt ? `${d.expiresAt}T23:59:59Z` : null } }, 'dates set')}>
                             Set dates
                           </button>
-                          {sub && standing !== 'revoked' && (
-                            <button class="btn sm danger" disabled={working} data-sub-revoke onClick={() => confirm(`Revoke ${u.name || u.email}'s club owner subscription? Publishing mode closes for them at once.`) && void change(u, { subscription: { action: 'revoke' } }, 'subscription revoked — Publishing is closed')}>
+                          {sub && standing !== 'revoked' && standing !== 'none' && (
+                            <button class="btn sm danger" disabled={working} data-sub-revoke onClick={() => confirm(`Revoke ${u.name || u.email}'s plan? Their picture on stage (and Publishing, for a club owner) closes at once.`) && void change(u, { subscription: { action: 'revoke' } }, 'plan revoked')}>
                               Revoke
                             </button>
                           )}
                         </div>
-                      </div>
-                    )}
-                    {u.role !== 'club_owner' && !sub && u.role !== 'super_admin' && (
-                      <div class="row" style="margin-top:6px">
-                        <button class="btn sm" disabled={working} data-sub-grant onClick={() => void change(u, { subscription: { action: 'grant' } }, 'made a club owner with a year — Publishing is open')}>
-                          Make a club owner (grant a year)
-                        </button>
                       </div>
                     )}
                   </div>

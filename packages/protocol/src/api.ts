@@ -2,8 +2,10 @@
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
 import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
 import type { MixBatch } from './mix.ts';
-import type { AdminUserUpdate, AdminUsersResponse, BillingStatus, Destination, DestinationKind, DestinationUpdate, LiveStatus, PlanId, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
-import type { ClubOwnerOverview, ClubOwnerSettings, ClubOwnerStatus } from './roles.ts';
+import type { AdminUserUpdate, AdminUsersResponse, Destination, DestinationKind, DestinationUpdate, LiveStatus, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
+import type { AdminBillingOverview, BillingSettings, ClubStatus, OrderRecord, PlanId, PlansResponse } from './plans.ts';
+import type { PaymentRecord } from './roles.ts';
+import type { AdminCouponsResponse, Coupon, CouponSettings } from './coupons.ts';
 import type { RegisterTrackRequest, TrackAccessRequest, TrackCopyRequest, TrackHistoryResponse, TrackMetaPatch, TrackRecord, TrackSearchResponse } from './registry.ts';
 import type { YtFetchRequest, YtJob, YtSearchResponse, YtStatus } from './ytTracks.ts';
 
@@ -71,6 +73,8 @@ export interface MeetSnapshot {
   performances: MeetPerformance[];
   serverEpochMs: number;
   you?: Participant;
+  /** On a heartbeat: the video hours left to this account this month (null = without limit), and why the picture is off when it is (plans.ts): the role, the plan, or the hours used up. */
+  yourVideo?: { leftSeconds: number | null; note: string; reason: '' | 'role' | 'plan' | 'hours' };
 }
 
 export interface DecideRequest {
@@ -143,14 +147,26 @@ export interface Routes {
   'GET /health': { res: HealthResponse };
   'GET /time': { res: TimeResponse };
   'GET /me': { res: MeResponse };
-  /** Billing: the account's plan and the Publisher price. */
-  'GET /billing': { res: BillingStatus };
-  /** Start a Stripe Checkout for the Publisher plan: the page to send the browser to. */
-  'POST /billing/checkout': { req: Record<string, never>; res: { url: string } };
+  /** The coupon gate (coupons.ts): the code this account enters; the admin's list, the requirement, a coupon issued or changed (by email), one deleted. */
+  'POST /coupon': { req: { code: string }; res: MeResponse };
+  'GET /admin/coupons': { res: AdminCouponsResponse };
+  'PUT /admin/coupons/settings': { req: Partial<CouponSettings>; res: { settings: CouponSettings } };
+  'PUT /admin/coupons': { req: { email: string; code?: string; expiresAt: string; note?: string }; res: { coupon: Coupon } };
+  'DELETE /admin/coupons/:email': { res: { ok: true } };
+  /** The Plans page: the plans on offer, the currencies, where this account stands, its payments. */
+  'GET /plans': { res: PlansResponse };
+  /** Start a Stripe Checkout for a plan in a currency it is priced in: the page to send the browser to, and the order it opened. */
+  'POST /plans/checkout': { req: { planId: PlanId; currency: string }; res: { url: string; orderId: string } };
+  /** Back from Checkout: what became of it (paid, still processing — a bank's confirmation on its way —, failed, canceled, expired). */
+  'GET /billing/session/:id': { res: { order: OrderRecord } };
   /** Open the Stripe Customer Portal (change card, cancel, invoices). */
   'POST /billing/portal': { req: Record<string, never>; res: { url: string } };
-  /** Admin: put an account on a plan by email (a comp, a test, a payment taken elsewhere). */
-  'POST /admin/plan': { req: { email: string; plan: PlanId; until?: string | null }; res: { user: UserRecord } };
+  /** A club owner's club: the members named (email addresses) who share the club's video hours; add one; remove one. */
+  'GET /club': { res: ClubStatus };
+  'POST /club/members': { req: { email: string }; res: ClubStatus };
+  'DELETE /club/members/:email': { res: ClubStatus };
+  /** Admin: put an account on a plan by email (a comp, a test, a payment taken elsewhere); `until` or the plan's own period. */
+  'POST /admin/plan': { req: { email: string; plan: PlanId | 'publisher'; until?: string | null }; res: { user: UserRecord } };
   'GET /catalog/tracks': { res: CatalogListResponse };
   'GET /catalog/tracks/:id': { res: { track: CatalogTrack } };
   /** The track's file (json | audio | video), fetched from the owner's Drive by the service. */
@@ -175,13 +191,10 @@ export interface Routes {
   'PATCH /tracks/:id': { req: TrackMetaPatch; res: { track: TrackRecord } };
   /** The Admin page (super admins): every account; one account's role and subscription changed. */
   'GET /admin/users': { res: AdminUsersResponse };
-  /** The super admin's club owner portal: the price and the rules, every club owner by expiry, the payments. */
-  'GET /admin/club-owners': { res: ClubOwnerOverview };
-  'PUT /admin/club-owners/settings': { req: Partial<ClubOwnerSettings>; res: { settings: ClubOwnerSettings } };
-  /** The Club owner page (self-service): my standing, the offer, my payments; a Checkout for a year; Stripe's portal. */
-  'GET /club-owner': { res: ClubOwnerStatus };
-  'POST /club-owner/checkout': { req: Record<string, never>; res: { url: string } };
-  'POST /club-owner/portal': { req: Record<string, never>; res: { url: string } };
+  /** The super admin's billing portal: the plans and their prices, every subscriber by standing, the payments and the open orders; the settings changed; a payment refunded through Stripe. */
+  'GET /admin/billing': { res: AdminBillingOverview };
+  'PUT /admin/billing/settings': { req: Partial<BillingSettings>; res: { settings: BillingSettings } };
+  'POST /admin/payments/:id/refund': { req: { amountCents?: number }; res: { payment: PaymentRecord } };
   'PATCH /admin/users/:id': { req: AdminUserUpdate; res: { user: UserRecord } };
   /** YouTube song tracks (through the relay, docs/RELAY.md): can the service fetch them; search; fetch one into my Drive; the job as it goes. */
   'GET /yt': { res: YtStatus };

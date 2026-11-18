@@ -8,7 +8,8 @@ import { IcDrive, IcLibrary, IcMic, IcPlay, IcShare, IcUsers } from '../componen
 import { Page } from '../components/Shell.tsx';
 import { checkControl, controlConfigured, controlStatus, refreshAccount } from '../lib/api.ts';
 import { href } from '../lib/nav.ts';
-import { canPublish, isDrive, profile, provider, role } from '../state/session.ts';
+import { hoursLabel } from '@singersvoice/protocol';
+import { canPublish, entitlement, isDrive, ownsClub, profile, provider, role } from '../state/session.ts';
 
 export function Home() {
   useEffect(() => {
@@ -31,7 +32,16 @@ export function Home() {
               <IcDrive size={14} /> {isDrive.value ? 'Drive linked' : 'device only'}
             </span>
             <span class={`chip ${svc === 'online' ? 'ok' : svc === 'unconfigured' ? '' : 'warn'}`}>SVT DB · {svc === 'online' ? 'online' : svc === 'checking' ? 'checking' : svc === 'offline' ? 'unreachable' : 'not deployed'}</span>
-            {role.value === 'super_admin' ? <span class="chip ok">super admin</span> : role.value === 'club_owner' ? <span class={`chip ${canPublish.value ? 'ok' : 'warn'}`}>club owner{canPublish.value ? '' : ' · subscription closed'}</span> : role.value === 'audio' ? <span class="chip">audio only</span> : null}
+            {role.value === 'super_admin' ? (
+              <span class="chip ok">super admin</span>
+            ) : entitlement.value ? (
+              <a href={href('/plans')} class={`chip ${entitlement.value.video ? 'ok' : ''}`} data-home-plan={entitlement.value.plan} title={entitlement.value.videoNote || 'Your plan — the Plans page'}>
+                {entitlement.value.via === 'club' ? `${entitlement.value.clubOwner?.name ?? 'a club'}'s club` : entitlement.value.planTitle}
+                {entitlement.value.videoLeftSeconds !== null && entitlement.value.videoHours > 0 ? ` · video ${hoursLabel(entitlement.value.videoLeftSeconds)} left` : entitlement.value.videoHours === 0 ? ' · voice in meets' : ''}
+              </a>
+            ) : role.value === 'audio' ? (
+              <span class="chip">audio only</span>
+            ) : null}
           </div>
         </section>
 
@@ -58,10 +68,17 @@ export function Home() {
               <span>Stream meets to YouTube and the in-house watch page</span>
             </a>
           ) : (
-            <a href={href('/club-owner')} data-home-club-owner>
+            <a href={href('/plans')} data-home-plans>
               <IcShare />
-              <b>Club owner</b>
-              <span>{role.value === 'club_owner' ? 'Your club owner year — renew it to open Publishing mode again' : 'Become a club owner: a yearly subscription opens Publishing mode — stream meets to YouTube and the in-house watch page'}</span>
+              <b>Plans</b>
+              <span>{entitlement.value?.video ? `${entitlement.value.planTitle}: your picture on stage · ${hoursLabel(entitlement.value.videoLeftSeconds ?? 0)} of video left this month` : 'Your picture on stage in live meets — SVV, SVVPro, or a club of 15 with Publishing mode'}</span>
+            </a>
+          )}
+          {ownsClub.value && role.value !== 'super_admin' && (
+            <a href={href('/club')} data-home-club>
+              <IcUsers />
+              <b>My club</b>
+              <span>The members of your club and the video hours you share</span>
             </a>
           )}
           <a href={href('/studio/performances')}>
@@ -76,7 +93,7 @@ export function Home() {
           <p class="muted small">
             Tracks are files in each singer's Drive; publishing one shares its link through the catalog so anyone can pull it. The Studio works entirely offline. A Live Meet is a link anyone can
             join: performers take stage slots, every device starts the track at the same server instant, each singer's take stays personal in their own Drive. Publishing streams a meet out to the platforms
-            for club owners (a yearly subscription — see <a href={href('/club-owner')}>Club owner</a>).
+            for club owners (the Club owner plan — see <a href={href('/plans')}>Plans</a>). A picture on stage in a live meet comes with a plan; the voice is free.
           </p>
         </section>
       </div>

@@ -1,10 +1,11 @@
 /** Roles and the club owner year (roles.ts): the standing with grace days, the days left, the reasons, the money. */
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CLUB_OWNER_SETTINGS, daysLeft, moneyLabel, publishingClosedReason, publishingOpen, subscriptionStatus, yearFrom } from '../src/roles.ts';
+import { daysLeft, moneyLabel, publishingClosedReason, publishingOpen, subscriptionStatus, yearFrom } from '../src/roles.ts';
+import { DEFAULT_BILLING_SETTINGS } from '../src/plans.ts';
 
 const DAY = 86_400_000;
 const now = Date.parse('2026-11-17T12:00:00Z');
-const sub = (expiresAt: string | null, status: 'active' | 'revoked' | 'none' = 'active') => ({ startedAt: '2025-11-17T12:00:00Z', expiresAt, status, source: 'grant' as const, updatedAt: null });
+const sub = (expiresAt: string | null, status: 'active' | 'revoked' | 'none' = 'active', plan = 'club') => ({ plan, startedAt: '2025-11-17T12:00:00Z', expiresAt, status, source: 'grant' as const, updatedAt: null });
 
 describe('the standing of a club owner year', () => {
   it('runs out by itself on the day — or after the grace days the admin allows', () => {
@@ -18,22 +19,22 @@ describe('the standing of a club owner year', () => {
     expect(subscriptionStatus(sub('2030-01-01T00:00:00Z', 'none'), now)).toBe('none');
   });
 
-  it('opens Publishing to a super admin always, to a club owner within the year (grace included), to nobody else', () => {
-    expect(publishingOpen('super_admin', null, now)).toBe(true);
-    expect(publishingOpen('club_owner', sub(new Date(now + DAY).toISOString()), now)).toBe(true);
-    expect(publishingOpen('club_owner', sub(new Date(now - DAY).toISOString()), now)).toBe(false);
-    expect(publishingOpen('club_owner', sub(new Date(now - DAY).toISOString()), now, 2)).toBe(true);
-    expect(publishingOpen('dual', sub(new Date(now + DAY).toISOString()), now)).toBe(false);
-    expect(publishingOpen('audio', null, now)).toBe(false);
+  it('opens Publishing to a super admin always, to a plan that carries it while the subscription is active (grace included), to nobody else', () => {
+    expect(publishingOpen('super_admin', null, false, now)).toBe(true);
+    expect(publishingOpen('club_owner', sub(new Date(now + DAY).toISOString()), true, now)).toBe(true);
+    expect(publishingOpen('club_owner', sub(new Date(now - DAY).toISOString()), true, now)).toBe(false);
+    expect(publishingOpen('club_owner', sub(new Date(now - DAY).toISOString()), true, now, 2)).toBe(true);
+    expect(publishingOpen('dual', sub(new Date(now + DAY).toISOString(), 'active', 'svv'), false, now)).toBe(false); // SVV carries no Publishing
+    expect(publishingOpen('audio', null, false, now)).toBe(false);
   });
 
-  it('says why it is closed, pointing at the Club owner page', () => {
-    expect(publishingClosedReason('dual', null, now)).toMatch(/for club owners — become one on the Club owner page/);
-    expect(publishingClosedReason('club_owner', sub('2026-01-01T00:00:00Z'), now)).toBe('Your club owner subscription expired on 2026-01-01 — renew it on the Club owner page');
-    expect(publishingClosedReason('club_owner', sub('2026-01-01T00:00:00Z'), now, 365)).toBe(''); // within a year of grace: open, no reason
-    expect(publishingClosedReason('club_owner', sub('2030-01-01T00:00:00Z', 'revoked'), now)).toMatch(/revoked/);
-    expect(publishingClosedReason('club_owner', null, now)).toMatch(/pay for a year on the Club owner page/);
-    expect(publishingClosedReason('super_admin', null, now)).toBe('');
+  it('says why it is closed, pointing at the Plans page', () => {
+    expect(publishingClosedReason('dual', null, false, now)).toMatch(/for club owners — the Club owner plan on the Plans page/);
+    expect(publishingClosedReason('dual', sub(new Date(now + DAY).toISOString(), 'active', 'svv'), false, now)).toMatch(/comes with the Club owner plan/);
+    expect(publishingClosedReason('club_owner', sub('2026-01-01T00:00:00Z'), true, now)).toBe('Your club owner subscription expired on 2026-01-01 — renew it on the Plans page');
+    expect(publishingClosedReason('club_owner', sub('2026-01-01T00:00:00Z'), true, now, 365)).toBe(''); // within a year of grace: open, no reason
+    expect(publishingClosedReason('club_owner', sub('2030-01-01T00:00:00Z', 'revoked'), true, now)).toMatch(/revoked/);
+    expect(publishingClosedReason('super_admin', null, false, now)).toBe('');
   });
 
   it('counts the days left (negative once past, none without an end), and a year is a calendar year', () => {
@@ -51,6 +52,7 @@ describe('the standing of a club owner year', () => {
     expect(moneyLabel(4900, 'usd')).toMatch(/\$/);
     expect(moneyLabel(150000, 'inr')).toMatch(/1,?500/);
     expect(moneyLabel(500, 'xxx')).toMatch(/5\.00/); // an unknown code still reads as money
-    expect(DEFAULT_CLUB_OWNER_SETTINGS).toMatchObject({ priceCents: 0, currency: 'usd', selfService: true, expiringSoonDays: 30, graceDays: 0 });
+    expect(DEFAULT_BILLING_SETTINGS).toMatchObject({ note: '', expiringSoonDays: 7, graceDays: 0 });
+    expect(DEFAULT_BILLING_SETTINGS.plans.map((p) => p.id)).toEqual(['free', 'svv', 'svvpro', 'club']);
   });
 });

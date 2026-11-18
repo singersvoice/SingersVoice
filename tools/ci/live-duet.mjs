@@ -142,6 +142,16 @@ async function importTrack(page, meta) {
 
 const alice = await person('alice', { width: 1280, height: 800 });
 const bob = await person('bob', { width: 390, height: 844 });
+/** A plan for a singer, granted by the super admin (alice, the first account) through the service: the picture on stage comes with a plan (plans.ts). */
+const grantPlan = async (who, plan) => {
+  const h = (u) => ({ 'X-Dev-User': u, 'X-Dev-Name': u, 'Content-Type': 'application/json' });
+  const me = await (await fetch(`${servers.controlUrl}/me`, { headers: h(who) })).json();
+  const r = await fetch(`${servers.controlUrl}/admin/users/${me.user.userId}`, { method: 'PATCH', headers: h('alice'), body: JSON.stringify({ subscription: { action: 'grant', plan } }) });
+  const j = await r.json().catch(() => ({}));
+  return { status: r.status, media: j.user?.media, plan: j.user?.entitlement?.plan };
+};
+const bobPlan = await grantPlan('bob', 'svv');
+check(bobPlan.status === 200 && bobPlan.media === 'dual' && bobPlan.plan === 'svv', `bob has the SVV plan: his picture on stage (a free account sings with the voice alone) — ${bobPlan.status} ${bobPlan.plan} ${bobPlan.media}`);
 // Bob's copy must be recognisable as the host's track: rename his record to "<hostId>-copy-bob"
 await bob.page.evaluate(([from, to]) => new Promise((res) => { const r = indexedDB.open('singersvoice'); r.onsuccess = () => { const db = r.result; const tx = db.transaction('tracks', 'readwrite'); const st = tx.objectStore('tracks'); const g = st.get(from); g.onsuccess = () => { const rec = g.result; rec.track.trackId = to; st.put(rec, to); st.delete(from); }; tx.oncomplete = () => res(); }; }), [bob.trackId, `${alice.trackId}-copy-bob`]);
 await importTrack(bob.page, secondTrack); // bob's own second song: nobody else holds it
@@ -373,6 +383,8 @@ try {
   const daveLog = [];
   const dave = await person('dave', { width: 412, height: 915 }, { track: false });
   extraPages.dave = dave.page;
+  const davePlan = await grantPlan('dave', 'svv');
+  check(davePlan.status === 200 && davePlan.media === 'dual', `dave has the SVV plan too (${davePlan.plan}, ${davePlan.media})`);
   dave.page.on('response', (r) => { if (/\/meets\//.test(r.url()) && !/signals|heartbeat/.test(r.url())) daveLog.push(`${new Date().toISOString().slice(14, 23)} ${r.request().method()} ${r.url().replace(servers.controlUrl, '').replace(/meet-[a-z0-9-]+/, 'M')} ${r.status()}`); });
   await dave.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
   await dave.page.getByRole('button', { name: 'Ask to sing next' }).waitFor({ timeout: 30000 });
@@ -1032,13 +1044,14 @@ try {
   await dave.page.goto(`${base}publishing?${control}`, { waitUntil: 'networkidle' });
   await dave.page.getByRole('heading', { name: 'Publishing mode is for club owners' }).waitFor({ timeout: 15000 });
   check(/club owner/.test(await dave.page.locator('.empty, main').first().innerText()), 'a singer finds Publishing closed, with the reason: it is for club owners');
-  await dave.page.goto(`${base}club-owner?${control}`, { waitUntil: 'networkidle' });
-  await dave.page.locator('[data-club-owner][data-standing="none"] [data-ask-admin]').waitFor({ timeout: 15000 });
-  check(/club owner year/i.test(await dave.page.locator('[data-offer]').innerText()), 'the Club owner page offers the year');
-  check((await dave.page.locator('[data-pay]').count()) === 0, 'without Stripe configured the year is asked of the admin, not bought');
+  await dave.page.goto(`${base}plans?${control}`, { waitUntil: 'networkidle' });
+  await dave.page.locator('[data-plans][data-current-plan="svv"] [data-plan-card="club"] [data-ask-admin="club"]').waitFor({ timeout: 15000 });
+  check(/Publishing mode/.test(await dave.page.locator('[data-plan-card="club"]').innerText()) && (await dave.page.locator('[data-plan-card]').count()) === 4, 'the Plans page offers the four plans; the Club owner plan carries Publishing mode');
+  check((await dave.page.locator('[data-choose]').count()) === 0, 'without Stripe configured a plan is asked of the admin, not bought');
   await alice.page.goto(`${base}admin?${control}`, { waitUntil: 'networkidle' });
   const daveRow = alice.page.locator('[data-admin-user="dave@dev.local"]');
   await daveRow.waitFor({ timeout: 15000 });
+  await daveRow.locator('[data-grant-plan]').selectOption('club');
   await daveRow.locator('[data-sub-grant]').click();
   await alice.page.locator('[data-admin-user="dave@dev.local"][data-user-role="club_owner"]').waitFor({ timeout: 10000 });
   check(/publishing open/.test(await daveRow.innerText()), "the super admin's grant on the Admin page makes a club owner of the account, with Publishing open");

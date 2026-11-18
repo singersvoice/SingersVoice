@@ -1,4 +1,4 @@
-import { roleTitle } from '@singersvoice/protocol';
+import { hoursLabel, roleTitle } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { BackgroundPicker } from '../components/BackgroundPicker.tsx';
 import { FxPanel } from '../components/FxPanel.tsx';
@@ -11,7 +11,7 @@ import { idb, STORES } from '../lib/idb.ts';
 import { asset, go, href } from '../lib/nav.ts';
 import { bytes, isStandalone, platformName } from '../lib/platform.ts';
 import { errorText, toast } from '../lib/toast.ts';
-import { canPublish, isDrive, isSuperAdmin, media, profile, provider, role, signInWithGoogle, signOut, withProvider } from '../state/session.ts';
+import { canPublish, entitlement, isDrive, isSuperAdmin, ownsClub, profile, provider, role, signInWithGoogle, signOut, withProvider } from '../state/session.ts';
 import { checkControl, controlStatus, controlUrl, controlVersion, refreshAccount, setControlUrl } from '../lib/api.ts';
 import { appSettings, audioSettings, pullSettings, updateApp, updateAudio } from '../state/settings.ts';
 
@@ -136,10 +136,20 @@ export function Settings() {
               {controlStatus.value === 'online' ? `online${controlVersion.value ? ` · v${controlVersion.value}` : ''}` : controlStatus.value === 'checking' ? 'checking…' : controlStatus.value === 'offline' ? 'unreachable' : 'not configured'}
             </span>
             <span class={`chip ${role.value === 'super_admin' || canPublish.value ? 'ok' : ''}`}>{roleTitle(role.value)}</span>
-            {role.value === 'club_owner' && <span class={`chip ${canPublish.value ? 'ok' : 'warn'}`}>{canPublish.value ? 'subscription active' : 'subscription closed'}</span>}
+            {entitlement.value && role.value !== 'super_admin' && (
+              <span class={`chip ${entitlement.value.video ? 'ok' : ''}`} data-settings-plan={entitlement.value.plan}>
+                {entitlement.value.via === 'club' ? `${entitlement.value.clubOwner?.name ?? 'a club'}'s club` : entitlement.value.planTitle}
+                {entitlement.value.videoHours > 0 ? ` · video ${hoursLabel(entitlement.value.videoLeftSeconds ?? 0)} left` : ' · voice in meets'}
+              </span>
+            )}
             {!isSuperAdmin.value && (
-              <a class="btn sm" href={href('/club-owner')} data-club-owner-link>
-                Club owner
+              <a class="btn sm" href={href('/plans')} data-plans-link>
+                Plans
+              </a>
+            )}
+            {ownsClub.value && !isSuperAdmin.value && (
+              <a class="btn sm" href={href('/club')} data-club-link>
+                My club
               </a>
             )}
             {isSuperAdmin.value && (
@@ -229,7 +239,7 @@ export function Settings() {
 
         <section class="card stack">
           <h2>Camera</h2>
-          <Switch checked={app.cameraOn && media.value === 'dual'} onChange={(v) => updateApp({ cameraOn: v })} label={media.value === 'dual' ? 'Camera on stage' : 'Camera on stage (your account is audio only — the SingersVoice admin can change that)'} disabled={media.value !== 'dual'} />
+          <Switch checked={app.cameraOn && role.value !== 'audio'} onChange={(v) => updateApp({ cameraOn: v })} label={role.value === 'audio' ? 'Camera on stage (your account is audio only — the SingersVoice admin can change that)' : entitlement.value && !entitlement.value.video && role.value !== 'super_admin' ? 'Camera on stage (in live meets your plan gives the voice alone — the Studio keeps the camera; see Plans)' : 'Camera on stage'} disabled={role.value === 'audio'} />
           <Field label="Camera device">
             <select class="input" value={app.cameraDeviceId} onChange={(e) => updateApp({ cameraDeviceId: (e.currentTarget as HTMLSelectElement).value })}>
               <option value="">Auto (front camera)</option>
