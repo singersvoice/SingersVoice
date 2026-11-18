@@ -63,4 +63,4 @@ A build made without `VITE_CONTROL_URL` (a local `vite build`, the CI e2es) take
 link: open the app with `?control=https://…` (kept on the device). The deployed app has its address baked
 in and ignores that query — every request carries the singer's Google token, so a crafted link must never
 point a singer at another host. On the deployed app only a super admin can override it, for their own
-device: *Settings → Live services → Service URL (super admins)*; singers do not see the field.
+device: *Settings → Live services (SVT DB) → Service URL*. That whole section — the service's status and version, the Service URL — is the super admin's; singers see their plan and the Plans button under their account instead.

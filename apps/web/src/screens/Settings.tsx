@@ -86,6 +86,29 @@ export function Settings() {
               <div class="small muted">{isDrive.value ? p?.email : 'Device mode — files live in this browser'}</div>
             </div>
           </div>
+          {!isSuperAdmin.value && (
+            <div class="row wrap" data-settings-standing>
+              {entitlement.value && (
+                <span class={`chip ${entitlement.value.video ? 'ok' : ''}`} data-settings-plan={entitlement.value.plan}>
+                  {entitlement.value.via === 'club' ? `${entitlement.value.clubOwner?.name ?? 'a club'}'s club` : entitlement.value.planTitle}
+                  {entitlement.value.videoHours > 0 ? ` · video ${hoursLabel(entitlement.value.videoLeftSeconds ?? 0)} left` : ' · voice in meets'}
+                </span>
+              )}
+              <a class="btn sm" href={href('/plans')} data-plans-link>
+                Plans
+              </a>
+              {ownsClub.value && (
+                <a class="btn sm" href={href('/club')} data-club-link>
+                  My club
+                </a>
+              )}
+              {canPublish.value && (
+                <a class="btn sm" href={href('/publishing')}>
+                  Publishing portal
+                </a>
+              )}
+            </div>
+          )}
           {isDrive.value ? (
             <>
               <div class="row">
@@ -129,47 +152,27 @@ export function Settings() {
           )}
         </section>
 
-        <section class="card stack">
-          <h2>Live services (SVT DB)</h2>
-          <div class="row">
-            <span class={`chip ${controlStatus.value === 'online' ? 'ok' : controlStatus.value === 'unconfigured' ? '' : 'warn'}`}>
-              {controlStatus.value === 'online' ? `online${controlVersion.value ? ` · v${controlVersion.value}` : ''}` : controlStatus.value === 'checking' ? 'checking…' : controlStatus.value === 'offline' ? 'unreachable' : 'not configured'}
-            </span>
-            <span class={`chip ${role.value === 'super_admin' || canPublish.value ? 'ok' : ''}`}>{roleTitle(role.value)}</span>
-            {entitlement.value && role.value !== 'super_admin' && (
-              <span class={`chip ${entitlement.value.video ? 'ok' : ''}`} data-settings-plan={entitlement.value.plan}>
-                {entitlement.value.via === 'club' ? `${entitlement.value.clubOwner?.name ?? 'a club'}'s club` : entitlement.value.planTitle}
-                {entitlement.value.videoHours > 0 ? ` · video ${hoursLabel(entitlement.value.videoLeftSeconds ?? 0)} left` : ' · voice in meets'}
+        {isSuperAdmin.value && (
+          <section class="card stack" data-live-services>
+            <h2>Live services (SVT DB)</h2>
+            <div class="row wrap">
+              <span class={`chip ${controlStatus.value === 'online' ? 'ok' : controlStatus.value === 'unconfigured' ? '' : 'warn'}`}>
+                {controlStatus.value === 'online' ? `online${controlVersion.value ? ` · v${controlVersion.value}` : ''}` : controlStatus.value === 'checking' ? 'checking…' : controlStatus.value === 'offline' ? 'unreachable' : 'not configured'}
               </span>
-            )}
-            {!isSuperAdmin.value && (
-              <a class="btn sm" href={href('/plans')} data-plans-link>
-                Plans
-              </a>
-            )}
-            {ownsClub.value && !isSuperAdmin.value && (
-              <a class="btn sm" href={href('/club')} data-club-link>
-                My club
-              </a>
-            )}
-            {isSuperAdmin.value && (
+              <span class="chip ok">{roleTitle(role.value)}</span>
               <a class="btn sm" href={href('/admin')}>
                 Admin
               </a>
-            )}
-            {(canPublish.value || isSuperAdmin.value) && (
               <a class="btn sm" href={href('/publishing')}>
                 Publishing portal
               </a>
-            )}
-          </div>
-          {isSuperAdmin.value && (
-            <Field label="Service URL (super admins)" hint="Set at build time by VITE_CONTROL_URL; override on this device to test another deployment (leave empty to reset). Singers never see this.">
+            </div>
+            <Field label="Service URL" hint="Set at build time by VITE_CONTROL_URL; override on this device to test another deployment (leave empty to reset). Singers never see this section.">
               <input class="input mono" value={controlUrl.value} placeholder="https://sv-control.<account>.workers.dev" data-service-url onChange={(e) => setControlUrl((e.currentTarget as HTMLInputElement).value)} />
             </Field>
-          )}
-          <p class="small muted">The catalog, live meets and publishing talk to the SingersVoice service. Your audio, video and track files never go through it — they live in your Drive.</p>
-        </section>
+            <p class="small muted">The catalog, live meets and publishing talk to the SingersVoice service. Audio, video and track files never go through it — they live in each singer's Drive.</p>
+          </section>
+        )}
 
         <section class="card stack">
           <h2>Display</h2>

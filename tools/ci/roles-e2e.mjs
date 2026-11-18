@@ -170,9 +170,10 @@ try {
   const camSwitch = bob.page.locator('label.switch', { hasText: 'Camera on stage' }).locator('input');
   check(await camSwitch.isDisabled() && /audio only/.test(await bob.page.locator('label.switch', { hasText: 'Camera on stage' }).innerText()), 'an audio-only account finds "Camera on stage" off and locked in Settings, with the reason');
   check(/audio only/.test(await bob.page.locator('main').innerText()), "the account's standing says audio only");
-  check((await bob.page.locator('[data-service-url]').count()) === 0, "a singer's Settings has no Service URL field (the service's address is the super admin's to override, never a singer's)");
+  check((await bob.page.locator('[data-live-services]').count()) === 0 && (await bob.page.locator('[data-service-url]').count()) === 0 && !/Live services/.test(await bob.page.locator('main').innerText()), "a singer's Settings has no Live services (SVT DB) section — no service status, no Service URL (the service's address is the super admin's to override, never a singer's)");
+  check((await bob.page.locator('[data-settings-standing] [data-plans-link]').count()) === 1, "a singer's plan and the Plans button sit under their account instead");
   await alice.page.goto(`${base}settings?${control}`, { waitUntil: 'networkidle' });
-  check((await alice.page.locator('[data-service-url]').count()) === 1, "the super admin's Settings has it");
+  check((await alice.page.locator('[data-live-services] [data-service-url]').count()) === 1 && (await alice.page.locator('[data-settings-standing]').count()) === 0, "the super admin's Settings has the Live services section with the Service URL, and no plan row of their own");
   // In a meet: bob takes a slot on alice's open stage; his room shows the audio-only chip, the camera control is locked.
   await bob.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
   await bob.page.getByRole('button', { name: 'Take a stage slot' }).click();
