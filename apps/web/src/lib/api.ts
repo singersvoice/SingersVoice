@@ -1,7 +1,10 @@
 /**
  * sv-control (SVT DB) client: typed fetch with the Google token, NTP-style clock sync, status.
- * The URL comes from VITE_CONTROL_URL at build time; `?control=https://…` or localStorage
- * `sv.controlUrl` override it for testing another deployment.
+ * The URL is the build's own (VITE_CONTROL_URL, baked in by Deploy web). A build without one — dev, CI —
+ * takes it from a link, `?control=https://…`; a build with its own address ignores that query, because
+ * every request carries the singer's Google token and a crafted link must never send it to another
+ * host. The super admin's Settings field (setControlUrl) overrides on their own device alone, kept in
+ * localStorage `sv.controlUrl`.
  */
 import { computed, signal } from '@preact/signals';
 import { bestClockOffset, clockOffsetMs, type Routes } from '@singersvoice/protocol';
@@ -9,10 +12,12 @@ import { access, needsReconnect, profile, reconnect, setAccess, setAccountUserId
 import { toast } from './toast.ts';
 
 const OVERRIDE_KEY = 'sv.controlUrl';
+/** The service address this build was made with; empty in dev and CI builds. */
+const builtInUrl = (import.meta.env.VITE_CONTROL_URL ?? '').trim().replace(/\/$/, '');
 
 function readOverride(): string {
   try {
-    const q = new URLSearchParams(location.search).get('control');
+    const q = builtInUrl ? '' : new URLSearchParams(location.search).get('control');
     if (q) {
       localStorage.setItem(OVERRIDE_KEY, q);
       return q;
@@ -23,7 +28,7 @@ function readOverride(): string {
   }
 }
 
-export const controlUrl = signal((readOverride() || (import.meta.env.VITE_CONTROL_URL ?? '')).trim().replace(/\/$/, ''));
+export const controlUrl = signal((readOverride() || builtInUrl).trim().replace(/\/$/, ''));
 export const controlConfigured = computed(() => controlUrl.value.length > 0);
 export type ControlStatus = 'unconfigured' | 'checking' | 'online' | 'offline';
 export const controlStatus = signal<ControlStatus>(controlUrl.value ? 'checking' : 'unconfigured');
@@ -38,7 +43,7 @@ export function setControlUrl(url: string): void {
   } catch {
     /* ignore */
   }
-  controlUrl.value = v || (import.meta.env.VITE_CONTROL_URL ?? '').trim().replace(/\/$/, '');
+  controlUrl.value = v || builtInUrl;
   controlStatus.value = controlUrl.value ? 'checking' : 'unconfigured';
   void checkControl();
 }

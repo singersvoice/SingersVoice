@@ -59,4 +59,8 @@ Then set the repo variable `VITE_CONTROL_URL` to `https://<your host>` and run *
 
 ## Testing against a different service
 
-In the app: *Settings → Live services → Service URL*, or open the app with `?control=https://…`.
+A build made without `VITE_CONTROL_URL` (a local `vite build`, the CI e2es) takes the service from the
+link: open the app with `?control=https://…` (kept on the device). The deployed app has its address baked
+in and ignores that query — every request carries the singer's Google token, so a crafted link must never
+point a singer at another host. On the deployed app only a super admin can override it, for their own
+device: *Settings → Live services → Service URL (super admins)*; singers do not see the field.

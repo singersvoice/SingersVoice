@@ -170,6 +170,9 @@ try {
   const camSwitch = bob.page.locator('label.switch', { hasText: 'Camera on stage' }).locator('input');
   check(await camSwitch.isDisabled() && /audio only/.test(await bob.page.locator('label.switch', { hasText: 'Camera on stage' }).innerText()), 'an audio-only account finds "Camera on stage" off and locked in Settings, with the reason');
   check(/audio only/.test(await bob.page.locator('main').innerText()), "the account's standing says audio only");
+  check((await bob.page.locator('[data-service-url]').count()) === 0, "a singer's Settings has no Service URL field (the service's address is the super admin's to override, never a singer's)");
+  await alice.page.goto(`${base}settings?${control}`, { waitUntil: 'networkidle' });
+  check((await alice.page.locator('[data-service-url]').count()) === 1, "the super admin's Settings has it");
   // In a meet: bob takes a slot on alice's open stage; his room shows the audio-only chip, the camera control is locked.
   await bob.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
   await bob.page.getByRole('button', { name: 'Take a stage slot' }).click();

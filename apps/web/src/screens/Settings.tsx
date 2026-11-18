@@ -163,10 +163,12 @@ export function Settings() {
               </a>
             )}
           </div>
-          <Field label="Service URL" hint="Set at build time by VITE_CONTROL_URL; override here to test another deployment (leave empty to reset).">
-            <input class="input mono" value={controlUrl.value} placeholder="https://sv-control.<account>.workers.dev" onChange={(e) => setControlUrl((e.currentTarget as HTMLInputElement).value)} />
-          </Field>
-          <p class="small muted">The catalog, live meets and publishing talk to this service. Your audio, video and track files never go through it — they live in your Drive.</p>
+          {isSuperAdmin.value && (
+            <Field label="Service URL (super admins)" hint="Set at build time by VITE_CONTROL_URL; override on this device to test another deployment (leave empty to reset). Singers never see this.">
+              <input class="input mono" value={controlUrl.value} placeholder="https://sv-control.<account>.workers.dev" data-service-url onChange={(e) => setControlUrl((e.currentTarget as HTMLInputElement).value)} />
+            </Field>
+          )}
+          <p class="small muted">The catalog, live meets and publishing talk to the SingersVoice service. Your audio, video and track files never go through it — they live in your Drive.</p>
         </section>
 
         <section class="card stack">
