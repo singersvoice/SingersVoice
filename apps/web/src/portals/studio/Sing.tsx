@@ -106,7 +106,7 @@ export function SingPicker() {
                   <div class="meta">
                     <div class="t">{c.title}</div>
                     <div class="s">
-                      {c.artist || 'Unknown artist'} · {formatMs(c.durationMs)} · {c.singerCount} singer{c.singerCount > 1 ? 's' : ''} · by {c.ownerName}
+                      {c.artist || 'Unknown artist'} · {formatMs(c.durationMs)} · {c.singerCount} singer{c.singerCount > 1 ? 's' : ''}
                     </div>
                     {pulling?.id === c.trackId && <Progress fraction={pulling.fraction} label={pulling.label} />}
                   </div>

@@ -162,7 +162,7 @@ export function SongPicker(props: {
   const placeOf = props.placeOf ?? (() => null);
   const rows: Row[] = [
     ...mine.map((t) => ({ key: t.trackId, title: t.title, artist: t.artist || 'Unknown artist', sub: `${formatMs(t.durationMs)} · ${t.video ? 'karaoke video' : `${t.singerCount} singer${t.singerCount > 1 ? 's' : ''}`}`, from: 'Your library', place: placeOf({ trackId: t.trackId, catalogTrackId: sharedId(t), trackTitle: t.title, durationMs: t.durationMs }), pick: () => pickMine(t) })),
-    ...others.map((c) => ({ key: c.trackId, title: c.title, artist: c.artist || 'Unknown artist', sub: formatMs(c.durationMs), from: `Shared by ${c.ownerName}`, place: placeOf({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs }), pick: () => pickShared(c) })),
+    ...others.map((c) => ({ key: c.trackId, title: c.title, artist: c.artist || 'Unknown artist', sub: formatMs(c.durationMs), from: 'Shared song', place: placeOf({ trackId: null, catalogTrackId: c.trackId, trackTitle: c.title, durationMs: c.durationMs }), pick: () => pickShared(c) })),
   ];
   const total = catalog?.total ?? 0;
   const loading = tracks === null && !fresh;

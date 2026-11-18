@@ -6,7 +6,7 @@
  * track like any other: it lists, sings, is picked for a meet, is published to the catalog; on stage
  * the video (the words are in the picture) stands where the lyrics would be.
  */
-import { createTrack, parseSongTitle, type TrackPackageV2, type YtJob, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
+import { createTrack, parseSongTitle, youtubeSearchQuery, type TrackPackageV2, type YtJob, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
 import { api, ApiError, controlConfigured } from './api.ts';
 import type { Progress, TrackSummary } from './storage/types.ts';
 import { driveProvider } from '../state/session.ts';
@@ -29,8 +29,9 @@ export async function ytStatus(): Promise<YtStatus> {
   }
 }
 
+/** Search YouTube for the singer's words — always as a karaoke track (`youtubeSearchQuery`). */
 export async function searchYoutube(q: string): Promise<YtSearchItem[]> {
-  const query = q.trim();
+  const query = youtubeSearchQuery(q);
   if (!query) return [];
   const r = await api.get('GET /yt/search', `/yt/search?q=${encodeURIComponent(query)}`);
   return r.items;

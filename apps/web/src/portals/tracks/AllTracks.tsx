@@ -7,7 +7,7 @@
  * shares it and opens the stage; a preview plays the backing track here. An access is on record only
  * once the song really opened or played — never for a search.
  */
-import { formatMs, trackRecordLine, type CatalogTrack, type TrackRecord, type TrackSearchGroup, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
+import { formatMs, trackRecordLine, youtubeSearchQuery, type CatalogTrack, type TrackRecord, type TrackSearchGroup, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { IcDownload, IcPlay, IcSliders, IcStop } from '../../components/icons.tsx';
 import { Empty, Progress, Spinner } from '../../components/ui.tsx';
@@ -273,13 +273,13 @@ export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void
                   <div class="meta">
                     <div class="t">{c.title}</div>
                     <div class="s">
-                      {c.artist || 'Unknown artist'} · {formatMs(c.durationMs)} · by {c.ownerName}
+                      {c.artist || 'Unknown artist'} · {formatMs(c.durationMs)}
                     </div>
                     {b && <Progress fraction={b.fraction} label={b.label} />}
                   </div>
                   <div class="actions">
                     {owned || have ? (
-                      <span class="chip ok">{owned ? 'yours' : 'in my library'}</span>
+                      <span class="chip ok">in my library</span>
                     ) : (
                       <button class="btn sm accent" disabled={busy !== null} onClick={() => void pull(c)}>
                         <IcDownload size={16} /> Add to my {isDrive.value ? 'Drive' : 'device'}
@@ -298,6 +298,11 @@ export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void
           <b class="small">YouTube</b>
           {status && !status.available && <div class="callout warn small">YouTube is not available: {status.note || 'the relay is not deployed'}.</div>}
           {ytOnly === null && status?.available !== false && <div class="muted small">Press Search for YouTube results{ytSearching ? '…' : ''}</div>}
+          {ytOnly !== null && youtubeSearchQuery(q) !== q.trim() && (
+            <div class="muted small" data-yt-asked>
+              YouTube was asked for “{youtubeSearchQuery(q)}” — a karaoke track, always.
+            </div>
+          )}
           {ytOnly && !ytOnly.length && <div class="muted small">{yt?.items.length ? 'The YouTube results are all in the SingersVoice track database already (above).' : 'Nothing found on YouTube.'}</div>}
           {ytOnly && ytOnly.length > 0 && (
             <div class="list" data-yt-results>
@@ -426,11 +431,11 @@ function ArtistBranch(props: { name: string; versions: TrackRecord[] } & RowProp
   );
 }
 
-/** One file of a song: what it is (artist · movie · year · language · source), who sang it, and Sing / a preview. */
+/** One file of a song: what it is (artist · movie · year · language · source), how many sang it, and Sing / a preview — never who (no singer's name on a track line). */
 function VersionRow(props: { v: TrackRecord } & RowProps) {
   const { v } = props;
   const haveIt = props.tracks.some((t) => t.registryId === v.trackId || t.trackId === v.mine?.copyTrackId);
-  const ownIt = v.ownerUserId === myRegistryUserId();
+  const ownIt = v.ownerUserId === myRegistryUserId(); // mine: in my Drive as any other
   const b = props.busy?.id === v.trackId ? props.busy : null;
   const pv = props.preview?.id === v.trackId ? props.preview : null;
   const line = trackRecordLine(v);
@@ -439,12 +444,11 @@ function VersionRow(props: { v: TrackRecord } & RowProps) {
       {v.thumbnail ? <img class="thumb" src={v.thumbnail} alt="" loading="lazy" style="object-fit:cover;aspect-ratio:16/9;width:72px;height:auto" /> : <div class="thumb">{v.song.charAt(0).toUpperCase()}</div>}
       <div class="meta">
         <div class="t">
-          {v.song} <span class="chip">{sourceName(v.source)}</span> {v.hasVideo && <span class="chip">video</span>} {(haveIt || ownIt) && <span class="chip ok">{ownIt ? 'yours' : 'in my Drive'}</span>} {v.unavailable && <span class="chip warn">unavailable</span>}
+          {v.song} <span class="chip">{sourceName(v.source)}</span> {v.hasVideo && <span class="chip">video</span>} {(haveIt || ownIt) && <span class="chip ok">in my Drive</span>} {v.unavailable && <span class="chip warn">unavailable</span>}
         </div>
         <div class="s">
           {line ? `${line} · ` : ''}
           {v.durationMs ? `${formatMs(v.durationMs)} · ` : ''}
-          {v.ownerName && !ownIt ? `by ${v.ownerName} · ` : ''}
           {v.singers ? `sung by ${v.singers} singer${v.singers === 1 ? '' : 's'} · ` : ''}
           <span data-sung-ago>{v.lastAccessedAt ? `last sung ${sungAgo(v.lastAccessedAt)}` : 'not sung yet'}</span>
         </div>

@@ -6,6 +6,7 @@
  * asks the relay; the relay downloads, takes the sound out, uploads both files with the singer's own
  * Drive sign-in and shares the video anyone-with-the-link, and reports the job as it goes.
  */
+import { youtubeVideoId } from './track.ts';
 
 export interface YtSearchItem {
   /** The 11-character video id. */
@@ -78,3 +79,17 @@ export const YT_MAX_DURATION_MS = 20 * 60 * 1000;
 export const YT_MAX_HEIGHT = 720;
 
 export const ytWatchUrl = (id: string): string => `https://www.youtube.com/watch?v=${id}`;
+
+/**
+ * What YouTube is asked for a singer's words: a karaoke track, always — "karaoke" and "track" are added when they are
+ * missing (the usual misspelling "karoake" set right), so "tu hi meri shab" asks for "tu hi meri shab karaoke track".
+ * A pasted YouTube link or video id is asked for as it is.
+ */
+export function youtubeSearchQuery(q: string): string {
+  const query = String(q ?? '').replace(/\s+/g, ' ').trim();
+  if (!query || youtubeVideoId(query)) return query;
+  let out = query.replace(/\bkar(?:oake|oke|aoki)\b/gi, 'karaoke');
+  if (!/\bkaraoke\b/i.test(out)) out += ' karaoke';
+  if (!/\btracks?\b/i.test(out)) out += ' track';
+  return out;
+}

@@ -4,7 +4,7 @@
  * (`SingersVoice/Tracks/YT/<title>`: the video, shared anyone-with-the-link, and its sound), ready to
  * sing here and in a meet like any Track Maker song — the video stands where the lyrics would be.
  */
-import { formatMs, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
+import { youtubeSearchQuery, formatMs, type YtSearchItem, type YtStatus } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { IcDownload, IcPlay } from '../../components/icons.tsx';
 import { Empty, Progress, Spinner } from '../../components/ui.tsx';
@@ -83,12 +83,17 @@ export function YoutubeTracks(props: { tracks: TrackSummary[]; onAdded: () => vo
           void search();
         }}
       >
-        <input ref={input} class="input" style="flex:1" placeholder="Song, artist, “karaoke” — or paste a YouTube link" value={q} onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)} data-yt-query />
+        <input ref={input} class="input" style="flex:1" placeholder="Song or artist — or paste a YouTube link" value={q} onInput={(e) => setQ((e.currentTarget as HTMLInputElement).value)} data-yt-query />
         <button class="btn primary" type="submit" disabled={searching || status?.available === false} data-yt-search>
           {searching ? <Spinner /> : null} Search
         </button>
       </form>
-      {items && !items.length && <Empty title="Nothing found" body="Try the song's name with the word karaoke, or paste the video's link." />}
+      {q.trim() && youtubeSearchQuery(q) !== q.trim() && (
+        <div class="small muted" data-yt-asked>
+          YouTube is asked for “{youtubeSearchQuery(q)}” — a karaoke track, always.
+        </div>
+      )}
+      {items && !items.length && <Empty title="Nothing found" body="Try the song's name another way, or paste the video's link." />}
       {items && items.length > 0 && (
         <div class="list" data-yt-results>
           {items.map((it) => {

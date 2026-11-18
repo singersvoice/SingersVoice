@@ -6,7 +6,7 @@
 //   1. The tabs: All · My Drive · Public catalog · YouTube, in that order; All first.
 //   2. alice imports a song and sings it: the first Sing shares her folder (the shareable URL), registers the song
 //      with a 12-character id and records her access; a second Sing adds nothing new (one record per source).
-//   3. bob finds it under All (the latest sung first, "by alice"), previews it (an access of his), sings it: the
+//   3. bob finds it under All (the latest sung first — no singer's name on the line), previews it (an access of his), sings it: the
 //      files come through the service from alice's shared Drive, a copy lands under bob's own Tracks, shared and
 //      registered as a copy; the Sing screen records his access; sung again, his copy is used, not copied twice.
 //   4. The tree: bob's own "CI Sample Song" by another artist makes a second version — one song group, two
@@ -292,7 +292,7 @@ try {
   await bob.page.goto(`${base}tracks?${control}`, { waitUntil: 'networkidle' });
   const latest = bob.page.locator('[data-all-db] [data-version]').first();
   await latest.waitFor();
-  check(/CI Sample Song/.test(await latest.innerText()) && /by alice/.test(await latest.innerText()) && /last sung/.test(await latest.innerText()), `with nothing typed, All shows the latest sung by anyone: "${(await latest.innerText()).replace(/\s+/g, ' ').slice(0, 90)}"`);
+  check(/CI Sample Song/.test(await latest.innerText()) && /last sung/.test(await latest.innerText()) && !/alice|yours/.test(await latest.innerText()), `with nothing typed, All shows the latest sung by anyone — the song, when, never who: "${(await latest.innerText()).replace(/\s+/g, ' ').slice(0, 90)}"`);
   await bob.page.locator('[data-all-query]').fill('ci sample');
   const row = bob.page.locator(`[data-song-tree] [data-version="${aliceRec.trackId}"]`);
   await row.waitFor();

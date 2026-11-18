@@ -116,9 +116,13 @@ try {
   await page.locator('[data-yt-section]').waitFor({ timeout: 10000 });
   await wait(1500);
   ok((await page.locator('[data-yt-unavailable]').count()) === 0, 'the YouTube section finds the relay (yt-dlp on it) through the service');
-  await page.locator('[data-yt-query]').fill('amma karaoke');
+  await page.locator('[data-yt-query]').fill('amma karoake');
+  ok(/“amma karaoke track”/.test(await page.locator('[data-yt-asked]').innerText()), 'the words are asked of YouTube as a karaoke track — "karaoke track" added, the misspelling set right — and the page says so');
+  const asked = [];
+  page.on('request', (r) => r.url().includes('/yt/search') && asked.push(new URL(r.url()).searchParams.get('q')));
   await page.locator('[data-yt-search]').click();
   await page.locator('[data-yt-result]').first().waitFor({ timeout: 30000 });
+  ok(asked.includes('amma karaoke track'), `the service was asked for "amma karaoke track" (${asked.join(' | ')})`);
   const results = await page.locator('[data-yt-result]').evaluateAll((els) => els.map((e) => ({ id: e.getAttribute('data-yt-result'), text: e.textContent, img: e.querySelector('img')?.getAttribute('src') })));
   ok(results.length === 2, `two results listed (${results.length})`);
   ok(results[0]?.id === 'dQw4w9WgXcQ' && /Sing King/.test(results[0].text) && /3:33/.test(results[0].text) && /1\.2M views/.test(results[0].text), `the first result carries title, channel, duration and views: ${results[0]?.text?.trim()}`);

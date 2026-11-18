@@ -1,6 +1,7 @@
 /** The master track database's ids, song keys and the reading of karaoke titles (registry.ts). */
 import { describe, expect, it } from 'vitest';
 import { isDriveUrl, isRegistryId, newRegistryId, parseSongTitle, registryIdDate, registrySourceKey, songKey, trackRecordLine } from '../src/registry.ts';
+import { youtubeSearchQuery } from '../src/ytTracks.ts';
 
 describe('track ids', () => {
   it('are 12 characters: 8 random from an alphabet without 0/O/1/I, then the month minted (YYMM), the same way everywhere', () => {
@@ -50,6 +51,19 @@ describe('reading a karaoke title', () => {
   it('what it cannot tell stays empty — never invented', () => {
     expect(parseSongTitle('Amma Karaoke with Lyrics')).toEqual({ song: 'Amma', artists: '', movie: '', year: null, language: '' });
     expect(parseSongTitle('')).toEqual({ song: '', artists: '', movie: '', year: null, language: '' });
+  });
+});
+
+describe('what YouTube is asked', () => {
+  it('always a karaoke track: the words added when missing, the misspelling set right, a link left alone', () => {
+    expect(youtubeSearchQuery('tu hi meri shab')).toBe('tu hi meri shab karaoke track');
+    expect(youtubeSearchQuery('tu hi meri shab karoake track')).toBe('tu hi meri shab karaoke track');
+    expect(youtubeSearchQuery('  Tu Hi Meri Shab   Karaoke ')).toBe('Tu Hi Meri Shab Karaoke track');
+    expect(youtubeSearchQuery('ammo ammaayena karaoke track')).toBe('ammo ammaayena karaoke track');
+    expect(youtubeSearchQuery('backing tracks hey jude')).toBe('backing tracks hey jude karaoke');
+    expect(youtubeSearchQuery('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    expect(youtubeSearchQuery('dQw4w9WgXcQ')).toBe('dQw4w9WgXcQ');
+    expect(youtubeSearchQuery('')).toBe('');
   });
 });
 

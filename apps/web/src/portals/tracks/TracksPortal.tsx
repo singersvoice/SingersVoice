@@ -365,15 +365,13 @@ function Catalog(props: { onPulled: () => void; myIds: Set<string> }) {
               <div class="meta">
                 <div class="t">{t.title}</div>
                 <div class="s">
-                  {t.artist || 'Unknown artist'} · {formatMs(t.durationMs)} · {t.singerCount} singer{t.singerCount > 1 ? 's' : ''} · by {t.ownerName}
+                  {t.artist || 'Unknown artist'} · {formatMs(t.durationMs)} · {t.singerCount} singer{t.singerCount > 1 ? 's' : ''}
                   {t.pulls ? ` · ${t.pulls} pull${t.pulls === 1 ? '' : 's'}` : ''}
                 </div>
                 {pulling?.id === t.trackId && <Progress fraction={pulling.fraction} label={pulling.label} />}
               </div>
               <div class="row" style="gap:6px">
-                {mine ? (
-                  <span class="chip ok">yours</span>
-                ) : have ? (
+                {mine || have ? (
                   <span class="chip ok">in my library</span>
                 ) : (
                   <button class="btn sm accent" disabled={pulling !== null} onClick={() => void pull(t)}>
