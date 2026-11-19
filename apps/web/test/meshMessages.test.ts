@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // The mesh asks the service for ICE servers when it starts; the api module itself wants a browser (localStorage).
 vi.mock('../src/lib/api.ts', () => ({ api: { get: async () => ({ iceServers: [] }) } }));
 const { PerformerMesh } = await import('../src/video/peers.ts');
+const { PACK_WIDTH } = await import('../src/video/enhance.ts');
 type MeshMessage = import('../src/video/peers.ts').MeshMessage;
 
 class FakeChannel {
@@ -84,5 +85,40 @@ describe('mesh messages', () => {
     FakePC.made[1]!.channels[0]!.onmessage!({ data: 'not json' }); // ignored
     FakePC.made[1]!.channels[0]!.onmessage!({ data: '{"type":"other"}' }); // not ours: ignored
     expect(heard).toEqual([{ from: 'p2', m: { type: 'changed' } }]);
+  });
+
+  it("a device says how wide a picture it draws of us: told to every open link now and to each new one as it opens; what a peer said is kept on its link and its sender's encoding follows (a small frame for a Preview tile, the whole one for a show view)", () => {
+    const mesh = new PerformerMesh(channel, 'me');
+    mesh.setPeers(['p1']);
+    const p1 = FakePC.made[0]!;
+    // Nothing open: the width is remembered and said when the channel opens.
+    mesh.announceWant(320);
+    expect(p1.channels[0]!.sent).toEqual([]);
+    p1.channels[0]!.readyState = 'open';
+    (p1.channels[0] as unknown as { onopen: () => void }).onopen();
+    expect(p1.channels[0]!.sent).toEqual(['{"type":"want","width":320}']);
+    mesh.announceWant(320); // the same again: nothing said
+    expect(p1.channels[0]!.sent).toHaveLength(1);
+    mesh.announceWant(0);
+    expect(p1.channels[0]!.sent.at(-1)).toBe('{"type":"want","width":0}');
+    // A publisher's view (a peer we did not ask for) tells us it draws a small picture: its sender is scaled to it.
+    const params = { encodings: [{}] as Record<string, unknown>[], degradationPreference: '' };
+    let applied: typeof params | null = null;
+    const sender = { track: { kind: 'video' }, getParameters: () => params, setParameters: async (p: typeof params) => void (applied = p) };
+    const viewer = new (class extends FakePC {
+      override getSenders() {
+        return [sender];
+      }
+    })();
+    const inbound = mesh as unknown as { connect: (id: string, inbound: boolean) => void };
+    vi.stubGlobal('RTCPeerConnection', class { constructor() { return viewer; } });
+    inbound.connect('show-view', true);
+    viewer.channels[0]!.onmessage!({ data: '{"type":"want","width":160}' });
+    expect(applied).not.toBeNull();
+    expect((applied!.encodings[0] as { scaleResolutionDownBy: number }).scaleResolutionDownBy).toBe(PACK_WIDTH / 160); // the packed frame scaled to what they draw
+    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBeLessThanOrEqual(1_200_000);
+    viewer.channels[0]!.onmessage!({ data: '{"type":"want","width":0}' }); // the whole frame: the show view
+    expect((applied!.encodings[0] as { scaleResolutionDownBy: number }).scaleResolutionDownBy).toBe(1);
+    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBe(3_000_000);
   });
 });

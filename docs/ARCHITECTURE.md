@@ -501,14 +501,39 @@ else, so singers still never hear each other (Solo foldback) and latency never p
 Every vocal sender is capped at 96 kbps (`RTCRtpSender.setParameters`, re-applied when the link
 connects and when the track is attached) — music quality rather than WebRTC's ~32 kbps phone-call
 default. Video: a link to another singer shares the uplink (2.4 Mbps over the singer links, 300 kbps
-to 1.2 Mbps each, 15 fps, scaled down only past six singers); a link to a *publisher* — a peer the
-singer did not ask for, i.e. a show view or Preview tile — is the broadcast's source and gets its
-own 2 Mbps at 24 fps, resolution kept. The cut-out itself is 720×960 on computers (480×640 on
-phones; the packed frame twice as wide), so a singer standing full-height in a 720p show is drawn
-near 1:1; the general selfie model (256×256) replaces the landscape one (256×144) on computers and
-the mask is drawn with a 1.2 px blur — a soft edge instead of a staircase. The show layout is the
-chaired row above: one or two singers stand big in the middle, ten make one even row. The show view plays the vocals (hidden audio elements) and the backing track a quarter
-second behind the shared clock to meet them; Preview tiles are muted unless asked to listen.
+to 1.2 Mbps each, 15 fps, the frame scaled down to 320 wide — half as much again past six singers);
+a link to a *publisher* — a peer the singer did not ask for, i.e. a show view — is the broadcast's
+source and gets the whole packed frame at its own 3 Mbps, 24 fps (a strained sender gives up
+resolution and frame rate by turns there, never a frozen picture); a Preview tile says over the
+mesh's channel that it draws a small picture (`announceWant`, `{type:'want'}`) and its link is
+scaled down like a singer's.
+The cut-out itself is 720×960 on computers (480×640 on phones), so a singer standing full-height in
+a 720p show is drawn near 1:1; the general selfie model (256×256) replaces the landscape one
+(256×144) on computers and the mask is drawn with a 1.2 px blur — a soft edge instead of a
+staircase. The show layout is the chaired row above: one or two singers stand big in the middle,
+ten make one even row. The show view plays the vocals (hidden audio elements) and the backing track
+a quarter second behind the shared clock to meet them; Preview tiles are muted unless asked to listen.
+
+**Picture quality** (`video/enhance.ts`). At the source: the packed frame goes out at 640×852 on
+computers (near 1:1 with the 540×720 a 720p camera gives a 3:4 crop) and 480×640 on phones (a weak
+device, three cores or fewer, keeps to 320×426) — it was 320×426 everywhere, half the detail gone
+before it was sent and blown up two to three times on a show stage;
+each singer link scales it back down on the way (`scaleResolutionDownBy`), so the mesh costs what it
+did, and the publisher's link gets it whole. The exposure is lifted at the source too: the face's
+brightness — the brighter quarter of the pixels in the head box the framing measures (of the whole
+person when the model has no head), weighted by the mask so the room behind them counts for
+nothing — is read off a 48×64 sample of the cut-out every half second; a gain towards a lit face
+(target 0.5, never past ×1.5) glides to it frame by frame, and the picture is drawn through
+`brightness() contrast(1.05) saturate(1.08)` once, in the feed — so the singer's own stage, every
+other singer's, the show, the broadcast, the saved show and the cut-out recordings all get the same
+picture (the stage strip says "lifted +N%"); a dark shirt in a lit room asks for nothing. At the receiver (`alphaPack.ts`): a frame that still arrives small — an older build,
+a link the browser scaled down, a Studio cut-out recording at 320×426 — is unpacked at twice its
+size through a Catmull-Rom bicubic upscaler, and every frame gets an unsharp mask on its luminance
+(one texel wide, half strength, a hair of threshold so flat skin stays flat) — on a real GPU only: a
+software renderer (SwiftShader, llvmpipe — CI's headless browser, a machine without acceleration)
+gets the plain unpack, every texel it fetches costing a CPU the stage needs elsewhere; the
+compositor draws the result with the canvas's high-quality resampling. The broadcast encodes at
+4.5 Mbps (720p30 H.264).
 
 **The saved performance (`video/showRecorder.ts`).** Every singer's device records the show while
 a song runs: its own 1280×720 canvas (the meet's background drawn as the show view shows it, then

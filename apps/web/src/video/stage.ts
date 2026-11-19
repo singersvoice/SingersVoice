@@ -281,6 +281,7 @@ export class StageCompositor {
     const { cssW: W, cssH: H, dpr } = this;
     if (!W || !H) return;
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (c.imageSmoothingQuality !== 'high') c.imageSmoothingQuality = 'high'; // a cut-out scaled to its slot keeps its detail (a resize resets this)
     c.clearRect(0, 0, W, H);
     this.live = false;
     if (!this.performers.length) {

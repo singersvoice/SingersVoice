@@ -1,4 +1,5 @@
 import { CanvasTrack } from './canvasTrack.ts';
+import { SHARPEN, upscaleFor } from './enhance.ts';
 
 /**
  * Performer video travels between devices as an "alpha-packed" frame: the left half is the
@@ -60,13 +61,52 @@ export class AlphaPacker {
 }
 
 const VS = `attribute vec2 p; varying vec2 v; void main(){ v = vec2((p.x+1.0)*0.5, (1.0-p.y)*0.5); gl_Position = vec4(p,0.0,1.0); }`;
-// The mask travels as the grey right half of a lossy video: erode it by one texel (3×3 minimum) so
-// codec ringing and the sliver of background the segmenter leaves around a person never show as a
-// bright fringe once the cut-out stands huge on a show stage, then firm up the edge.
-const FS = `precision mediump float; uniform sampler2D t; uniform vec2 u; varying vec2 v;
+// The person's half, sampled bicubically (Catmull-Rom, nine bilinear taps) when the frame is drawn larger than it
+// arrived, bilinearly otherwise; then an unsharp mask on the luminance (the detail the codec softened, one texel
+// wide, back by `k`); the taps keep to the left half (never the mask's grey). The mask travels as the grey right
+// half of a lossy video: erode it by one texel (3×3 minimum) so codec ringing and the sliver of background the
+// segmenter leaves around a person never show as a bright fringe once the cut-out stands huge on a show stage,
+// then firm up the edge.
+const FS = `#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D t; uniform vec2 u; uniform vec2 sz; uniform float k; uniform float bic; varying vec2 v;
 float m(vec2 o){ return texture2D(t, vec2(0.5 + v.x*0.5, v.y) + o).r; }
+vec2 lh(vec2 c){ return vec2(clamp(c.x, u.x * 0.5, 0.5 - u.x * 1.5), clamp(c.y, u.y * 0.5, 1.0 - u.y * 0.5)); }
+vec3 px(vec2 c){ return texture2D(t, lh(c)).rgb; }
+vec3 cubic(vec2 c){
+  vec2 s = c * sz;
+  vec2 t1 = floor(s - 0.5) + 0.5;
+  vec2 f = s - t1;
+  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+  vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+  vec2 w3 = f * f * (-0.5 + 0.5 * f);
+  vec2 w12 = w1 + w2;
+  vec2 p0 = (t1 - 1.0) * u;
+  vec2 p3 = (t1 + 2.0) * u;
+  vec2 p12 = (t1 + w2 / w12) * u;
+  vec3 r = vec3(0.0);
+  r += px(vec2(p0.x, p0.y)) * w0.x * w0.y;
+  r += px(vec2(p12.x, p0.y)) * w12.x * w0.y;
+  r += px(vec2(p3.x, p0.y)) * w3.x * w0.y;
+  r += px(vec2(p0.x, p12.y)) * w0.x * w12.y;
+  r += px(vec2(p12.x, p12.y)) * w12.x * w12.y;
+  r += px(vec2(p3.x, p12.y)) * w3.x * w12.y;
+  r += px(vec2(p0.x, p3.y)) * w0.x * w3.y;
+  r += px(vec2(p12.x, p3.y)) * w12.x * w3.y;
+  r += px(vec2(p3.x, p3.y)) * w3.x * w3.y;
+  return r;
+}
+float lum(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
 void main(){
-  vec3 rgb = texture2D(t, vec2(v.x*0.5, v.y)).rgb;
+  vec2 pc = vec2(v.x*0.5, v.y);
+  vec3 rgb = bic > 0.5 ? cubic(pc) : px(pc);
+  float d = lum(px(pc)) - 0.25 * (lum(px(pc + vec2(-u.x, 0.0))) + lum(px(pc + vec2(u.x, 0.0))) + lum(px(pc + vec2(0.0, -u.y))) + lum(px(pc + vec2(0.0, u.y))));
+  d = sign(d) * max(abs(d) - 0.01, 0.0);
+  rgb = clamp(rgb + k * d, 0.0, 1.0);
   float a = m(vec2(0.0));
   a = min(a, min(min(m(vec2(-u.x, 0.0)), m(vec2(u.x, 0.0))), min(m(vec2(0.0, -u.y)), m(vec2(0.0, u.y)))));
   a = min(a, min(min(m(vec2(-u.x, -u.y)), m(vec2(u.x, -u.y))), min(m(vec2(-u.x, u.y)), m(vec2(u.x, u.y)))));
@@ -74,8 +114,21 @@ void main(){
   gl_FragColor = vec4(rgb, a);
 }`;
 
+/** A WebGL context drawn by software (SwiftShader, llvmpipe, Mesa's software paths): every texel fetched costs a CPU the stage needs elsewhere. */
+export function softwareRenderer(gl: WebGLRenderingContext): boolean {
+  try {
+    const info = gl.getExtension('WEBGL_debug_renderer_info') as { UNMASKED_RENDERER_WEBGL: number } | null;
+    const renderer = String(info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+    return /swiftshader|llvmpipe|softpipe|software/i.test(renderer);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Turns a packed <video> back into an RGBA canvas (person over transparent). WebGL1 is enough and
+ * Turns a packed <video> back into an RGBA canvas (person over transparent) — at `upscale` times
+ * the frame's own size (enhance.ts: a small frame drawn larger than it arrived is upscaled
+ * bicubically here rather than bilinearly by whoever draws it), sharpened. WebGL1 is enough and
  * universally available; without it the left half is drawn through an oval so the performer is
  * still never a rectangle.
  */
@@ -85,15 +138,23 @@ export class AlphaUnpacker {
   private tex: WebGLTexture | null = null;
   private fallback: CanvasRenderingContext2D | null = null;
 
+  /** The size the frame is drawn at: `upscale` times its own — 1 where the GPU is software (the enhancement is not for a renderer that would pay for it in frames). */
+  readonly upscale: number;
+  /** Whether the sharpening and the bicubic upscale are on (off on a software renderer). */
+  readonly enhanced: boolean;
+
   constructor(
     readonly width = 320,
     readonly height = 426,
+    upscale = 1,
   ) {
     this.canvas = document.createElement('canvas');
-    this.canvas.width = width;
-    this.canvas.height = height;
     // The frame is read by whoever draws it (the stage, a recorder), in their own loops: keep it until the next draw.
     this.gl = this.canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true, antialias: false, preserveDrawingBuffer: true }) as WebGLRenderingContext | null;
+    this.enhanced = this.gl !== null && !softwareRenderer(this.gl);
+    this.upscale = this.enhanced ? upscale : 1;
+    this.canvas.width = width * this.upscale;
+    this.canvas.height = height * this.upscale;
     if (this.gl) this.setup(this.gl);
     else this.fallback = this.canvas.getContext('2d')!;
   }
@@ -124,7 +185,10 @@ export class AlphaUnpacker {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.uniform1i(gl.getUniformLocation(prog, 't'), 0);
     gl.uniform2f(gl.getUniformLocation(prog, 'u'), 1 / (this.width * 2), 1 / this.height);
-    gl.viewport(0, 0, this.width, this.height);
+    gl.uniform2f(gl.getUniformLocation(prog, 'sz'), this.width * 2, this.height);
+    gl.uniform1f(gl.getUniformLocation(prog, 'k'), this.enhanced ? SHARPEN : 0);
+    gl.uniform1f(gl.getUniformLocation(prog, 'bic'), this.upscale > 1 ? 1 : 0);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
   /** Unpack the current frame of `video` (packed 2W×H) into `canvas`. */
@@ -144,7 +208,8 @@ export class AlphaUnpacker {
       return;
     }
     const c = this.fallback!;
-    const { width, height } = this;
+    const width = this.canvas.width;
+    const height = this.canvas.height;
     c.save();
     c.clearRect(0, 0, width, height);
     const g = c.createRadialGradient(width / 2, height * 0.42, Math.min(width, height) * 0.18, width / 2, height * 0.5, Math.min(width, height) * 0.62);
@@ -185,7 +250,14 @@ export class UnpackedFrame {
   current(): HTMLCanvasElement | null {
     const v = this.video;
     if (v.readyState < 2 || !v.videoWidth) return this.unpacker?.canvas ?? null;
-    if (!this.unpacker) this.unpacker = new AlphaUnpacker(Math.round(v.videoWidth / 2), v.videoHeight);
+    const w = Math.round(v.videoWidth / 2);
+    // The frame's size can change mid-stream (a link the browser scaled down, or back up): the unpacker follows it.
+    if (this.unpacker && (this.unpacker.width !== w || this.unpacker.height !== v.videoHeight)) {
+      this.unpacker.dispose();
+      this.unpacker = null;
+      this.lastTime = -1;
+    }
+    if (!this.unpacker) this.unpacker = new AlphaUnpacker(w, v.videoHeight, upscaleFor(w));
     if (v.currentTime !== this.lastTime) {
       this.lastTime = v.currentTime;
       this.unpacker.draw(v);

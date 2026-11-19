@@ -17,6 +17,7 @@
  */
 import type { IceServer, MeetSignal } from '@singersvoice/protocol';
 import { api } from '../lib/api.ts';
+import { PACK_WIDTH, singerLinkScale } from './enhance.ts';
 import { fingerprintOf } from './sdp.ts';
 
 export interface SignalChannel {
@@ -70,10 +71,12 @@ interface Peer {
   jb: { delay: number; count: number } | null;
   /** The hold applied to their voice and picture here (align.ts), ms. */
   playoutMs: number;
+  /** How wide a picture they draw of us, as they announced it (0: the whole frame — the default, and every singer's). */
+  wantWidth: number;
 }
 
-/** What travels over the mesh's message channel: "something changed, fetch the state", and a singer's round trip (align.ts). */
-export type MeshMessage = { type: 'changed' } | { type: 'rt'; ms: number };
+/** What travels over the mesh's message channel: "something changed, fetch the state", a singer's round trip (align.ts), and how wide a picture a device draws of us (enhance.ts). */
+export type MeshMessage = { type: 'changed' } | { type: 'rt'; ms: number } | { type: 'want'; width: number };
 /** Encode, decode and the capture pipeline, which the link's own statistics do not see (ms). */
 const CODEC_MS = 30;
 /** How often the links' latency is read (ms). */
@@ -85,8 +88,8 @@ const POLL_CONNECTING_MS = 900;
 const POLL_STEADY_MS = 2500;
 /** A singer's whole video uplink, shared by their links to the other singers (a publisher's link gets its own, generous cap). */
 const TOTAL_UPLINK_BPS = 2_400_000;
-/** A publisher's link carries what goes out to the world: up to this, always. */
-const PUBLISHER_BPS = 2_000_000;
+/** A publisher's link carries what goes out to the world — the whole packed frame (enhance.ts): up to this, always. */
+const PUBLISHER_BPS = 3_000_000;
 /** A vocal over the mesh: Opus at 96 kbps (the browser's phone-call default is ~32 kbps and thins a singing voice). */
 const VOCAL_BPS = 96_000;
 /** An offer unanswered this long (a lost signal, a peer that reloaded) is made again from a fresh connection. */
@@ -111,6 +114,8 @@ export class PerformerMesh {
   private localAudio: MediaStreamTrack | null = null;
   /** My round trip, announced to every peer when their channel opens (and again when it changes). */
   private roundTripMs: number | null = null;
+  /** How wide a picture this device draws of the singers it receives (0: the whole frame), announced to every peer the same way — a Preview tile asks for a small one (enhance.ts). */
+  private wantWidth: number | null = null;
   private latencyTimer: ReturnType<typeof setInterval> | undefined;
   /** A publisher's show view only receives (never sends a camera). */
   private readonly receiveOnly: boolean;
@@ -152,6 +157,14 @@ export class PerformerMesh {
     if (this.roundTripMs === v) return;
     this.roundTripMs = v;
     this.say({ type: 'rt', ms: v });
+  }
+
+  /** Tell every singer how wide a picture this device draws of them (0: the whole frame): their link scales the frame to it (`applyCaps`). */
+  announceWant(width: number): void {
+    const v = Math.max(0, Math.round(width));
+    if (this.wantWidth === v) return;
+    this.wantWidth = v;
+    this.say({ type: 'want', width: v });
   }
 
   /** Every singer linked from the stage (never a publisher's view, which sends nothing): how far behind the shared clock their voice reaches this device before the hold applied here (null until known). */
@@ -339,7 +352,7 @@ export class PerformerMesh {
 
   private connect(id: string, inbound: boolean): void {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers as RTCIceServer[], bundlePolicy: 'max-bundle' });
-    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0, dc: null, token: Math.random().toString(36).slice(2, 10), remoteToken: null, rtMs: null, netMs: null, jb: null, playoutMs: 0 };
+    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0, dc: null, token: Math.random().toString(36).slice(2, 10), remoteToken: null, rtMs: null, netMs: null, jb: null, playoutMs: 0, wantWidth: 0 };
     this.peers.set(id, peer);
     // The message channel, made before the first offer on both sides with the same id: part of the link from the start, never a renegotiation.
     try {
@@ -349,14 +362,18 @@ export class PerformerMesh {
           const m = JSON.parse(String(e.data)) as MeshMessage;
           if (m && m.type === 'changed') this.onMessage?.(id, m);
           else if (m && m.type === 'rt' && Number.isFinite(Number(m.ms))) peer.rtMs = Math.max(0, Math.round(Number(m.ms)));
+          else if (m && m.type === 'want' && Number.isFinite(Number(m.width))) {
+            peer.wantWidth = Math.max(0, Math.min(4096, Math.round(Number(m.width))));
+            this.applyCaps(peer); // the link scales to what they draw
+          }
         } catch {
           /* not ours */
         }
       };
       dc.onopen = () => {
-        if (this.roundTripMs === null) return;
         try {
-          dc.send(JSON.stringify({ type: 'rt', ms: this.roundTripMs } satisfies MeshMessage));
+          if (this.roundTripMs !== null) dc.send(JSON.stringify({ type: 'rt', ms: this.roundTripMs } satisfies MeshMessage));
+          if (this.wantWidth !== null) dc.send(JSON.stringify({ type: 'want', width: this.wantWidth } satisfies MeshMessage));
         } catch {
           /* closing */
         }
@@ -440,10 +457,12 @@ export class PerformerMesh {
   }
 
   private applyCaps(peer: Peer): void {
-    // Links to other singers share the uplink; a link to a publisher (someone we did not ask for — the show view) is the broadcast's source and gets the full picture.
+    // Links to other singers share the uplink; a link to a publisher (someone we did not ask for — the show view) is the broadcast's source and gets the full
+    // picture — unless it said it draws a small one (a Preview tile): then the frame is scaled to that, at a singer link's bitrate.
     const singers = Math.max(1, [...this.peers.keys()].filter((id) => this.wanted.has(id)).length);
     const publisher = !this.wanted.has(peer.id);
-    const maxBitrate = publisher ? PUBLISHER_BPS : Math.max(300_000, Math.min(1_200_000, Math.round(TOTAL_UPLINK_BPS / singers)));
+    const small = publisher && peer.wantWidth > 0 && peer.wantWidth < PACK_WIDTH;
+    const maxBitrate = publisher && !small ? PUBLISHER_BPS : Math.max(300_000, Math.min(1_200_000, publisher ? 1_200_000 : Math.round(TOTAL_UPLINK_BPS / singers)));
     for (const s of peer.pc.getSenders()) {
       if (!s.track) continue;
       const params = s.getParameters();
@@ -452,10 +471,12 @@ export class PerformerMesh {
         // The vocal goes out at music quality: a fixed, generous Opus bitrate, whatever the mesh size.
         params.encodings[0]!.maxBitrate = VOCAL_BPS;
       } else {
+        // The packed frame goes out at its full size (enhance.ts): a publisher's link gets the whole of it, a singer's is scaled down to the size their stage draws.
         params.encodings[0]!.maxBitrate = maxBitrate;
         params.encodings[0]!.maxFramerate = publisher ? 24 : 15;
-        params.encodings[0]!.scaleResolutionDownBy = !publisher && singers > 6 ? 1.5 : 1;
-        params.degradationPreference = publisher ? 'maintain-resolution' : 'maintain-framerate';
+        params.encodings[0]!.scaleResolutionDownBy = publisher ? (small ? Math.max(1, PACK_WIDTH / peer.wantWidth) : 1) : singerLinkScale(singers);
+        // A publisher's link under a strained sender gives up resolution and frame rate by turns ('balanced'): a broadcast with a softer picture for a moment, never one that freezes.
+        params.degradationPreference = publisher ? 'balanced' : 'maintain-framerate';
       }
       void s.setParameters(params).catch(() => undefined);
     }

@@ -7,14 +7,18 @@
  * stage session.
  */
 import { AlphaPacker } from './alphaPack.ts';
+import { EXPOSURE_EVERY_MS, Exposure, isComputer, PACK_HEIGHT, PACK_WIDTH, personLuma } from './enhance.ts';
 import { cropFactor, distanceNote, measureMask, plausibleHead, Seat, visiblePart, type PersonMeasure, type SeatState } from './framing.ts';
 import { PersonSegmenter, type SegmenterMode } from './segmenter.ts';
 import type { PerformerSource } from './stage.ts';
 
 /** The cut-out's own size: computers work at 720×960 so a singer standing full-height in a 720p show is drawn near 1:1; phones at 480×640. */
-const COMPUTER = typeof navigator !== 'undefined' && (navigator.hardwareConcurrency ?? 2) >= 4 && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const COMPUTER = isComputer();
 const W = COMPUTER ? 720 : 480;
 const H = COMPUTER ? 960 : 640;
+/** The exposure probe: the person's brightness is read off a sample this size (enhance.ts). */
+const LUMA_W = 48;
+const LUMA_H = 64;
 /** The person probe: the mask at this size, measured on every new cut-out but at most this often (the head of a singer sitting back is still a dozen pixels wide). */
 const PROBE_W = 120;
 const PROBE_H = 160;
@@ -69,6 +73,7 @@ export class LocalFeed {
   private useModel = true;
   private timer: ReturnType<typeof setInterval> | undefined;
   private lastSeg = -1;
+  private lastGain = 1;
   mode: SegmenterMode = 'off';
   onMode: ((m: SegmenterMode) => void) | null = null;
   /**
@@ -107,6 +112,16 @@ export class LocalFeed {
   private lastProbedSeg = -1;
   /** Increments on every framed frame (compositor redraws only when it changed). */
   frame = 0;
+  /** The lift of my picture (enhance.ts): the person's brightness measured now and then, the gain glided to every frame. */
+  readonly exposure = new Exposure();
+  /** The width of the packed frame this device sends (enhance.ts) — for the stage strip and the e2e. */
+  readonly packWidth = PACK_WIDTH;
+  private lumaProbe: CanvasRenderingContext2D | null = null;
+  private lastLuma = 0;
+  /** The head as last measured by the model (fractions of the cut-out), the lift's region. */
+  private lastHead: PersonMeasure['head'] | null = null;
+  /** Whether this browser's canvas can apply a filter while drawing (Safari's cannot: the picture goes out as the camera gives it). */
+  private readonly canFilter: boolean;
 
   constructor() {
     const v = document.createElement('video');
@@ -126,6 +141,7 @@ export class LocalFeed {
     this.maskCtx = this.maskCanvas.getContext('2d', { alpha: false })!;
     this.maskCtx.fillStyle = '#000';
     this.maskCtx.fillRect(0, 0, W, H);
+    this.canFilter = typeof (this.ctx as { filter?: unknown }).filter === 'string';
   }
 
   /** Point the feed at a camera stream (or null to go dark). */
@@ -287,7 +303,8 @@ export class LocalFeed {
     if (found === undefined) return;
     this.noteStillness(found, now);
     const trusted = this.segmenter.mode === 'model' && this.segmenter.maskMode !== 'soft-center';
-    this.seat.sample(trusted && found && plausibleHead(found) ? found.head : null, now);
+    this.lastHead = trusted && found && plausibleHead(found) ? found.head : null;
+    this.seat.sample(this.lastHead, now);
     const t = this.seat.target;
     const note = t ? distanceNote(cropFactor(t, H)) : null;
     if (note !== this.note) {
@@ -301,19 +318,46 @@ export class LocalFeed {
     return this.seat.state(performance.now());
   }
 
-  /** What the camera is doing, in words for the stage strip: its frame rate (or that the browser tells no frames), the cut-out, and how long the picture has stood still. */
+  /** What the camera is doing, in words for the stage strip: its frame rate (or that the browser tells no frames), the cut-out, the lift of the picture, and how long it has stood still. */
   get cameraLine(): string {
     const cut = this.segmenter.mode === 'model' ? 'cut-out model' : this.segmenter.mode === 'oval' ? 'cut-out silhouette' : this.segmenter.mode === 'loading' ? 'cut-out loading' : 'cut-out off';
     const frames = this.framesSeen > 0 ? `camera ${this.cameraFps} fps` : 'camera (frames not told)';
+    const lift = this.exposure.lift >= 3 ? ` · lifted +${this.exposure.lift}%` : '';
     const still = this.stillSince ? ` · picture still ${Math.round((performance.now() - this.stillSince) / 1000)} s` : '';
-    return `${frames} · ${cut}${still}`;
+    return `${frames} · ${cut}${lift}${still}`;
+  }
+
+  /**
+   * The person's brightness — the face's, where the model found the head — read off a small sample of the cut-out every
+   * EXPOSURE_EVERY_MS (weighted by its mask, so the room behind them counts for nothing): the exposure's next target.
+   */
+  private measureLuma(now: number): void {
+    if (!this.canFilter || now - this.lastLuma < EXPOSURE_EVERY_MS) return;
+    this.lastLuma = now;
+    if (!this.lumaProbe) {
+      const lc = document.createElement('canvas');
+      lc.width = LUMA_W;
+      lc.height = LUMA_H;
+      this.lumaProbe = lc.getContext('2d', { willReadFrequently: true });
+      if (!this.lumaProbe) return;
+    }
+    try {
+      this.lumaProbe.clearRect(0, 0, LUMA_W, LUMA_H);
+      this.lumaProbe.drawImage(this.segmenter.canvas, 0, 0, LUMA_W, LUMA_H);
+      this.exposure.sample(personLuma(this.lumaProbe.getImageData(0, 0, LUMA_W, LUMA_H).data, LUMA_W, LUMA_H, this.lastHead));
+    } catch {
+      /* a lost context: the lift stays where it is */
+    }
   }
 
   private tick(): void {
     const now = performance.now();
     this.measure(now);
-    if (this.segmenter.frame === this.lastSeg && this.seat.state(now) !== 'gliding') return; // nothing new to draw
+    this.measureLuma(now);
+    const gain = this.exposure.step();
+    if (this.segmenter.frame === this.lastSeg && this.seat.state(now) !== 'gliding' && gain === this.lastGain) return; // nothing new to draw
     this.lastSeg = this.segmenter.frame;
+    this.lastGain = gain;
     const r = visiblePart(this.seat.crop(now), W, H); // the crop may reach past the camera picture: that part stays transparent
     const c = this.ctx;
     c.clearRect(0, 0, W, H);
@@ -321,7 +365,10 @@ export class LocalFeed {
     m.fillStyle = '#000';
     m.fillRect(0, 0, W, H);
     if (r) {
+      // The picture goes out lifted and polished (enhance.ts) — the one place, so every stage, the show and the recordings get the same picture I see.
+      if (this.canFilter) c.filter = this.exposure.filter();
       c.drawImage(this.segmenter.canvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+      if (this.canFilter) c.filter = 'none';
       m.drawImage(this.segmenter.maskCanvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
       // A camera that sees little of the singer (close up) ends above the stage's riser: its bottom edge is
       // feathered, so the figure fades out instead of ending in a straight cut across the chest.
@@ -339,9 +386,9 @@ export class LocalFeed {
     return this.stream ? { kind: 'person', canvas: this.canvas, version: () => this.frame } : { kind: 'none' };
   }
 
-  /** The alpha-packed outgoing stream (created on first use). */
+  /** The alpha-packed outgoing stream (created on first use): the frame at its full size (enhance.ts) — each link scales it as it needs. */
   packedStream(): MediaStream {
-    if (!this.packer) this.packer = new AlphaPacker(320, 426);
+    if (!this.packer) this.packer = new AlphaPacker(PACK_WIDTH, PACK_HEIGHT);
     return this.packer.start(this.canvas, this.maskCanvas, 15);
   }
 

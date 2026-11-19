@@ -221,8 +221,8 @@ const stageInfo = (page) =>
     const w = c.width;
     for (let i = 0, px = 0; i + 3 < d.length; i += 4, px++) {
       if (d[i + 3] > 40) { if (px % w < w / 2) left++; else right++; }
-      // the fake person's skin-tone head (fake-person.mjs: 8d 55 24): a real picture of them, not a placeholder; the head is above the riser whatever the framing
-      if (d[i + 3] > 200 && d[i] > 110 && d[i] < 175 && d[i + 1] > 60 && d[i + 1] < 115 && d[i + 2] > 15 && d[i + 2] < 70) { if (px % w < w / 2) headLeft++; else headRight++; }
+      // the fake person's skin-tone head (fake-person.mjs: 8d 55 24, lifted by up to half again at the source — enhance.ts): a real picture of them, not a placeholder; the head is above the riser whatever the framing
+      if (d[i + 3] > 200 && d[i] > 110 && d[i] < 240 && d[i + 1] > 60 && d[i + 1] < 150 && d[i + 2] > 10 && d[i + 2] < 85 && d[i] > d[i + 1] + 30 && d[i + 1] > d[i + 2] + 20) { if (px % w < w / 2) headLeft++; else headRight++; }
     }
     return { performers: bar.dataset.performers, blend: bar.dataset.blend, left, right, headLeft, headRight, w, h: c.height, text: bar.innerText.replace(/\s+/g, ' ') };
   });

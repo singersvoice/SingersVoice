@@ -11,6 +11,7 @@ import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { serverNow } from '../../lib/api.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
+import { SINGER_LINK_WIDTH } from '../../video/enhance.ts';
 import { PerformerMesh, type PeerState } from '../../video/peers.ts';
 import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
 import type { MeetSession } from '../meets/meetSession.ts';
@@ -32,10 +33,17 @@ export interface ShowFeed {
   reconnect: (id: string) => void;
 }
 
-/** Receive every performer's video (the publisher never sends a camera) and lay them out as a show. */
-export function useShowFeed(session: MeetSession, meet: Meet, you: Participant): ShowFeed {
+/**
+ * Receive every performer's video (the publisher never sends a camera) and lay them out as a show. A `small` feed (the
+ * Preview's monitor tile) tells every singer so: their link to it carries the frame scaled down, as a singer's does,
+ * not the whole picture the show view (the broadcast's source) gets.
+ */
+export function useShowFeed(session: MeetSession, meet: Meet, you: Participant, opts: { small?: boolean } = {}): ShowFeed {
   const compositor = useMemo(() => new StageCompositor('show'), []);
   const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, you.participantId, { receiveOnly: true }) : null), [session, you.participantId]);
+  useEffect(() => {
+    mesh?.announceWant(opts.small ? SINGER_LINK_WIDTH : 0);
+  }, [mesh, opts.small]);
   const remoteVideos = useRef(new Map<string, { video: HTMLVideoElement; frame: UnpackedFrame }>());
   const [peerStates, setPeerStates] = useState<Record<string, PeerState>>({});
   const [vocals, setVocals] = useState<Record<string, MediaStream>>({});

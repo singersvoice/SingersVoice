@@ -183,7 +183,7 @@ function LiveMonitor(props: { meet: Meet; onStatus: (s: { onStage: number; linke
 }
 
 function MonitorFeed(props: { session: MeetSession; meet: Meet; you: NonNullable<MeetSession['you']['value']>; onStatus: (s: { onStage: number; linked: number }) => void }) {
-  const feed = useShowFeed(props.session, props.meet, props.you);
+  const feed = useShowFeed(props.session, props.meet, props.you, { small: true });
   const countdown = useCountdown(props.meet);
   const [listen, setListen] = useState(false); // a wall of tiles monitors silently; one can be heard on request
   useEffect(() => props.onStatus({ onStage: feed.onStage, linked: feed.linked }), [feed.onStage, feed.linked]);

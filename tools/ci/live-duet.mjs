@@ -53,6 +53,16 @@ let failed = false;
 const extraPages = {};
 const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) failed = true; };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Polls `fn` every half second until it answers something truthy (that), or `ms` have passed (null). */
+const until = async (fn, ms = 20000) => {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() - t0 > ms) return null;
+    await wait(500);
+  }
+};
 const secs = (t) => Number(t.split(':')[0]) * 60 + Number(t.split(':')[1]);
 const errors = { alice: [], bob: [], carol: [], dave: [] };
 /** The song as PCM at a device's rate (decoded once per rate), for the sound checks. */
@@ -304,6 +314,16 @@ try {
   const tShowLobby = Date.now();
   while (Date.now() - tShowLobby < 45000 && (await remoteFrames(carol.page)) < 2) await wait(500);
   check((await remoteFrames(carol.page)) >= 2, `the show view receives both performers before the song starts (${Math.round((Date.now() - tShowLobby) / 1000)} s)`);
+  // Picture quality (enhance.ts): a publisher's link carries the whole packed frame — twice the width this device sends (a computer 640, a phone 480, a machine
+  // with two cores like CI's the 320 it always sent) —, a singer's link the frame scaled to the old size (640 packed).
+  const widths = (p) => p.evaluate(() => [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0).map((v) => v.videoWidth));
+  const packWidth = await alice.page.evaluate(() => window.__svFeed?.packWidth ?? 0);
+  const showWidths = await until(async () => { const ws = await widths(carol.page); return ws.length >= 2 && ws.every((w) => w === packWidth * 2) ? ws : null; }, 20000);
+  check(packWidth >= 320 && Boolean(showWidths), `the show view gets every singer's picture at its full packed size (${(showWidths ?? (await widths(carol.page))).join('×')} wide; this device sends ${packWidth})`);
+  const singerWidths = await widths(alice.page);
+  check(singerWidths.length >= 1 && singerWidths.every((w) => w <= 660), `a singer's link gets it scaled down to the stage's size (${singerWidths.join('/')} wide packed)`);
+  const lift = await alice.page.evaluate(() => ({ gain: window.__svFeed?.exposure?.gain ?? null, line: window.__svFeed?.cameraLine ?? '' }));
+  check(lift.gain !== null && lift.gain > 1.03 && lift.gain <= 1.5 && /lifted \+\d+%/.test(lift.line), `a dim picture is lifted at the source (gain ${lift.gain?.toFixed(2)}: "${lift.line}")`);
   check(/Up next: CI Sample Song/.test(await carol.page.locator('.show-note').innerText().catch(() => '')), 'the show picture names the song that is up next');
   await carol.page.screenshot({ path: `${out}/show-carol-lobby.png` });
 
