@@ -1,8 +1,9 @@
 /**
- * The background saver: takes save themselves. A finished take (vocal + the show video) is handed
- * here and the singer carries on — the next song, another page, leaving the room, the meet ending:
- * none of it touches the save. Jobs run one at a time (one upload at a time keeps the uplink for
- * the stage), each stage of a job is remembered so a retry never uploads twice, a failed job is
+ * The background saver: things save themselves. A finished Studio take (vocal + the show video),
+ * or the film of a meet once it is in Drive (shared and registered with the meet), is handed here
+ * and the singer carries on — the next song, another page, leaving the room, the meet ending: none
+ * of it touches the save. Jobs run one at a time (one upload at a time keeps the uplink for the
+ * stage), each stage of a job is remembered so a retry never uploads twice, a failed job is
  * retried by itself a few times and then waits for a tap on Retry. The room and the Performances
  * page show what is saving, saved, or stuck.
  */

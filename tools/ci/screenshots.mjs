@@ -161,16 +161,17 @@ for (const m of matrix) {
       await shot('22-meet-countdown');
       await wait(10000);
       await shot('23-meet-live');
-      // "Stop song" ends the song for everyone — the host's or any singer's (a singer also has "Leave": their own take only).
+      // "Stop song" ends the song for everyone — the host's or any singer's (a singer also has "Leave": they step out alone).
       await page.getByRole('button', { name: /Stop the song for everyone/ }).click();
-      // Straight back to the lobby stage; the take saves itself in the background as the meet's performance.
+      // Straight back to the lobby stage; nothing saves per song — the film of the meet runs on.
       await page.getByRole('button', { name: 'End meet' }).waitFor({ timeout: 30000 });
-      await page.locator('[data-save="done"]').first().waitFor({ timeout: 60000 });
       await wait(600);
-      await shot('24-meet-saved');
+      await shot('24-meet-between-songs');
       page.once('dialog', (d) => d.accept());
       await page.getByRole('button', { name: 'End meet' }).click();
       await page.getByText(/Meet ended/).waitFor({ timeout: 30000 });
+      // The film of the meet saves itself at End meet, as the meet's performance.
+      await page.locator('[data-save="done"]').first().waitFor({ timeout: 60000 }).catch(() => undefined);
       await wait(800);
       await shot('25-meet-ended');
       const meetId = page.url().split('/meet/')[1];

@@ -4,7 +4,7 @@
  * status reads as "receiving" / "not receiving", and ending a broadcast that is over already is no error.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { _setYoutubeFetch, endBroadcast, ensureHlsStream, startBroadcast, youtubeReason, youtubeStatus, youtubeWord, YoutubeError } from '../src/lib/youtube.ts';
+import { _setYoutubeFetch, endBroadcast, ensureHlsStream, keyMatchesHint, setBroadcastPrivacy, startBroadcast, youtubeReason, youtubeStatus, youtubeWord, YoutubeError } from '../src/lib/youtube.ts';
 import type { GoogleToken } from '../src/lib/google.ts';
 
 const token: GoogleToken = { accessToken: 'tok', expiresAt: Date.now() + 3600_000, scope: 'https://www.googleapis.com/auth/youtube' };
@@ -46,6 +46,23 @@ describe('YouTube run by the app', () => {
     expect(calls2.map((c) => c.method)).toEqual(['GET']);
   });
 
+  it('a channel with several HLS streams: the one whose key the service keeps comes first, then the app\'s own — never a Studio stream by chance', async () => {
+    // A stream made in YouTube Studio lists first; the app's and the saved key's come after it.
+    const items = [
+      { id: 'studio', snippet: { title: 'Default stream' }, cdn: { ingestionType: 'hls', ingestionInfo: { streamName: 'stud-io00-0000-key1' } } },
+      { id: 'app', snippet: { title: 'SingersVoice' }, cdn: { ingestionType: 'hls', ingestionInfo: { streamName: 'appp-made-0000-key2' } } },
+      { id: 'saved', snippet: { title: 'Other' }, cdn: { ingestionType: 'hls', ingestionInfo: { streamName: 'save-dkey-0000-key3' } } },
+    ];
+    fakeApi({ 'GET liveStreams': () => ({ json: { items } }) });
+    expect((await ensureHlsStream(token, '…key3')).streamId).toBe('saved'); // the key the service sends to (the hint as the service hands it out)
+    expect((await ensureHlsStream(token, 'key3')).streamId).toBe('saved');
+    expect((await ensureHlsStream(token, '…zzzz')).streamId).toBe('app'); // a key hint nothing matches: the app's own stream
+    expect(keyMatchesHint('save-dkey-0000-key3', '…key3') && !keyMatchesHint('save-dkey-0000-key3', '…key1') && !keyMatchesHint('x', '…')).toBe(true);
+    expect((await ensureHlsStream(token)).streamId).toBe('app');
+    fakeApi({ 'GET liveStreams': () => ({ json: { items: [items[0]] } }) });
+    expect((await ensureHlsStream(token)).streamId).toBe('studio'); // the only HLS stream there is
+  });
+
   it('makes a broadcast for the show, bound to the stream, going live by itself — and its public link', async () => {
     const calls = fakeApi({
       'POST liveBroadcasts': () => ({ json: { id: 'FTUbrBKUSvY', status: { lifeCycleStatus: 'ready' } } }),
@@ -58,6 +75,27 @@ describe('YouTube run by the app', () => {
     expect(made.status.privacyStatus).toBe('public');
     expect(made.contentDetails.enableAutoStart && made.contentDetails.enableAutoStop).toBe(true);
     expect(calls[1]!.params).toMatchObject({ id: 'FTUbrBKUSvY', streamId: 'hls1' });
+  });
+
+  it('a broadcast YouTube made private against the ask is put right at once; the visibility can be changed later too', async () => {
+    const calls = fakeApi({
+      'POST liveBroadcasts': () => ({ json: { id: 'b1', status: { lifeCycleStatus: 'ready', privacyStatus: 'private' } } }),
+      'POST liveBroadcasts/bind': () => ({ json: { id: 'b1' } }),
+      'PUT liveBroadcasts': (body) => ({ json: body }),
+    });
+    await startBroadcast(token, { title: 't', streamId: 'hls1', privacy: 'unlisted' });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST liveBroadcasts', 'POST liveBroadcasts/bind', 'PUT liveBroadcasts']);
+    expect(calls[2]!.body).toEqual({ id: 'b1', status: { privacyStatus: 'unlisted' } });
+    const calls2 = fakeApi({ 'PUT liveBroadcasts': (body) => ({ json: body }) });
+    await setBroadcastPrivacy(token, 'b1', 'public');
+    expect(calls2[0]!.body).toEqual({ id: 'b1', status: { privacyStatus: 'public' } });
+    // As asked: nothing to put right.
+    const calls3 = fakeApi({
+      'POST liveBroadcasts': () => ({ json: { id: 'b2', status: { lifeCycleStatus: 'ready', privacyStatus: 'unlisted' } } }),
+      'POST liveBroadcasts/bind': () => ({ json: { id: 'b2' } }),
+    });
+    await startBroadcast(token, { title: 't', streamId: 'hls1', privacy: 'unlisted' });
+    expect(calls3.map((c) => c.method)).toEqual(['POST', 'POST']);
   });
 
   it("YouTube's reasons come back in the publisher's words", async () => {
@@ -81,7 +119,18 @@ describe('YouTube run by the app', () => {
     expect(youtubeWord(st)).toEqual({ text: 'YouTube: live · stream good', ok: true });
     expect(youtubeWord({ broadcast: 'ready', stream: 'inactive', health: 'noData' })).toEqual({ text: 'YouTube: not receiving the stream yet', ok: false });
     expect(youtubeWord({ broadcast: 'ready', stream: 'active', health: 'ok' })).toMatchObject({ ok: true });
-    expect(youtubeWord({ broadcast: 'complete', stream: 'inactive', health: 'noData' })).toMatchObject({ ok: false, text: expect.stringMatching(/over/) });
+    expect(youtubeWord({ broadcast: 'complete', stream: 'inactive', health: 'noData' })).toMatchObject({ ok: false, text: expect.stringMatching(/over — the video stays at the link/) });
+    // The visibility is read with the status and said: unlisted or public — and a PRIVATE video is the first thing said, since nobody can open its link.
+    fakeApi({
+      'GET liveBroadcasts': () => ({ json: { items: [{ id: 'b', status: { lifeCycleStatus: 'live', privacyStatus: 'unlisted' } }] } }),
+      'GET liveStreams': () => ({ json: { items: [{ id: 's', status: { streamStatus: 'active', healthStatus: { status: 'good' } } }] } }),
+    });
+    const seen = await youtubeStatus(token, 'b', 's');
+    expect(seen.privacy).toBe('unlisted');
+    expect(youtubeWord(seen)).toEqual({ text: 'YouTube: live · unlisted (anyone with the link) · stream good', ok: true });
+    expect(youtubeWord({ ...seen, privacy: 'public' }).text).toBe('YouTube: live · public · stream good');
+    expect(youtubeWord({ ...seen, privacy: 'private' })).toEqual({ text: 'YouTube: the video is PRIVATE — nobody can open the link', ok: false, privateVideo: true });
+    expect(youtubeWord({ broadcast: 'complete', stream: 'inactive', health: 'noData', privacy: 'private' }).privateVideo).toBeUndefined(); // over: nothing to put right here
   });
 
   it('ending a broadcast: done; one that is over already, or never went live, is no error', async () => {

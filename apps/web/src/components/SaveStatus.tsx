@@ -1,6 +1,6 @@
 /**
- * What the background saver is doing: chips for each take being saved, saved, or stuck (with Retry). A
- * chapter of a film (a quiet job) shows only when it is stuck — the film's own line counts the saved ones.
+ * What the background saver is doing: a chip for each job being saved, saved, or stuck (with Retry) — a
+ * Studio take, the film of a meet being shared and registered. A quiet job shows only when it is stuck.
  */
 import { href } from '../lib/nav.ts';
 import { dismissSave, retrySave, saveJobs } from '../lib/saveQueue.ts';

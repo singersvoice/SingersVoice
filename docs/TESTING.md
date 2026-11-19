@@ -13,8 +13,8 @@ Live build: **https://singersvoice.github.io/SingersVoice/**
 
 - **Tracks** — All / My Drive / Public catalog / YouTube tabs, in that order. **All**: one box searches the SingersVoice track database (what singers have sung, grouped by song name — a song with several files is an expandable group, several artists cascade one more level; the latest sung first), your Drive and the catalog as you type, YouTube on *Search*; **Sing** on any version brings the song into your Drive under Tracks (shared, registered as your copy) and opens the stage; ▶ previews it here. Sing a track of your own once: it is shared, registered with a 12-character id and listed for every singer; the *in the database* chip shows it. The global "last sung" and your own history move only on a Sing or a preview that plays — never on a search. *More → Publish to public catalog* shares the Drive folder and lists the track for everyone; *Add to my Drive* pulls a catalog track; **YouTube** — type a song (or paste a link): YouTube is always asked for a *karaoke track* ("karaoke" and "track" are added when missing, "karoake" set right — the line under the box says what was asked), *Add to my Drive* on a result fetches it through the relay into `Tracks/YT` (progress in the relay's words), then *Sing*: the karaoke video where the lyrics would be, muted, on the song's clock. Needs the relay (docs/RELAY.md); without it the tab says so. Track Maker has Movie and Year fields for the database's metadata. No track line anywhere (the catalog, All, the Sing screen's list, a meet's song picker) names the singer who shared or registered it, and nothing is tagged *yours* — a track of your own just says *in my library*.
 - **Studio** — Track Maker, Sing, Performances (unchanged flows, now under `/studio`).
-- **Live Meets** — Create meet (pick a *public* track so others can load it) → share the link/code → whoever has the link takes a slot with *Take a stage slot* (the stage is open; the host can switch to deciding each one) → with headphones on, the singers on stage hear each other and the audience hears the stage (talk-back) → *I'm ready* → host *Start the song (8 s count-in)* → everyone's stage starts at the same instant, nobody on stage hears anyone else → the song ends → the take lands as one file in `Performances` and is listed on the meet's ended page; the host's device films the whole meet into their Drive as it goes, a chapter per song, pause and stretch of stage (*Full meet 01, 02, …* on the ended page too; under Performances one filming with its chapters and *Play all*) — press Pause, Restart, Stop on the song and the film carries on, each a new chapter. Tick *Instrument* beside the mic to add a USB interface's input to your sound. Only the host can remove someone (*out* on a slot, × on a name). Idle 5 minutes → the meet closes itself.
-- **Publishing** (club owners with an active year, or a super admin) — Destinations (stream keys, saved once), Publish a meet, History; **Publish** in the room opens the show view; `/watch/<meetId>` is the public in-house page. With the RTMP relay deployed (docs/RELAY.md) YouTube runs at ultra-low latency and Facebook / Instagram / Twitch go live. Recording and streaming run from *Go live* to *Stop publishing*, whatever the singers do to the song; the footage lands in chapters like the host's film.
+- **Live Meets** — Create meet (pick a *public* track so others can load it) → share the link/code → whoever has the link takes a slot with *Take a stage slot* (the stage is open; the host can switch to deciding each one) → with headphones on, the singers on stage hear each other and the audience hears the stage (talk-back) → *I'm ready* → host *Start the song (8 s count-in)* → everyone's stage starts at the same instant, nobody on stage hears anyone else → the song ends → nothing is saved per song: the host's device films the whole meet into their Drive as it goes, **one file** with a chapter mark per song, pause and stretch of stage (*Full meet* on the ended page at End meet, its marks on a line; under Performances with *Watch* and *Chapters*) — press Pause, Restart, Stop on the song and the film carries on, a new mark each time. Tick *Instrument* beside the mic to add a USB interface's input to your sound. Only the host can remove someone (*out* on a slot, × on a name). Idle 5 minutes → the meet closes itself.
+- **Publishing** (club owners with an active year, or a super admin) — Destinations (stream keys, saved once), Publish a meet, History; **Publish** in the room opens the show view; `/watch/<meetId>` is the public in-house page. With the RTMP relay deployed (docs/RELAY.md) YouTube runs at ultra-low latency and Facebook / Instagram / Twitch go live. Recording and streaming run from *Go live* to *Stop publishing*, whatever the singers do to the song; the footage lands as one file with the same chapter marks as the host's film. **Connect YouTube** in the show view's bar (one tap), then *Go live* makes an unlisted (or public) YouTube broadcast of its own and writes its link out with Copy; a Publish from the portal opens the show view and goes live by itself.
 - **Admin** (super admins: the first account ever, `PRIVILEGED_EMAILS`) — Settings › Admin: **Plans & payments** on top (every plan's price in USD and INR, period, video hours, seats, for sale or granted; a note for the Plans page; the expiring-soon and grace margins; every subscriber by standing — expired and expiring first, with the plan, the days left, the hours used this month, the last payment, *Grant again* / *Renew* / *Revoke* in the row; every payment with Stripe's fee and a *Refund* button; the Checkouts without a payment), then every account with its role (*Audio only* → no camera anywhere; *Dual*; *Club owner*; *Super admin*) and its plan chip (the hours used), *Grant* (a plan, for its period or for months) / *Renew* / *Set dates* / *Revoke*; the picture on stage and Publishing open and close at once (an expired period closes by itself, with the date on their gate). The last super admin cannot be demoted.
 - **Plans** (everyone who is not a super admin: More › Plans, the Home card, Settings) — the account's plan, the video hours used and left this month, the four plans at the admin's prices, *Pay in USD / INR* when both are priced, **Choose** on each (Stripe's Checkout when payments are set up and the plan is for sale — else *ask the SingersVoice admin*), the return page waiting for Stripe's word, *Manage subscription* (Stripe's portal), the account's payments. **My club** (club owners): members by email, Add / Remove, the seats, the club's hours. In a **live meet**: a free singer is seated with the voice alone (the chip says a picture comes with a plan); with SVV the picture, the chip the hours left; hours used up, the picture goes with the reason. Publishing and Admin are not on a plain singer's menus at all (side menu, More panel, Home, Settings) — the service refuses them to that account anyway.
 
@@ -88,15 +88,17 @@ later, and the test asserts the same choice card on every singer's device (both 
 what, a *Sing this one* for each, on the third singer's phone too), that Start is off while it is
 open, that the picker offers neither song again (*Up now* / *Put forward*), and that one tap by the
 guest settles it everywhere — the shared song up, his own gone. After the second song the host removes a listener
-(his device says so; the link no longer lets him in) and ends the meet: the ended page lists the
-two songs' shows and the **film of the whole meet as its chapters** — exactly the run the stage
-made (on stage · the song · its restart · the jump to 0:02 · the pause · the song resumed · the
-jump near the end · the stage between · the second act · the stage again), numbered in order with
-nothing missing or merged, each named for what it is, each with its timestamp climbing, together
-spanning the whole meet (the film never stopped at a Start, Pause, Stop or Restart), no song
-chapter a sliver — and the guest finds the two shows and the same run of chapters under
-Performances. The first song's chapter must be cut at the song's kickstart as the service had it
-(within a couple of seconds; a moment ahead by design). The club owner flow replaces the old plan
+(his device says so; the link no longer lets him in) and ends the meet: nothing was saved per song
+on any device (no save chip after either song; the film ran on through both), and the ended page
+lists **one performance — the film of the whole meet**, saved once at End meet and shared with the
+meet, with its **chapter marks** exactly the run the stage made (on stage · the song · its restart ·
+the jump to 0:02 · the pause · the song resumed · the jump near the end · the stage between · the
+second act · the stage again), in order, each named for what it is (*CI Sample Song (from 0:02)*
+where a jump or a resume picked it up), each with its place in the file climbing, the one file
+spanning the whole meet (never stopped at a Start, Pause, Stop or Restart) — and the guest finds the
+same film, one row with the same marks, under Performances, and no take of his own. The first
+song's mark must sit at the song's kickstart as the service had it (within a couple of seconds; a
+moment ahead by design); the in-app player offers a button per mark. The club owner flow replaces the old plan
 grant: a plain account finds Publishing closed (*for club owners*), the Plans page offers the four
 plans (to be asked of the admin, no Stripe here), the super admin grants the Club owner plan on the
 Admin page, and Publishing opens for that account at once — the singers themselves have the SVV plan
@@ -356,14 +358,15 @@ of a failed job; the stage's way to the video (the owner's token, else the servi
 a copy came from), fetched once. sv-control: nothing without the relay, the search and the job through
 it with the singer's own token, the catalog entry carrying the video, the video proxied like the audio.
 
-**What the saved files hold** — the live e2e decodes three of them with ffmpeg at the end of the
-run and measures six seconds of each: the song's saved show (a singer's take), the host's **film of
-the whole meet** (the first song's chapter, at the moment of the first song it measured live, found
-where the chapter's own timestamp puts it) and the publisher's **footage of the broadcast** (the
-chapter that holds the moment it measured on the bus) must all carry the song (the backing track
-located by correlation) and the voice. **Orientation**: the fake person wears a magenta badge on the
-camera's left of the head and a yellow one on the right; a frame of the saved show and a frame of
-the film must keep magenta left of yellow — the picture as the camera saw it, not a mirror (the
+**What the saved files hold** — the live e2e decodes two of them with ffmpeg at the end of the
+run (fetched from the in-app player 8 MB at a time — a whole meet is one file) and measures six
+seconds of each: the host's **film of the whole meet** (at the moment of the first song it measured
+live, found where the song's mark puts it) and the publisher's **footage of the broadcast** (where
+the marks put the moment it measured on the bus) must both carry the song (the backing track
+located by correlation) and the voice; the film's picture must run the whole meet (frames to its
+last minute, not one picture with a song behind it). **Orientation**: the fake person wears a
+magenta badge on the camera's left of the head and a yellow one on the right; a frame of the film
+must keep magenta left of yellow — the picture as the camera saw it, not a mirror (the
 screen alone mirrors the singer's own camera, as a mirror does). The voice is told
 from the song by its harmonics: the fake microphone sings a vibrato on 180 Hz (a phase modulation,
 each harmonic a line ±1.2 % wide), and `voice` in `tools/ci/audio-measure.mjs` reads the power at

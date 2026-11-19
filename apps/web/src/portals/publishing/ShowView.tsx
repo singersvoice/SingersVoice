@@ -7,14 +7,22 @@
  * receives every performer's video and vocal over the same mesh the singers use (receive-only), and
  * runs the broadcast from a bar that hides itself while the show plays. **Go live** makes this
  * browser the encoder (`broadcast.ts`): H.264 + AAC, one-second segments, delivered to the service,
- * which keeps them for the watch page and forwards them to YouTube's HLS ingestion. Nothing here
- * touches the singers' rooms: they keep their lyrics and controls; the show view only listens to
- * the meet (stage, transport) and pulls media. The picture itself is `showStage.tsx`, shared with
- * the Preview tab's monitor tiles.
+ * which keeps them for the watch page and forwards them to YouTube's HLS ingestion. YouTube is one
+ * tap: **Connect YouTube** right in the bar (the app makes the channel's stream key), and from then
+ * on Go live makes a YouTube broadcast of its own for the show — unlisted (anyone with the link) or
+ * public, chosen beside the destinations, never private — and the bar writes its link out with a
+ * Copy button, beside the watch page's; after Stop the YouTube link stays (the video is there). The
+ * bar says only what matters: LIVE, YouTube's own word on the stream, and whatever is wrong; the
+ * footage of the broadcast goes to the publisher's Drive without a word (Performances). A Publish
+ * from the portal opens this view with `go=1`: it goes live by itself. Nothing here touches the
+ * singers' rooms: they keep their lyrics and controls; the show view only listens to the meet
+ * (stage, transport) and pulls media. The picture itself is `showStage.tsx`, shared with the
+ * Preview tab's monitor tiles; the brand's mark is drawn into the broadcast picture, so the page's
+ * own watermark steps aside while that picture is mirrored here (one mark, never two).
  */
 import { DESTINATIONS, fedDestinations, formatMs, playbackPositionMs, type Destination, type DestinationKind, type Meet, type Participant, type PerformanceSinger, type PublishJob } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { IcHeadphones, IcMicOff, IcMusic, IcPlay, IcStop, IcUsers, IcVideo, IcX, IcZoom } from '../../components/icons.tsx';
+import { IcCheck, IcHeadphones, IcMicOff, IcMusic, IcPlay, IcStop, IcUsers, IcX, IcZoom } from '../../components/icons.tsx';
 import { BrandWatermark, Page } from '../../components/Shell.tsx';
 import { Empty, Spinner } from '../../components/ui.tsx';
 import { api, ApiError, clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
@@ -27,15 +35,15 @@ import { loadMeetTrack } from '../meets/trackSource.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { useStreamCheck } from '../../components/LiveShow.tsx';
-import { appSettings } from '../../state/settings.ts';
+import { appSettings, updateApp } from '../../state/settings.ts';
 import { blobLoudness } from '../../audio/loudness.ts';
 import { VOCAL_LAG_MS } from '../../video/showRecorder.ts';
 import { Broadcast } from './broadcast.ts';
+import { connectYoutubeDestination, saveDestination } from './destinations.ts';
 import { LiveLinks } from './LiveLinks.tsx';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
-import { filmSound } from '../../video/meetRecorder.ts';
 import { chapterCue } from '../../video/chapters.ts';
-import { endBroadcast, ensureHlsStream, startBroadcast, youtubeStatus, youtubeToken, youtubeWord } from '../../lib/youtube.ts';
+import { endBroadcast, ensureHlsStream, keyMatchesHint, setBroadcastPrivacy, startBroadcast, youtubeStatus, youtubeToken, youtubeWord, type YoutubeWord } from '../../lib/youtube.ts';
 
 const IDLE_MS = 3000;
 const JOB_POLL_MS = 8000;
@@ -44,7 +52,6 @@ const YOUTUBE_POLL_MS = 15000;
 const SYNC_TOLERANCE_MS = 300;
 
 export const activeJob = (j: PublishJob) => j.state === 'requested' || j.state === 'starting' || j.state === 'live';
-const mb = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB` : `${Math.round(bytes / 1024)} KB`);
 
 export function ShowView(props: { id: string }) {
   const [checked, setChecked] = useState(false);
@@ -205,6 +212,8 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
         toast(errorText(e), 'error');
       });
   }, []);
+  /** The jobs of this meet have been read once (a Publish from the portal goes live only once it knows none is running). */
+  const [jobLoaded, setJobLoaded] = useState(false);
   const loadJob = async () => {
     try {
       const r = await api.get('GET /publishing/jobs', '/publishing/jobs');
@@ -213,6 +222,8 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
       setJob(mine.find((j) => j.jobId === wanted) ?? mine.find(activeJob) ?? mine[0] ?? null);
     } catch {
       /* offline: shown as "not live" */
+    } finally {
+      setJobLoaded(true);
     }
   };
   useEffect(() => {
@@ -236,7 +247,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     filmSingers.current = new Map(meet.stage.filter((s) => s.participantId).map((s) => [s.slot, { slot: s.slot, displayName: s.displayName }]));
     return { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot), first: chapterCue(meet, serverNow()) };
   };
-  // The footage is cut where the stage goes — a song's start, a pause, a stop, the next song — into chapters, each a file of its own (video/chapters.ts).
+  // The footage is marked where the stage goes — a song's start, a pause, a stop, the next song (video/chapters.ts): one file, a chapter mark each.
   useEffect(() => {
     broadcast.film.cue(chapterCue(meet, serverNow()));
   }, [pb.state, pb.epoch, pb.pauseAtEpochMs, meet.kickstartEpochMs, meet.trackTitle, meet.songCount]);
@@ -254,30 +265,76 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     if (s.ok && !driveReady) toast('The footage is not being saved: reconnect Drive first', 'warn', 8000);
     else if (s.ok && !onDrive) toast('The footage stays on this device — sign in with Google to keep it in your Drive', 'warn', 8000);
   };
-  // YouTube run by the app (Destinations → Connect YouTube): a broadcast of its own for this show, made at Go live.
-  const ytAuto = dests?.find((d) => d.kind === 'youtube')?.auto === true;
-  const [yt, setYt] = useState<{ text: string; ok: boolean } | null>(null);
+  // YouTube run by the app (Connect YouTube — here, or under Destinations): a broadcast of its own for this show, made at Go live.
+  const ytDest = dests?.find((d) => d.kind === 'youtube') ?? null;
+  const ytAuto = ytDest?.auto === true;
+  const signedIn = profile.value?.mode === 'drive';
+  const [yt, setYt] = useState<YoutubeWord | null>(null);
+  const [ytBusy, setYtBusy] = useState(false);
+  /** One tap: YouTube connected and picked — the app makes the stream key and, at Go live, a broadcast with its link. */
+  const connectYt = async () => {
+    setYtBusy(true);
+    try {
+      const d = await connectYoutubeDestination(ytDest ?? { ingestUrl: '', keyHint: '' }, profile.value?.email);
+      setDests((list) => [...(list ?? []).filter((x) => x.kind !== 'youtube'), d]);
+      setPicked((p) => (p?.includes('youtube') ? p : [...(p ?? []), 'youtube']));
+      setYt(null);
+      toast('YouTube is connected — Go live makes a broadcast for this show and gives you its link', 'ok', 8000);
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : errorText(e), 'error', 12000);
+    } finally {
+      setYtBusy(false);
+    }
+  };
+  /** YouTube says the video is private: make it what the publisher chose (unlisted by default), on the spot. */
+  const fixPrivacy = async () => {
+    const y = job?.youtube;
+    if (!y) return;
+    setYtBusy(true);
+    try {
+      await setBroadcastPrivacy(await youtubeToken(profile.value?.email), y.broadcastId, app.youtubePrivacy);
+      setYt({ text: `YouTube: the video is ${app.youtubePrivacy} now`, ok: true });
+    } catch (e) {
+      toast(`YouTube: ${errorText(e)}`, 'error', 10000);
+    } finally {
+      setYtBusy(false);
+    }
+  };
   const goLive = async () => {
     if (!picked?.length) return toast('Pick at least one destination', 'warn');
     setBusy(true);
     try {
       await broadcast.bus.resume(); // inside the click: the browser lets the sound run
-      const description = meet.trackTitle ? `${meet.trackTitle} — live on SingersVoice` : '';
+      // The listing: the portal's Publish tab hands its title and description over in the link; the meet's own otherwise.
+      const q = new URLSearchParams(location.search);
+      const title = q.get('title')?.trim() || meet.title;
+      const description = q.get('description')?.trim() || (meet.trackTitle ? `${meet.trackTitle} — live on SingersVoice` : '');
       let links: Partial<Record<DestinationKind, string>> | undefined;
       let youtube: { broadcastId: string; streamId: string } | undefined;
-      if (picked.includes('youtube') && ytAuto) {
+      let destinations = picked;
+      if (picked.includes('youtube') && ytAuto && ytDest) {
         try {
           const token = await youtubeToken(profile.value?.email);
-          const stream = await ensureHlsStream(token);
-          const b = await startBroadcast(token, { title: meet.title, streamId: stream.streamId, privacy: app.youtubePrivacy, description: description || 'Live on SingersVoice' });
+          // The very stream whose key the service sends to (found by the key's last characters); a key that changed on YouTube's side is saved again.
+          const stream = await ensureHlsStream(token, ytDest.keyHint);
+          if (ytDest.keyHint && !keyMatchesHint(stream.streamKey, ytDest.keyHint)) {
+            const d = await saveDestination('youtube', { enabled: true, ingestUrl: ytDest.ingestUrl, streamKey: stream.streamKey, auto: true });
+            setDests((list) => [...(list ?? []).filter((x) => x.kind !== 'youtube'), d]);
+          }
+          const b = await startBroadcast(token, { title, streamId: stream.streamId, privacy: app.youtubePrivacy, description: description || 'Live on SingersVoice' });
           links = { youtube: b.watchUrl };
           youtube = { broadcastId: b.broadcastId, streamId: stream.streamId };
-          setYt({ text: 'YouTube: broadcast made · waiting for the stream', ok: true });
+          setYt({ text: `YouTube: broadcast made (${app.youtubePrivacy}) · waiting for the stream`, ok: true });
         } catch (e) {
-          toast(`YouTube: ${errorText(e)} — going live to the saved stream key without a broadcast of its own`, 'warn', 14000);
+          // No broadcast of its own means no link to hand out and a visibility nobody chose: YouTube is left out of this show, and the bar says why.
+          const why = errorText(e);
+          setYt({ text: `YouTube is NOT on: ${why}`, ok: false });
+          toast(`YouTube: ${why}`, 'error', 14000);
+          destinations = picked.filter((k) => k !== 'youtube');
+          if (!destinations.length) return;
         }
       }
-      const r = await api.post('POST /publishing/jobs', '/publishing/jobs', { meetId: meet.meetId, destinations: picked, title: meet.title, description, ...(links ? { links } : {}), ...(youtube ? { youtube } : {}) });
+      const r = await api.post('POST /publishing/jobs', '/publishing/jobs', { meetId: meet.meetId, destinations, title, description, ...(links ? { links } : {}), ...(youtube ? { youtube } : {}) });
       setJob(r.job);
       await startSending(r.job);
     } catch (e) {
@@ -303,7 +360,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     if (job.youtube) {
       try {
         await endBroadcast(await youtubeToken(profile.value?.email), job.youtube.broadcastId);
-        setYt({ text: 'YouTube: the broadcast is over', ok: true });
+        setYt({ text: 'YouTube: the broadcast is over — the video stays at the link', ok: true });
       } catch (e) {
         toast(`YouTube: ${errorText(e)} — end the broadcast in YouTube Studio`, 'warn', 10000);
       }
@@ -334,6 +391,17 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   useEffect(() => {
     if (job && activeJob(job) && !broadcast.running && job.live && !busy) void startSending(job);
   }, [job?.jobId]);
+  // Publish from the portal (one tap): the view opened with `go=1` goes live by itself once it knows the destinations and that no job runs.
+  const autoGo = useRef(new URLSearchParams(location.search).get('go') === '1');
+  useEffect(() => {
+    if (!autoGo.current || !jobLoaded || dests === null || !picked || busy || over) return;
+    autoGo.current = false;
+    const q = new URLSearchParams(location.search);
+    q.delete('go');
+    const qs = q.toString();
+    history.replaceState(history.state, '', `${location.pathname}${qs ? `?${qs}` : ''}${location.hash}`); // a reload never goes live again by itself
+    if (!job || !activeJob(job)) void goLive();
+  }, [jobLoaded, dests, picked, busy, over]);
   // Leaving the show view ends the broadcast: nothing else is encoding it.
   const jobRef = useRef<PublishJob | null>(null);
   jobRef.current = job;
@@ -468,7 +536,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
       <audio ref={audioRef} src={trackUrl ?? undefined} preload="auto" crossOrigin="anonymous" />
       <Vocals vocals={feed.vocals} on={false} />
 
-      <BrandWatermark />
+      {!broadcast.mirror.value && <BrandWatermark />}
       <header class="show-top">
         <div class="show-title">
           <h1>{meet.title}</h1>
@@ -495,24 +563,38 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
         <div class="dests" role="group" aria-label="Destinations">
           {dests === null ? (
             <Spinner />
-          ) : enabledDests.length ? (
-            enabledDests.map((d) => {
-              const on = picked?.includes(d.kind) ?? false;
-              return (
-                <button key={d.kind} type="button" class={`dest ${on ? 'on' : ''}`} aria-pressed={on} disabled={!canEditDests} onClick={() => setPicked((p) => (on ? (p ?? []).filter((k) => k !== d.kind) : [...(p ?? []), d.kind]))} title={DESTINATIONS.find((x) => x.kind === d.kind)?.ingestHint}>
-                  {d.label}
-                </button>
-              );
-            })
           ) : (
-            <a class="chip" href={href('/publishing?tab=destinations')}>
-              No destinations enabled — set up YouTube, Facebook, Instagram or Twitch
-            </a>
+            <>
+              {enabledDests.map((d) => {
+                const on = picked?.includes(d.kind) ?? false;
+                return (
+                  <button key={d.kind} type="button" class={`dest ${on ? 'on' : ''}`} aria-pressed={on} disabled={!canEditDests} onClick={() => setPicked((p) => (on ? (p ?? []).filter((k) => k !== d.kind) : [...(p ?? []), d.kind]))} title={DESTINATIONS.find((x) => x.kind === d.kind)?.ingestHint}>
+                    {d.label}
+                  </button>
+                );
+              })}
+              {!ytAuto && canEditDests && (
+                <button type="button" class="btn sm accent" disabled={ytBusy || !signedIn} data-youtube-connect-button onClick={() => void connectYt()} title={signedIn ? 'One tap: the app makes your YouTube stream key, and every show you go live with gets a YouTube broadcast of its own — unlisted or public, as you choose — with its link to share' : 'Sign in with Google first (Settings) — YouTube is run through your Google account'}>
+                  {ytBusy ? <Spinner /> : <IcCheck size={14} />} {signedIn ? 'Connect YouTube' : 'Sign in with Google to connect YouTube'}
+                </button>
+              )}
+              {ytAuto && picked?.includes('youtube') && canEditDests && (
+                <select class="input yt-visibility" aria-label="Who can watch on YouTube" data-youtube-privacy value={app.youtubePrivacy} onChange={(e) => updateApp({ youtubePrivacy: (e.currentTarget as HTMLSelectElement).value === 'public' ? 'public' : 'unlisted' })} title="The visibility of the YouTube broadcast Go live makes: unlisted — anyone with the link; public — on your channel for everyone">
+                  <option value="unlisted">YouTube: unlisted — anyone with the link</option>
+                  <option value="public">YouTube: public — on the channel</option>
+                </select>
+              )}
+              {!enabledDests.length && !ytAuto && (
+                <a class="chip" href={href('/publishing?tab=destinations')}>
+                  Other platforms: Publishing › Destinations
+                </a>
+              )}
+            </>
           )}
         </div>
         <div class="actions">
           {!job || !activeJob(job) ? (
-            <button class="btn big primary" disabled={busy || over || !picked?.length} onClick={() => void goLive()}>
+            <button class="btn big primary" disabled={busy || over || !picked?.length} onClick={() => void goLive()} title={picked?.includes('youtube') && ytAuto ? 'Go live: a YouTube broadcast is made for this show and its link appears below' : 'Go live to the picked destinations'}>
               {busy ? <Spinner /> : <IcPlay />} Go live
             </button>
           ) : (
@@ -535,7 +617,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
             <IcX />
           </button>
         </div>
-        <div class="row between" style="gap:12px;flex-wrap:wrap">
+        <div class="row between monitor-row" style="gap:12px;flex-wrap:wrap">
           <MixBalance compact />
           <span class="chip" data-mic="off" title="The show view never opens your microphone: it only plays the stage to you and sends it out.">
             <IcMicOff size={14} /> Mic off
@@ -545,58 +627,53 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
             {ownOnStage.length ? 'Your own voice stays out of this monitor (you hear it on stage); the broadcast carries it.' : 'The headphone and music buttons change what you hear here, never the broadcast. No microphone is used here.'}
           </span>
         </div>
-        {job && (
-          <div class="jobline small" data-live-state={sending?.state ?? ''} data-live-segments={sending?.segments ?? 0} data-live-youtube={sending?.youtube ?? ''} data-live-relay={sending?.relay ?? ''}>
-            <b>{sending?.state === 'live' ? 'LIVE' : job.state}</b> · {job.destinations.join(' · ')}
-            {sending && sending.state === 'live' && (
-              <>
-                {' '}
-                · {formatMs(Date.now() - sending.startedAt)} · {sending.kbps} kbps · {sending.segments} segment{sending.segments === 1 ? '' : 's'}
-                {!sending.audio && <span class="warn"> · video only (no AAC in this browser)</span>}
-                {sending.relay !== 'off' ? (
-                  <span class={sending.relay === 'ok' ? '' : sending.relay === 'starting' ? 'muted' : 'danger'} title="The RTMP relay: YouTube at ultra-low latency, Facebook, Instagram, Twitch">
-                    {' '}
-                    · relay: {sending.relay === 'ok' ? sending.relayNote || 'streaming' : sending.relay === 'starting' ? 'starting…' : sending.relayNote || 'error'}
-                  </span>
-                ) : (
-                  sending.youtube !== 'off' && (
-                    <span class={yt ? (yt.ok ? 'ok' : 'danger') : sending.youtube === 'ok' ? '' : sending.youtube === 'waiting' ? 'muted' : 'danger'} data-youtube-word={yt ? (yt.ok ? 'ok' : 'off') : ''}>
-                      {' '}
-                      · {yt ? yt.text : `YouTube: ${sending.youtubeNote || (sending.youtube === 'waiting' ? 'sending…' : sending.youtube)}`}
-                    </span>
-                  )
-                )}
-              </>
+        {/* The job, in a few chips: on air (with the technical figures as a tooltip), YouTube's own word, and whatever is wrong. The footage of the broadcast goes to the publisher's Drive without a word here (Performances); its state rides on the attributes for support. */}
+        {(job || yt) && (
+          <div class="jobline small" data-live-state={sending?.state ?? ''} data-live-segments={sending?.segments ?? 0} data-live-youtube={sending?.youtube ?? ''} data-live-relay={sending?.relay ?? ''} data-footage={film.recording ? 'recording' : film.saved ? 'saved' : 'off'} data-footage-bytes={film.bytes} data-footage-seconds={film.seconds} data-footage-chapters={film.chapters}>
+            {job && (
+              <span class={`chip ${sending?.state === 'live' ? 'ok' : ''}`} data-job-state={sending?.state === 'live' ? 'live' : job.state} title={sending?.state === 'live' ? `${sending.kbps} kbps · ${sending.segments} segment${sending.segments === 1 ? '' : 's'} · ${job.destinations.join(', ')}${film.recording ? ` · the footage goes to ${onDrive ? 'your Drive' : 'this device'} (Performances)` : ''}` : job.destinations.join(', ')}>
+                {sending?.state === 'live' ? <b>LIVE</b> : sending?.state === 'sending' ? 'starting the encoder…' : job.state}
+                {sending?.state === 'live' && ` · ${formatMs(Date.now() - sending.startedAt)}`}
+              </span>
             )}
-            {sending?.state === 'sending' && <span class="muted"> · starting the encoder…</span>}
+            {sending?.state === 'live' && !sending.audio && <span class="chip warn">video only — no AAC in this browser</span>}
+            {job && job.destinations.includes('youtube') && (sending?.state === 'live' || yt) && (
+              <span class={`chip ${yt ? (yt.ok ? 'ok' : 'danger') : sending?.youtube === 'ok' ? 'ok' : sending?.youtube === 'waiting' ? '' : 'danger'}`} data-youtube-word={yt ? (yt.ok ? 'ok' : 'off') : ''}>
+                {yt ? yt.text : sending?.youtubeNote || `YouTube: ${sending?.youtube === 'waiting' ? 'sending…' : sending?.youtube}`}
+              </span>
+            )}
+            {!job && yt && <span class={`chip ${yt.ok ? 'ok' : 'danger'}`} data-youtube-word={yt.ok ? 'ok' : 'off'}>{yt.text}</span>}
+            {job && activeJob(job) && job.destinations.includes('youtube') && !job.youtube && (
+              <span class="chip" data-youtube-manual title="This show goes to the stream key you pasted: its video, its visibility and its link are YouTube Studio's. Connect YouTube and the next show gets a broadcast of its own — unlisted or public, as you choose — with its link right here.">
+                YouTube by your pasted key — visibility as set in YouTube Studio{ytAuto ? '' : ' · Connect YouTube (after this show) for a link of its own'}
+              </span>
+            )}
+            {yt?.privateVideo && job?.youtube && (
+              <button class="btn sm accent" disabled={ytBusy} onClick={() => void fixPrivacy()} data-youtube-fix-privacy>
+                {ytBusy ? <Spinner /> : null} Make it {app.youtubePrivacy}
+              </button>
+            )}
+            {yt && !yt.ok && (!job || !activeJob(job)) && (!ytAuto || /Connect YouTube/.test(yt.text)) && (
+              <button class="btn sm accent" disabled={ytBusy || !signedIn} onClick={() => void connectYt()} data-youtube-connect-button>
+                {ytBusy ? <Spinner /> : <IcCheck size={14} />} Connect YouTube
+              </button>
+            )}
+            {sending?.state === 'live' && sending.relay !== 'off' && sending.relay !== 'ok' && (
+              <span class={`chip ${sending.relay === 'starting' ? '' : 'danger'}`} title="The RTMP relay: YouTube at ultra-low latency, Facebook, Instagram, Twitch">
+                relay: {sending.relay === 'starting' ? 'starting…' : sending.relayNote || 'error'}
+              </span>
+            )}
             {streamCheck.state !== 'off' && (
-              <span class={streamCheck.state === 'failed' ? 'danger' : streamCheck.state === 'ok' ? 'ok' : 'muted'} data-stream-check={streamCheck.state} title="The stream as the watch page and the platforms get it, played back here for half a minute">
-                {' '}
-                · stream check: {streamCheck.state === 'ok' ? '✓ ' : ''}
-                {streamCheck.note}
+              <span class={`chip ${streamCheck.state === 'failed' ? 'danger' : streamCheck.state === 'ok' ? 'ok' : ''}`} data-stream-check={streamCheck.state} title="The stream as the watch page and the platforms get it, played back here for half a minute">
+                {streamCheck.state === 'ok' ? '✓ the stream plays' : streamCheck.state === 'failed' ? `stream check failed: ${streamCheck.note}` : streamCheck.note}
               </span>
             )}
-            {(film.recording || film.saved || film.note) && (
-              <span class={`footage ${film.note ? 'warn' : ''}`} data-footage={film.recording ? 'recording' : film.saved ? 'saved' : 'off'} data-footage-bytes={film.bytes} data-footage-seconds={film.seconds} data-footage-chapter={film.chapter?.index ?? 0} data-footage-chapters={film.chapters} title={film.recording ? 'The whole broadcast, as it goes out, into your Drive (Performances → Broadcast)' : film.saved ? 'The footage is in your Drive (Performances → Broadcast)' : film.note ?? ''}>
-                {' '}
-                · <IcVideo size={14} />{' '}
-                {film.recording ? `footage to ${onDrive ? 'your Drive' : 'this device'} · ${formatMs(film.seconds * 1000)} · ${mb(film.stored || film.bytes)} · ${filmSound(film)}${film.chapter ? ` · chapter ${film.chapter.index} ${film.chapter.title}` : ''}` : film.saved ? `footage saved to ${onDrive ? 'your Drive' : 'this device'} · ${film.chapters} chapter${film.chapters === 1 ? '' : 's'}` : film.note}
-              </span>
-            )}
-            {job.watchUrl && (
-              <>
-                {' '}
-                ·{' '}
-                <a href={href(job.watchUrl)} target="_blank" rel="noopener">
-                  watch page
-                </a>
-              </>
-            )}
-            {(sending?.error ?? job.error) && <span class="danger"> · {sending?.error ?? job.error}</span>}
-            {support && !support.ok && <span class="danger"> · {support.reason}</span>}
+            {film.note && <span class="chip warn">{film.note}</span>}
+            {(sending?.error ?? job?.error) && <span class="chip danger">{sending?.error ?? job?.error}</span>}
+            {support && !support.ok && <span class="chip danger">{support.reason}</span>}
           </div>
         )}
-        {job && activeJob(job) && <LiveLinks title={job.title || meet.title} destinations={job.destinations} dests={dests ?? []} watchPage={job.watchUrl} links={job.links} />}
+        {job && (activeJob(job) || job.links?.youtube) && <LiveLinks title={job.title || meet.title} destinations={job.destinations} dests={dests ?? []} watchPage={job.watchUrl} links={job.links} over={!activeJob(job)} />}
       </footer>
     </div>
   );

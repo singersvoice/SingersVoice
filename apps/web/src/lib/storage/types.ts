@@ -47,7 +47,9 @@ export interface PerformanceSummary {
   hasVideo: boolean;
   /** Shared anyone-with-the-link (Drive). */
   shared?: boolean;
-  /** A chapter of a filmed event (the film of a meet, the broadcast's footage): which event, which chapter, what kind. */
+  /** The film of a meet (or a broadcast's footage), one file: its chapter marks — where each song, pause and stretch of stage starts. */
+  chapters?: PerformanceChapter[];
+  /** An older build's film: this file is one chapter of it. */
   chapter?: PerformanceChapter;
   /** The singer's cut-out video beside the show (join.ts): what another singer's stage draws them from. Drive: the file's id; this device: ''. */
   cutout?: { driveId: string; mimeType: string; bytes: number };
@@ -87,6 +89,8 @@ export interface PerformanceStream {
   readonly stored: number;
   /** The last error on the way (the stream keeps trying), or null. */
   readonly error: string | null;
+  /** The manifest as it now stands (the film's chapter marks grow as the meet goes): what the file is stamped with — and what an interrupted film is completed with. */
+  update(manifest: PerformanceManifest): void;
   /** The file is complete: everything buffered goes out, the manifest is written with the final duration and size. */
   finish(final: { durationMs: number }): Promise<PerformanceSummary>;
   /** Give the file up (best effort: what was stored is removed). */

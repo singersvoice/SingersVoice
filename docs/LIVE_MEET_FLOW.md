@@ -15,7 +15,7 @@ first moment.
 | Background | The stage background (from your settings' picker). |
 | *open meets N/3* | You may host **at most 3 open meets** (lobby / countdown / live) at a time; at the limit, Create is off until you end one below. |
 | **Join by code** | 6-letter code → the room. A shared link does the same. |
-| My meets | Meets you host or joined, with their state. Per meet: **Open** (this tab), **New tab** (run several meets side by side), and for meets you host **End** (open ones) and **Delete** (any — the room, chat and take list go for good; takes stay in each singer's Drive). |
+| My meets | Meets you host or joined, with their state. Per meet: **Open** (this tab), **New tab** (run several meets side by side), and for meets you host **End** (open ones) and **Delete** (any — the room, chat and performance list go for good; the film stays in the host's Drive). |
 
 The moment you create a meet you are **on stage (S1)** with your camera on. The meet closes itself
 after 5 idle minutes.
@@ -57,7 +57,7 @@ stage, two stand big in the middle; the names sit on the riser under each singer
 **What reaches the mix, in numbers.** While you are on stage the strip (and the live stage's bar)
 carries a *mix line*, refreshed every second — *mix: you −18 dB · Team −22 dB · track −20 dB* —
 what each source brings to this device's mix right now, which on the host's device is what the
-audience, the film and the takes get. *You: silent* while you sing means your voice is not reaching
+audience and the film get. *You: silent* while you sing means your voice is not reaching
 the mix: the device notices that by itself within three seconds (the microphone sung into, nothing
 coming out of the voice effects) and switches your raw microphone in instead, with *voice effects
 off — your voice goes out plain* on the mic line; reopening the mic tries the effects again.
@@ -154,8 +154,8 @@ receiving side); the cure on their side is the restart above, by itself or from 
 | Option | Who | What it does |
 | --- | --- | --- |
 | **Turn my mic on** | singers | The mic opens by itself the moment you are seated (talk-back, your vocal in the song); this button only appears when the browser wanted a tap first (a permission not given yet, or iOS with the camera on) — one tap opens it. |
-| **Film the whole meet into my Drive — a chapter per song, pause and stretch of stage** | host | On by default. From the moment the host's mic is open on stage until **End meet** (or the host steps off), the host's device records the whole meet — the show picture (everyone on stage over the background, no lyrics) with the stage mix (the songs, the talk between them) — and writes it into their Drive *as it goes* (ten seconds at a time, a resumable upload): a two-hour meet never has to fit in memory, and a tab that dies loses seconds, not the meet (the next start of the app completes the file with what Drive already holds). **Nothing a singer does to the song stops it**: Play, Pause, Stop, Restart and a seek are all inside the film. The film is **cut into chapters** where the stage goes: a new chapter whenever a song starts (at its kickstart, so the chapter begins where the song begins), another for every restart, resume or jump (*Ammo (continued at 1:12)*), one for every pause (*Paused — Ammo*), one for the stage between songs (*On stage*) — each a timestamped file of its own in Drive (`Full meet 03 · Ammo`), never merged, never overwritten, so every song can be played, found and shared on its own; a chapter longer than ten minutes carries on in parts. The switch shows what it is doing (*Filming · 12:34 · 210 MB in Drive · sound −18 dB · chapter 3 · Ammo 2:10 · 2 saved*) — the sound figure is what reaches the film right now, and *NO SOUND reaching the film* is said on the spot, never discovered afterwards. The chapters are performances of the meet, **Full meet 01, 02, …**, listed in order on the ended screen and, under Performances, as one filming with its chapters (**Play all** plays them in turn), shared with everyone who was in the meet like a song's show. **Download** on a performance gives the files themselves (the show video; a take's vocal too) and nothing else — the details stay with the performance. |
-| **Instrument** (a tick beside the mic, on the stage's mic status and in Settings → Audio) | any singer | A second input for an instrument — a guitar, keys, a violin on a **USB audio interface** beside the microphone: tick *Instrument*, pick the interface's input from the list, set its level (3 dB steps). It opens with the mic and is summed into that singer's sound, so it goes wherever the voice goes — the other singers, the take, the stage mix, the film, the broadcast — without the vocal effects or the auto-level (a line input: no echo cancellation, no noise suppression, no automatic gain; an interface's stereo pair is folded to mono). Unplugged, the mic status says so; not on iPhone or iPad, where Safari keeps one capture per page. |
+| **Film the whole meet into my Drive — one file, a chapter mark per song** | host | On by default. From the moment the host's mic is open on stage until **End meet** (or the host steps off), the host's device records the whole meet — the show picture (everyone on stage over the background, no lyrics) with the stage mix (the songs, the talk between them) — into **one file** in their Drive, written *as it goes* (ten seconds at a time, a resumable upload): a two-hour meet never has to fit in memory, and a tab that dies loses seconds, not the meet (the next start of the app completes the file with what Drive already holds, the marks up to then on it). **Nothing a singer does to the song stops it**: Play, Pause, Stop, Restart and a seek are all inside the film — and **nothing is saved per song**, on any device: the film is the record of every song. Where the stage goes, the film gets a **chapter mark**: one whenever a song starts (at its kickstart, so the mark is where the song begins), another for every restart, resume or jump (*Ammo (from 1:12)*), one for every pause (*Paused — Ammo*), one for the stage between songs (*On stage*). The switch shows what it is doing (*Filming · 12:34 · 210 MB in Drive · sound −18 dB · chapter 3 · Ammo 2:10*) — the sound figure is what reaches the film right now, and *NO SOUND reaching the film* is said on the spot, never discovered afterwards. At End meet the film is **the performance of the meet**, *Full meet*, listed on the ended screen with its marks on a line (*▪ On stage 0:00 · ♪ Ammo 3:18 · ⏸ Paused — Ammo 7:40 · …*) and, under Performances, for everyone who was in the meet: **Watch** (the file from Drive — anyone with the link), **Chapters** (the in-app player, a button per mark that jumps there), **Share**. |
+| **Instrument** (a tick beside the mic, on the stage's mic status and in Settings → Audio) | any singer | A second input for an instrument — a guitar, keys, a violin on a **USB audio interface** beside the microphone: tick *Instrument*, pick the interface's input from the list, set its level (3 dB steps). It opens with the mic and is summed into that singer's sound, so it goes wherever the voice goes — the other singers, the stage mix, the film, the broadcast — without the vocal effects or the auto-level (a line input: no echo cancellation, no noise suppression, no automatic gain; an interface's stereo pair is folded to mono). Unplugged, the mic status says so; not on iPhone or iPad, where Safari keeps one capture per page. |
 | **I'm ready (mic & camera check)** | singers | Opens the mic (and the camera on iOS) if it is not open yet, decodes the current song, marks you *ready*. Shown once there is a song (and no choice open); ready resets whenever another song comes up. Under it the **Mic** line says what the microphone really gives: its name, its sample rate, the automatic level — and warns in red when it is a *phone-call quality* line (a Bluetooth headset's mic: 8–16 kHz, thin and muffled), with a menu to sing into another microphone; **I'm on speakers** turns echo cancellation on (only needed when the track plays out of speakers; with headphones it stays off for the cleanest voice — a hint appears when the sound is going out through speakers). |
 | **Start the song (8 s count-in)** | host, singers | Needs a song on the stage and no choice open (*Several songs are picked — choose one on the song card first*). Whoever taps it is made ready on the way (mic, track) if not yet; every device starts the backing track at the same server instant (the GMT kickstart), and every other singer on stage goes to the singing screen and joins from the count-in without a tap — mic open or not yet (it opens on the way). A singer whose browser insisted on a tap for the mic sees **Join the song** on the singing screen and starts mid-song with that tap. |
 | **End the song** (lobby, while a song runs) | host, singers | Ends the song for everyone; a song put forward during it comes up (several: the choice card). |
@@ -197,12 +197,11 @@ jump is cued too (*jumping to 1:23…*), so the song keeps playing and every dev
 same instant; while paused the paused position simply moves for everyone. **Restart** (from the
 top) and **Stop song** — which stops the song for everyone, a song put forward during it up — are
 every singer's as well. The **Songs** drawer shows what is playing and what was put forward for
-after it, and holds the picker. A singer who is not the host also has **Leave**: their own take ends, the
-song goes on for the others, and they can **Join the song** again. The backing track ending on any
-device ends the song for everyone too. Whoever plays, pauses or seeks, the devices stay in sync:
-every cue is a shared GMT instant, never "when the message arrives". A take follows every pause and
-jump on the track timeline (a part sung again replaces the old one); the saved show records what
-happened, jumps included.
+after it, and holds the picker. A singer who is not the host also has **Leave**: they step out of the
+song, it goes on for the others, and they can **Join the song** again. The backing track ending on
+any device ends the song for everyone too. Whoever plays, pauses or seeks, the devices stay in sync:
+every cue is a shared GMT instant, never "when the message arrives". The film of the meet records
+what happened, jumps and pauses included, a chapter mark at each.
 
 **Instant, on every device.** Whatever a singer changes on stage — the background, the song, a
 pause, a jump, a restart, a slot — is one request to the service (the source of truth) and, the
@@ -215,24 +214,23 @@ stage is live, so they follow within two seconds at the most. The links carry th
 state always comes from the service, so a device that missed the word is right again at its next
 poll.
 
-**What gets saved — by itself.** Every take is a personal session: your vocal, sample-accurate on
-the track timeline across any number of pauses — and its video is **the show**: exactly the
-broadcast picture Publisher mode shows (every singer on stage over the stage background, huge, no
-lyrics), with the whole mix as its sound (the backing track, your vocal after FX, and every other
-singer's vocal, which travels over the links for the recording only — nobody ever hears it).
-When the song is over (or you stop your take) **nothing asks you anything**: you are straight
-back on the stage — the lobby with the next song up, or, after your own Stop mid-song, the live
-stage with *Join the song* — your mic stays open (talk-back is back on: the stage hears each
-other again), and the take saves itself in the background, kept at once in your
-Drive `Performances` (never Temp). The picture is recorded frame by frame by the room itself, so
-it runs the whole song even when the room's tab is not in front (the host over in the show view, a
-window behind another) — the same for the film of the meet and the video the other singers get.
-A chip in the room says *Saving "song"… · 40 %* → *Saved
-"song"* (→ Performances), or *Could not save — Retry*; the saver keeps going when you change page,
-leave the room or the meet ends, retries by itself, and the app never reloads under it. **The
-host's take of a song is the meet's saved performance**: registered with the meet and shared with
-everyone who was in it — anyone with its link can watch it. Pick the next song, sing, and on, until
-the singers drop off.
+**What gets saved — by itself.** Nothing per song, on any device. The record of a meet is **its
+film**: the host's device films the whole meet into the host's Drive as it goes (the switch above)
+— **the show**, exactly the broadcast picture Publisher mode shows (every singer on stage over the
+stage background, huge, no lyrics), with the whole mix as its sound (the backing track and every
+singer's vocal after FX, which travels over the links for the mix only — nobody on stage ever
+hears another's during a song) — one file, a chapter mark wherever a song starts, pauses, jumps or
+ends. When the song is over (or you leave it) **nothing asks you anything**: you are straight back
+on the stage — the lobby with the next song up, or, after your own Leave mid-song, the live stage
+with *Join the song* — your mic stays open (talk-back is back on: the stage hears each other
+again). The picture is recorded frame by frame by the room itself, so the film runs the whole meet
+even when the room's tab is not in front (the host over in the show view, a window behind another)
+— the same for the video the other singers get. At **End meet** a chip in the host's room says
+*Saved "Full meet" · shared with the meet* (→ Performances), or *Could not save — Retry*; the saver
+keeps going when you change page or leave the room, retries by itself, and the app never reloads
+under it. **The film is the meet's performance**: registered with the meet and shared with everyone
+who was in it — anyone with its link can watch it. Pick the next song, sing, and on, until the
+singers drop off.
 
 **The voice.** Under the lyrics, one row of chips applies a finished-vocal treatment to the
 captured voice the instant it is tapped (the chain runs in 128-frame blocks — under 3 ms — so
@@ -244,7 +242,7 @@ level, a short pre-delayed room), **Radio-Ready** (bright, dense, loud, a hint o
 (maximum air and presence, the rider all the way — even a whisper fills the stage), then Pop Star,
 Warm, Bright, Warm Ballad, Stadium, Telephone, Doubler, Robot, Octave Down. The choice is the
 singer's own, kept on their device (and in their Drive config) until they change it; what the
-recording, the publisher and the other singers' recordings get is the treated voice.
+film, the publisher and the audience get is the treated voice.
 
 **Restart, Track volume, Vocal volume.** Every singer on stage has **Restart** (the song starts over
 for everyone, cued — a fluffed first line is nobody's problem) beside Pause and Stop; the host alone
@@ -254,13 +252,13 @@ file it came from, a rider on every voice (it lifts a voice, never a microphone'
 standing well above the mic's own floor counts, and the floor is kept 12 dB under the voice) — and
 a guard turns the sum back down when both are pushed, so even +30 / +30 never lives in the limiter; **Backing level in your ears** (Settings) is
 only what you hear, never what is recorded: the balance *this
-device mixes at* — what it records, what the host's device relays to
+device mixes at* — what the host's device films and relays to
 the audience, and (in the show view) what goes out to YouTube and the portal. They are kept on the
 device until changed. *Hear myself* is a different thing — the singer's own monitor — and comes back
 through the browser some 40–100 ms late (more while pitch correction runs), so a singer hears
 themselves twice; the Mic line says so and points to the microphone's or interface's own headphone
-jack, which is instant. A song that runs out on its own now finishes like one that is stopped: the
-takes save, the meet moves on (a stale callback used to leave it hanging unless someone had paused).
+jack, which is instant. A song that runs out on its own finishes like one that is stopped: the meet
+moves on to the next song (a stale callback used to leave it hanging unless someone had paused).
 
 ## 4 · The room — audience
 
@@ -269,7 +267,7 @@ publisher), the song of the stage (and the choice card, without its buttons), wh
 is on air — the publisher's broadcast, every singer on the stage background with the track and
 their voices blended (section 6), played a few seconds behind behind a *Watch the show* tap — and
 otherwise the stage background with who is on it, plus **Hear the stage — the singers and the
-track, blended**: the very mix the host's device builds for the saved show (the backing track with
+track, blended**: the very mix the host's device builds for the film (the backing track with
 every singer's vocal, after their FX, in sync) is sent out by the host's device a second at a time
 (WebCodecs/Opus, 64 kbps, through the relay — no media server; listeners read it from the public
 `/watch/:id/mix` route, which the edge caches, so a hundred listeners cost the relay one answer
@@ -303,10 +301,10 @@ by the host's share link, an audience member by the meet's link; the watch page 
 
 When a song is over the meet is back in the **lobby**: stage, slots and cameras untouched, ready
 flags cleared, a song put forward during the song up (several: the choice card, nothing up until the
-singers settle it; none: nothing until somebody picks one). Any number of songs follow. **End meet** → the *Meet ended* screen: **the performances of this meet** (one saved show
-per song — Watch, Share), every singer's registered take (links to their Drive), *Create another
-meet*, *All performances*, and for the host with Publishing, *Publish this meet*. A meet that
-nobody touched for 5 minutes expires the same way.
+singers settle it; none: nothing until somebody picks one). Any number of songs follow. **End meet** → the *Meet ended* screen: **the film of this meet** (one file, its
+chapter marks on a line — Watch, Share), *Create another meet*, *All performances*, and for the
+host with Publishing, *Publish this meet*. A meet that nobody touched for 5 minutes expires the
+same way.
 
 ## 5a · Performances (`/studio/performances`, also from Home and the Meets page)
 
@@ -314,17 +312,17 @@ Everything you ever sang, by date and name:
 
 | Section | What is in it |
 | --- | --- |
-| **Meet performances** | One saved show per song of every meet you hosted or were in: *meet · song*, date and time, length, who sang, who hosted. **Play** (your own: in the app) / **Watch** (the host's Drive link — anyone with it can watch), **Share** (copies the link, or the phone's share sheet). The host's own rows have a **Delete** button right there, and the section a **Delete all (N)** for every performance you hosted — permanently (one confirmation): the files leave your Drive for good (not the trash) and the meet's list. A performance in another host's Drive is theirs to delete. |
-| **Your takes** | Your own takes: every take of a meet song (kept by itself) and Studio takes (Temp for 7 days unless kept). Tap a row to play it, keep it, download it, **Share link** (shares the file anyone-with-the-link and copies it). Every row has a **Delete** button, and the section a **Delete all (N)** for every take shown (the filter — All / Kept / Temp — decides which) — permanently, out of your Drive, after one confirmation; a progress line counts them down. |
+| **Meet performances** | The film of every meet you hosted or were in — one row per meet: *meet · Full meet*, date and time, length, who sang, who hosted, and its chapter marks on a line (*▪ On stage 0:00 · ♪ Ammo 3:18 · ⏸ Paused — Ammo 7:40 · …*). **Watch** (the host's Drive link — anyone with it can watch), **Chapters** (your own film: the in-app player with a button per mark that jumps there), **Share** (copies the link, or the phone's share sheet). A publisher's footage of a broadcast (*Broadcast*) sits here the same way. The host's own rows have a **Delete** button right there, and the section a **Delete all (N)** for every performance you hosted — permanently (one confirmation): the files leave your Drive for good (not the trash) and the meet's list. A performance in another host's Drive is theirs to delete. |
+| **Your takes** | Your Studio takes (Temp for 7 days unless kept). Tap a row to play it, keep it, download it, **Share link** (shares the file anyone-with-the-link and copies it). Every row has a **Delete** button, and the section a **Delete all (N)** for every take shown (the filter — All / Kept / Temp — decides which) — permanently, out of your Drive, after one confirmation; a progress line counts them down. |
 | **Saving now** | Whatever the background saver is still on (with Retry when something is stuck). |
 
-In Drive: **one level, one file per performance** — `SingersVoice/Performances/<song · meet [meet
-id] · date time>.mp4`, e.g. `Performances/Ammo · Friday Meet [mwe8q644-onrv6m] · 2026-11-12
-2047.mp4` (local time; the meet's title and id so every take of a meet is found together; the show
-is **MP4** with H.264 and AAC on Windows, Mac and iOS, H.264 and Opus on Linux Chrome, WebM only on
-Firefox; the sound at 192 kbps; Drive's own player opens it for anyone with the link). A take
-without video is its vocal WAV, named the same way. The details (who sang, offsets, settings) ride
-on the file itself — its Drive properties and description — so nothing else is stored beside it;
+In Drive: **one level, one file per performance** — `SingersVoice/Performances/<title · meet [meet
+id] · date time>.mp4`, e.g. `Performances/Full meet · Friday Meet [mwe8q644-onrv6m] · 2026-11-12
+2047.mp4` (local time; the meet's title and id so a meet's film is found at once; the film is
+**MP4** with H.264 and AAC on Windows, Mac and iOS, H.264 and Opus on Linux Chrome, WebM only on
+Firefox; the sound at 192 kbps; Drive's own player opens it for anyone with the link). A Studio
+take without video is its vocal WAV, named the same way. The details (who sang, the chapter marks,
+settings) ride on the file itself — its Drive properties and description — so nothing else is stored beside it;
 Studio takes land in the same folder, `Temp/…` until kept. **Delete is delete**: the file is
 removed from Drive, not trashed. Performances saved by older builds (a folder each, under
 `Performances/Live` or `/Offline`) are flattened once on the first start after the update: the show
@@ -348,7 +346,7 @@ filled in, paste the key, **your live link** (the page viewers open to watch you
 link or just your channel name: YouTube's `@handle` becomes `youtube.com/@handle/live`, which always
 points at your current live stream; `twitch.tv/<channel>`; a Facebook page's `/live`),
 **Save & enable**, and the switch comes on; *Change key* later; the in-house portal needs nothing;
-**Publish** → the show view), **Preview** (every open eligible meet as a 16:9 monitor tile with the
+**Publish** → the show view opens and **goes live by itself** — one tap), **Preview** (every open eligible meet as a 16:9 monitor tile with the
 exact broadcast picture), **Destinations** (the same keys and live links, managed in one place:
 YouTube, Facebook, Instagram, Twitch ingest + stream key + live link, Enable / Disable; keys are
 stored encrypted on the service and only their last 4 characters ever shown again), **History**.
@@ -362,19 +360,28 @@ singers' vocals, backing track in sync, full screen). It shows the singers from 
 next: …*), the countdown as an opener, *Paused by the host*, and carries on across every song of
 the event: the show is independent of the song.
 
-**YouTube, run by the app.** Under **Destinations → YouTube** one tap, **Connect YouTube**, lets the
-app run the channel (the Google screen once more, asking to manage your YouTube account): it makes
-the channel's HLS stream key and keeps it on the service, and from then on every show gets a YouTube
-broadcast of its own the moment **Go live** is tapped — made in the meet's name, bound to that
-stream, set to go live by itself when the stream arrives — with its public link
-(`youtube.com/watch?v=…`) as the **YouTube link** button, YouTube's own word on the stream in the bar
-(*YouTube: receiving the stream · going live… / live · stream good / not receiving the stream yet*),
-and the broadcast ended on **Stop publishing**. Nothing is pasted or looked up in YouTube Studio; the
-broadcasts are public (or unlisted, a setting under Destinations). What YouTube refuses comes back in
-plain words (*Live streaming is not enabled on this YouTube channel yet…*). Without connecting, the
-manual way remains: a stream key made for HLS and a live link — and a pasted YouTube link of any
-shape (a Studio dashboard link, youtu.be, a /live link) becomes the page viewers open. The two
-switches this needs in the Google Cloud console are in docs/GOOGLE_OAUTH.md.
+**YouTube, run by the app — one tap.** **Connect YouTube** sits right in the show view's bar (and
+under **Destinations → YouTube**): one tap lets the app run the channel (the Google screen once
+more, asking to manage your YouTube account): it makes the channel's HLS stream key and keeps it on
+the service, and from then on every show gets a YouTube broadcast of its own the moment **Go live**
+is tapped — made in the show's name, bound to that very stream (found again by its key at every Go
+live, so a channel that also holds a Studio-made stream never gets the broadcast on the wrong one —
+the way a show ends up on a *private* video nobody can open), set to go live by itself when the
+stream arrives — **unlisted** (anyone with the link can watch; not on the channel's page) or
+**public**, chosen in the select beside the destination chips, **never private**: the visibility is
+read back and put right if YouTube did not take it, and should YouTube ever report the video
+private the bar says so first, with a *Make it unlisted* button. Its link (`youtube.com/watch?v=…`)
+is written out under the bar with **Copy** — hand it to the team — and YouTube's own word on the
+stream is in the bar (*YouTube: receiving the stream · going live… / live · unlisted (anyone with
+the link) · stream good / not receiving the stream yet*); **Stop publishing** ends the broadcast and
+the link stays (the video is there). Should the broadcast fail to be made, YouTube is left out of
+that show and the bar says why (never a silent fall-back to a pasted key whose visibility nobody
+chose). Nothing is pasted or looked up in YouTube Studio. What YouTube refuses comes back in plain
+words (*Live streaming is not enabled on this YouTube channel yet…*). Without connecting, the manual
+way remains: a stream key made for HLS and a live link — then the video, its visibility and its link
+are YouTube Studio's, and the bar says so — and a pasted YouTube link of any shape (a Studio
+dashboard link, youtu.be, a /live link) becomes the page viewers open. The two switches this needs
+in the Google Cloud console are in docs/GOOGLE_OAUTH.md.
 
 **What Publish mode is, in one line.** What goes out to the platforms and the watch page is the
 **show**: the stage picture (every singer seated on it, cut out of their camera, the stage
@@ -382,15 +389,17 @@ background, the names on the riser — no lyrics, no controls) with the **whole 
 — the backing track and every singer's voice, blended on the publisher bus. And **the same thing
 is kept**: from *Go live* to *Stop publishing* the show view films exactly what it sends — the same
 picture, the same bus — into the publisher's own Drive as **Broadcast** (Performances → *meet ·
-Broadcast*), cut into the same **chapters** as the host's film (a chapter per song, restart, pause
-and stretch of stage, each its own timestamped file), so the stream and the files are one and the
-same and every song of the broadcast is playable on its own. The stream and the footage run from
-*Go live* to *Stop publishing* and nothing a singer does to the song — Play, Pause, Stop, Restart —
-interrupts either. Two films can exist of one meet, and
-they are different things: the host's **Full meet** (section 5a — the host's device, the stage mix
-as the audience in the room hears it, songs and talk, from the host's mic opening to *End meet*)
-and the publisher's **Broadcast** (the show, as it was streamed). Both say on their line, while they
-run, what sound reaches them and which chapter they are in.
+Broadcast*), one file with the same **chapter marks** as the host's film (a mark per song, restart,
+pause and stretch of stage), so the stream and the file are one and the same and every song of the
+broadcast is a tap away. The stream and the footage run from *Go live* to *Stop publishing* and
+nothing a singer does to the song — Play, Pause, Stop, Restart — interrupts either. Two films can
+exist of one meet, and they are different things: the host's **Full meet** (section 5a — the host's
+device, the stage mix as the audience in the room hears it, songs and talk, from the host's mic
+opening to *End meet*) and the publisher's **Broadcast** (the show, as it was streamed). The show
+view's bar says nothing of the footage while it runs — it is in the publisher's Performances when
+the broadcast stops; the bar is for the broadcast: **LIVE** and the time on air, YouTube's own word
+on the stream, and the **live links** written out with a Copy button each (YouTube's, the watch
+page's) to hand to the viewers.
 
 **The broadcast sound.** Publishing collects the whole song: every singer's vocal (after their
 own FX — the presets a singer picks are theirs, kept on their device until they change them)
@@ -432,33 +441,39 @@ a second or more and must never hold up the next segment or the watch page behin
 verdict lands on the job when it comes back and the next answer carries it. The key never leaves
 the service. **The key must be one YouTube made for HLS**: in YouTube Studio → Go live → Stream
 settings → Stream key → *Create new stream key*, streaming protocol **HLS**, latency *Low* (ultra-low
-is RTMP only); the Destinations page says so beside the YouTube key. The broadcast bar says
-*LIVE · 1:23 · 3100 kbps · 41 segments · YouTube: YouTube is receiving the show*; a wrong key reads
-*YouTube rejected the stream key (401)*. **The stream check.** Half a minute into every broadcast
-the show view plays its own playlist back from the service on a hidden, muted player — exactly what
-the watch page and the platforms get — and the bar says *stream check: ✓ plays (5 s checked)*, or
-what the player saw when it did not (*not playing after 30 s — at 0.0 s, ready 1/4, buffered
-nothing*); then the check stops, so the broadcasting device is not decoding its own stream for the
-whole show. The watch page, for its part, says *Still tuning in…* with the same player facts and a
-**Try again** after eight seconds without a picture. Under the bar, while the show is on air, **the live links**: one button per platform the show
-goes to — **YouTube link**, **Facebook link**, **Twitch link**… — that hands you the page viewers
-open there (copied to the clipboard, or the phone's share sheet, ready to paste into a chat or a
-post), and **Watch page link** for the in-house page; a platform whose live link you have not set
-shows *add your YouTube link* instead, which opens Destinations. The same buttons sit on the active
-job in History. Stop, or leaving the show view, ends the job; a job whose segments stop for 20 s is off
-air. **The footage, in the publisher's Drive.** From *Go live* to *Stop publishing* the show view
-also records the whole broadcast — the very picture the encoder sends and the very sound of the
-bus — as **one video in the publisher's own Drive**, written as it goes (ten seconds at a time, a
-resumable upload, so a two-hour show never has to fit in memory and a tab that dies loses seconds):
-the bar says *footage to your Drive · 1:23 · 210 MB · sound −20 dB* while it runs (the sound figure
-is what reaches the footage — the same bus the stream carries — and *NO SOUND* is said on the spot)
-and *footage saved to your Drive · 1:23* when the broadcast stops. It is listed under the publisher's **Performances** as
-**Broadcast** (*meet · Broadcast*, date, length, who was on stage), with the video; nothing is
-asked — as chapters, like the host's film. The host's own *Full meet* chapters are different files in the host's Drive (the stage mix,
-songs and talk); the footage is what went out. It needs the publisher's Google sign-in (a club
-owner with a year, or a super admin): in the developer preview it stays on the device, and the bar says so. What a browser needs: WebCodecs (Chrome, Edge, Safari 17+, Firefox 130+) and an AAC encoder
-for sound — Windows, macOS, iOS and Android have one; Chrome on Linux and Firefox do not and go
-out **video only** (the bar says so; the audience then hears the stage mix for sound).
+is RTMP only); the Destinations page says so beside the YouTube key — but the one-tap way is
+**Connect YouTube** (below), which makes the key for you. **The bar says what matters and nothing
+else**: a **LIVE** chip with the time on air (the kbps and segment count in its tooltip), YouTube's
+own word (*YouTube: live · unlisted (anyone with the link) · stream good*; by a pasted key, the
+service's: *YouTube is receiving the show*, and a wrong key reads *YouTube rejected the stream key
+(401)*), the stream check, and whatever is wrong. **The stream check.** Half a minute into every
+broadcast the show view plays its own playlist back from the service on a hidden, muted player —
+exactly what the watch page and the platforms get — and the bar says *✓ the stream plays*, or
+what the player saw when it did not (*stream check failed: not playing after 30 s — at 0.0 s, ready
+1/4, buffered nothing*); then the check stops, so the broadcasting device is not decoding its own
+stream for the whole show. The watch page, for its part, says *Still tuning in…* with the same
+player facts and a **Try again** after eight seconds without a picture. Under the bar, while the
+show is on air, **the live links**, each written out in full with a **Copy** button (the phone's
+share sheet where there is one): **YouTube** — the broadcast the app made for this very show, or the
+channel's standing live link — **Facebook**, **Twitch**… the page viewers open there, ready to
+paste into a chat or a post, and the in-house **Watch page**; a platform whose live link you have
+not set shows *add your YouTube link* instead, which opens Destinations. After *Stop publishing*
+the YouTube link stays on the bar — the video is there. The same links sit on the job in History.
+Stop, or leaving the show view, ends the job; a job whose segments stop for 20 s is off air. **The
+footage, in the publisher's Drive.** From *Go live* to *Stop publishing* the show view also records
+the whole broadcast — the very picture the encoder sends and the very sound of the bus — as **one
+video in the publisher's own Drive**, written as it goes (ten seconds at a time, a resumable
+upload, so a two-hour show never has to fit in memory and a tab that dies loses seconds), the same
+chapter marks on it as the host's film. The bar says nothing of it (a problem — no Drive, no sound
+reaching it — is said; the running figures ride on the bar's attributes for support): it is listed
+under the publisher's **Performances** as **Broadcast** (*meet · Broadcast*, date, length, who was
+on stage, the marks) once the broadcast stops; nothing is asked. The host's own *Full meet* is a
+different file in the host's Drive (the stage mix, songs and talk); the footage is what went out.
+It needs the publisher's Google sign-in (a club owner with a year, or a super admin): in the
+developer preview it stays on the device. What a browser needs: WebCodecs (Chrome, Edge, Safari
+17+, Firefox 130+) and an AAC encoder for sound — Windows, macOS, iOS and Android have one; Chrome
+on Linux and Firefox do not and go out **video only** (the bar says so; the audience then hears the
+stage mix for sound).
 
 **Low latency — the RTMP relay (`services/relay`, docs/RELAY.md).** YouTube's HLS ingestion is
 the slow road: YouTube plays an HLS-ingested stream 15–30 s behind the stage (its *ultra-low
@@ -482,10 +497,10 @@ page keeps playing throughout. Without a relay, YouTube keeps working through HL
 | --- | --- | --- |
 | Stage (room) | cameras, cut-outs, performer video mesh | the meet's slot list only |
 | Songs | which song is up / put forward (the choice card) | `lib/catalog.ts` + your Drive to resolve a song |
-| Song transport | kickstart, pause/resume/restart, takes | the current song being loadable on each device |
+| Song transport | kickstart, pause/resume/restart, seek | the current song being loadable on each device |
 | Audience | the show (when on air) or the stage, hearing the stage, chat, asking to sing | the meet snapshot; the publisher's segments; the host's mix batches (falls back to the backing track alone) |
 | Publishing show / Preview | the broadcast picture, jobs | the meet's slot list + the performers' video |
-| The film of the meet | the whole meet in the host's Drive, a chapter (file) per song, pause and stretch of stage | the host's device being on stage with its mic open (the stage's video and sound reach it only there) |
+| The film of the meet | the whole meet in the host's Drive — one file, a chapter mark per song, pause and stretch of stage | the host's device being on stage with its mic open (the stage's video and sound reach it only there) |
 | RTMP relay | the RTMP streams of a job | the service forwarding segments; the saved keys |
 
 Each of these can fail or change without the others noticing: a song that one device cannot load

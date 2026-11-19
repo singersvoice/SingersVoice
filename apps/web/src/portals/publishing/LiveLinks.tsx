@@ -1,8 +1,10 @@
 /**
- * The live links of a show: one button per platform the show goes to — "YouTube link", "Facebook
- * link", "Twitch link"… — that hands the publisher the page viewers open to watch (copied, or the
- * phone's share sheet), and the in-house watch page's link. A platform whose live link is not set
- * yet shows where to add it (Publishing › Destinations) instead.
+ * The live links of a show, one per platform the show goes to, each written out in full with a
+ * Copy button (the phone's share sheet where there is one) — the page viewers open to watch:
+ * YouTube's (the broadcast the app made for this very show, else the channel's standing live
+ * link), Facebook's, Twitch's… and the in-house watch page's. A platform whose live link is not
+ * set yet shows where to add it (Publishing › Destinations) instead. After the show, the YouTube
+ * link is the video's: it stays.
  */
 import { DESTINATIONS, type Destination, type DestinationKind } from '@singersvoice/protocol';
 import { IcShare } from '../../components/icons.tsx';
@@ -28,17 +30,33 @@ export async function giveLink(title: string, short: string, url: string): Promi
   toast(r === 'copied' ? `${short} link copied — share it: ${url}` : r === 'shared' ? 'Shared' : url, r === 'failed' ? 'warn' : 'ok', 7000);
 }
 
-export function LiveLinks(props: { title: string; destinations: DestinationKind[]; dests: Destination[]; watchPage: string | null; links?: Partial<Record<DestinationKind, string>>; compact?: boolean }) {
-  const links = liveLinks(props.destinations, props.dests, props.watchPage, props.links);
+export function LiveLinks(props: {
+  title: string;
+  destinations: DestinationKind[];
+  dests: Destination[];
+  watchPage: string | null;
+  links?: Partial<Record<DestinationKind, string>>;
+  compact?: boolean;
+  /** The show is over: only the links that still lead somewhere (the YouTube video), said so. */
+  over?: boolean;
+}) {
+  let links = liveLinks(props.destinations, props.dests, props.watchPage, props.links);
+  if (props.over) links = links.filter((l) => l.kind === 'youtube' && props.links?.youtube);
   if (!links.length) return null;
   return (
-    <div class="row livelinks" data-live-links={links.filter((l) => l.url).length} style="gap:6px;flex-wrap:wrap;align-items:center">
-      {!props.compact && <span class="small muted">Live links:</span>}
+    <div class="livelinks" data-live-links={links.filter((l) => l.url).length}>
+      {!props.compact && <span class="small muted">{props.over ? 'The show is over — the video stays at this link:' : 'Share with your viewers:'}</span>}
       {links.map((l) =>
         l.url ? (
-          <button key={l.kind} class="btn sm" aria-label={`${l.short} link`} title={`${l.url} — copies the link (or opens the share sheet)`} data-live-link={l.kind} onClick={() => void giveLink(props.title, l.short, l.url!)}>
-            <IcShare size={14} /> {l.short} link
-          </button>
+          <span key={l.kind} class="livelink" data-live-link-row={l.kind}>
+            <b class="small">{l.short}</b>
+            <a class="url mono small" href={l.url} target="_blank" rel="noopener" data-live-url={l.kind} title={`Open the ${l.short} page viewers watch on`}>
+              {l.url}
+            </a>
+            <button class="btn sm" aria-label={`${l.short} link`} title="Copies the link (or opens the share sheet)" data-live-link={l.kind} onClick={() => void giveLink(props.title, l.short, l.url!)}>
+              <IcShare size={14} /> Copy
+            </button>
+          </span>
         ) : (
           <a key={l.kind} class="chip warn" href={href('/publishing?tab=destinations')} target="_blank" rel="noopener" data-live-link-missing={l.kind} title={`Set your ${l.short} live link under Publishing › Destinations (the page viewers open to watch you)`}>
             add your {l.short} link

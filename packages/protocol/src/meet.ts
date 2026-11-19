@@ -244,7 +244,9 @@ export interface MeetPerformance {
   bytes: number;
   mimeType: string;
   createdAt: string;
-  /** A chapter of a filmed event (the film of the whole meet, the broadcast's footage): which event, which chapter, what kind. */
+  /** The film of the whole meet (or the broadcast's footage), one file: its chapter marks — where each song, pause and stretch of stage starts in it. */
+  chapters?: PerformanceChapter[];
+  /** An older build's film: this file is one chapter of it. */
   chapter?: PerformanceChapter;
 }
 
@@ -260,6 +262,8 @@ export interface RegisterPerformanceRequest {
   durationMs: number;
   bytes: number;
   mimeType: string;
+  /** See `MeetPerformance.chapters`. */
+  chapters?: PerformanceChapter[];
   /** See `MeetPerformance.chapter`. */
   chapter?: PerformanceChapter;
 }

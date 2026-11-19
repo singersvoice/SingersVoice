@@ -1,11 +1,13 @@
 /**
  * Performances (/studio/performances): everything you ever sang, by date and name.
  *
- * - Meet performances: one saved show per song of every meet you hosted or were in — the stage
- *   with everyone on it over the stage background, with the whole mix, exactly as Publisher mode
- *   showed it. The host's device recorded it; it lives in the host's Drive, shared with everyone
- *   who was in the meet, and anyone with its link can watch it.
- * - Your takes: your own takes (Studio, or your personal take of a meet song), Temp or kept.
+ * - Meet performances: the film of every meet you hosted or were in — one file for the whole meet,
+ *   the stage with everyone on it over the stage background, with the whole mix, exactly as
+ *   Publisher mode showed it, a chapter mark per song, pause and stretch of stage. The host's device
+ *   recorded it; it lives in the host's Drive, shared with everyone who was in the meet, and anyone
+ *   with its link can watch it. (A broadcast's footage, and an older build's per-song shows and
+ *   chapter files, are listed the same way.)
+ * - Your takes: your own Studio takes, Temp or kept.
  *
  * Deleting is plain: a Delete on every row, and Delete all for a whole section — the files go from
  * your Drive for good (never the trash), and a meet performance is unlisted for everyone in the meet.
@@ -20,8 +22,8 @@ import { api, controlConfigured } from '../../lib/api.ts';
 import { downloadBlob, shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
 import { closeInvite, invitePerformance, joinUrl } from '../../lib/joins.ts';
-import { groupEvents, type FilmEvent } from '../../lib/filmEvents.ts';
 import type { LoadedPerformance, PerformanceSummary } from '../../lib/storage/types.ts';
+import { chapterGlyph, marksLine, markTitle } from '../../video/chapters.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { saveJobs } from '../../lib/saveQueue.ts';
 import { accountUserId, isDrive, withProvider } from '../../state/session.ts';
@@ -63,12 +65,14 @@ export function Performances() {
 
   const mine = useMemo(() => new Map((list ?? []).map((p) => [p.performanceId, p])), [list]);
   const showIds = useMemo(() => new Set((shows ?? []).map((s) => s.performanceId)), [shows]);
-  const takes = (list ?? []).filter((p) => !showIds.has(p.performanceId) && !p.chapter).filter((p) => filter === 'all' || p.state === filter);
   const me = accountUserId.value;
-  /** The filmed events (the film of a meet, a broadcast's footage): their chapters, from the meet's registry and from my own Drive, grouped and ordered. */
-  const events = useMemo(() => groupEvents(shows ?? [], list ?? []), [shows, list]);
-  const songShows = (shows ?? []).filter((s) => !s.chapter);
-  const [openEvent, setOpenEvent] = useState<FilmEvent | null>(null);
+  /** A film in my own Drive the meet's registry does not list (the host left before it was listed; a broadcast's footage): shown among the meet performances all the same. */
+  const ownFilms: MeetPerformance[] = useMemo(
+    () => (list ?? []).filter((p) => !showIds.has(p.performanceId) && (p.chapters?.length || p.chapter)).map((p) => ({ performanceId: p.performanceId, meetId: p.meetId ?? '', meetTitle: p.meetTitle ?? '', hostUserId: me ?? '', hostName: '', songTitle: p.trackTitle, trackId: p.trackId, singers: p.singers ?? [], link: p.link ?? null, videoLink: p.videoLink ?? null, durationMs: p.durationMs, bytes: 0, mimeType: '', createdAt: p.createdAt, ...(p.chapters?.length ? { chapters: p.chapters } : {}), ...(p.chapter ? { chapter: p.chapter } : {}) })),
+    [list, showIds, me],
+  );
+  const takes = (list ?? []).filter((p) => !showIds.has(p.performanceId) && !p.chapter && !p.chapters?.length).filter((p) => filter === 'all' || p.state === filter);
+  const songShows = useMemo(() => [...(shows ?? []), ...ownFilms].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [shows, ownFilms]);
 
   const share = async (title: string, url: string | null) => {
     if (!url) return toast('No link yet — the host saved this performance without Drive', 'warn');
@@ -186,7 +190,7 @@ export function Performances() {
               <span class="chip">{shows?.length ?? '…'}</span>
             </span>
           </div>
-          <div class="muted small">One saved show per song of every meet you hosted or were in: everyone on stage over the stage background, with the whole mix — what Publisher mode showed. One file each, straight under Performances in the host's Drive, shared with everyone who was in the meet; anyone with the link can watch. Delete removes the file from your Drive for good (the host deletes; a performance in another host's Drive is theirs to delete).</div>
+          <div class="muted small">The film of every meet you hosted or were in — one file for the whole meet: everyone on stage over the stage background, with the whole mix, what Publisher mode showed, with a chapter mark per song, pause and stretch of stage. It lives in the host's Drive, shared with everyone who was in the meet; anyone with the link can watch. Delete removes the file from your Drive for good (the host deletes; a film in another host's Drive is theirs to delete).</div>
           {deleting && deleting.total > 1 && (
             <div class="row small muted">
               <Spinner /> Deleting {deleting.done + 1} of {deleting.total}…
@@ -197,121 +201,60 @@ export function Performances() {
               <Spinner /> Loading…
             </div>
           )}
-          {shows && !shows.length && !events.length && <div class="muted small">Nothing yet — sing a song in a live meet and the host's device saves the show here for everyone in it.</div>}
-          {events.length > 0 && (
-            <div class="stack" data-events>
-              {events.map((ev) => {
-                const hosted = ev.hostUserId === me || ev.chapters.every((c) => c.own && !c.show);
-                return (
-                  <div class="card stack pad-sm" key={ev.eventId} data-event={ev.eventId} style="background:var(--surface-2, rgba(255,255,255,0.03))">
-                    <div class="row between wrap">
-                      <div>
-                        <b>
-                          {ev.title} · {ev.meetTitle}
-                        </b>
-                        <div class="small muted">
-                          {new Date(ev.startedAt).toLocaleString()} · {ev.chapters.length} chapter{ev.chapters.length === 1 ? '' : 's'} · {formatMs(ev.durationMs)}
-                          {ev.hostUserId === me ? ' · you hosted' : ev.hostName ? ` · host ${ev.hostName}` : ''}
-                        </div>
-                        <div class="small faint">One file per chapter: every song, pause and stretch of stage on its own, in order, with its time — nothing merged, nothing lost with the next.</div>
-                      </div>
-                      <div class="row" style="gap:6px">
-                        {ev.chapters.some((c) => c.own) && (
-                          <button class="btn sm primary" onClick={() => setOpenEvent(ev)} data-play-all>
-                            <IcPlay size={14} /> Play all
-                          </button>
-                        )}
-                        {hosted && ev.chapters.length > 1 && (
-                          <button class="btn sm danger" disabled={deleting !== null} aria-label={`Delete every chapter of ${ev.title}`} onClick={() => void deleteRows(ev.chapters.map((c) => ({ id: c.performanceId, show: Boolean(c.show) })), `chapters of "${ev.title} · ${ev.meetTitle}"`)}>
-                            <IcTrash size={14} /> Delete all
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div class="list">
-                      {ev.chapters.map((c) => {
-                        const url = c.show?.videoLink ?? c.own?.videoLink ?? c.show?.link ?? c.own?.link ?? null;
-                        return (
-                          <div class="item wide-actions" key={c.performanceId} data-chapter={c.index} data-chapter-kind={c.kind} data-chapter-at={c.startedAt} data-performance-id={c.performanceId}>
-                            <div class="thumb" style={{ background: c.kind === 'song' ? 'linear-gradient(135deg,#3a1a6a,#7a3aa8)' : c.kind === 'pause' ? 'linear-gradient(135deg,#5a3a10,#8a5a1a)' : 'linear-gradient(135deg,#1a3a4a,#2a6a7a)' }}>
-                              <span class="small">{String(c.index).padStart(2, '0')}</span>
-                            </div>
-                            <div class="meta">
-                              <div class="t">
-                                {c.kind === 'song' ? '♪ ' : c.kind === 'pause' ? '⏸ ' : '▪ '}
-                                {c.title}
-                              </div>
-                              <div class="s">
-                                {new Date(c.startedAt).toLocaleTimeString()} · {formatMs(c.durationMs)}
-                                {c.singers.length ? ` · ${c.singers.map((x) => x.displayName.split(' ')[0]).join(', ')}` : ''}
-                              </div>
-                            </div>
-                            <div class="actions">
-                              {c.own ? (
-                                <button class="btn sm primary" onClick={() => setOpen(c.own!)}>
-                                  <IcPlay size={14} /> Play
-                                </button>
-                              ) : url ? (
-                                <a class="btn sm primary" href={url} target="_blank" rel="noopener">
-                                  <IcPlay size={14} /> Watch
-                                </a>
-                              ) : (
-                                <span class="chip">no link</span>
-                              )}
-                              <button class="btn sm" aria-label={`Share chapter ${c.index}`} onClick={() => void share(`${ev.title} ${String(c.index).padStart(2, '0')} · ${c.title}`, url)}>
-                                <IcShare size={14} /> Share
-                              </button>
-                              {(c.show ? c.show.hostUserId === me : Boolean(c.own)) && (
-                                <button class="btn sm danger" disabled={deleting !== null} aria-label={`Delete chapter ${c.index}`} title="Delete permanently from your Drive" onClick={() => void deleteRows([{ id: c.performanceId, show: Boolean(c.show) }], `chapter ${c.index} "${c.title}"`)}>
-                                  {deleting?.id === c.performanceId ? <Spinner /> : <IcTrash size={14} />} Delete
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {shows && !songShows.length && <div class="muted small">Nothing yet — hold a live meet and the host's device films it here for everyone in it.</div>}
           <div class="list">
             {songShows.map((s) => {
               const own = mine.get(s.performanceId);
               const hosted = s.hostUserId === me;
               const url = s.videoLink ?? own?.videoLink ?? s.link ?? own?.link ?? null;
+              const marks = s.chapters ?? [];
+              const label = s.chapter ? `${s.chapter.eventTitle} ${String(s.chapter.index).padStart(2, '0')} · ${chapterGlyph(s.chapter.kind)} ${s.songTitle}` : s.songTitle || 'Untitled song';
               return (
-                <div class="item wide-actions" key={s.performanceId} data-show={s.performanceId}>
+                <div class="item wide-actions" key={s.performanceId} data-show={s.performanceId} data-film-marks={marks.length} data-film-kinds={marks.map((c) => c.kind).join(",")}>
                   <div class="thumb" style="background:linear-gradient(135deg,#3a1a6a,#7a3aa8)">
                     <IcUsers size={20} />
                   </div>
                   <div class="meta">
                     <div class="t">
-                      {s.meetTitle} · {s.songTitle || 'Untitled song'}
+                      {s.meetTitle ? `${s.meetTitle} · ` : ''}
+                      {label}
                     </div>
                     <div class="s">
                       {new Date(s.createdAt).toLocaleString()} · {formatMs(s.durationMs)} · {s.singers.map((x) => x.displayName.split(' ')[0]).join(', ') || s.hostName}
-                      {hosted ? ' · you hosted' : ` · host ${s.hostName}`}
+                      {hosted ? ' · you hosted' : s.hostName ? ` · host ${s.hostName}` : ''}
                     </div>
+                    {marks.length > 0 && (
+                      <div class="s" data-film-chapters>
+                        {marksLine(marks)}
+                      </div>
+                    )}
                   </div>
                   <div class="actions">
-                    {own ? (
+                    {own && !marks.length ? (
                       <button class="btn sm primary" onClick={() => setOpen(own)}>
                         <IcPlay size={14} /> Play
                       </button>
                     ) : url ? (
-                      <a class="btn sm primary" href={url} target="_blank" rel="noopener">
+                      <a class="btn sm primary" href={url} target="_blank" rel="noopener" title={marks.length ? 'The whole film, streamed from Drive' : 'Watch'}>
                         <IcPlay size={14} /> Watch
                       </a>
+                    ) : own ? (
+                      <button class="btn sm primary" onClick={() => setOpen(own)}>
+                        <IcPlay size={14} /> Play
+                      </button>
                     ) : (
                       <span class="chip">no link</span>
+                    )}
+                    {own && marks.length > 0 && (
+                      <button class="btn sm" onClick={() => setOpen(own)} title="Play here, with a button per chapter" data-film-play>
+                        Chapters
+                      </button>
                     )}
                     <button class="btn sm" aria-label={`Share ${s.songTitle}`} onClick={() => void share(`${s.meetTitle} — ${s.songTitle}`, url)}>
                       <IcShare size={14} /> Share
                     </button>
-                    {hosted && (
-                      <button class="btn sm danger" disabled={deleting !== null} aria-label={`Delete ${s.songTitle || 'this performance'}`} title="Delete permanently from your Drive (everyone in the meet loses it)" onClick={() => void deleteRows([{ id: s.performanceId, show: true }], `"${s.songTitle || 'this performance'}"`)}>
+                    {(hosted || (own && !showIds.has(s.performanceId))) && (
+                      <button class="btn sm danger" disabled={deleting !== null} aria-label={`Delete ${s.songTitle || 'this performance'}`} title="Delete permanently from your Drive (everyone in the meet loses it)" onClick={() => void deleteRows([{ id: s.performanceId, show: showIds.has(s.performanceId) }], `"${s.songTitle || 'this performance'}"`)}>
                         {deleting?.id === s.performanceId ? <Spinner /> : <IcTrash size={14} />} Delete
                       </button>
                     )}
@@ -422,65 +365,10 @@ export function Performances() {
       <Sheet open={open !== null} onClose={() => setOpen(null)} title={open ? `${open.meetTitle ? `${open.meetTitle} · ` : ''}${open.chapter ? `${open.chapter.eventTitle} ${String(open.chapter.index).padStart(2, '0')} · ` : ''}${open.trackTitle}` : ''}>
         {open && <PerformanceDetail summary={open} show={(shows ?? []).find((s) => s.performanceId === open.performanceId) ?? null} onChanged={() => (setOpen(null), void reload())} />}
       </Sheet>
-      <Sheet open={openEvent !== null} onClose={() => setOpenEvent(null)} title={openEvent ? `${openEvent.title} · ${openEvent.meetTitle}` : ''}>
-        {openEvent && <EventPlayer event={openEvent} />}
-      </Sheet>
     </Page>
   );
 }
 
-/** The whole filming, chapter after chapter: each file plays in turn (the chapters that are in my Drive). */
-function EventPlayer(props: { event: FilmEvent }) {
-  const playable = props.event.chapters.filter((c) => c.own);
-  const [at, setAt] = useState(0);
-  const [url, setUrl] = useState('');
-  const [loading, setLoading] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const current = playable[at] ?? null;
-  useEffect(() => {
-    let gone = false;
-    let made = '';
-    if (!current) return;
-    setLoading(true);
-    void withProvider(async (p) => {
-      const perf = await p.getPerformance(current.performanceId);
-      if (!perf?.video || gone) return;
-      made = URL.createObjectURL(perf.video);
-      setUrl(made);
-    })
-      .catch((e) => toast(errorText(e), 'error'))
-      .finally(() => !gone && setLoading(false));
-    return () => {
-      gone = true;
-      if (made) URL.revokeObjectURL(made);
-    };
-  }, [current?.performanceId]);
-  useEffect(() => {
-    const v = videoRef.current;
-    if (v && url) void v.play().catch(() => undefined);
-  }, [url]);
-  return (
-    <div class="stack" data-event-player>
-      <div class="small muted">
-        Chapter {current ? String(current.index).padStart(2, '0') : '—'} of {playable.length}: {current?.title ?? ''}
-        {current ? ` · ${new Date(current.startedAt).toLocaleTimeString()} · ${formatMs(current.durationMs)}` : ''}
-      </div>
-      {loading && (
-        <div class="row">
-          <Spinner /> Loading the chapter…
-        </div>
-      )}
-      {url && <video ref={videoRef} src={url} controls playsInline style="width:100%;border-radius:12px;background:#000;max-height:40dvh" onEnded={() => at < playable.length - 1 && setAt(at + 1)} data-event-video={current?.index} />}
-      <div class="row wrap" style="gap:6px">
-        {playable.map((c, i) => (
-          <button class={`btn sm ${i === at ? 'primary' : ''}`} key={c.performanceId} onClick={() => setAt(i)} data-event-chapter={c.index}>
-            {String(c.index).padStart(2, '0')} {c.kind === 'song' ? '♪' : c.kind === 'pause' ? '⏸' : '▪'} {c.title}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function daysLeft(expiresAt: string | null): string {
   if (!expiresAt) return '';
@@ -638,6 +526,31 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
         </div>
       )}
       {videoUrl && <video ref={videoRef} src={videoUrl} muted={!isShow} controls={isShow} playsInline style="width:100%;border-radius:12px;background:#000;max-height:40dvh" />}
+      {videoUrl && (s.chapters?.length ?? 0) > 0 && (
+        <div class="row wrap" style="gap:6px" data-film-marks-row>
+          {s.chapters!.map((c) => (
+            <button
+              class="btn sm"
+              key={c.index}
+              data-film-mark={c.index}
+              data-film-mark-kind={c.kind}
+              data-film-mark-at={c.startedAt}
+              data-film-mark-ms={c.startMs}
+              title={`Jump to ${formatMs(c.startMs)}`}
+              onClick={() => {
+                const v = videoRef.current;
+                if (!v) return;
+                v.currentTime = c.startMs / 1000;
+                v.muted = false;
+                void v.play().catch(() => undefined);
+                setPlaying(true);
+              }}
+            >
+              {String(c.index).padStart(2, '0')} {chapterGlyph(c.kind)} {markTitle(c)} · {formatMs(c.startMs)}
+            </button>
+          ))}
+        </div>
+      )}
       {isShow && <div class="small faint">The show: everyone on stage over the stage background, with the whole mix — as Publisher mode showed it.</div>}
       {loaded && !isShow && !backing && <div class="callout warn">The backing track for this take isn't in your library any more — playing the vocal only.</div>}
       <div class="row">

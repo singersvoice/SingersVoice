@@ -77,7 +77,7 @@ export function youtubeReason(reason: string, fallback: string): string {
   }
 }
 
-async function call<T>(token: GoogleToken, method: 'GET' | 'POST', path: string, params: Record<string, string>, body?: unknown): Promise<T> {
+async function call<T>(token: GoogleToken, method: 'GET' | 'POST' | 'PUT', path: string, params: Record<string, string>, body?: unknown): Promise<T> {
   const q = new URLSearchParams(params).toString();
   const r = await youtubeFetch(`${API}/${path}?${q}`, {
     method,
@@ -110,6 +110,12 @@ interface BroadcastItem {
   status?: { lifeCycleStatus?: string; privacyStatus?: string };
 }
 
+/** Whether a stream key is the one the service keeps, by the hint the service hands out (its last characters, "…abcd"). */
+export function keyMatchesHint(streamKey: string, keyHint: string): boolean {
+  const tail = keyHint.replace(/^…/, '').trim();
+  return tail.length > 0 && streamKey.endsWith(tail);
+}
+
 export interface HlsStream {
   streamId: string;
   /** The stream key (YouTube's "stream name"): kept by the service, encrypted; never shown whole again. */
@@ -117,10 +123,16 @@ export interface HlsStream {
   ingestionAddress: string;
 }
 
-/** The channel's reusable HLS stream — found, or made now (one per channel, "SingersVoice"). */
-export async function ensureHlsStream(token: GoogleToken): Promise<HlsStream> {
+/**
+ * The channel's reusable HLS stream — found, or made now (one per channel, "SingersVoice"). A channel may hold
+ * several HLS streams (one made in YouTube Studio, say): the one whose key the service keeps (`keyHint`, its last
+ * characters) comes first, then the app's own, so the broadcast is bound to the very stream the show is sent to —
+ * bound to another, the show would go live on that stream's own broadcast (private, as YouTube Studio makes them).
+ */
+export async function ensureHlsStream(token: GoogleToken, keyHint = ''): Promise<HlsStream> {
   const list = await call<{ items?: StreamItem[] }>(token, 'GET', 'liveStreams', { part: 'id,snippet,cdn,status', mine: 'true', maxResults: '50' });
-  let item = (list.items ?? []).find((i) => i.cdn?.ingestionType === 'hls' && i.cdn.ingestionInfo?.streamName);
+  const hls = (list.items ?? []).filter((i) => i.cdn?.ingestionType === 'hls' && i.cdn.ingestionInfo?.streamName);
+  let item = (keyHint ? hls.find((i) => keyMatchesHint(i.cdn!.ingestionInfo!.streamName!, keyHint)) : undefined) ?? hls.find((i) => i.snippet?.title === 'SingersVoice') ?? hls[0];
   if (!item) {
     item = await call<StreamItem>(token, 'POST', 'liveStreams', { part: 'id,snippet,cdn,contentDetails,status' }, {
       snippet: { title: 'SingersVoice', description: 'The SingersVoice stage, streamed by the app (HLS)' },
@@ -138,7 +150,11 @@ export interface Broadcast {
   watchUrl: string;
 }
 
-/** A broadcast for this show — made now, bound to the HLS stream, set to go live by itself when the stream arrives and to end when it stops. */
+/**
+ * A broadcast for this show — made now, bound to the HLS stream, set to go live by itself when the stream arrives
+ * and to end when it stops. Its visibility is read back and put right if YouTube did not take it (a private video
+ * is one nobody can open by its link).
+ */
 export async function startBroadcast(token: GoogleToken, o: { title: string; streamId: string; privacy: YoutubePrivacy; description?: string }): Promise<Broadcast> {
   const b = await call<BroadcastItem>(token, 'POST', 'liveBroadcasts', { part: 'id,snippet,status,contentDetails' }, {
     snippet: { title: o.title.slice(0, 100) || 'SingersVoice live', description: (o.description ?? 'Live on SingersVoice').slice(0, 5000), scheduledStartTime: new Date().toISOString() },
@@ -146,7 +162,13 @@ export async function startBroadcast(token: GoogleToken, o: { title: string; str
     contentDetails: { enableAutoStart: true, enableAutoStop: true, enableDvr: true, recordFromStart: true, monitorStream: { enableMonitorStream: false }, latencyPreference: 'low' },
   });
   await call<unknown>(token, 'POST', 'liveBroadcasts/bind', { id: b.id, part: 'id', streamId: o.streamId });
+  if (b.status?.privacyStatus && b.status.privacyStatus !== o.privacy) await setBroadcastPrivacy(token, b.id, o.privacy);
   return { broadcastId: b.id, watchUrl: youtubeBroadcastUrl(b.id) };
+}
+
+/** Change a broadcast's visibility (unlisted: anyone with the link; public: on the channel for everyone). */
+export async function setBroadcastPrivacy(token: GoogleToken, broadcastId: string, privacy: YoutubePrivacy): Promise<void> {
+  await call<unknown>(token, 'PUT', 'liveBroadcasts', { part: 'id,status' }, { id: broadcastId, status: { privacyStatus: privacy } });
 }
 
 export interface YoutubeStatus {
@@ -156,24 +178,36 @@ export interface YoutubeStatus {
   stream: string;
   /** good · ok · bad · noData · (unknown) */
   health: string;
+  /** public · unlisted · private · (unknown) — who can open the link. */
+  privacy?: string;
 }
 
-/** YouTube's own word on the show: the broadcast's life cycle and whether the stream is coming in. */
+/** YouTube's own word on the show: the broadcast's life cycle and visibility, and whether the stream is coming in. */
 export async function youtubeStatus(token: GoogleToken, broadcastId: string, streamId: string): Promise<YoutubeStatus> {
   const [b, s] = await Promise.all([
     call<{ items?: BroadcastItem[] }>(token, 'GET', 'liveBroadcasts', { part: 'status', id: broadcastId }),
     call<{ items?: StreamItem[] }>(token, 'GET', 'liveStreams', { part: 'status', id: streamId }),
   ]);
-  return { broadcast: b.items?.[0]?.status?.lifeCycleStatus ?? 'unknown', stream: s.items?.[0]?.status?.streamStatus ?? 'unknown', health: s.items?.[0]?.status?.healthStatus?.status ?? 'unknown' };
+  const bs = b.items?.[0]?.status;
+  return { broadcast: bs?.lifeCycleStatus ?? 'unknown', stream: s.items?.[0]?.status?.streamStatus ?? 'unknown', health: s.items?.[0]?.status?.healthStatus?.status ?? 'unknown', ...(bs?.privacyStatus ? { privacy: bs.privacyStatus } : {}) };
 }
 
-/** The status in the publisher's words, for the bar. */
-export function youtubeWord(s: YoutubeStatus): { text: string; ok: boolean } {
+export interface YoutubeWord {
+  text: string;
+  ok: boolean;
+  /** YouTube says the video is private: nobody can open its link (the bar offers to make it unlisted). */
+  privateVideo?: boolean;
+}
+
+/** The status in the publisher's words, for the bar: the visibility first — a private video is the one thing viewers cannot get past. */
+export function youtubeWord(s: YoutubeStatus): YoutubeWord {
   const receiving = s.stream === 'active' && s.health !== 'noData';
-  if (s.broadcast === 'live') return { text: `YouTube: live · stream ${receiving ? (s.health === 'good' ? 'good' : s.health) : 'not coming in'}`, ok: receiving };
-  if (s.broadcast === 'complete' || s.broadcast === 'revoked') return { text: `YouTube: the broadcast is ${s.broadcast === 'complete' ? 'over' : 'revoked'}`, ok: false };
-  if (receiving) return { text: `YouTube: receiving the stream (${s.health}) · going live…`, ok: true };
-  return { text: 'YouTube: not receiving the stream yet', ok: false };
+  if (s.privacy === 'private' && s.broadcast !== 'complete' && s.broadcast !== 'revoked') return { text: 'YouTube: the video is PRIVATE — nobody can open the link', ok: false, privateVideo: true };
+  const seen = s.privacy === 'unlisted' ? ' · unlisted (anyone with the link)' : s.privacy === 'public' ? ' · public' : '';
+  if (s.broadcast === 'live') return { text: `YouTube: live${seen} · stream ${receiving ? (s.health === 'good' ? 'good' : s.health) : 'not coming in'}`, ok: receiving };
+  if (s.broadcast === 'complete' || s.broadcast === 'revoked') return { text: `YouTube: the broadcast is ${s.broadcast === 'complete' ? 'over — the video stays at the link' : 'revoked'}`, ok: false };
+  if (receiving) return { text: `YouTube: receiving the stream (${s.health}) · going live…${seen}`, ok: true };
+  return { text: `YouTube: not receiving the stream yet${seen}`, ok: false };
 }
 
 /** End the broadcast (Stop publishing); a broadcast that never went live, or is over already, is left as it is. */

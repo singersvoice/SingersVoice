@@ -99,7 +99,7 @@ export function Watch(props: { id: string }) {
           <div class="stack">
             <div class="watch-stage">
               <StageBackground id={m.backgroundId} />
-              <img class="logo" src={asset('brand/sv-mark.png')} alt="" />
+              {!show.playing && <img class="logo" src={asset('brand/sv-mark.png')} alt="" />}
               <LiveShow meetId={props.id} status={liveStatus} onState={setShow}>
                 <div class="watch-center">
                   <div class="stack" style="text-align:center;justify-items:center">

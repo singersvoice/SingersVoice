@@ -161,7 +161,7 @@ function chapterOf(c: unknown): PerformanceChapter | null {
   const eventId = typeof x.eventId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(x.eventId) ? x.eventId : null;
   if (!kind || !eventId) return null;
   const startedAt = typeof x.startedAt === 'string' && !Number.isNaN(Date.parse(x.startedAt)) ? new Date(x.startedAt).toISOString() : new Date().toISOString();
-  return { eventId, eventTitle: String(x.eventTitle ?? '').slice(0, 60), index: Math.max(0, Math.min(100_000, Math.round(Number(x.index) || 0))), kind, trackId: String(x.trackId ?? '').slice(0, 120), trackTitle: String(x.trackTitle ?? '').slice(0, 120), songEpoch: Math.max(0, Math.round(Number(x.songEpoch) || 0)), startedAt, startMs: Math.max(0, Math.round(Number(x.startMs) || 0)) };
+  return { eventId, eventTitle: String(x.eventTitle ?? '').slice(0, 60), index: Math.max(0, Math.min(100_000, Math.round(Number(x.index) || 0))), kind, trackId: String(x.trackId ?? '').slice(0, 120), trackTitle: String(x.trackTitle ?? '').slice(0, 120), songEpoch: Math.max(0, Math.round(Number(x.songEpoch) || 0)), startedAt, startMs: Math.max(0, Math.round(Number(x.startMs) || 0)), ...(typeof x.songMs === 'number' && Number.isFinite(x.songMs) ? { songMs: Math.max(0, Math.round(x.songMs)) } : {}) };
 }
 
 const DEFAULT_ORIGINS = ['https://singersvoice.github.io', 'http://localhost:5173', 'http://localhost:4173', 'http://127.0.0.1:5173', 'http://127.0.0.1:4173'];
@@ -1236,6 +1236,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       mimeType: String(body.mimeType ?? '').slice(0, 80),
       createdAt: new Date().toISOString(),
       ...(chapterOf(body.chapter) ? { chapter: chapterOf(body.chapter)! } : {}),
+      // The film's chapter marks (one file for the whole meet): each checked as a chapter is, at most a few hundred.
+      ...(Array.isArray(body.chapters) ? { chapters: body.chapters.slice(0, 400).map(chapterOf).filter((x): x is PerformanceChapter => x !== null) } : {}),
     };
     await store.addPerformance(performance);
     touch(meet);

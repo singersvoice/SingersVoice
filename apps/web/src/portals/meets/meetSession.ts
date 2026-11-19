@@ -258,10 +258,7 @@ export class MeetSession {
     const r = await api.post('POST /meets/:id/chat', `/meets/${encodeURIComponent(this.meetId)}/chat`, { resumeToken: this.resumeToken, text });
     this.apply({ ...(this.snapshot.value as MeetSnapshot), chat: [r.message] });
   }
-  async registerRecording(performanceId: string, driveFolderLink: string | null, durationMs: number): Promise<void> {
-    await api.post('POST /meets/:id/recordings', `/meets/${encodeURIComponent(this.meetId)}/recordings`, { resumeToken: this.resumeToken, performanceId, driveFolderLink, durationMs });
-  }
-  /** The host registers a song's saved show with the meet; the answer names who else to share it with. */
+  /** The host registers the film of the meet (one file, its chapter marks on it) with the meet; the answer names who else to share it with. */
   async registerPerformance(body: Omit<RegisterPerformanceRequest, 'resumeToken'>): Promise<{ performance: MeetPerformance; shareWith: string[] }> {
     const r = await api.post('POST /meets/:id/performances', `/meets/${encodeURIComponent(this.meetId)}/performances`, { resumeToken: this.resumeToken, ...body });
     const snap = this.snapshot.value;

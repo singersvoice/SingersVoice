@@ -33,7 +33,7 @@ that the code depends on.
 | --- | --- | --- | --- |
 | Tracks | `/tracks` | track files in Drive, catalog entries, YouTube song tracks | Drive API, `sv-control /catalog/*`, `/yt/*` (the relay behind it) |
 | Studio | `/studio/*` | tracks, takes, audio settings | Drive API (works offline); the catalog only to publish a saved track or pull one to sing |
-| Live Meets | `/meets`, `/meet/:id` | meet session (poll), personal take, the saved show | `sv-control /meets/*`, Drive for the take and the show |
+| Live Meets | `/meets`, `/meet/:id` | meet session (poll), the virtual stage, the film of the meet (the host's device) | `sv-control /meets/*`, Drive for the film |
 | Publishing | `/publishing`, `/publishing/show/:id`, `/watch/:id` | destinations, jobs, the show view | `sv-control /publishing/*`, `/meets/:id/*` (as a publisher), `/watch/*` |
 
 No portal imports another's screens; they share only `packages/protocol`, `lib/` (storage, api, audio) and
@@ -255,11 +255,10 @@ mounted until it wraps up, even once the meet is back in the lobby. The full wal
    top is the host's. A seek while playing is a **cued jump**: every device keeps playing and switches
    to the new position at the shared instant (`BackingPlayer.cue`, a second buffer source scheduled
    sample-accurately against the first); a seek while paused moves the paused position for everyone.
-   The recorder worklet drops frames between the pause and resume instants and, at a jump, inserts
-   that much silence (forward) or keeps only the frames before the new position (backward: the part sung
-   again replaces the old one), so a personal take stays on the track timeline across any number of
-   pauses and jumps; its alignment is anchored to the timeline origin captured at the first cue. The
-   show recording runs on in wall time (the song simply jumps in it). Performers poll every 1.5 s while
+   (The recorder worklet — a Studio take's — drops frames between a pause and a resume and, at a jump,
+   inserts that much silence or keeps only the frames before the new position, so a take stays on the
+   track timeline; in a live meet nothing records per song.) The film of the meet runs on in wall time
+   (the song simply jumps in it, a chapter mark at the jump). Performers poll every 1.5 s while
    live, the audience every 2 s — and every link of the mesh carries a small negotiated data channel
    (`sv`, id 1, made on both sides before the first offer so it never renegotiates): after any
    action of a device (`MeetSession.onActed`) it says *changed* to every linked peer, and each one
@@ -535,47 +534,41 @@ gets the plain unpack, every texel it fetches costing a CPU the stage needs else
 compositor draws the result with the canvas's high-quality resampling. The broadcast encodes at
 4.5 Mbps (720p30 H.264).
 
-**The saved performance (`video/showRecorder.ts`).** Every singer's device records the show while
-a song runs: its own 1280×720 canvas (the meet's background drawn as the show view shows it, then
-a 'show' compositor over the same cut-outs the stage draws — the remote frames are unpacked once
-and shared, `UnpackedFrame`), its own audio bus on the engine's context (backing track + own vocal
+**The show (`video/showRecorder.ts`).** Every singer's device draws the show beside its stage: its
+own 1280×720 canvas (the meet's background drawn as the show view shows it, then a 'show'
+compositor over the same cut-outs the stage draws — the remote frames are unpacked once and
+shared, `UnpackedFrame`), its own audio bus on the engine's context (backing track + own vocal
 after FX, held back by the same quarter second through a DelayNode — and this device's own cut-out
 through a frame ring, so its picture is in step with its sound — plus every other singer's vocal as
-it arrives — through the shared **mix bus** (`audio/mixBus.ts`, below), one MediaRecorder on a
-**hand-fed video track** (`video/canvasTrack.ts`: a `MediaStreamTrackGenerator` that gets every
-frame the drawing loop draws, as a VideoFrame, where the browser has it — Chrome, Edge — the canvas
-capture elsewhere; `canvas.captureStream()` alone hands out a frame only when the page renders one,
-and a hidden tab — the host over in the show view, a window covered by another — renders nothing,
-which once left a saved show with one picture and five minutes of song; the film of the meet and
-the alpha-packed video the other singers get go down the same kind of track) — **MP4
-first** (`pickShowMime`: H.264 + AAC where the browser has an AAC encoder — Windows, Mac, iOS —
-else H.264 + Opus in MP4, WebM only where MP4 is not offered, i.e. Firefox; audio at 192 kbps) so
+it arrives — through the shared **mix bus** (`audio/mixBus.ts`, below)). In the **Studio** that is
+what a take records: one MediaRecorder on a **hand-fed video track** (`video/canvasTrack.ts`: a
+`MediaStreamTrackGenerator` that gets every frame the drawing loop draws, as a VideoFrame, where
+the browser has it — Chrome, Edge — the canvas capture elsewhere; `canvas.captureStream()` alone
+hands out a frame only when the page renders one, and a hidden tab — a window covered by another —
+renders nothing, which once left a saved show with one picture and five minutes of song; the film
+of the meet and the alpha-packed video the other singers get go down the same kind of track) —
+**MP4 first** (`pickShowMime`: H.264 + AAC where the browser has an AAC encoder — Windows, Mac, iOS
+— else H.264 + Opus in MP4, WebM only where MP4 is not offered, i.e. Firefox; audio at 192 kbps) so
 a saved show plays wherever its Drive link is opened; the Drive file is named *song · meet ·
-date.mp4* (`performanceVideoName`), found again by its app property — from the moment Start is
-tapped (a recorder takes a moment to start; one started at the kickstart loses the first beat, so
-it starts ahead of it, and `videoOffsetMs`, its first frame's place on the song, is negative) to the
-end of the song, paused with the transport. Every frame the recorder draws ends with **the brand's
-mark** (`video/brandMark.ts`): the app's own small animated loop (`brand/sv-loop-sm.mp4`, the one
-the page's corner watermark plays) as a rounded tile in the top-right corner, an eighth of the
-picture tall — so the saved performance, each chapter of the film of a meet and the broadcast all
-carry it; the loop's poster stands in until it plays. The take's video
-is that recording (`videoOffsetMs` = its first frame's place on the track timeline, lag included).
-A live take never waits for a review: the stage hands it to the **background saver**
-(`lib/saveQueue.ts`, one job at a time, each stage memoised so a retry never uploads twice, three
-automatic retries then a Retry chip; `portals/meets/liveTake.ts` is the job) and the singer is
-already back on the stage. The take is kept at once as one file in `Performances`, registered as the
-singer's take (`POST /meets/:id/recordings`, by account — the singer may have left the room by
-then), and the host's copy is **the meet's performance**: shared from the host's Drive
-anyone-with-the-link and with each member's Google account, registered with the meet
-(`POST /meets/:id/performances`, host by account → the `performances` table; `meet_members`
-remembers everyone who was ever in the meet). A chapter of the film of the meet (4c below) is
-registered the same way, with `chapter` on the row (in `performances.data`: the event id and title,
-the index, the kind — `song`, `pause`, `stage` — the song, the instant it started) and on the Drive
-file's `appProperties` (`svEvent`, `svChapter`, `svChapterKind`, `svChapterAt`, `svChapterSong`),
-so a filming is put back together from either side. `GET /performances` lists every show and
-chapter of every meet the account hosted or was in — the Performances page, with the shareable
-links, the chapters grouped under their filming. The PWA never applies an update while a save is
-pending.
+date.mp4* (`performanceVideoName`), found again by its app property. In a **live meet nothing is
+recorded per song**: the live stage plays the song in step with the shared transport and that is
+all; the host's device keeps the one mix bus up the whole time it is on stage (`startTalk`: the
+talk between songs, the count-in, the song — so what the audience hears never breaks off), and the
+**film of the meet** (4c below) reads the show's picture (`takeTrack`) and that bus (`setTap`) for
+the whole meet — one file, a chapter mark per song. Every frame the show draws ends with **the
+brand's mark** (`video/brandMark.ts`): the app's own small animated loop (`brand/sv-loop-sm.mp4`,
+the one the page's corner watermark plays) as a rounded tile in the top-right corner, an eighth of
+the picture tall — so a Studio take, the film of a meet and the broadcast all carry it; the loop's
+poster stands in until it plays. Because the mark is in the broadcast picture itself, the show view
+draws no page watermark while that picture is mirrored on it, and the watch page drops its own
+corner logo while the stream plays: **one mark, never two**. The film lands in Drive as the meet
+goes and is registered once at the meet's end (`portals/meets/meetFilm.ts`, through the
+**background saver** `lib/saveQueue.ts`: shared from the host's Drive anyone-with-the-link and with
+each member's Google account, registered with the meet — `POST /meets/:id/performances`, host by
+account → the `performances` table, `chapters` on the row; `meet_members` remembers everyone who was
+ever in the meet). `GET /performances` lists the film of every meet the account hosted or was in —
+the Performances page, with the shareable link, the marks and the in-app player. The PWA never
+applies an update while a save is pending.
 
 **Preview** (admin monitoring) lists every open meet the account may publish (hosted or joined,
 any other by link / code) as a monitor tile: the exact broadcast picture (`showStage.tsx`, the
@@ -658,8 +651,13 @@ link; the first four tiles connect by themselves, the rest on request.
    itself: `Broadcast.film` is a `MeetRecorder` (`video/meetRecorder.ts`, the same recorder as the
    host's film of the meet, with `busSound(bus)` as its sound instead of the stage mix) on the
    encoder's own canvas, from Go live to Stop — the footage goes into the publisher's Drive as it
-   is recorded (`PerformanceStream`, ten-second pieces, a resumable upload) and is listed under the
-   publisher's Performances as *Broadcast*. Tests: `SV_FAKE_YOUTUBE_DIR` makes the
+   is recorded (`PerformanceStream`, ten-second pieces, a resumable upload), one file with the same
+   chapter marks as the host's film, and is listed under the publisher's Performances as
+   *Broadcast*; the show view's bar says nothing of it (its state rides on the bar's data
+   attributes for support). The bar itself is a few chips — **LIVE** with the time on air (the kbps
+   and segment count in its tooltip), YouTube's own word on the stream, the stream check, and
+   whatever is wrong — and the **live links** written out in full, each with a Copy button, the
+   watch page's among them (`LiveLinks.tsx`). Tests: `SV_FAKE_YOUTUBE_DIR` makes the
    Node service serve a stand-in at `/fake/youtube/http_upload_hls`; the live e2e goes live from
    the show view, ffprobes a segment the fake received, watches the show on both pages, records six
    seconds of the bus and of an audience device's output and measures them (`tools/ci/audio-measure.mjs`),
@@ -683,52 +681,69 @@ link; the first four tiles connect by themselves, the rest on request.
    against a stub ffmpeg.
 4b′. **YouTube, run by the app** (`lib/youtube.ts`, the YouTube Data API v3 with the publisher's own
    Google token carrying `YOUTUBE_SCOPE` — asked for once, incrementally, by **Connect YouTube**
-   under Destinations, and from then on by every token request, `youtubeWanted`): Connect finds the
-   channel's reusable HLS `liveStream` or makes one (`ensureHlsStream`) and hands its key to the
-   service like a pasted one (`PUT /publishing/destinations/youtube` with `auto: true`); **Go live**
-   makes a `liveBroadcast` in the meet's name (unlisted by default — anyone with the link can watch,
-   the channel's page does not list it; public is a setting — `enableAutoStart`/`AutoStop`,
-   low latency), binds it to the stream (`startBroadcast`) and puts its public page on the job
-   (`PublishJob.links.youtube`, `PublishJob.youtube` — `POST /publishing/jobs` takes both; the
-   live-link buttons prefer a job's own links to the destination's standing link); while the job
-   runs the show view reads the broadcast's `lifeCycleStatus` and the stream's `streamStatus` /
-   `healthStatus` every 15 s (`youtubeStatus` → `youtubeWord`: *receiving · going live…*, *live ·
-   stream good*, *not receiving the stream yet*); **Stop** transitions the broadcast to `complete`
-   (`endBroadcast`; a broadcast that never went live is left as it is). YouTube's refusals come back
-   in the publisher's words (`youtubeReason`: live streaming not enabled on the channel, the API not
-   enabled in the Cloud project, the daily quota, a missing permission). A pasted YouTube link of
-   any shape — a Studio dashboard link above all, which viewers cannot open — becomes the page
-   viewers open (`youtubeWatchUrl`). Tests: `apps/web/test/youtube.test.ts` on a fake API.
+   — a button right in the show view's bar, and under Destinations — and from then on by every
+   token request, `youtubeWanted`): Connect (`portals/publishing/destinations.ts`,
+   `connectYoutubeDestination`) finds the channel's reusable HLS `liveStream` or makes one
+   (`ensureHlsStream`) and hands its key to the service like a pasted one
+   (`PUT /publishing/destinations/youtube` with `auto: true`); **Go live** finds that very stream
+   again (by the key's last characters, `keyHint` — a channel may hold a Studio-made HLS stream
+   too, and a broadcast bound to the wrong one goes live on that stream's own broadcast, private
+   as Studio makes them; a key that changed on YouTube's side is saved again), makes a
+   `liveBroadcast` in the show's name — **unlisted** by default (anyone with the link can watch;
+   the channel's page does not list it) or **public**, chosen in a select beside the destination
+   chips, never private: the visibility is read back after the insert and put right if YouTube did
+   not take it (`setBroadcastPrivacy`) — `enableAutoStart`/`AutoStop`, low latency, binds it to
+   the stream (`startBroadcast`) and puts its page on the job (`PublishJob.links.youtube`,
+   `PublishJob.youtube` — `POST /publishing/jobs` takes both; the live links prefer a job's own to
+   the destination's standing link); should the broadcast fail to be made, YouTube is left out of
+   that show and the bar says why (never a silent fall-back to the pasted key, whose visibility
+   nobody chose). While the job runs the show view reads the broadcast's `lifeCycleStatus` and
+   `privacyStatus` and the stream's `streamStatus` / `healthStatus` every 15 s (`youtubeStatus` →
+   `youtubeWord`: *receiving · going live…*, *live · unlisted (anyone with the link) · stream good*,
+   *not receiving the stream yet*; a video YouTube reports **private** is said first, with a
+   *Make it unlisted* button); **Stop** transitions the broadcast to `complete` (`endBroadcast`; a
+   broadcast that never went live is left as it is) and the YouTube link stays on the bar — the
+   video is there. A Publish from the portal's Publish tab opens the show view with `go=1` and it
+   goes live by itself: one tap. YouTube's refusals come back in the publisher's words
+   (`youtubeReason`: live streaming not enabled on the channel, the API not enabled in the Cloud
+   project, the daily quota, a missing permission). A pasted YouTube link of any shape — a Studio
+   dashboard link above all, which viewers cannot open — becomes the page viewers open
+   (`youtubeWatchUrl`). Tests: `apps/web/test/youtube.test.ts` on a fake API.
 4c. **The film of the meet** (`video/meetRecorder.ts`): on the host's device, from the host on
    stage with the mic open until the meet is over — **never stopped by the song's transport**: a
    singer's Start, Pause, Stop, Restart or seek changes nothing about the film running — on the
    room's ShowRecorder canvas (drawn for the whole meet — `keepDrawing`; 1280×720 at 24 fps where
    the browser has hardware H.264 in MP4 — Windows, Mac, iOS, Android — and a 960×540, 15 fps copy
    of it where it only encodes WebM in software, so the stage itself never slows down) with a tap
-   (`setTap`) on every mix bus the device builds (the song's, the talk-back's). The film is **cut
-   into chapters** where the stage goes (`video/chapters.ts`, read off the meet's shared transport
-   every poll): a new chapter when a song starts — at its kickstart instant, not when the poll that
-   announced it landed, so the chapter begins where the song begins — and again for every restart,
-   seek and resume (each a new epoch: its own chapter, *Ammo (continued at 1:12)*), one for every
-   pause (*Paused — Ammo*, an interruption, cut at the cued instant), one for the stage between
-   songs (*On stage*, a new one after every song). Every chapter is its own MediaRecorder on the
-   same stream and its own `PerformanceStream` — the Drive provider's `beginPerformanceStream`: one
-   resumable upload session fed in order, pieces in 256 KiB multiples as 4 MiB fill, the last with
-   the total; the next chapter's recorder starts before the last one stops (they overlap by a frame,
-   so there is no gap), a chapter longer than ten minutes carries on in parts (*… (part 2)*), the
-   session and the confirmed offset are remembered in localStorage, and a chapter whose tab died
-   is completed by the next start (`finishDanglingFilms`: Drive is asked what it holds, the file is
-   closed there). Each chapter is a performance of the meet (kind `show`, `chapter` on its manifest
-   and on the Drive file's properties: the event id, the index, the kind, the song, the instant it
-   started), registered and shared like a song's show as it lands, so nothing is ever overwritten or
-   merged and every song is playable on its own; the ended screen and Performances put the filming
-   back together (`lib/filmEvents.ts` groups them by event, in order, with *Play all*).
+   (`setTap`) on the mix bus the host's device keeps up the whole time it is on stage (the talk
+   between songs, the count-in, the song: one bus, `startTalk`). **The film is ONE file** — one
+   MediaRecorder for the whole meet, one `PerformanceStream` (the Drive provider's
+   `beginPerformanceStream`: one resumable upload session fed in order, pieces in 256 KiB multiples
+   as 4 MiB fill, the last with the total; the session and the confirmed offset are remembered in
+   localStorage, and a film whose tab died is completed by the next start — `finishDanglingFilms`:
+   Drive is asked what it holds, the file is closed there, the marks up to then on it). What the
+   stage did is written on the file as **chapter marks** (`video/chapters.ts`, read off the meet's
+   shared transport every poll): a mark when a song starts — at its kickstart instant, not when the
+   poll that announced it landed, so the mark is where the song begins — and again for every
+   restart, seek and resume (each a new epoch: *Ammo*, *Ammo (from 1:12)* where a jump or a resume
+   picked it up, `songMs`), one for every pause (*Paused — Ammo*, cut at the cued instant), one for
+   the stage between songs (*On stage*). The marks ride on the manifest as it grows
+   (`PerformanceManifest.chapters`: the index, the kind, the song, the instant, the offset from
+   the film's start; `PerformanceStream.update` rewrites the Drive file's description every time
+   one is added, so even a film that is never closed carries its marks). When the meet ends the film
+   is registered once with the meet (`POST /meets/:id/performances`, `chapters` on the row,
+   `portals/meets/meetFilm.ts`), shared anyone-with-the-link and with every member's Google
+   account, and listed under Performances for everyone who was in the meet: one row, the marks on a
+   line (*▪ On stage 0:00 · ♪ Ammo 3:18 · ⏸ Paused — Ammo 7:40 · …*), **Watch** (the file streamed
+   from Drive) and **Chapters** (the in-app player with a button per mark that seeks to it). Nothing
+   is saved per song on any singer's device: the live stage plays the song and talks to the
+   transport, and the film is the record of every song.
 4d. **Orientation.** The screen mirrors the singer's own camera (a selfie, as a mirror does); the
    `ShowRecorder` draws everyone **unmirrored** (`mirror: false` on every performer it is handed),
-   so every take, the film of the meet and the broadcast show the singers as the camera saw them
+   so a Studio take, the film of the meet and the broadcast show the singers as the camera saw them
    — a name on a shirt reads the right way round. Test: `apps/web/test/showMirror.test.ts`, and the
-   live e2e checks a frame of the saved show and of the film (two badges the fake person wears).
-5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet; a live take is capped at 15 minutes.
+   live e2e checks a frame of the film (two badges the fake person wears).
+5. Inactivity (no join/heartbeat/chat/slot/start for 5 minutes) expires the meet.
 
 ## A hundred in a meet — what each one costs
 

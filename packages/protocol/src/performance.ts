@@ -33,10 +33,12 @@ export interface PerformanceSinger {
 
 /**
  * A chapter of a filmed event (the host's "Full meet" film, the publisher's "Broadcast" footage): the
- * film is cut into chapters as the stage goes — a new one every time a song starts (a restart or a
- * new song too), one for every pause, one for the stage between songs — and every chapter is a
- * performance of its own (its own file, its own timestamp), so no song is ever merged with the next
- * or lost with it. `eventId` ties the chapters of one filming together; `index` orders them.
+ * film is ONE file for the whole meet, with a chapter mark wherever the stage went — a new one every
+ * time a song starts (a restart or a new song too), one for every pause, one for the stage between
+ * songs (`PerformanceManifest.chapters`: where each starts in the file, `startMs`) — so a song is
+ * found in it at once and the whole evening plays through as one. (Older builds wrote every chapter as
+ * a file of its own, `PerformanceManifest.chapter`; those files still say which filming and chapter
+ * they were.) `eventId` names the filming; `index` orders the marks.
  */
 export type ChapterKind = 'song' | 'pause' | 'stage';
 
@@ -54,6 +56,8 @@ export interface PerformanceChapter {
   /** When the chapter starts: the wall clock, and the offset from the event's start. */
   startedAt: string;
   startMs: number;
+  /** A song mark: where in the song it picks the song up (0 from the top; a jump or a resume further in). */
+  songMs?: number;
 }
 
 /** A joined take's place in the chain: the performance it was sung over and the layers it inherited (join.ts has the arithmetic). */
@@ -79,7 +83,9 @@ export interface PerformanceManifest {
   meetTitle?: string;
   singers?: PerformanceSinger[];
   hostName?: string;
-  /** A chapter of a filmed event (see `PerformanceChapter`); absent on a song's show and on a take. */
+  /** The film of a meet or a broadcast's footage: its chapter marks, in order — where each song, pause and stretch of stage starts in this one file. */
+  chapters?: PerformanceChapter[];
+  /** An older build's film: this file is one chapter of it (see `PerformanceChapter`); absent on a song's show and on a take. */
   chapter?: PerformanceChapter;
   /** A take sung over another performance (join.ts): which one, and every earlier singer on this show's clock. */
   join?: PerformanceJoin;

@@ -8,9 +8,10 @@
  * One LocalFeed (camera → cut-out → framing), one StageCompositor and one PerformerMesh per room,
  * shared by the lobby's stage strip and the full live stage, so nothing reconnects when the song
  * starts. Audience devices draw the performers' placeholders (video is private to the stage).
- * Beside the stage runs the ShowRecorder: the saved performance of each song, the broadcast
- * picture with the whole mix, drawn from the same cut-outs (the other singers' vocals come over
- * the mesh for it — and are never played).
+ * Beside the stage runs the ShowRecorder: the show picture with the whole mix, drawn from the same
+ * cut-outs (the other singers' vocals come over the mesh for it — and are never played); on the
+ * host's device the MeetRecorder films it for the whole meet into one file, a chapter mark per
+ * song (nothing is recorded per song on any device).
  */
 import { meetIsOpen, participantMedia, SLOT_COLORS, type Meet, type Participant, type PerformanceChapter, type PerformanceSinger, type SingerSlot } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -30,7 +31,7 @@ import { PerformerMesh, type PeerState } from '../../video/peers.ts';
 import type { SegmenterMode } from '../../video/segmenter.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
 import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
-import { registerMeetFilm } from './liveTake.ts';
+import { registerMeetFilm } from './meetFilm.ts';
 import type { MeetSession } from './meetSession.ts';
 
 export interface RoomStage {
@@ -417,20 +418,20 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     for (const s of stagePerformers) filmSingers.current.set(s.slot, { slot: s.slot, displayName: s.displayName });
   }, [film.recording, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|')]);
   const driveLinked = !needsReconnect.value; // a Drive session that lapsed and came back starts the film then
-  /** Every chapter of the film, as it lands in Drive: shared with the meet and listed under its event (lib/liveTake.ts). */
+  /** The film, as it lands in Drive (one file, its chapter marks on it): shared with the meet and listed for everyone who was there (meetFilm.ts). */
   const meetRef = useRef(meet);
   meetRef.current = meet;
-  const onChapterSaved = (saved: PerformanceSummary, chapter: PerformanceChapter) => {
+  const onFilmSaved = (saved: PerformanceSummary, chapters: PerformanceChapter[]) => {
     const m = meetRef.current;
-    registerMeetFilm({ saved, chapter, meet: { meetId: m.meetId, title: m.title, hostName: m.hostName }, singers: [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot), session });
+    registerMeetFilm({ saved, chapters, meet: { meetId: m.meetId, title: m.title, hostName: m.hostName }, singers: [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot), session });
   };
   useEffect(() => {
     const engine = opts.engine;
     if (!host || !onStage || !engine || !filmWanted || !meetOpen || !driveLinked) return;
     filmSingers.current = new Map(stagePerformers.map((s) => [s.slot, { slot: s.slot, displayName: s.displayName }]));
-    void film.start(stageSound(engine, show), { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot), onSaved: onChapterSaved }, chapterCue(meet, serverNow()));
+    void film.start(stageSound(engine, show), { meetId: meet.meetId, title: meet.title, hostName: meet.hostName, singers: () => [...filmSingers.current.values()].sort((a, b) => a.slot - b.slot), onSaved: onFilmSaved }, chapterCue(meet, serverNow()));
   }, [film, host, onStage, opts.engine, filmWanted, meetOpen, driveLinked]);
-  // The film is cut where the stage goes: a song's start (its kickstart), a pause, a stop, the next song (video/chapters.ts).
+  // The film is marked where the stage goes: a song's start (its kickstart), a pause, a stop, the next song (video/chapters.ts).
   const pb = meet.playback;
   useEffect(() => {
     film.cue(chapterCue(meet, serverNow()));

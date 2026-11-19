@@ -1,15 +1,18 @@
 /**
- * The saved performance: a recording of the show — exactly the broadcast picture Publisher mode
- * shows (every singer on stage cut out over the stage background, huge, no lyrics, the brand's
- * animated mark in the top-right corner — `brandMark.ts`) with the whole mix as its sound (the backing track, this singer's vocal after FX, and every other singer's
- * vocal as it arrives over the mesh). It runs on a singer's device beside the live stage: its
- * own 1280×720 canvas, its own 'show' compositor over the same cut-outs the stage draws, its own
- * audio bus on the engine's context, one MediaRecorder.
+ * The show — exactly the broadcast picture Publisher mode shows (every singer on stage cut out over
+ * the stage background, huge, no lyrics, the brand's animated mark in the top-right corner —
+ * `brandMark.ts`) with the whole mix as its sound (the backing track, this singer's vocal after FX,
+ * and every other singer's vocal as it arrives over the mesh). It runs on a singer's device beside
+ * the stage: its own 1280×720 canvas, its own 'show' compositor over the same cut-outs the stage
+ * draws, its own audio bus on the engine's context. In the Studio, `start`/`stop` record a take of
+ * it (one MediaRecorder). In a live meet nothing is recorded per song: the host's device keeps the
+ * bus running for the audience (`startTalk`) and the film of the meet (`meetRecorder.ts`) reads the
+ * picture (`takeTrack`) and the mix (`setTap`) for the whole meet — one file, a chapter mark per song.
  *
  * Time: the other singers' video and vocals arrive a quarter second late (the mesh), so this
  * device's own cut-out and vocal, and the backing track, are held back by the same lag — the
  * show view does the same with its backing track — and the recording's own timeline is simply
- * "the others' time". Nothing is ever played out loud: the vocals go to the recording only.
+ * "the others' time". Nothing is ever played out loud: the vocals go to the mix only.
  */
 import type { BackgroundItem, MixBatch } from '@singersvoice/protocol';
 import type { AudioEngine } from '../audio/engine.ts';

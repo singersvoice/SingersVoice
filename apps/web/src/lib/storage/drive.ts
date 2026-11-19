@@ -654,6 +654,18 @@ export class DriveProvider implements StorageProvider {
     const view = `https://drive.google.com/file/d/${f.id}/view`;
     const legacy = f.mimeType === 'application/json'; // a manifest.json still in a folder of its own (not migrated yet)
     const video = legacy ? (p.svVideo === '1' ? `https://drive.google.com/file/d/${p.svVideoId}/view` : undefined) : p.svMedia === 'video' ? view : undefined;
+    // The film's chapter marks and its singers are in the manifest the file's description holds (too long for the properties).
+    let marks: PerformanceChapter[] | undefined;
+    let singers: PerformanceSummary['singers'];
+    if (p.svKind === 'show' && f.description?.includes('"chapters"')) {
+      try {
+        const m = JSON.parse(f.description) as Partial<PerformanceManifest>;
+        if (Array.isArray(m.chapters) && m.chapters.length) marks = m.chapters;
+        if (Array.isArray(m.singers)) singers = m.singers;
+      } catch {
+        /* not a manifest */
+      }
+    }
     return {
       performanceId: p[APP_PROPS.id] ?? f.id,
       trackId: p[APP_PROPS.trackId] ?? '',
@@ -672,6 +684,8 @@ export class DriveProvider implements StorageProvider {
       hasVideo: Boolean(video),
       shared: p.svShared === '1',
       ...(this.chapterOf(p) ? { chapter: this.chapterOf(p) } : {}),
+      ...(marks ? { chapters: marks } : {}),
+      ...(singers ? { singers } : {}),
       ...(p.svCutoutId ? { cutout: { driveId: p.svCutoutId, mimeType: p.svCutoutMime ?? 'video/webm', bytes: Number(p.svCutoutBytes ?? 0) } } : {}),
       ...(p.svWith ? { with: p.svWith } : {}),
     };
@@ -1083,7 +1097,7 @@ class DriveFilm implements PerformanceStream {
   private finished = false;
 
   constructor(
-    private readonly entry: FilmEntry,
+    private entry: FilmEntry,
     private readonly host: FilmHost,
   ) {
     this.performanceId = entry.manifest.performanceId;
@@ -1095,6 +1109,12 @@ class DriveFilm implements PerformanceStream {
 
   private snapshot(): FilmEntry {
     return { ...this.entry, stored: this.stored, durationMs: this.durationMs };
+  }
+
+  update(manifest: PerformanceManifest): void {
+    if (this.finished) return;
+    this.entry.manifest = manifest;
+    this.host.remember(this.snapshot(), true);
   }
 
   push(chunk: Blob, progress?: { durationMs: number }): void {

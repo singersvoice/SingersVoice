@@ -20,7 +20,8 @@ import { go, href } from '../../lib/nav.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { canPublish, profile, publishingNote } from '../../state/session.ts';
 import { appSettings, updateApp } from '../../state/settings.ts';
-import { connectYoutube, ensureHlsStream, forgetYoutube } from '../../lib/youtube.ts';
+import { forgetYoutube } from '../../lib/youtube.ts';
+import { connectYoutubeDestination, saveDestination } from './destinations.ts';
 import { LiveLinks } from './LiveLinks.tsx';
 import { resolveMeet } from './meetLookup.ts';
 import { Preview } from './Preview.tsx';
@@ -96,18 +97,6 @@ export function PublishingPortal() {
 const usableIngest = (u: string): string => (u && !u.includes('…') ? u : '');
 const looksLikeIngest = (u: string): boolean => /^rtmps?:\/\/\S+/i.test(u.trim());
 
-/** Save a platform's ingest URL / stream key (an empty key keeps the saved one), its live link, its enabled flag — and whether the app runs it (YouTube connected). */
-async function saveDestination(kind: DestinationKind, patch: { enabled: boolean; ingestUrl: string; streamKey?: string; watchUrl?: string; auto?: boolean }): Promise<Destination> {
-  const r = await api.put('PUT /publishing/destinations/:kind', `/publishing/destinations/${kind}`, {
-    enabled: patch.enabled,
-    ingestUrl: patch.ingestUrl.trim(),
-    ...(patch.streamKey?.trim() ? { streamKey: patch.streamKey.trim() } : {}),
-    ...(patch.watchUrl !== undefined ? { watchUrl: patch.watchUrl.trim() } : {}),
-    ...(patch.auto !== undefined ? { auto: patch.auto } : {}),
-  });
-  return r.destination;
-}
-
 /**
  * YouTube, run by the app: one tap connects the publisher's YouTube channel (the Google screen once more, with the
  * YouTube permission) and makes the channel's HLS stream key for the service to keep — from then on every show
@@ -120,9 +109,7 @@ function YoutubeConnect(props: { dest: Destination; onSaved: (d: Destination) =>
   const connect = async () => {
     setBusy(true);
     try {
-      const token = await connectYoutube(profile.value?.email);
-      const stream = await ensureHlsStream(token);
-      const d = await saveDestination('youtube', { enabled: true, ingestUrl: props.dest.ingestUrl, streamKey: stream.streamKey, auto: true, watchUrl: '' });
+      const d = await connectYoutubeDestination(props.dest, profile.value?.email);
       toast(`YouTube is connected — the stream key was made for you (ends with ${d.keyHint}); every show gets its own YouTube link when you go live`, 'ok', 9000);
       props.onSaved(d);
     } catch (e) {
@@ -363,7 +350,6 @@ function Publish(props: { onDone: () => void }) {
   const [setup, setSetup] = useState<DestinationKind | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     void api.get('GET /meets', '/meets').then((r) => setMeets(r.meets)).catch(() => setMeets([]));
@@ -399,24 +385,19 @@ function Publish(props: { onDone: () => void }) {
 
   const selected = meets?.find((m) => m.meetId === meetId) ?? null;
   const chosen = picked ?? [];
-  const showUrl = (id: string, job?: PublishJob) => `/publishing/show/${encodeURIComponent(id)}?dest=${encodeURIComponent(chosen.join(','))}${job ? `&job=${encodeURIComponent(job.jobId)}` : ''}`;
+  const showUrl = (id: string, extra: Record<string, string> = {}) => {
+    const q = new URLSearchParams({ dest: chosen.join(','), ...extra });
+    return `/publishing/show/${encodeURIComponent(id)}?${q.toString()}`;
+  };
 
-  /** Publish: queue the job for the chosen destinations, then open the show view (performers huge, no lyrics). */
-  const publish = async () => {
+  /**
+   * Publish — one tap: the show view opens (performers huge, no lyrics) and goes live by itself to the chosen
+   * destinations, with the listing's title and description; YouTube, when connected, gets a broadcast of its own
+   * and the link appears in the show view's bar.
+   */
+  const publish = () => {
     if (!meetId) return;
-    setBusy(true);
-    try {
-      const r = await api.post('POST /publishing/jobs', '/publishing/jobs', { meetId, destinations: chosen, title, description });
-      toast('Publishing requested — opening the show view', 'ok');
-      go(showUrl(meetId, r.job));
-    } catch (e) {
-      if (e instanceof ApiError && (e.code === 'already_publishing' || e.code === 'not_in_meet')) {
-        // Already running, or we have to be in the meet first: the show view joins as the publisher and takes it from there.
-        go(showUrl(meetId));
-      } else toast(e instanceof ApiError ? e.message : errorText(e), 'error', 8000);
-    } finally {
-      setBusy(false);
-    }
+    go(showUrl(meetId, { go: '1', ...(title.trim() ? { title: title.trim() } : {}), ...(description.trim() ? { description: description.trim() } : {}) }));
   };
 
   return (
@@ -518,10 +499,10 @@ function Publish(props: { onDone: () => void }) {
           )}
         </p>
         <div class="row">
-          <button class="btn accent lg" disabled={busy || !meetId || !chosen.length} onClick={() => void publish()}>
-            {busy ? <Spinner /> : <IcPlay />} Publish
+          <button class="btn accent lg" disabled={!meetId || !chosen.length} onClick={publish} title="Opens the show view and goes live at once — YouTube's link appears in its bar">
+            <IcPlay /> Publish
           </button>
-          <button class="btn lg" disabled={!meetId} onClick={() => meetId && go(showUrl(meetId))} title="Open the broadcast picture without queueing a job">
+          <button class="btn lg" disabled={!meetId} onClick={() => meetId && go(showUrl(meetId))} title="Open the broadcast picture without going live (Go live is there)">
             Open show view
           </button>
         </div>
@@ -551,7 +532,7 @@ function JobCard(props: { job: PublishJob; dests: Destination[]; onStop?: () => 
           </>
         )}
       </div>
-      {active && <LiveLinks title={j.title} destinations={j.destinations} dests={props.dests} watchPage={j.watchUrl} links={j.links} />}
+      {(active || j.links?.youtube) && <LiveLinks title={j.title} destinations={j.destinations} dests={props.dests} watchPage={j.watchUrl} links={j.links} over={!active} />}
       <div class="small">
         {j.events.map((e, i) => (
           <div key={i}>

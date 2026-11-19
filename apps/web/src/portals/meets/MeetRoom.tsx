@@ -1,11 +1,11 @@
 /**
  * Meet room (/meet/:id): lobby with stage slots + chat, the clock-synced live stage for
  * performers (GMT kickstart), the audience view, and the ended/expired summary.
- * Every take on stage is a personal session: recorded locally and saved by itself, in the
- * background (`liveTake.ts`), to the singer's own Drive — its video being the show (the stage
- * with everyone on it and the whole mix, as Publisher mode shows it) — while the singer stays on
- * stage for the next song. The host's take of each song is the meet's saved performance, shared
- * with everyone who was in the meet. Nothing here ever waits for a review or an approval.
+ * Nothing is recorded per song on a singer's device: the record of a meet is its film — one file
+ * for the whole meet, the stage with everyone on it and the whole mix as Publisher mode shows it,
+ * a chapter mark where each song starts — kept by the host's device in the host's Drive
+ * (`roomStage.ts` → `video/meetRecorder.ts`) and shared, in the background (`meetFilm.ts`), with
+ * everyone who was in the meet. Nothing here ever waits for a review or an approval.
  */
 import { clampSlot, formatMs, hoursLabel, MAX_PERFORMERS, planParts, playbackPositionMs, SLOT_COLORS, songChoicePending, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
 import { activeRoomInfo } from './activeRoom.ts';
@@ -30,7 +30,6 @@ import { recordAccess } from '../../lib/registry.ts';
 import { shareOrCopy } from '../../lib/download.ts';
 import { href } from '../../lib/nav.ts';
 import { isIOS, keepAwake } from '../../lib/platform.ts';
-import type { TakeResult } from '../../lib/takes.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { canPublish as canPublishSignal } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
@@ -40,7 +39,7 @@ import { filmSound, type MeetRecorder } from '../../video/meetRecorder.ts';
 import { MicStatus } from '../../components/MicStatus.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
-import { saveLiveTake } from './liveTake.ts';
+import { marksLine } from '../../video/chapters.ts';
 import { MeetSession } from './meetSession.ts';
 import { keepMeetTrack, loadMeetTrack, type MeetTrack } from './trackSource.ts';
 
@@ -257,11 +256,12 @@ export function MeetRoom(props: { id: string }) {
       onOpenMic={() => openMicForStage()}
       micBusy={micBusy}
       participants={snap?.participants ?? []}
-      onTake={(t, loaded, singers) => {
-        // The take saves itself in the background; the singer is already back on the stage (ready again for the next song, or to rejoin this one).
+      onSongOver={() => {
+        // The song is over on this device (it ended, the host stopped it, or this singer stepped out): the singer is back on
+        // the stage, ready again for the next song or to rejoin this one. Nothing is saved per song — the film of the meet
+        // (one file, the host's Drive) is the record of every song.
         if (meet.state === 'live' || meet.state === 'countdown') leftSong.current = true; // they stepped out of a running song: back in only by their own tap
         setPrepared(false);
-        saveLiveTake({ take: t, loaded, slot: you.slot ?? 1, meet: { meetId: meet.meetId, title: meet.title, hostName: meet.hostName }, host: you.userId === meet.hostUserId, singers, resumeToken: session.resumeToken || undefined });
       }}
     />
   );
@@ -281,7 +281,7 @@ function Room(props: {
   onOpenMic: () => Promise<void>;
   micBusy: boolean;
   participants: Participant[];
-  onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>, singers: { slot: number; displayName: string; userId?: string }[]) => void;
+  onSongOver: () => void;
 }) {
   const { session, meet, you, track, camera, engine } = props;
   // The song is paused on THIS device (at the cued instant, not when the next poll says so): talk-back opens for the pause.
@@ -289,13 +289,13 @@ function Room(props: {
   const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, engine, paused, restartCamera: () => restartCamera(engine, camera) });
   const onStage = you.slot !== null;
   const live = meet.state === 'countdown' || meet.state === 'live';
-  // A take in progress keeps the live stage mounted until it wraps up, even once the meet is back in
-  // the lobby (the host ended the song, the set list moved on) — otherwise the take would be lost.
+  // A song running on this device keeps the live stage mounted until it wraps up, even once the meet is
+  // back in the lobby (the host ended the song, the set list moved on) — the stage stops the song cleanly.
   const [singing, setSinging] = useState(false);
   const liveLoaded = useRef<NonNullable<MeetTrack['loaded']> | null>(null);
   if (live && track?.loaded) liveLoaded.current = track.loaded;
 
-  if ((live || singing) && onStage && liveLoaded.current && engine) return <LiveStage session={session} meet={meet} you={you} loaded={liveLoaded.current} engine={engine} camera={camera} stage={stage} track={track} prepared={props.prepared} onPrepare={props.onPrepare} onTake={props.onTake} onSinging={setSinging} onPaused={setPaused} participants={props.participants} />;
+  if ((live || singing) && onStage && liveLoaded.current && engine) return <LiveStage session={session} meet={meet} you={you} loaded={liveLoaded.current} engine={engine} camera={camera} stage={stage} track={track} prepared={props.prepared} onPrepare={props.onPrepare} onSongOver={props.onSongOver} onSinging={setSinging} onPaused={setPaused} />;
 
   if (meet.state === 'ended' || meet.state === 'expired') return <Ended session={session} meet={meet} you={you} />;
 
@@ -763,9 +763,9 @@ function MeetFilmSwitch(props: { film: MeetRecorder; onStage: boolean }) {
   const hint = !on
     ? 'Off: nothing of this meet is kept as one video'
     : s.recording
-      ? `Filming · ${formatMs(s.seconds * 1000)} · ${mb(s.bytes)}${s.stored < s.bytes ? ` (${mb(s.stored)} in Drive)` : ' in Drive'} · ${filmSound(s)}${s.chapter ? ` · chapter ${s.chapter.index} ${s.chapter.kind === 'song' ? '♪' : s.chapter.kind === 'pause' ? '⏸' : '▪'} ${s.chapter.title} ${formatMs(s.chapter.seconds * 1000)}` : ''}${s.chapters ? ` · ${s.chapters} saved` : ''}${s.note ? ` · ${s.note}` : ''}`
+      ? `Filming · ${formatMs(s.seconds * 1000)} · ${mb(s.bytes)}${s.stored < s.bytes ? ` (${mb(s.stored)} in Drive)` : ' in Drive'} · ${filmSound(s)}${s.chapter ? ` · chapter ${s.chapter.index} ${s.chapter.kind === 'song' ? '♪' : s.chapter.kind === 'pause' ? '⏸' : '▪'} ${s.chapter.title} ${formatMs(s.chapter.seconds * 1000)}` : ''}${s.note ? ` · ${s.note}` : ''}`
       : s.saved
-        ? `Saved: ${s.chapters} chapter${s.chapters === 1 ? '' : 's'} (the last: ${s.saved.trackTitle} · ${formatMs(s.saved.durationMs)})`
+        ? `Saved: one film, ${formatMs(s.saved.durationMs)}, ${s.chapters} chapter mark${s.chapters === 1 ? '' : 's'} — under Performances for everyone who was in the meet`
         : s.note
           ? s.note
           : props.onStage
@@ -773,7 +773,7 @@ function MeetFilmSwitch(props: { film: MeetRecorder; onStage: boolean }) {
             : 'Films while you are on stage: the show picture and the stage mix, into your Drive as it happens';
   return (
     <div data-meet-film={s.recording ? 'on' : on ? 'armed' : 'off'} data-film-seconds={s.seconds} data-film-level={Math.round(s.level)} data-film-heard={s.heard ? '1' : '0'} data-film-chapter={s.chapter?.index ?? 0} data-film-chapter-kind={s.chapter?.kind ?? ''} data-film-chapters={s.chapters}>
-      <Switch checked={on} onChange={(v) => updateApp({ recordMeet: v })} label="Film the whole meet into my Drive — a chapter per song, pause and stretch of stage" hint={hint} />
+      <Switch checked={on} onChange={(v) => updateApp({ recordMeet: v })} label="Film the whole meet into my Drive — one file, a chapter mark per song" hint={hint} />
     </div>
   );
 }
@@ -868,7 +868,7 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean; ses
           </span>
         )}
         {props.onStage && stage.mixLine && (
-          <span class="chip faint" style="pointer-events:none" data-mix-line={stage.mixLine} title="What each source brings to this device's mix right now — what the audience, the film and the takes get from here">
+          <span class="chip faint" style="pointer-events:none" data-mix-line={stage.mixLine} title="What each source brings to this device's mix right now — what the audience and the film get from here">
             {stage.mixLine}
           </span>
         )}
@@ -944,15 +944,15 @@ function LiveStage(props: {
   track: MeetTrack | null;
   prepared: boolean;
   onPrepare: () => Promise<boolean>;
-  onTake: (t: TakeResult, loaded: NonNullable<MeetTrack['loaded']>, singers: { slot: number; displayName: string; userId?: string }[]) => void;
-  /** A take is in progress (from the first cue until it wraps up). */
+  /** The song is over on this device (it ended, the host stopped it, this singer stepped out): the singer is back on the stage. */
+  onSongOver: () => void;
+  /** A song is running on this device (from the first cue until it wraps up). */
   onSinging: (singing: boolean) => void;
   /** The song is paused on this device (from the cued instant to the resume) — the stage talks meanwhile. */
   onPaused: (paused: boolean) => void;
-  participants: Participant[];
 }) {
   const { session, meet, engine, camera, loaded, stage } = props;
-  const { feed, compositor, blend, peerStates, show } = stage;
+  const { feed, compositor, blend, peerStates } = stage;
   const [tMs, setTMs] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [started, setStarted] = useState(false);
@@ -969,12 +969,6 @@ function LiveStage(props: {
     }
   };
   const [fxOpen, setFxOpen] = useState(false);
-  /** Who was on stage during this take (the manifest and the meet's performance name them). */
-  const singersRef = useRef<{ slot: number; displayName: string; userId?: string }[]>([]);
-  /** While paused: the track position the vocal recording's end corresponds to (a resume elsewhere jumps the take there). */
-  const recPos = useRef(0);
-  /** The take's timeline origin (context time of track position 0 at the first cue): pauses and jumps never move it. */
-  const takeOrigin = useRef(0);
   /** A seek on its way: where the song is about to jump (cleared when the cue lands). */
   const [seekTarget, setSeekTarget] = useState<number | null>(null);
   const raf = useRef(0);
@@ -1020,17 +1014,10 @@ function LiveStage(props: {
   }, []);
   const camOn = stage.camOn;
   const stagePerformers = meet.stage.filter((s) => s.participantId);
-  useEffect(() => {
-    if (!started) return;
-    const seen = new Map(singersRef.current.map((x) => [x.slot, x]));
-    for (const s of stagePerformers) {
-      const userId = props.participants.find((p) => p.participantId === s.participantId)?.userId;
-      seen.set(s.slot, { slot: s.slot, displayName: s.displayName, ...(userId ? { userId } : {}) });
-    }
-    singersRef.current = [...seen.values()].sort((a, b) => a.slot - b.slot);
-  }, [started, stagePerformers.map((s) => `${s.slot}:${s.participantId}`).join('|')]);
 
-  // ---- follow the shared transport: schedule playback + recording at every kickstart (start / resume / restart) ----
+  // ---- follow the shared transport: schedule playback at every kickstart (start / resume / restart) ----
+  // Nothing is recorded per song on a singer's device: the film of the meet (roomStage.ts, the host's device)
+  // keeps every song, with a chapter mark where each one starts, in one file.
   useEffect(() => {
     const ks = meet.kickstartEpochMs;
     if (ks === null || !props.prepared || pb.state !== 'playing' || scheduledEpoch.current === pb.epoch) return;
@@ -1043,36 +1030,20 @@ function LiveStage(props: {
     const t0 = engine.ctx.currentTime + Math.max(0, startIn);
     const offsetMs = pb.offsetMs + (startIn < 0 ? -startIn * 1000 : 0); // late join → start mid-song
     if (firstCue) {
-      void engine.recorder?.start();
       player.play(t0, offsetMs);
-      takeOrigin.current = player.originCtxTime();
-      recPos.current = offsetMs;
-      // The show — the stage with everyone and the whole mix — records from now (its first frame's clock places it on the song; the kickstart is the origin).
-      show.start(engine, t0);
       setStarted(true);
       props.onSinging(true);
     } else if (player.playing && !pausedLocally.current) {
       // A jump while playing (a seek, a restart from the top): the song keeps playing and jumps at the cued
-      // instant — the same instant on every device — and the take follows it on the track timeline.
-      const delta = offsetMs - player.positionAt(t0);
+      // instant — the same instant on every device.
       player.cue(t0, offsetMs);
-      if (Math.abs(delta) > 30) engine.recorder?.seek(t0, delta);
     } else {
-      // Resume (from our pause — or a pause we only learned of late): the recorder kept the take on the
-      // track timeline by dropping the pause; a seek made while paused moves it there too.
+      // Resume (from our pause — or a pause we only learned of late); a seek made while paused moves the song there too.
       clearTimeout(pauseTimer.current);
-      if (!pausedLocally.current) {
-        recPos.current = player.positionAt(engine.ctx.currentTime);
-        engine.recorder?.pause(engine.ctx.currentTime);
-        player.pause();
-      }
+      if (!pausedLocally.current) player.pause();
       pausedLocally.current = false;
       props.onPaused(false); // the resume is cued: from this moment nobody on stage hears anyone else again
       player.play(t0, offsetMs);
-      engine.recorder?.resume(t0);
-      const delta = offsetMs - recPos.current;
-      if (Math.abs(delta) > 30) engine.recorder?.seek(t0, delta);
-      show.resume();
     }
     setSeekTarget(null);
     // The song's natural end calls the *latest* finish (through a ref): the one in this closure was made before
@@ -1095,32 +1066,27 @@ function LiveStage(props: {
     raf.current = requestAnimationFrame(tick);
   }, [meet.kickstartEpochMs, pb.epoch, pb.state, props.prepared]);
 
-  // Host paused: the pause is cued at a shared server instant — stop exactly there (sample-accurate for
-  // the recorder, since the instant is converted to our own audio clock). A device that only learns of
-  // it after the instant stops immediately and re-aligns on resume.
+  // Host paused: the pause is cued at a shared server instant — stop exactly there (the instant is
+  // converted to our own audio clock). A device that only learns of it after the instant stops
+  // immediately and re-aligns on resume.
   const pauseAt = pb.pauseAtEpochMs;
   useEffect(() => {
     clearTimeout(pauseTimer.current);
     if (!started) return;
     const player = engine.player;
     if (!player) return;
-    const doPause = (ctxAt: number) => {
+    const doPause = () => {
       if (pausedLocally.current) return;
       pausedLocally.current = true;
       props.onPaused(true);
-      if (player.playing) {
-        recPos.current = player.positionAt(ctxAt);
-        player.pause();
-        engine.recorder?.pause(ctxAt);
-      } else recPos.current = player.positionMs();
+      if (player.playing) player.pause();
       player.seek(pb.pausedAtMs);
       setTMs(pb.pausedAtMs);
-      show.pause();
     };
     if (pb.state === 'paused') {
-      if (!pausedLocally.current) doPause(engine.ctx.currentTime);
+      if (!pausedLocally.current) doPause();
       else if (Math.abs(player.positionMs() - pb.pausedAtMs) > 1) {
-        // A seek while paused: everyone's paused position moves; the take jumps there on resume.
+        // A seek while paused: everyone's paused position moves.
         player.seek(pb.pausedAtMs);
         setTMs(pb.pausedAtMs);
       }
@@ -1130,9 +1096,8 @@ function LiveStage(props: {
     if (pb.state === 'playing' && pauseAt !== null) {
       const localInstant = pauseAt - clock.value.offsetMs; // server instant → local epoch ms
       const inMs = localInstant - Date.now();
-      const ctxAt = engine.ctx.currentTime + Math.max(0, inMs) / 1000;
-      if (inMs <= 0) doPause(ctxAt);
-      else pauseTimer.current = setTimeout(() => doPause(ctxAt), inMs);
+      if (inMs <= 0) doPause();
+      else pauseTimer.current = setTimeout(doPause, inMs);
     }
     return () => clearTimeout(pauseTimer.current);
   }, [pb.state, pauseAt, pb.pausedAtMs, started]);
@@ -1145,16 +1110,17 @@ function LiveStage(props: {
     [],
   );
 
-  // The song is over (its track ended on the host's device, or the host ended it) or the meet ended → wrap up the personal take.
+  // The song is over (its track ended on the host's device, or the host ended it) or the meet ended → wrap up on this device.
   useEffect(() => {
     if (started && (meet.state === 'lobby' || meet.state === 'ended' || meet.state === 'expired')) void finish();
   }, [meet.state]);
 
   const finishRef = useRef<(forEveryone?: boolean) => Promise<void>>(async () => undefined);
   /**
-   * Wrap up this device's take — and, `forEveryone`, end the song for the whole stage (the next one on the set
+   * Wrap the song up on this device — and, `forEveryone`, end it for the whole stage (the next one on the set
    * list comes up). The song's natural end on the host's device ends it for everyone as well; a singer who only
-   * leaves the song keeps the stage singing and may join back in.
+   * leaves the song keeps the stage singing and may join back in. Nothing is saved here: the film of the meet
+   * (the host's device, roomStage.ts) has the song, marked, in the one file of the meet.
    */
   const finish = async (forEveryone = host) => {
     (window as unknown as { __svFinish?: unknown }).__svFinish = { at: Date.now(), finishing, started, step: 'called' }; // support / e2e
@@ -1163,49 +1129,20 @@ function LiveStage(props: {
     cancelAnimationFrame(raf.current);
     try {
       const player = engine.player!;
-      const origin = takeOrigin.current || player.originCtxTime();
-      const durationMs = Math.round(player.positionMs());
       player.onEnded = null;
       player.stop();
-      let vocal = new Blob([], { type: 'audio/wav' });
-      let vocalOffsetMs = 0;
-      let sampleRate = engine.ctx.sampleRate;
-      if (engine.recorder?.recording) {
-        const rec = await engine.recorder.stop();
-        vocal = rec.wav;
-        sampleRate = rec.sampleRate;
-        vocalOffsetMs = (rec.startCtxTime - origin) * 1000;
-      }
-      // The show's first frame shows the stage as it was a lag earlier (its sources are held back to meet the others).
-      const rec = await show.stop();
-      const video = rec?.video ?? null;
-      const videoOffsetMs = rec ? (rec.startCtxTime - origin) * 1000 - rec.lagMs : null;
       // The mic stays open: the singer is still on stage, and between songs the stage talks (talk-back); it closes when they step off.
       await keepAwake(false);
       (window as unknown as { __svFinish?: unknown }).__svFinish = { at: Date.now(), step: 'stopped', host, state: meet.state };
-      // Ending the song for everyone: the meet goes back to the lobby, next song up (the host's take ending always does).
+      // Ending the song for everyone: the meet goes back to the lobby, next song up (the host's song ending always does).
       if (forEveryone && (meet.state === 'live' || meet.state === 'countdown')) void session.nextSong().catch(() => undefined);
-      props.onTake(
-        {
-          vocal,
-          video,
-          durationMs,
-          vocalOffsetMs: Math.round(vocalOffsetMs),
-          videoOffsetMs: videoOffsetMs === null ? null : Math.round(videoOffsetMs),
-          latencyCompMs: Math.round(engine.roundTripMs),
-          sampleRate,
-          startedAtEpochMs: meet.kickstartEpochMs ?? Date.now(),
-        },
-        loaded,
-        singersRef.current,
-      );
+      props.onSongOver();
       props.onSinging(false);
-      // Back to a clean slate: a singer who left the running song joins it again with "Join the song" (a fresh take,
-      // cued from where the song is), and the next song starts from the top.
+      // Back to a clean slate: a singer who left the running song joins it again with "Join the song" (cued from
+      // where the song is), and the next song starts from the top.
       scheduledEpoch.current = 0;
       pausedLocally.current = false;
       props.onPaused(false);
-      takeOrigin.current = 0;
       setStarted(false);
       setCountdown(null);
       setFinishing(false);
@@ -1225,7 +1162,7 @@ function LiveStage(props: {
       toast(errorText(e), 'error');
     }
   };
-  /** Move the song back or forth for everyone: cued, so every device jumps at the same instant (the take follows). */
+  /** Move the song back or forth for everyone: cued, so every device jumps at the same instant (the film marks it). */
   const seek = async (ms: number) => {
     if (!started) return;
     const to = Math.max(0, Math.min(track.durationMs, ms));
@@ -1265,7 +1202,7 @@ function LiveStage(props: {
           {seekTarget !== null && !paused && <span class="chip warn">jumping to {formatMs(seekTarget)}…</span>}
           {host && meet.requests.length > 0 && <span class="chip">wait list · {meet.requests.length} — seated when the song is over</span>}
           {stage.mixLine && (
-            <span class="chip faint" data-mix-line={stage.mixLine} title="What each source brings to this device's mix right now — what the audience, the film and the takes get from here">
+            <span class="chip faint" data-mix-line={stage.mixLine} title="What each source brings to this device's mix right now — what the audience and the film get from here">
               {stage.mixLine}
             </span>
           )}
@@ -1367,7 +1304,7 @@ function LiveStage(props: {
                   {finishing ? <Spinner /> : <IcStop />} Stop song
                 </button>
                 {!host && (
-                  <button class="btn" disabled={finishing} aria-label="Leave the song" title="Ends your own take — the song goes on for the others, and you can join back in" onClick={() => void finish(false)}>
+                  <button class="btn" disabled={finishing} aria-label="Leave the song" title="Step out of the song — it goes on for the others, and you can join back in" onClick={() => void finish(false)}>
                     Leave
                   </button>
                 )}
@@ -1421,12 +1358,13 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
           </div>
         </div>
         <section class="card stack">
-          <h3>Performances of this meet</h3>
-          <div class="muted small">One per song: the show — everyone on stage over the stage background, with the whole mix — and the film of the whole meet in chapters (a chapter per song, pause and stretch of stage, each a file of its own), saved by the host and shared with everyone who was in the meet. Find them any time under Performances.</div>
-          {!shows.length && <div class="muted small">No song was recorded in this meet.</div>}
+          <h3>The film of this meet</h3>
+          <div class="muted small">One file for the whole meet — everyone on stage over the stage background, with the whole mix, as the audience saw and heard it — with a chapter mark per song, pause and stretch of stage, saved by the host and shared with everyone who was in the meet. Find it any time under Performances.</div>
+          <SaveStatus />
+          {!shows.length && <div class="muted small">{host ? 'The film lands here as soon as it is closed and shared (a moment after End meet); if nothing comes, the film was off (it runs while you are on stage with Film the whole meet switched on).' : 'Nothing has landed yet — the host’s film arrives here a moment after the meet ends (if the host had Film the whole meet switched on).'}</div>}
           <div class="list">
             {[...shows].sort((a, b) => (a.chapter && b.chapter && a.chapter.eventId === b.chapter.eventId ? a.chapter.index - b.chapter.index : a.createdAt.localeCompare(b.createdAt))).map((p) => (
-              <div class="item wide-actions" key={p.performanceId} data-performance={p.performanceId} data-chapter={p.chapter?.index ?? ''} data-chapter-kind={p.chapter?.kind ?? ''} data-chapter-at={p.chapter?.startedAt ?? ''}>
+              <div class="item wide-actions" key={p.performanceId} data-performance={p.performanceId} data-chapter={p.chapter?.index ?? ''} data-chapter-kind={p.chapter?.kind ?? ''} data-chapter-at={p.chapter?.startedAt ?? ''} data-film-marks={p.chapters?.length ?? 0} data-film-kinds={(p.chapters ?? []).map((c) => c.kind).join(',')}>
                 <div class="thumb">
                   {p.chapter ? <span class="small">{String(p.chapter.index).padStart(2, '0')}</span> : <IcPlay size={18} />}
                 </div>
@@ -1438,6 +1376,11 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
                   <div class="s">
                     {new Date(p.createdAt).toLocaleString()} · {formatMs(p.durationMs)} · {p.singers.map((x) => x.displayName.split(' ')[0]).join(', ') || p.hostName}
                   </div>
+                  {(p.chapters?.length ?? 0) > 0 && (
+                    <div class="s" data-film-chapters>
+                      {marksLine(p.chapters!)}
+                    </div>
+                  )}
                 </div>
                 <div class="actions">
                   {(p.videoLink ?? p.link) && (
@@ -1456,32 +1399,34 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
             All performances
           </a>
         </section>
-        <section class="card stack">
-          <h3>Personal takes from this meet</h3>
-          {!recs.length && <div class="muted small">No takes were registered. Each singer's take stays in their own Drive (Performances › Live).</div>}
-          <div class="list">
-            {recs.map((r) => (
-              <div class="item" key={r.performanceId}>
-                <div class="thumb">
-                  <IcMic size={18} />
-                </div>
-                <div class="meta">
-                  <div class="t">
-                    {r.displayName} {r.slot ? <span class="slot-badge" style={{ background: SLOT_COLORS[r.slot as SingerSlot] }}>S{r.slot}</span> : null}
+        {recs.length > 0 && (
+          <section class="card stack">
+            <h3>Personal takes from this meet</h3>
+            <div class="muted small">Takes singers saved for themselves in this meet (an older build saved one per song; the film above is the meet's record now).</div>
+            <div class="list">
+              {recs.map((r) => (
+                <div class="item" key={r.performanceId}>
+                  <div class="thumb">
+                    <IcMic size={18} />
                   </div>
-                  <div class="s">{formatMs(r.durationMs)} · {new Date(r.createdAt).toLocaleTimeString()}</div>
+                  <div class="meta">
+                    <div class="t">
+                      {r.displayName} {r.slot ? <span class="slot-badge" style={{ background: SLOT_COLORS[r.slot as SingerSlot] }}>S{r.slot}</span> : null}
+                    </div>
+                    <div class="s">{formatMs(r.durationMs)} · {new Date(r.createdAt).toLocaleTimeString()}</div>
+                  </div>
+                  {r.driveFolderLink ? (
+                    <a class="btn sm" href={r.driveFolderLink} target="_blank" rel="noopener">
+                      Drive
+                    </a>
+                  ) : (
+                    <span class="chip">private</span>
+                  )}
                 </div>
-                {r.driveFolderLink ? (
-                  <a class="btn sm" href={r.driveFolderLink} target="_blank" rel="noopener">
-                    Drive
-                  </a>
-                ) : (
-                  <span class="chip">private</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
+              ))}
+            </div>
+          </section>
+        )}
         <div class="row">
           <a class="btn primary" href={href('/meets')}>
             Create another meet

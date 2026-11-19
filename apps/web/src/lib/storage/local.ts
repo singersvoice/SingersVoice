@@ -105,6 +105,7 @@ export class LocalProvider implements StorageProvider {
         ref: r.manifest.performanceId,
         hasVideo: Boolean(r.video),
         ...(r.manifest.chapter ? { chapter: r.manifest.chapter } : {}),
+        ...(r.manifest.chapters?.length ? { chapters: r.manifest.chapters } : {}),
         ...(r.cutout ? { cutout: { driveId: '', mimeType: r.cutout.type, bytes: r.cutout.size } } : {}),
         ...(r.manifest.join ? { with: singersLine(r.manifest.singers ?? []) } : {}),
       }))
@@ -165,6 +166,9 @@ export class LocalProvider implements StorageProvider {
         return bytes;
       },
       error: null,
+      update(m) {
+        manifest = m;
+      },
       async finish(final) {
         if (!bytes) throw new Error('Nothing was recorded');
         const video = new Blob(pieces, { type: mimeType });

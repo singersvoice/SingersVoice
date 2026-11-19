@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url);
 let pw; try { pw = require('playwright'); } catch { pw = require('/opt/npm-tools/node_modules/playwright'); }
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { appendFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 const out = process.argv[2] ?? 'screenshots';
@@ -68,19 +68,33 @@ const errors = { alice: [], bob: [], carol: [], dave: [] };
 /** The song as PCM at a device's rate (decoded once per rate), for the sound checks. */
 const songPcm = new Map();
 const songAt = (rate) => songPcm.get(rate) ?? songPcm.set(rate, decodeToPcm(longSong, rate)).get(rate);
-/** The video playing in the Performances sheet, as base64 (fetched from its blob URL inside the page). */
-async function sheetVideo(page) {
-  return page.evaluate(async () => {
+/**
+ * The video playing in the Performances sheet, written to `file` (fetched from its blob URL inside the page, 8 MB at a
+ * time — the film of a whole meet is one file, and a whole meet does not fit one message). Resolves with its size (0: none).
+ */
+async function sheetVideo(page, file) {
+  const size = await page.evaluate(async () => {
     const started = Date.now();
     let v = null;
     while (!(v = document.querySelector('.sheet video')) && Date.now() - started < 20000) await new Promise((r) => setTimeout(r, 200));
-    if (!v) return '';
-    const buf = await (await fetch(v.src)).arrayBuffer();
-    let bin = '';
-    const bytes = new Uint8Array(buf);
-    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    return btoa(bin);
+    if (!v) return 0;
+    window.__svSheetBlob = await (await fetch(v.src)).blob();
+    return window.__svSheetBlob.size;
   });
+  if (!size) return 0;
+  const SLICE = 8 * 1024 * 1024;
+  await writeFile(file, Buffer.alloc(0));
+  for (let at = 0; at < size; at += SLICE) {
+    const b64 = await page.evaluate(async ({ at, end }) => {
+      const bytes = new Uint8Array(await window.__svSheetBlob.slice(at, end).arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      return btoa(bin);
+    }, { at, end: Math.min(size, at + SLICE) });
+    await appendFile(file, Buffer.from(b64, 'base64'));
+  }
+  await page.evaluate(() => delete window.__svSheetBlob);
+  return size;
 }
 
 /**
@@ -596,10 +610,14 @@ try {
   const busVoice = voiceLift(busSound, busCap);
   console.log('broadcast voices (dB above the song alone):', JSON.stringify({ bus: busVoice.toFixed(1), host: voiceLift(hostSound2, hostCap2).toFixed(1) }));
   check(busVoice > 6, `the broadcast carries the singers' voices, off the mesh (${busVoice.toFixed(1)} dB above the song alone at the voice's harmonics)`);
-  // The footage: the whole broadcast, as it goes out, into the publisher's storage (Drive when signed in with Google; this device here).
-  await carol.page.locator('.showbar .jobline [data-footage="recording"]').waitFor({ timeout: 20000 }).catch(() => undefined);
-  const footage = await carol.page.locator('.showbar .jobline .footage').innerText().catch(() => '');
-  check((await carol.page.locator('.showbar .jobline [data-footage="recording"]').count()) === 1, `the broadcast is being filmed into the publisher's storage while it is on air (${footage.replace(/\s+/g, ' ')})`);
+  // The footage: the whole broadcast, as it goes out, into the publisher's storage (Drive when signed in with Google; this device
+  // here) — without a word in the bar (it is on the bar's attributes for support): the bar says what matters and nothing else.
+  await carol.page.locator('.showbar .jobline[data-footage="recording"]').waitFor({ timeout: 20000 }).catch(() => undefined);
+  const footage = await carol.page.locator('.showbar .jobline').evaluate((el) => ({ state: el.getAttribute('data-footage'), seconds: Number(el.getAttribute('data-footage-seconds')), bytes: Number(el.getAttribute('data-footage-bytes')) })).catch(() => null);
+  check(footage?.state === 'recording', `the broadcast is being filmed into the publisher's storage while it is on air (${JSON.stringify(footage)})`);
+  const barText = (await carol.page.locator('.showbar').innerText()).replace(/\s+/g, ' ');
+  const joblineText = (await carol.page.locator('.showbar .jobline').innerText()).replace(/\s+/g, ' ');
+  check(!/footage|chapter|saved to/i.test(barText) && !/watch page/i.test(joblineText), `the bar carries no footage / chapter / watch-page prose — LIVE, YouTube's word and the links (the watch page among them) are all it says (${joblineText.slice(0, 160)})`);
   check((await carol.page.locator('.showbar [data-mix="trackDb"]').count()) === 1 && (await carol.page.locator('.showbar [data-mix="vocalDb"]').count()) === 1, 'the show view has Track volume and Vocal volume controls for the broadcast');
   check((await carol.page.locator('.showbar .jobline').getAttribute('data-live-youtube')) === 'ok' && /YouTube is receiving the show/.test(jobline), 'YouTube accepted the segments and the playlist');
   // The publisher's own check of the stream: the show view played its own playlist back and says it plays.
@@ -607,12 +625,16 @@ try {
   const streamCheck = await carol.page.locator('.showbar .jobline [data-stream-check]').first().evaluate((el) => ({ state: el.getAttribute('data-stream-check'), text: el.textContent?.trim() })).catch(() => null);
   check(streamCheck?.state === 'ok', `the show view's own stream check says the stream plays (${JSON.stringify(streamCheck)})`);
   check((await carol.page.locator('.showbar [data-mic="off"]').count()) === 1, 'the show view says plainly that no microphone is used (Mic off)');
-  // On air: one button per platform hands the publisher the live link viewers open (YouTube here), and the watch page's.
+  // On air: the live link of each platform is written out in full with a Copy button — YouTube's (the channel's standing live
+  // link here: the fake YouTube is set up by hand, not connected) and the watch page's — what the publisher hands the viewers.
   await carol.page.locator('[data-live-link="youtube"]').waitFor({ state: 'visible', timeout: 10000 });
+  const ytUrlShown = (await carol.page.locator('[data-live-url="youtube"]').innerText()).trim();
   await tapShow(carol.page.locator('[data-live-link="youtube"]'));
   await wait(500);
   const copied = await carol.page.evaluate(() => navigator.clipboard.readText().catch(() => ''));
-  check(copied === 'https://www.youtube.com/@carolsings/live' && (await carol.page.locator('[data-live-link="inhouse"]').count()) === 1, `the "YouTube link" button gives the live link (${copied}); the watch page has its button too`);
+  check(copied === 'https://www.youtube.com/@carolsings/live' && ytUrlShown === copied && (await carol.page.locator('[data-live-link="inhouse"]').count()) === 1 && (await carol.page.locator('[data-live-url="inhouse"]').count()) === 1, `the YouTube link is written out (${ytUrlShown}) and Copy copies it; the watch page's link is there the same way`);
+  // The brand's mark is in the broadcast picture itself; while that picture is mirrored here the page draws no second one.
+  check((await carol.page.locator('.show .watermark').count()) === 0 && (await carol.page.locator('.showpic[data-mirror="1"]').count()) === 1, 'one mark on the show view while on air: the one in the picture (the page watermark steps aside)');
   const ytFiles = readdirSync(fakeYoutubeDir);
   const ytSegs = ytFiles.filter((f) => f.endsWith('.ts')).sort();
   check(ytSegs.length >= 3 && ytFiles.includes('live.m3u8'), `the fake YouTube received ${ytSegs.length} segments and the playlist`);
@@ -663,9 +685,9 @@ try {
   // software H.264 encoder) gets its CPU back for the sync checks that follow.
   await tapShow(carol.page.getByRole('button', { name: 'Stop publishing' }));
   await carol.page.getByRole('button', { name: 'Go live' }).waitFor({ timeout: 15000 });
-  await carol.page.locator('.showbar .jobline [data-footage="saved"]').waitFor({ timeout: 30000 }).catch(() => undefined);
-  const footageSaved = await carol.page.locator('.showbar .jobline .footage').innerText().catch(() => '');
-  check(/footage saved/.test(footageSaved), `stopping the broadcast completes the footage in the publisher's storage (${footageSaved.replace(/\s+/g, ' ')})`);
+  await carol.page.locator('.showbar .jobline[data-footage="saved"]').waitFor({ timeout: 30000 }).catch(() => undefined);
+  const footageSaved = await carol.page.locator('.showbar .jobline').evaluate((el) => ({ state: el.getAttribute('data-footage'), seconds: Number(el.getAttribute('data-footage-seconds')), marks: Number(el.getAttribute('data-footage-chapters')) })).catch(() => null);
+  check(footageSaved?.state === 'saved', `stopping the broadcast completes the footage in the publisher's storage — one file, its marks on it, nothing said in the bar (${JSON.stringify(footageSaved)})`);
   await wait(1000);
   const afterStop = await (await fetch(`${servers.controlUrl}/watch/${meetId}/live`)).json();
   check(afterStop.live === false, 'stopping the broadcast takes the show off the portal');
@@ -800,28 +822,19 @@ try {
   await alice.page.locator('.sing .timeline.seekable input[type="range"]').fill(String(SONG_S * 1000 - 12000));
   await wait(4000);
   // The song ends on the host's device → the song is over for everyone: both singers are straight back on the
-  // lobby stage (no review, no approval); each take saves itself in the background — the host's as the meet's performance.
+  // lobby stage (no review, no approval) — and NOTHING is saved per song on any device: the film of the meet
+  // (the host's, one file) runs on through it, the song a chapter mark in it.
   for (const p of [alice.page, bob.page]) await p.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 70000 });
   const endedA = await alice.page.evaluate(() => window.__svFinish ?? null);
   console.log('song end on the host:', JSON.stringify(endedA));
   check(true, 'the song ending on the host device ends it for everyone — both singers stay on stage, no review screen');
-  // Both pages watched at once (the "saved" chip stays 20 s: a page looked at only after the other's long save would have lost it);
-  // the chip's words are kept the moment it shows.
-  const saveTexts = await Promise.all(
-    [alice.page, bob.page].map(async (p) => {
-      await p.locator('[data-save="done"]').first().waitFor({ timeout: 90000 }).catch(async (e) => {
-        // Diagnostics for a save that never came: what the save status shows and what the page says.
-        const chips = await p.locator('[data-save]').evaluateAll((els) => els.map((el) => `${el.dataset.save}:${el.textContent.replace(/\s+/g, ' ').trim()}`)).catch(() => []);
-        console.log('save status chips:', JSON.stringify(chips), '| page:', (await p.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 400));
-        throw e;
-      });
-      return (await p.locator('[data-save="done"]').first().innerText()).replace(/\s+/g, ' ');
-    }),
-  );
-  const [saveA, saveB] = saveTexts;
-  console.log('saved:', { alice: saveA, bob: saveB });
-  check(/Saved “CI Sample Song” · shared with the meet/.test(saveA), "the host's take saved itself as the meet's performance, shared with everyone in the meet");
-  check(/Saved “CI Sample Song”/.test(saveB) && !/shared/.test(saveB), "a singer's take saved itself to their own performances");
+  await wait(4000);
+  const perSong = await Promise.all([alice.page, bob.page].map((p) => p.locator('[data-save]').count()));
+  check(perSong.every((n) => n === 0), `nothing is saved per song on any device — the meet is one film (${perSong.join(' / ')} save chips)`);
+  check((await alice.page.locator('[data-meet-film="on"]').count()) === 1, "the film of the meet runs on through the song's end (never stopped by it)");
+  const marksSoFar = await alice.page.evaluate(() => (window.__svStage?.film?.marks ?? []).map((m) => `${m.kind}${m.songMs ? `@${Math.round(m.songMs / 1000)}` : ''}`));
+  console.log('film marks so far:', marksSoFar.join(', '));
+  check(marksSoFar.map((m) => m.split('@')[0]).join(',') === 'stage,song,song,song,pause,song,song,stage', `the film is marked where the stage went: on stage, the song, its restart, the jump, the pause, the resume, the jump near the end, the stage again (${marksSoFar.join(', ')})`);
   const meshAfterSong = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   check(meshAfterSong === meshBefore, 'the same video mesh carries on after the song (stage never left)');
   check(/No song picked yet/.test(await alice.page.locator('.setlist').innerText()), 'nothing is up after the only song');
@@ -895,10 +908,10 @@ try {
   const balance = await bob.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}'));
   check(balance.trackDb === 6 && balance.vocalDb === -3, `Track / Vocal volume move in 3 dB steps (±30 dB) and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
   await bob.page.getByRole('button', { name: 'Close the songs' }).click();
-  // A singer may leave the song alone (their own take ends; the song goes on for the host) and join back in…
+  // A singer may leave the song alone (the song goes on for the host) and join back in…
   await bob.page.getByRole('button', { name: 'Leave the song' }).click();
   await bob.page.getByRole('button', { name: 'Join the song' }).waitFor({ timeout: 30000 });
-  check(await alice.page.locator('.sing .stagebar').isVisible(), "a singer's Leave ends only their take — the host keeps singing, the singer stays on the live stage");
+  check(await alice.page.locator('.sing .stagebar').isVisible(), "a singer's Leave steps them out of the song alone — the host keeps singing, the singer stays on the live stage");
   await bob.page.getByRole('button', { name: 'Join the song' }).click();
   await bob.page.getByRole('button', { name: 'Stop the song for everyone' }).waitFor({ timeout: 30000 });
   await wait(4000);
@@ -907,16 +920,13 @@ try {
   const rejoinApart = Math.abs(rejoinB.posMs - rejoinA.posMs - (rejoinB.now - rejoinA.now)); // the two readings against their read times
   console.log('after rejoin:', JSON.stringify({ alice: rejoinA, bob: rejoinB, apart: rejoinApart }));
   check(rejoinB.playing && rejoinApart < 2500, `the singer who left is back in the song, in step with the stage (${Math.round(rejoinA.posMs / 1000)} s / ${Math.round(rejoinB.posMs / 1000)} s, ${Math.round(rejoinApart)} ms apart)`);
-  // …or stop the song for everyone, like the host: everyone is back on the lobby stage; the takes save themselves.
+  // …or stop the song for everyone, like the host: everyone is back on the lobby stage; nothing saves (the film runs on).
   await bob.page.getByRole('button', { name: 'Stop the song for everyone' }).click();
-  // The wrap-up of a take (the recorder's last pieces, the save queued) is heavy on a starved page: the lobby can be a while coming.
   await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 120000 });
   await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 120000 });
   check(true, '"Stop song" on a singer\'s device wraps up the song for everyone — straight back to the lobby stage');
-  // The saves (a recorder's last pieces, the files written) can take minutes on a starved machine: the verdict is theirs, not a clock's.
-  await alice.page.locator('[data-save="done"][data-save-id], [data-save="failed"][data-save-id]').first().waitFor({ timeout: 150000 });
-  await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 150000 });
-  check((await alice.page.locator('[data-save="failed"]').count()) === 0, 'the second song saved itself too (nothing stuck)');
+  await wait(3000);
+  check((await alice.page.locator('[data-save]').count()) === 0 && (await bob.page.locator('[data-save]').count()) === 0 && (await alice.page.locator('[data-meet-film="on"]').count()) === 1, 'the second song saved nothing of its own either — the film of the meet has it, still running');
   // Only the host removes people: dave (on stage by now) is put out of the meet for good and sees why.
   alice.page.once('dialog', (d) => void d.accept());
   await alice.page.getByRole('button', { name: 'Remove dave from the meet' }).click();
@@ -929,68 +939,74 @@ try {
   await alice.page.getByRole('button', { name: 'End meet' }).click();
   await alice.page.getByText(/Meet ended/).waitFor({ timeout: 15000 });
   check(true, 'the host ends the meet');
-  // The ended screen lists the saved performances of the meet: one per song the host sang, and the film of the whole
-  // meet (the host's device recorded it from her mic opening to "End meet", straight into her storage); so does everyone's Performances.
-  await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 90000 });
-  // THE FILM IS A RUN OF CHAPTERS, cut where the stage went and never stopped by it. What the stage did, in order: the host's mic
-  // opened in the lobby (on stage) · alice started the song (its kickstart) · bob restarted it · bob jumped it to 0:02 · alice paused
-  // it (an interruption) · alice resumed it · alice jumped it to 12 s before the end · it ran out (the stage between songs) · bob
-  // started the second act · bob stopped it (the stage again) · End meet. Every one a file of its own, numbered, with its time.
-  const wantChapters = [
-    ['stage', /^Full meet 01 · ▪ On stage$/],
-    ['song', /^Full meet 02 · ♪ CI Sample Song$/],
-    ['song', /^Full meet 03 · ♪ CI Sample Song$/], // the restart: from the top again, its own chapter
-    ['song', /^Full meet 04 · ♪ CI Sample Song \(continued at 0:0[1-3]\)$/], // the jump to 0:02
-    ['pause', /^Full meet 05 · ⏸ Paused — CI Sample Song$/],
-    ['song', /^Full meet 06 · ♪ CI Sample Song \(continued at 0:\d\d\)$/], // resumed where it stood
-    ['song', /^Full meet 07 · ♪ CI Sample Song \(continued at 6:[45]\d\)$/], // the jump to 6:48
-    ['stage', /^Full meet 08 · ▪ On stage$/],
-    ['song', /^Full meet 09 · ♪ CI Sample Song$/], // the second act
-    ['stage', /^Full meet 10 · ▪ On stage$/],
+  // The ended screen lists the film of the meet: ONE file, recorded by the host's device from her mic opening to "End meet",
+  // straight into her storage, with a chapter mark wherever the stage went — and shared with everyone who was in the meet
+  // (it is under everyone's Performances). The film is written as the meet goes; End meet closes it, then it is registered.
+  await alice.page.locator('[data-save="done"][data-save-id], [data-save="failed"][data-save-id]').first().waitFor({ timeout: 150000 }).catch(async (e) => {
+    const chips = await alice.page.locator('[data-save]').evaluateAll((els) => els.map((el) => `${el.dataset.save}:${el.textContent.replace(/\s+/g, ' ').trim()}`)).catch(() => []);
+    console.log('save status chips:', JSON.stringify(chips), '| page:', (await alice.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').slice(0, 400));
+    throw e;
+  });
+  await alice.page.waitForFunction(() => document.querySelectorAll('[data-save="saving"], [data-save="queued"]').length === 0, null, { timeout: 150000 });
+  const filmSave = (await alice.page.locator('[data-save]').first().innerText().catch(() => '')).replace(/\s+/g, ' ');
+  console.log('the film saved:', filmSave);
+  check(/Saved “Full meet” · shared with the meet/.test(filmSave), `the film of the meet saved itself once, at End meet, as the meet's performance shared with everyone in it (${filmSave})`);
+  // THE FILM IS ONE FILE WITH CHAPTER MARKS, never stopped by what the stage did. What the stage did, in order: the host's mic
+  // opened in the lobby (on stage) · alice started the song (its kickstart) · bob restarted it · bob jumped it to 0:02 · alice
+  // paused it · alice resumed it · alice jumped it to 12 s before the end · it ran out (the stage between songs) · bob started
+  // the second act · bob stopped it (the stage again) · End meet. One mark each, in order, each with where it starts in the file.
+  const wantMarks = [
+    ['stage', /^▪ On stage 0:00$/],
+    ['song', /^♪ CI Sample Song \d+:\d\d$/],
+    ['song', /^♪ CI Sample Song \d+:\d\d$/], // the restart: from the top again
+    ['song', /^♪ CI Sample Song \(from 0:0[1-3]\) \d+:\d\d$/], // the jump to 0:02
+    ['pause', /^⏸ Paused — CI Sample Song \d+:\d\d$/],
+    ['song', /^♪ CI Sample Song \(from 0:\d\d\) \d+:\d\d$/], // resumed where it stood
+    ['song', /^♪ CI Sample Song \(from 6:[45]\d\) \d+:\d\d$/], // the jump to 6:48
+    ['stage', /^▪ On stage \d+:\d\d$/],
+    ['song', /^♪ CI Sample Song \d+:\d\d$/], // the second act
+    ['stage', /^▪ On stage \d+:\d\d$/],
   ];
-  await alice.page.waitForFunction((n) => document.querySelectorAll('[data-performance][data-chapter-kind]:not([data-chapter-kind=""])').length >= n, wantChapters.length, { timeout: 90000 }).catch(() => undefined);
-  const endedRows = await alice.page.locator('[data-performance]').evaluateAll((els) => els.map((e) => ({ text: e.innerText.replace(/\s+/g, ' '), title: (e.querySelector('.t')?.innerText ?? '').replace(/\s+/g, ' ').trim(), kind: e.getAttribute('data-chapter-kind') || '', index: Number(e.getAttribute('data-chapter') || 0), at: e.getAttribute('data-chapter-at') || '' })));
-  const endedSongShows = endedRows.filter((r) => !r.kind);
-  const chapters = endedRows.filter((r) => r.kind).sort((a, b) => a.index - b.index);
-  console.log('ended screen:', JSON.stringify(endedRows.map((r) => `${r.kind || 'show'}${r.index ? r.index : ''}: ${r.text.slice(0, 80)}`)));
-  check(endedSongShows.length === 2, `the ended meet lists one saved show per song the host sang (${endedSongShows.length})`);
-  let whole = chapters.filter((c) => !/\(part \d+\)/.test(c.title)); // a chapter longer than a chunk carries on in parts: the same chapter
+  await alice.page.waitForFunction((n) => [...document.querySelectorAll('[data-performance][data-film-marks]')].some((e) => Number(e.getAttribute('data-film-marks')) >= n), wantMarks.length, { timeout: 90000 }).catch(() => undefined);
+  const endedRows = await alice.page.locator('[data-performance]').evaluateAll((els) => els.map((e) => ({ text: e.innerText.replace(/\s+/g, ' '), title: (e.querySelector('.t')?.innerText ?? '').replace(/\s+/g, ' ').trim(), marks: Number(e.getAttribute('data-film-marks') || 0), kinds: e.getAttribute('data-film-kinds') || '', line: (e.querySelector('[data-film-chapters]')?.innerText ?? '').replace(/\s+/g, ' ').trim() })));
+  console.log('ended screen:', JSON.stringify(endedRows.map((r) => `${r.title} · ${r.marks} marks · ${r.line}`)));
+  check(endedRows.length === 1 && /Full meet/.test(endedRows[0].title), `the ended meet lists ONE performance — the film of the whole meet, not a file per song (${endedRows.length}: ${endedRows.map((r) => r.title).join(' | ')})`);
+  const film = endedRows[0] ?? { marks: 0, kinds: '', line: '', text: '' };
+  let marks = film.line ? film.line.split(' · ') : [];
   // A third singer whose link took long enough joined the second act well under way: the song restarted from the top for
-  // everyone (the late-join restart) — a real restart, and the film has it as the chapter it is. Allowed, and said.
-  const lateJoinRestart = whole.length === wantChapters.length + 1 && whole[9]?.kind === 'song' && /^Full meet 10 · ♪ CI Sample Song$/.test(whole[9].title);
+  // everyone (the late-join restart) — a real restart, and the film has it as the mark it is. Allowed, and said.
+  const lateJoinRestart = marks.length === wantMarks.length + 1 && /^♪ CI Sample Song \d+:\d\d$/.test(marks[9] ?? '') && film.kinds.split(',')[9] === 'song';
   if (lateJoinRestart) {
-    console.log('the second act restarted for a late-joining singer: one more song chapter, as it should be');
-    whole = [...whole.slice(0, 9), ...whole.slice(10)].map((c, i) => ({ ...c, title: c.title.replace(/^Full meet \d\d/, `Full meet ${String(i + 1).padStart(2, '0')}`) }));
+    console.log('the second act restarted for a late-joining singer: one more song mark, as it should be');
+    marks = [...marks.slice(0, 9), ...marks.slice(10)];
   }
-  const kinds = whole.map((c) => c.kind).join(',');
-  check(kinds === wantChapters.map((w) => w[0]).join(','), `the film of the meet is a run of chapters cut where the stage went — on stage, the song, its restart, the jump, the pause, the song resumed, the jump near the end, the stage between, the second act${lateJoinRestart ? ' (restarted once for a late joiner)' : ''}, the stage again (${kinds})`);
-  check(chapters.length >= wantChapters.length && chapters.every((c, i) => c.index === i + 1), `the chapters are numbered in order, none missing, none merged (${chapters.map((c) => c.index).join(' ')})`);
-  const misnamed = wantChapters.map(([, re], i) => (re.test(whole[i]?.title ?? '') ? null : `${i + 1}: "${whole[i]?.title ?? '—'}"`)).filter(Boolean);
-  check(misnamed.length === 0, `every chapter is named for what it is — the song, its restart, where a jump or a resume took it up, the pause, the stage between${misnamed.length ? ` (not as expected: ${misnamed.join(', ')})` : ''}`);
-  const stamps = chapters.map((c) => Date.parse(c.at));
-  check(stamps.every((t) => t > 0) && stamps.every((t, i) => i === 0 || t > stamps[i - 1]), 'every chapter carries its timestamp, and they climb in order');
+  const kinds = (lateJoinRestart ? [...film.kinds.split(',').slice(0, 9), ...film.kinds.split(',').slice(10)] : film.kinds.split(',')).join(',');
+  check(kinds === wantMarks.map((w) => w[0]).join(','), `the film is marked where the stage went — on stage, the song, its restart, the jump, the pause, the song resumed, the jump near the end, the stage between, the second act${lateJoinRestart ? ' (restarted once for a late joiner)' : ''}, the stage again (${kinds})`);
+  const misnamed = wantMarks.map(([, re], i) => (re.test(marks[i] ?? '') ? null : `${i + 1}: "${marks[i] ?? '—'}"`)).filter(Boolean);
+  check(misnamed.length === 0, `every mark is named for what it is — the song, where a jump or a resume took it up, the pause, the stage between — with where it starts in the film${misnamed.length ? ` (not as expected: ${misnamed.join(', ')})` : ''}`);
+  const markAt = (m) => { const t = / (\d+):(\d\d)$/.exec(m); return t ? Number(t[1]) * 60 + Number(t[2]) : -1; };
+  const starts = marks.map(markAt);
+  check(starts.every((t) => t >= 0) && starts.every((t, i) => i === 0 || t >= starts[i - 1]), `the marks climb through the file in order (${starts.join(' ')})`);
   const durOf = (t) => { const m = / · (\d+):(\d\d) · /.exec(t); return m ? Number(m[1]) * 60 + Number(m[2]) : 0; }; // "… · 9:55 · alice, bob" — the duration sits between the separators
-  const filmSecs = chapters.reduce((n, c) => n + durOf(c.text), 0);
-  check(filmSecs >= 240, `the chapters together span the whole meet, both songs and the talk between — the film never stopped at a song's start, pause, stop or restart (${filmSecs} s in ${chapters.length} chapters)`);
-  check(chapters.every((c) => (c.kind === 'song' ? durOf(c.text) >= 5 : true)), 'no song chapter is a sliver (each holds the singing it was cut for)');
+  const filmSecs = durOf(film.text);
+  check(filmSecs >= 240, `the one film spans the whole meet, both songs and the talk between — never stopped at a song's start, pause, stop or restart (${filmSecs} s, ${film.marks} marks)`);
+  check(starts.length >= 2 && starts.every((t) => t <= filmSecs + 1), 'every mark lies inside the film');
   check((await alice.page.locator('[data-meet-film]').count()) === 0 || (await alice.page.locator('[data-meet-film="on"]').count()) === 0, 'the film stopped with the meet');
   await navigate(bob.page, `${new URL(base).pathname}studio/performances`);
   await bob.page.locator('[data-show]').first().waitFor({ timeout: 20000 });
-  const bobShows = (await bob.page.locator('[data-show]').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
-  check(bobShows.length === 2 && bobShows.filter((t) => /Duet e2e · CI Sample Song/.test(t)).length === 2, `a singer finds the meet's song shows under Performances, by name and date (${bobShows.length})`);
-  const bobEvent = bob.page.locator('[data-event]', { hasText: 'Full meet' }).first();
-  await bobEvent.waitFor({ timeout: 20000 });
-  const bobChapters = await bobEvent.locator('[data-chapter]').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-chapter')}:${e.getAttribute('data-chapter-kind')}`));
-  check(bobChapters.length === chapters.length && bobChapters.every((c, i) => c === `${chapters[i].index}:${chapters[i].kind}`), `a singer finds the film of the meet as the same run of chapters, shared with the whole meet (${bobChapters.length})`);
-  check(new RegExp(`${chapters.length} chapters`).test(await bobEvent.innerText()), `the filming is one card for the singer — "${chapters.length} chapters", each its own row with its time (a Watch link each once the host's Drive holds them; this run stores locally)`);
+  const bobShows = await bob.page.locator('[data-show]').evaluateAll((els) => els.map((e) => ({ text: e.innerText.replace(/\s+/g, ' '), marks: Number(e.getAttribute('data-film-marks') || 0), kinds: e.getAttribute('data-film-kinds') || '', line: (e.querySelector('[data-film-chapters]')?.innerText ?? '').replace(/\s+/g, ' ').trim() })));
+  console.log('bob performances:', JSON.stringify(bobShows.map((r) => r.text.slice(0, 90))));
+  check(bobShows.length === 1 && /Duet e2e · Full meet/.test(bobShows[0].text) && bobShows[0].marks === film.marks && bobShows[0].kinds === film.kinds && bobShows[0].line === film.line, `a singer finds the film of the meet under Performances — one row, the same ${film.marks} marks, shared with the whole meet (${bobShows.length} rows)`);
+  check((await bob.page.locator('[data-chapter], [data-event]').count()) === 0, 'no chapter files, no filming to group: the film is one row');
   await bob.page.screenshot({ path: `${out}/performances-bob.png` });
   const bobTakes = (await bob.page.locator('.list .item').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
-  check(bobTakes.some((t) => /CI Sample Song/.test(t) && /show video/.test(t) && /Kept/.test(t)), `a singer's own takes are kept by themselves, their video the show (${bobTakes.length} items)`);
-  // The host plays her meet performance: the saved show is the 1280×720 broadcast picture.
+  check(!bobTakes.some((t) => /CI Sample Song/.test(t) && /Kept/.test(t)), `a singer has no take of their own per song — nothing was saved on their device (${bobTakes.length} items)`);
+  // The host plays the film from Performances ("Chapters": the in-app player with a button per mark): it is the 1280×720
+  // broadcast picture, with the whole mix, for the whole meet.
   await navigate(alice.page, `${new URL(base).pathname}studio/performances`);
-  await alice.page.locator('[data-show]').first().waitFor({ timeout: 20000 });
-  await alice.page.locator('[data-show]', { hasText: 'CI Sample Song' }).first().getByRole('button', { name: 'Play' }).click(); // a song's show, not the film of the meet
-  const showMeta = await alice.page.evaluate(async () => {
+  await alice.page.locator('[data-show][data-film-marks]').first().waitFor({ timeout: 20000 });
+  await alice.page.locator('[data-show][data-film-marks]').first().locator('[data-film-play]').click();
+  const filmMeta = await alice.page.evaluate(async () => {
     const started = Date.now();
     let v = null;
     while (!(v = document.querySelector('.sheet video')) && Date.now() - started < 20000) await new Promise((r) => setTimeout(r, 200));
@@ -998,15 +1014,20 @@ try {
     await new Promise((r) => (v.readyState >= 1 ? r() : v.addEventListener('loadedmetadata', r, { once: true })));
     return { w: v.videoWidth, h: v.videoHeight };
   });
-  console.log('show video:', JSON.stringify(showMeta));
-  check(showMeta && showMeta.w === 1280 && showMeta.h === 720, `the saved show is the 1280×720 broadcast picture (${JSON.stringify(showMeta)})`);
-  // Keep the host's recorded show beside the screenshots (inspect its frames / sound with ffmpeg).
-  const showB64 = await sheetVideo(alice.page);
-  if (showB64) await writeFile(`${out}/show-alice.webm`, Buffer.from(showB64, 'base64'));
-  // WHAT THE SAVED FILES HOLD — the same files land in Drive when signed in with Google: the song's show (a singer's
-  // take of the meet's song) carries the song and the voice; so does the film of the whole meet (where that moment of
-  // the song sits in it), and so does the publisher's footage of the broadcast. A film with the picture and no song, or
-  // with the room and not the singer, is the thing these are here to catch.
+  console.log('film video:', JSON.stringify(filmMeta));
+  check(filmMeta && filmMeta.w === 1280 && filmMeta.h === 720, `the film is the 1280×720 broadcast picture (${JSON.stringify(filmMeta)})`);
+  // The player has a button per mark, each with its place in the file and when it was.
+  await alice.page.locator('[data-film-marks-row] [data-film-mark]').first().waitFor({ timeout: 10000 });
+  const markButtons = await alice.page.locator('[data-film-marks-row] [data-film-mark]').evaluateAll((els) => els.map((e) => ({ index: Number(e.getAttribute('data-film-mark')), kind: e.getAttribute('data-film-mark-kind'), at: Date.parse(e.getAttribute('data-film-mark-at') || ''), ms: Number(e.getAttribute('data-film-mark-ms')), text: e.innerText.replace(/\s+/g, ' ').trim() })));
+  check(markButtons.length === film.marks && markButtons.every((b, i) => b.index === i + 1 && b.at > 0 && b.ms >= 0 && (i === 0 || b.ms >= markButtons[i - 1].ms)), `the player offers a button per mark, in order, each with its place in the film (${markButtons.length})`);
+  const songMark = markButtons.find((b) => b.kind === 'song');
+  // Keep the host's film beside the screenshots (inspect its frames / sound with ffmpeg).
+  const filmBytes = await sheetVideo(alice.page, `${out}/film-alice.webm`);
+  console.log('film file:', filmBytes, 'bytes');
+  // WHAT THE SAVED FILE HOLDS — the same file lands in Drive when signed in with Google: the film carries the song and the
+  // voice where the meet sang them (the moment of the first song measured live sits where the song's mark says), and so does
+  // the publisher's footage of the broadcast. A film with the picture and no song, or with the room and not the singer, is
+  // the thing these are here to catch.
   const fileSound = async (file, atS, window) => {
     const pcm = decodeToPcm(file, 48000);
     const a = Math.max(0, Math.round(atS * 48000));
@@ -1034,53 +1055,32 @@ try {
     const magX = mag.x / mag.n, yelX = yel.x / yel.n;
     return { side: magX < yelX - 2 ? 'left' : magX > yelX + 2 ? 'right' : 'centre', magentaX: Math.round(magX), yellowX: Math.round(yelX), magenta: mag.n, yellow: yel.n };
   };
-  if (showB64) {
-    const showSound = await fileSound(`${out}/show-alice.webm`, 4, [0, 30]);
-    const showMirror = mirrorOf(`${out}/show-alice.webm`, 4);
-    console.log('show mirror check:', JSON.stringify(showMirror));
-    check(showMirror.side === 'left', `the saved show is not mirrored — the singer's badges are where the camera saw them (${showMirror.side}: magenta x ${showMirror.magentaX ?? '?'}, yellow x ${showMirror.yellowX ?? '?'})`);
-    console.log("the saved show's sound:", JSON.stringify({ ...showSound, rms: showSound.rms.toFixed(3), voice: showSound.voice.toFixed(1) }));
-    check(showSound.song.r > 0.3, `the saved show carries the song (correlation ${showSound.song.r.toFixed(2)} at ${showSound.song.positionS.toFixed(1)} s into the song, 4 s into the file)`);
-    check(showSound.voice > 6, `the saved show carries the singer's voice (${showSound.voice.toFixed(1)} dB above the song alone)`);
-  }
-  // The film of the meet: the moment of the first song that was measured live sits in the first song chapter (cut at the
-  // song's kickstart), where the chapter's own timestamp says.
-  await alice.page.keyboard.press('Escape');
-  await alice.page.locator('.sheet').waitFor({ state: 'detached', timeout: 5000 }).catch(() => undefined);
-  const aliceEvent = alice.page.locator('[data-event]', { hasText: 'Full meet' }).first();
-  await aliceEvent.waitFor({ timeout: 20000 });
-  const songChapter = aliceEvent.locator('[data-chapter-kind="song"]').first();
-  const songChapterAt = Date.parse(await songChapter.getAttribute('data-chapter-at'));
-  await songChapter.getByRole('button', { name: 'Play' }).click();
-  const filmB64 = await sheetVideo(alice.page);
-  if (filmB64) await writeFile(`${out}/film-alice.webm`, Buffer.from(filmB64, 'base64'));
-  if (filmB64) {
-    // Where that moment sits in the chapter: the capture's wall clock against the chapter's start (the song's kickstart, a moment ahead).
-    const filmAt = Math.max(0, (hostCap.wallStart - songChapterAt) / 1000 - 1);
+  if (filmBytes && songMark) {
+    // Where the live-measured moment sits in the film: the mark's place in the file plus the capture's wall clock against the mark's.
+    const filmAt = Math.max(0, songMark.ms / 1000 + (hostCap.wallStart - songMark.at) / 1000 - 1);
     const filmSound = await fileSound(`${out}/film-alice.webm`, filmAt, [stageS - 25, stageS + 15]);
     console.log("the film's sound:", JSON.stringify({ ...filmSound, rms: filmSound.rms.toFixed(3), voice: filmSound.voice.toFixed(1) }));
-    check(filmSound.song.r > 0.3, `the song's chapter of the film carries the song where the meet sang it (correlation ${filmSound.song.r.toFixed(2)} at ${filmSound.song.positionS.toFixed(1)} s into the song, ${filmAt.toFixed(0)} s into the chapter)`);
-    check(filmSound.voice > 6, `the song's chapter of the film carries the host's voice (${filmSound.voice.toFixed(1)} dB above the song alone)`);
-    const cutOff = firstKickstart ? (songChapterAt - firstKickstart) / 1000 : null;
-    check(cutOff !== null && cutOff > -2 && cutOff < 2.5, `the song's chapter is cut at the song's kickstart — the service's instant, not a poll later (the chapter starts ${cutOff === null ? '?' : cutOff.toFixed(2)} s from it; a moment ahead by design)`);
-    check(Math.abs(filmSound.song.positionS - filmAt) < 3, `the chapter's clock is the song's: ${filmSound.song.positionS.toFixed(1)} s of the song at ${filmAt.toFixed(1)} s into the chapter`);
-  } else check(false, "the song's chapter of the film can be played from Performances");
-  await alice.page.keyboard.press('Escape');
-  // THE PICTURE IS NOT MIRRORED: in the film too, both singers' badges sit where the cameras saw them (the screen keeps its selfie
-  // mirror; what is recorded and streamed does not).
-  const filmMirror = filmB64 ? mirrorOf(`${out}/film-alice.webm`, Math.max(0, (hostCap.wallStart - songChapterAt) / 1000)) : { side: 'no film' };
-  console.log('film mirror check:', JSON.stringify(filmMirror));
-  check(filmMirror.side === 'left', `the film of the meet is not mirrored either (${filmMirror.side}: magenta x ${filmMirror.magentaX ?? '?'}, yellow x ${filmMirror.yellowX ?? '?'})`);
-  // The saved show is a moving picture for its whole length, not one frame with a song behind it: the picture's track is fed
-  // frame by frame (CanvasTrack), so it holds whether or not the tab was in front.
-  if (showB64) {
-    const probe = (args) => { try { return execFileSync('ffprobe', ['-v', 'error', ...args, `${out}/show-alice.webm`]).toString().trim(); } catch { return ''; } };
+    check(filmSound.song.r > 0.3, `the film carries the song where the meet sang it (correlation ${filmSound.song.r.toFixed(2)} at ${filmSound.song.positionS.toFixed(1)} s into the song, ${filmAt.toFixed(0)} s into the film)`);
+    check(filmSound.voice > 6, `the film carries the host's voice (${filmSound.voice.toFixed(1)} dB above the song alone)`);
+    const cutOff = firstKickstart ? (songMark.at - firstKickstart) / 1000 : null;
+    check(cutOff !== null && cutOff > -2 && cutOff < 2.5, `the song's mark sits at the song's kickstart — the service's instant, not a poll later (the mark is ${cutOff === null ? '?' : cutOff.toFixed(2)} s from it; a moment ahead by design)`);
+    check(Math.abs(filmSound.song.positionS - (filmAt - songMark.ms / 1000)) < 3, `the mark's clock is the song's: ${filmSound.song.positionS.toFixed(1)} s of the song at ${(filmAt - songMark.ms / 1000).toFixed(1)} s past the mark`);
+    // THE PICTURE IS NOT MIRRORED: in the film both singers' badges sit where the cameras saw them (the screen keeps its selfie
+    // mirror; what is recorded and streamed does not).
+    const filmMirror = mirrorOf(`${out}/film-alice.webm`, filmAt + 1);
+    console.log('film mirror check:', JSON.stringify(filmMirror));
+    check(filmMirror.side === 'left', `the film is not mirrored — the singers' badges are where the cameras saw them (${filmMirror.side}: magenta x ${filmMirror.magentaX ?? '?'}, yellow x ${filmMirror.yellowX ?? '?'})`);
+    // The film is a moving picture for its whole length, not one frame with a song behind it: the picture's track is fed frame by
+    // frame (CanvasTrack), so it holds whether or not the tab was in front — through both songs and the talk between.
+    const probe = (args) => { try { return execFileSync('ffprobe', ['-v', 'error', ...args, `${out}/film-alice.webm`]).toString().trim(); } catch { return ''; } };
     const packets = Number(probe(['-select_streams', 'v:0', '-count_packets', '-show_entries', 'stream=nb_read_packets', '-of', 'csv=p=0']));
     const lastVideoS = Number(probe(['-select_streams', 'v:0', '-show_entries', 'packet=pts_time', '-of', 'csv=p=0']).split('\n').filter(Boolean).pop() ?? 0);
     const audioS = Number(probe(['-select_streams', 'a:0', '-show_entries', 'packet=pts_time', '-of', 'csv=p=0']).split('\n').filter(Boolean).pop() ?? 0);
-    console.log('saved show:', { packets, lastVideoS, audioS });
-    check(packets > 20 && lastVideoS > 20 && lastVideoS > audioS * 0.8, `the saved show's picture runs the whole song (${packets} frames, picture to ${lastVideoS.toFixed(1)} s of ${audioS.toFixed(1)} s)`);
-  }
+    console.log('the film:', { packets, lastVideoS, audioS });
+    check(packets > 200 && lastVideoS >= 200 && lastVideoS > audioS * 0.8, `the film's picture runs the whole meet (${packets} frames, picture to ${lastVideoS.toFixed(1)} s of ${audioS.toFixed(1)} s)`);
+  } else check(false, 'the film of the meet can be played from Performances');
+  await alice.page.keyboard.press('Escape');
+  await alice.page.locator('.sheet').waitFor({ state: 'detached', timeout: 5000 }).catch(() => undefined);
   await alice.page.screenshot({ path: `${out}/performances-alice.png` });
   // Meets list maintenance: the ended meet is listed with Delete; open meets are counted against the limit of 3.
   await navigate(alice.page, `${new URL(base).pathname}meets`);
@@ -1116,24 +1116,25 @@ try {
   if (await carol.page.getByRole('button', { name: 'Stop publishing' }).isVisible().catch(() => false)) await carol.page.getByRole('button', { name: 'Stop publishing' }).click();
   await carol.page.locator('.showbar .jobline', { hasText: 'stopped' }).waitFor({ timeout: 15000 });
   await monitor.close();
-  // The publisher's own Performances page lists the footage of the broadcast as a run of chapters of its own, cut like the film.
+  // The publisher's own Performances page lists the footage of the broadcast: one file too, marked like the film.
   const carolPerf = await carol.ctx.newPage();
   carolPerf.on('pageerror', (e) => errors.carol.push(String(e)));
   await carolPerf.goto(`${base}studio/performances?${control}`, { waitUntil: 'networkidle' });
-  const carolEvent = carolPerf.locator('[data-event]', { hasText: 'Broadcast' }).first();
-  await carolEvent.waitFor({ timeout: 20000 }).catch(() => undefined);
-  const carolChapters = (await carolEvent.locator('[data-chapter]').evaluateAll((els) => els.map((e) => ({ index: Number(e.getAttribute('data-chapter')), kind: e.getAttribute('data-chapter-kind'), at: Date.parse(e.getAttribute('data-chapter-at') || '') }))).catch(() => []));
-  console.log('footage chapters:', JSON.stringify(carolChapters));
-  // The broadcast went on air during the first song and was stopped before anything happened to it: one chapter, the song.
-  check(carolChapters.length >= 1 && carolChapters[0].kind === 'song' && carolChapters.every((c, i) => c.index === i + 1 && ['song', 'pause', 'stage'].includes(c.kind) && c.at > 0), `the publisher finds the footage of the broadcast under Performances as its chapters, cut where the stage went while it was on air (${carolChapters.map((c) => c.kind).join(',')})`);
+  const carolRow = carolPerf.locator('[data-show][data-film-marks]', { hasText: 'Broadcast' }).first();
+  await carolRow.waitFor({ timeout: 20000 }).catch(() => undefined);
+  const footageKinds = ((await carolRow.getAttribute('data-film-kinds').catch(() => '')) || '').split(',').filter(Boolean);
+  console.log('footage marks:', JSON.stringify(footageKinds));
+  // The broadcast went on air during the first song and was stopped before anything happened to it: one mark, the song.
+  check(footageKinds.length >= 1 && footageKinds[0] === 'song' && footageKinds.every((k) => ['song', 'pause', 'stage'].includes(k)), `the publisher finds the footage of the broadcast under Performances as one file, marked where the stage went while it was on air (${footageKinds.join(',')})`);
   await carolPerf.screenshot({ path: `${out}/performances-carol.png` });
-  // The footage carries the song and the voices, exactly as the broadcast did: the moment measured on the bus, in the chapter that holds it.
-  const busChapter = [...carolChapters].filter((c) => c.at <= busCap.wallStart).sort((a, b) => b.at - a.at)[0] ?? carolChapters[0];
-  await carolEvent.locator(`[data-chapter="${busChapter?.index ?? 1}"]`).getByRole('button', { name: /^Play/ }).click();
-  const footageB64 = await sheetVideo(carolPerf);
-  if (footageB64) await writeFile(`${out}/footage-carol.webm`, Buffer.from(footageB64, 'base64'));
-  if (footageB64) {
-    const footageAt = Math.max(0, (busChapter ? (busCap.wallStart - busChapter.at) / 1000 : footageSecondsAtBus !== null ? footageSecondsAtBus + (busCap.wallStart - busWallAt) / 1000 : (busWallAt - goLiveAt) / 1000) - 1);
+  // The footage carries the song and the voices, exactly as the broadcast did: the moment measured on the bus, where the marks put it.
+  await carolRow.locator('[data-film-play]').click();
+  await carolPerf.locator('[data-film-marks-row] [data-film-mark]').first().waitFor({ timeout: 10000 }).catch(() => undefined);
+  const footageMarks = await carolPerf.locator('[data-film-marks-row] [data-film-mark]').evaluateAll((els) => els.map((e) => ({ index: Number(e.getAttribute('data-film-mark')), kind: e.getAttribute('data-film-mark-kind'), at: Date.parse(e.getAttribute('data-film-mark-at') || ''), ms: Number(e.getAttribute('data-film-mark-ms')) }))).catch(() => []);
+  const busMark = [...footageMarks].filter((c) => c.at <= busCap.wallStart).sort((a, b) => b.at - a.at)[0] ?? footageMarks[0];
+  const footageBytes = await sheetVideo(carolPerf, `${out}/footage-carol.webm`);
+  if (footageBytes) {
+    const footageAt = Math.max(0, (busMark ? busMark.ms / 1000 + (busCap.wallStart - busMark.at) / 1000 : footageSecondsAtBus !== null ? footageSecondsAtBus + (busCap.wallStart - busWallAt) / 1000 : (busWallAt - goLiveAt) / 1000) - 1);
     const footageSound = await fileSound(`${out}/footage-carol.webm`, footageAt, [(stageAtBus ?? 0) / 1000 - 25, (stageAtBus ?? 0) / 1000 + 15]);
     console.log("the footage's sound:", JSON.stringify({ ...footageSound, rms: footageSound.rms.toFixed(3), voice: footageSound.voice.toFixed(1) }));
     check(footageSound.song.r > 0.3, `the footage of the broadcast carries the song (correlation ${footageSound.song.r.toFixed(2)} at ${footageSound.song.positionS.toFixed(1)} s into the song, ${footageAt.toFixed(0)} s into the footage)`);
@@ -1143,7 +1144,7 @@ try {
   // "Failed to load resource" is the browser noting any non-2xx fetch (a deleted meet's last heartbeat, say); real errors are the rest.
   const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon|Failed to load resource/.test(e))]));
   check(Object.values(errs).every((v) => !v.length), `no page errors (${JSON.stringify(errs).slice(0, 300)})`);
-  console.log('both takes reviewed');
+  console.log('the film and the footage reviewed');
 } catch (e) {
   failed = true;
   console.error('FAIL', e);

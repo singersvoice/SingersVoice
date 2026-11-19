@@ -1170,11 +1170,55 @@
   grid-row: 3;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: 'dests actions' 'job job';
+  grid-template-areas: 'dests actions' 'monitor monitor' 'job job' 'links links';
   align-items: center;
   gap: 8px 16px;
   padding: 36px max(var(--pad), var(--safe-right)) calc(var(--safe-bottom) + 14px) max(var(--pad), var(--safe-left));
   background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.7));
+}
+.showbar .monitor-row {
+  grid-area: monitor;
+}
+.showbar .livelinks {
+  grid-area: links;
+}
+/* The live links: each platform's page written out, with Copy — what the publisher hands their viewers */
+.livelinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  min-width: 0;
+}
+.livelink {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.livelink .url {
+  min-width: 0;
+  max-width: 48ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+}
+.card .livelink {
+  border-color: var(--line);
+  background: transparent;
+}
+/* The YouTube visibility, right by the destination chips */
+.showbar .yt-visibility {
+  font-size: 13px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  width: auto;
 }
 .showbar .dests {
   grid-area: dests;
@@ -1221,21 +1265,22 @@
 }
 .showbar .jobline {
   grid-area: job;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
   color: rgba(255, 255, 255, 0.8);
 }
 .showbar .jobline a {
   color: #fff;
 }
-.showbar .jobline .footage svg {
-  vertical-align: -2px;
-}
-.showbar .jobline .footage.warn {
-  color: var(--warn);
+.showbar .jobline .chip {
+  white-space: normal;
 }
 @media (max-width: 640px) {
   .showbar {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: 'actions' 'dests' 'job';
+    grid-template-areas: 'actions' 'dests' 'monitor' 'job' 'links';
     padding-top: 24px;
   }
   .showbar .actions {
