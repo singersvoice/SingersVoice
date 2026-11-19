@@ -4,7 +4,7 @@
  */
 import { signal } from '@preact/signals';
 import type { VoxForgeParams } from '@singersvoice/protocol';
-import { hasAudioWorklet } from '../lib/platform.ts';
+import { hasAudioWorklet, isIOS } from '../lib/platform.ts';
 import { BackingPlayer } from './player.ts';
 import { PcmRecorder } from './recorder.ts';
 import { createVoxForgeChain, type VoxForgeChain } from './voxforge.ts';
@@ -163,10 +163,12 @@ export class AudioEngine {
   async openMic(opts: { deviceId?: string; echoCancellation?: boolean; video?: MediaTrackConstraints | false } = {}): Promise<MediaStream | null> {
     await this.resume();
     this.closeMic();
+    this.aecBase = opts.echoCancellation ?? false;
+    this.micDeviceId = opts.deviceId;
     const constraints: MediaStreamConstraints = {
       audio: {
         deviceId: opts.deviceId ? { exact: opts.deviceId } : undefined,
-        echoCancellation: opts.echoCancellation ?? false,
+        echoCancellation: this.aecBase || this.talkback,
         noiseSuppression: false,
         autoGainControl: false,
         channelCount: 1,
@@ -209,6 +211,8 @@ export class AudioEngine {
     this.micSource.connect(this.trim).connect(this.chain.input);
     this.startLeveller();
     this.micOpen.value = true;
+    // Talk-back may have been switched while the capture was on its way: the track is brought to the setting now wanted.
+    this.aecSwap = this.aecSwap.then(() => this.applyAec()).catch(() => undefined);
     return videoStream;
   }
 
@@ -380,6 +384,71 @@ export class AudioEngine {
   /** Hear yourself (with FX). Off by default on phones to avoid speaker feedback. */
   setMonitor(on: boolean, gain = 0.9): void {
     this.monitor.gain.setTargetAtTime(on ? gain : 0, this.ctx.currentTime, 0.03);
+  }
+
+  /** The singer's own choice of echo cancellation ("I'm on speakers"): on for the whole time the mic is open. */
+  private aecBase = false;
+  private talkback = false;
+  private micDeviceId: string | undefined;
+  /** One change of the microphone's processing at a time (a talk-back switch on its way is not overtaken by the next). */
+  private aecSwap: Promise<void> = Promise.resolve();
+  /**
+   * Talk-back is on (between songs, and while the song is paused, the singers on stage hear each other through
+   * this device's speakers): the browser's echo cancellation takes those voices back out of this microphone, so
+   * nobody hears themselves come back, and no loop builds up between two phones on speakers. For the song it is
+   * off again (unless the singer keeps it on), as echo cancellation chews at a singing voice over a backing track.
+   * The track is asked to change in place (`applyConstraints` — Firefox does it); where the browser answers and
+   * changes nothing (Chrome, Safari) the microphone is captured again with the new setting and swapped in under
+   * the chain, the new capture connected before the old one is let go, so the voice never breaks — except on
+   * iOS, which keeps one capture per page (a second would end the camera): there the setting waits for the next
+   * opening of the microphone, and a singer on speakers ticks "I'm on speakers", which keeps it on throughout.
+   */
+  setTalkback(on: boolean): void {
+    if (this.talkback === on) return;
+    this.talkback = on;
+    this.aecSwap = this.aecSwap.then(() => this.applyAec()).catch(() => undefined);
+  }
+
+  private async applyAec(): Promise<void> {
+    const track = this.micStream?.getAudioTracks()[0];
+    if (!track) return;
+    const want = this.aecBase || this.talkback;
+    const aecOf = (t: MediaStreamTrack) => Boolean((t.getSettings?.() as { echoCancellation?: boolean } | undefined)?.echoCancellation);
+    if (aecOf(track) === want) return;
+    if (typeof track.applyConstraints === 'function') {
+      await track.applyConstraints({ echoCancellation: want }).catch(() => undefined);
+      if (aecOf(track) === want) {
+        this.noteInput(track);
+        return;
+      }
+    }
+    if (isIOS || this.micStream?.getAudioTracks()[0] !== track) return;
+    // A fresh capture with the setting, swapped in: connected first, then the old one let go.
+    let fresh: MediaStream;
+    try {
+      fresh = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: this.micDeviceId ? { exact: this.micDeviceId } : undefined, echoCancellation: want, noiseSuppression: false, autoGainControl: false, channelCount: 1 }, video: false });
+    } catch {
+      return; // the device would not open again: the voice goes on as it was
+    }
+    if (this.micStream?.getAudioTracks()[0] !== track || !this.micSource) {
+      fresh.getTracks().forEach((t) => t.stop()); // the mic was closed or re-opened meanwhile
+      return;
+    }
+    const source = this.ctx.createMediaStreamSource(fresh);
+    source.connect(this.trim);
+    if (this.levelAnalyser) source.connect(this.levelAnalyser); // the leveller keeps listening to the voice, not to a silent old source
+    this.micSource.disconnect();
+    this.micStream.getTracks().forEach((t) => t.stop());
+    this.micSource = source;
+    this.micStream = new MediaStream(fresh.getAudioTracks());
+    this.noteInput(fresh.getAudioTracks()[0]!);
+  }
+
+  /** The mic line follows the track as it stands now (its echo cancellation, its rate). */
+  private noteInput(track: MediaStreamTrack): void {
+    const st = (track.getSettings?.() ?? {}) as { sampleRate?: number; channelCount?: number; echoCancellation?: boolean };
+    const info = this.inputInfo.value;
+    if (info) this.inputInfo.value = { ...info, sampleRate: typeof st.sampleRate === 'number' ? st.sampleRate : info.sampleRate, channels: typeof st.channelCount === 'number' ? st.channelCount : info.channels, echoCancellation: Boolean(st.echoCancellation) };
   }
 
   async listInputs(): Promise<MediaDeviceInfo[]> {

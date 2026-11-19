@@ -307,9 +307,31 @@ export class StageCompositor {
         this.drawPlaceholder(c, p, t);
       }
     }
-    // The riser in front of the row, then every singer's name on it.
-    this.drawRiser(c, W, H, tiles[0]!.h);
-    for (const t of this.tiles) this.drawTag(c, t.performer, t, W, H);
+    // The riser in front of the row, then every singer's name on it — drawn once per layout (the glow along the riser's
+    // edge is the dearest stroke on the stage) and laid over the row every frame.
+    this.drawRiserLayer(c, W, H, tiles[0]!.h);
+  }
+
+  /** The riser and the name tags for this layout, kept until the layout, the names or the colours change. */
+  private riserLayer: { key: string; canvas: HTMLCanvasElement } | null = null;
+
+  private drawRiserLayer(c: CanvasRenderingContext2D, W: number, H: number, slotH: number): void {
+    const key = `${this.canvas.width}x${this.canvas.height}|${W}x${H}|${this.mode}|${this.tiles.map((t) => `${t.x.toFixed(1)},${t.y.toFixed(1)},${t.w.toFixed(1)},${t.h.toFixed(1)},${t.performer.label},${t.performer.color ?? ''}`).join(';')}`;
+    if (!this.riserLayer || this.riserLayer.key !== key) {
+      const canvas = this.riserLayer?.canvas ?? document.createElement('canvas');
+      canvas.width = this.canvas.width;
+      canvas.height = this.canvas.height;
+      const lc = canvas.getContext('2d')!;
+      lc.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      lc.clearRect(0, 0, W, H);
+      this.drawRiser(lc, W, H, slotH);
+      for (const t of this.tiles) this.drawTag(lc, t.performer, t, W, H);
+      this.riserLayer = { key, canvas };
+    }
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.drawImage(this.riserLayer.canvas, 0, 0);
+    c.restore();
   }
 
   /**

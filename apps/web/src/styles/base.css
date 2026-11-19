@@ -181,10 +181,21 @@ h3 {
     height: 81px;
   }
 }
-/* A full-screen stage (the live stage, singing solo): the corner of the picture, under the top bar, clear of the controls along the bottom */
+/* A full-screen stage (the live stage, singing solo): the corner of the picture, under the top bar, clear of the controls along the bottom — small and faint, the lyrics have the screen */
 .shell.nonav .watermark {
-  top: calc(var(--safe-top) + var(--topbar) + 10px);
+  top: calc(var(--safe-top) + var(--topbar) + 8px);
   bottom: auto;
+  opacity: 0.35;
+}
+.shell.nonav .watermark .brandloop video,
+.shell.nonav .watermark .brandloop img {
+  height: 44px;
+}
+@media (min-width: 900px) {
+  .shell.nonav .watermark .brandloop video,
+  .shell.nonav .watermark .brandloop img {
+    height: 64px;
+  }
 }
 /* The show view (full screen, no top bar): the mark at the right edge under the show's own header, out of its way */
 .show .watermark {

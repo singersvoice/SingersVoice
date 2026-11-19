@@ -24,6 +24,8 @@ export interface SignalChannel {
   /** false = the addressee is gone (left the meet). */
   sendSignal(to: string, type: MeetSignal['type'], data: unknown): Promise<boolean | void>;
   pollSignals(): Promise<MeetSignal[]>;
+  /** The service pushes a word the moment a signal waits (`pollNow` is called then): the mesh's own polls are the safety net, at a relaxed pace. */
+  readonly pushing?: boolean;
 }
 
 export type PeerState = 'connecting' | 'connected' | 'failed';
@@ -51,6 +53,8 @@ interface Peer {
   pendingIce: (RTCIceCandidateInit & { token?: string })[];
   /** When our offer went out (ms); an offer nobody answers is re-made. */
   offeredAt: number;
+  /** When both descriptions were in place (ms) — a link that still has not connected STUCK_AFTER_MS later is re-made. */
+  settledAt: number;
   /**
    * This RTCPeerConnection's own name, carried on every signal it sends, and the name of the one on
    * the other side (from their offer or answer). A link re-made on either side (a lost or late answer,
@@ -86,6 +90,9 @@ const DC_ID = 1;
 
 const POLL_CONNECTING_MS = 900;
 const POLL_STEADY_MS = 2500;
+/** With the service pushing a word for every signal, the polls are the safety net. */
+const POLL_PUSHED_CONNECTING_MS = 2500;
+const POLL_PUSHED_STEADY_MS = 6000;
 /** A singer's whole video uplink, shared by their links to the other singers (a publisher's link gets its own, generous cap). */
 const TOTAL_UPLINK_BPS = 2_400_000;
 /** A publisher's link carries what goes out to the world — the whole packed frame (enhance.ts): up to this, always. */
@@ -96,6 +103,8 @@ const VOCAL_BPS = 96_000;
 const OFFER_TIMEOUT_MS = 12_000;
 /** A link that failed its ICE restarts is re-made after this long. */
 const REMAKE_AFTER_MS = 4000;
+/** A link with both descriptions in place that has not connected this long later (candidates lost on either side) is re-made from scratch. */
+const STUCK_AFTER_MS = 15_000;
 
 export class PerformerMesh {
   private peers = new Map<string, Peer>();
@@ -352,7 +361,7 @@ export class PerformerMesh {
 
   private connect(id: string, inbound: boolean): void {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers as RTCIceServer[], bundlePolicy: 'max-bundle' });
-    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, retryAt: 0, dc: null, token: Math.random().toString(36).slice(2, 10), remoteToken: null, rtMs: null, netMs: null, jb: null, playoutMs: 0, wantWidth: 0 };
+    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, settledAt: 0, retryAt: 0, dc: null, token: Math.random().toString(36).slice(2, 10), remoteToken: null, rtMs: null, netMs: null, jb: null, playoutMs: 0, wantWidth: 0 };
     this.peers.set(id, peer);
     // The message channel, made before the first offer on both sides with the same id: part of the link from the start, never a renegotiation.
     try {
@@ -444,6 +453,7 @@ export class PerformerMesh {
       if (s === 'connected') {
         peer.state = 'connected';
         peer.restarts = 0;
+        peer.settledAt = 0;
         this.applyCaps(peer); // negotiated now: the bitrate caps stick
       } else if (s === 'failed') {
         peer.state = 'failed';
@@ -493,7 +503,10 @@ export class PerformerMesh {
       if (p.inbound || !this.wanted.has(id)) continue;
       const unanswered = p.pc.signalingState === 'have-local-offer' && p.offeredAt && now - p.offeredAt > OFFER_TIMEOUT_MS && p.pc.connectionState === 'new';
       const dead = p.state === 'failed' && p.retryAt && now >= p.retryAt;
-      if (!unanswered && !dead) continue;
+      // Descriptions in place on both sides, and still no connection: a candidate lost on its way (a relay poll that missed it,
+      // a side that gathered none) leaves ICE waiting for ever — a fresh connection (a new name, an offer the other side mirrors) does not.
+      const stuck = p.pc.signalingState === 'stable' && p.settledAt && now - p.settledAt > STUCK_AFTER_MS && p.pc.connectionState !== 'connected' && p.state !== 'connected';
+      if (!unanswered && !dead && !stuck) continue;
       this.drop(id, false);
       this.connect(id, false);
     }
@@ -549,6 +562,7 @@ export class PerformerMesh {
         if (peer.ignoreOffer) return;
         await pc.setRemoteDescription(desc);
         if (data.token) peer.remoteToken = data.token;
+        if (desc.type === 'answer' && pc.connectionState !== 'connected') peer.settledAt = Date.now();
         if (desc.type === 'offer') {
           // Their offer asks for my vocal (a publisher, a singer recording the show): answer with a sending
           // audio line, fed when my mic is open — and ask for theirs back when I record the show too.
@@ -563,6 +577,7 @@ export class PerformerMesh {
                 .catch(() => undefined);
           }
           await pc.setLocalDescription();
+          if (pc.connectionState !== 'connected') peer.settledAt = Date.now();
           await this.send(peer, 'answer', { ...pc.localDescription!.toJSON(), token: peer.token, forToken: data.token });
         }
         // Candidates that overtook the description in the relay (those of another connection of theirs left out).
@@ -588,8 +603,22 @@ export class PerformerMesh {
     clearTimeout(this.timer);
     if (!this.running) return;
     const anyConnecting = [...this.peers.values()].some((p) => p.state !== 'connected');
-    this.timer = setTimeout(() => void this.poll(), delayMs ?? (anyConnecting ? POLL_CONNECTING_MS : POLL_STEADY_MS));
+    const pushed = this.channel.pushing === true;
+    this.timer = setTimeout(() => void this.poll(), delayMs ?? (anyConnecting ? (pushed ? POLL_PUSHED_CONNECTING_MS : POLL_CONNECTING_MS) : pushed ? POLL_PUSHED_STEADY_MS : POLL_STEADY_MS));
   }
+
+  /** A signal waits (the service said so): poll now — once more right after, when a poll was already on its way. */
+  pollNow(): void {
+    if (!this.running) return;
+    if (this.polling) {
+      this.pollAgain = true;
+      return;
+    }
+    clearTimeout(this.timer);
+    void this.poll();
+  }
+
+  private pollAgain = false;
 
   private async poll(): Promise<void> {
     if (this.polling || !this.running) return;
@@ -602,7 +631,10 @@ export class PerformerMesh {
       /* offline: try again next tick */
     } finally {
       this.polling = false;
-      this.schedule();
+      if (this.pollAgain) {
+        this.pollAgain = false;
+        this.schedule(0);
+      } else this.schedule();
     }
   }
 

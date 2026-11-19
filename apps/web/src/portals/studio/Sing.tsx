@@ -1,4 +1,5 @@
 import { createTrack, formatMs, nextSlot, planParts, singersLine, songTimeMs, SLOT_COLORS, type CatalogTrack, type JoinInvite, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
+import { useSignal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
@@ -7,7 +8,7 @@ import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
-import { MicStatus } from '../../components/MicStatus.tsx';
+import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { Page } from '../../components/Shell.tsx';
@@ -150,7 +151,8 @@ export function Sing(props: { id?: string; joinId?: string }) {
   const [joinGo, setJoinGo] = useState(false);
   /** The earlier singers' cut-outs on my stage (a join), on the show's clock. */
   const layers = useMemo(() => (join ? new JoinLayers(join.invite.layers, join.cutouts) : null), [join]);
-  const [tMs, setTMs] = useState(0);
+  // The song's position, written every frame: a signal, read by the lyrics and the seek bar alone (the stage never re-renders for it).
+  const tMs = useSignal(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [fxOpen, setFxOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
@@ -160,7 +162,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
   const engineRef = useRef<AudioEngine | null>(null);
   const camera = useMemo(() => new Camera(), []);
   const feed = useMemo(() => new LocalFeed(), []);
-  const compositor = useMemo(() => new StageCompositor(), []);
+  const compositor = useMemo(() => new StageCompositor('show'), []); // the singers fill their strip under the lyrics
   /** The take's video is the show: my cut-out on the stage background, as Publisher mode would show it, with the mix. */
   const show = useMemo(() => new ShowRecorder(), []);
   const [blend, setBlend] = useState<'loading' | 'model' | 'oval' | 'off'>('off');
@@ -355,7 +357,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
           setCountdown(null);
           setPhase((p) => (p === 'countdown' ? 'playing' : p));
           const heardMs = Math.max(0, player.positionMs() - engine.outputLatencyMs);
-          setTMs(join ? songTimeMs(heardMs, join.invite) : heardMs);
+          tMs.value = join ? songTimeMs(heardMs, join.invite) : heardMs;
           // The earlier singers' pictures keep step with their voices in the mix, which holds the show back by the lag and my round trip.
           layers?.sync(player.positionMs(), show.lagMs + engine.roundTripMs, player.playing);
         }
@@ -391,7 +393,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
       player.cue(at, to);
       if (Math.abs(delta) > 30) engine.recorder?.seek(at, delta / audio.tempo);
     } else player.seek(to);
-    setTMs(to);
+    tMs.value = to;
   };
 
   /** Pause the song, the vocal recorder and the show recorder together: the take stays on the track timeline. */
@@ -430,7 +432,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
     engine.player?.stop();
     if (engine.recorder?.recording) await engine.recorder.stop().catch(() => undefined);
     await show.stop();
-    setTMs(0);
+    tMs.value = 0;
     setPhase('ready');
     await start();
   };
@@ -550,7 +552,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
         join={join?.invite ?? null}
         onAgain={() => {
           setTake(null);
-          setTMs(0);
+          tMs.value = 0;
           setPhase('ready');
         }}
       />
@@ -560,11 +562,10 @@ export function Sing(props: { id?: string; joinId?: string }) {
   const live = phase === 'playing' || phase === 'countdown' || phase === 'paused';
   const engine = engineRef.current;
   const pitch = engine?.pitch.value ?? null;
-  const level = engine?.recorder?.level.value ?? 0;
 
   return (
     <Page title={join ? `${track.title} · with ${singersLine(join.invite.layers)}` : track.title} nav={false} full>
-      <div class="sing" data-join={join ? join.invite.performanceId : undefined} data-stage-slot={stageSlot}>
+      <div class="sing" data-layout="strip" data-join={join ? join.invite.performanceId : undefined} data-stage-slot={stageSlot}>
         <StageBackground id={app.backgroundId} />
         <VirtualStage compositor={compositor} />
         <section class="stagebar" data-blend={blend} data-mask={feed.segmenter.maskMode} data-performers={compositor.tiles.length}>
@@ -588,16 +589,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
           <LyricsPanel lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={planParts(track.singerCount, [])} countdown={phase === 'countdown' ? countdown : null} showWho={track.singerCount > 1} title={track.title} />
         )}
         {app.showCueDeck && track.singerCount > 1 && phase === 'playing' && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={planParts(track.singerCount, [])} />}
-        <section class="controls">
-          <PresetChips value={audio} onChange={updateAudio} />
-          <MicStatus
-            engine={engineRef.current}
-            onChange={() => {
-              const engine = engineRef.current;
-              if (!engine?.micOpen.value) return;
-              void openMicWithCamera(engine, camera).catch((e) => toast(errorText(e), 'error'));
-            }}
-          />
+        <section class="controls compact">
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={!join && (phase === 'playing' || phase === 'paused') ? seek : undefined} />
           <div class="main">
             <button class={`btn icon ${app.cameraOn && videoAllowed ? 'on' : ''}`} aria-label="Camera" title={videoAllowed ? 'Camera' : 'Your account is audio only — no camera'} onClick={() => updateApp({ cameraOn: !app.cameraOn })} disabled={busy || !videoAllowed}>
@@ -606,7 +598,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" title="Hear myself (use headphones)" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
             </button>
-            <button class="btn icon" aria-label="Voice FX" onClick={() => setFxOpen(true)}>
+            <button class="btn icon" aria-label="Sound" title="Sound: the voice preset and its tweaks, the microphone, the track and vocal volumes" onClick={() => setFxOpen(true)}>
               <IcSliders />
             </button>
             <button class="btn icon" aria-label="Stage setup" onClick={() => setSetupOpen(true)} disabled={live}>
@@ -639,12 +631,11 @@ export function Sing(props: { id?: string; joinId?: string }) {
               </button>
             )}
           </div>
-          <MixBalance />
           <div class="row between small">
             <div class="row" style="gap:8px">
               {engine?.micOpen.value && (
                 <span class="pitch-pill">
-                  <span class="dot" style={{ background: level > 0.9 ? 'var(--danger)' : 'var(--ok)', opacity: 0.4 + level * 0.6 }} />
+                  <LevelDot engine={engine} />
                   {pitch && pitch.clarity > 0.7 ? `${noteName(pitch.midi)} ${pitch.cents >= 0 ? '+' : ''}${pitch.cents}¢` : 'mic on'}
                 </span>
               )}
@@ -661,8 +652,18 @@ export function Sing(props: { id?: string; joinId?: string }) {
         </section>
       </div>
 
-      <Sheet open={fxOpen} onClose={() => setFxOpen(false)} title="VoxForge voice">
+      <Sheet open={fxOpen} onClose={() => setFxOpen(false)} title="Sound">
         <div class="stack">
+          <PresetChips value={audio} onChange={updateAudio} />
+          <MicStatus
+            engine={engineRef.current}
+            onChange={() => {
+              const engine = engineRef.current;
+              if (!engine?.micOpen.value) return;
+              void openMicWithCamera(engine, camera).catch((e) => toast(errorText(e), 'error'));
+            }}
+          />
+          <MixBalance />
           <div class="grid-2">
             <Field label={`Backing level in your ears ${Math.round(audio.backingGain * 100)}%`}>
               <input type="range" min={0} max={1} step={0.01} value={audio.backingGain} onInput={(e) => updateAudio({ backingGain: Number((e.currentTarget as HTMLInputElement).value) })} />

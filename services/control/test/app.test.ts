@@ -410,6 +410,58 @@ describe('sv-control API', () => {
     expect((await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: '{}' })).status).toBe(410);
   });
 
+  it('meets: the event stream tells a device of every change at once, and whom a signal waits for', async () => {
+    const created = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Push meet' }) }));
+    const meet = created.meet;
+    const host = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'audience' }) }));
+    // The stream: by resume token only (no sign-in header, as the browser's EventSource sends none); a bad token is refused.
+    expect((await app.request(`/meets/${meet.meetId}/events?rt=rt-nope`)).status).toBe(403);
+    expect((await app.request(`/meets/${meet.meetId}/events`)).status).toBe(403);
+    const res = await app.request(`/meets/${meet.meetId}/events?rt=${encodeURIComponent(host.resumeToken)}`, { headers: { Origin: 'https://singersvoice.github.io' } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/text\/event-stream/);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://singersvoice.github.io');
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let text = '';
+    const until = async (re: RegExp) => {
+      for (let i = 0; i < 20 && !re.test(text); i++) {
+        const { value, done } = await Promise.race([reader.read(), new Promise<{ value: undefined; done: true }>((r) => setTimeout(() => r({ value: undefined, done: true }), 1500))]);
+        if (done) break;
+        text += dec.decode(value, { stream: true });
+      }
+      expect(text).toMatch(re);
+    };
+    const settle = () => new Promise((r) => setTimeout(r, 30)); // a change is told once the service's turn is over
+    try {
+      await until(/event: hello\ndata: \{"participantId":"p-[^"]+","serverEpochMs":\d+\}\nretry: 1500/);
+      // Somebody joins: the host's stream says 'changed' — once, though the join wrote the meet twice (the device then fetches its snapshot).
+      const bob = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ role: 'performer' }) }));
+      expect(bob.you.slot).toBe(2);
+      await settle();
+      await until(/event: changed\ndata: \{"type":"changed"\}\nid: 1\n/);
+      // A signal for the host: the host's stream says so; one for bob is not the host's business.
+      await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, to: host.you.participantId, type: 'offer', data: '{}' }) });
+      await until(/event: signal\ndata: \{"type":"signal","to":"p-[^"]+"\}\nid: 2\n/);
+      await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, to: bob.you.participantId, type: 'answer', data: '{}' }) });
+      // A chat line (a song pick, the transport, a slot: the same): 'changed'.
+      await app.request(`/meets/${meet.meetId}/chat`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, text: 'hi' }) });
+      await settle();
+      await until(/event: changed\ndata: \{"type":"changed"\}\nid: 3\n/);
+      expect((text.match(/event: signal/g) ?? []).length).toBe(1); // bob's answer was bob's alone
+      expect((text.match(/event: changed/g) ?? []).length).toBe(2);
+      // The host ends the meet: 'changed' once more, and the stream is closed by the service.
+      await app.request(`/meets/${meet.meetId}/stop`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken }) });
+      await settle();
+      await until(/id: 4\n/);
+      const end = await Promise.race([reader.read(), new Promise<{ done: boolean }>((r) => setTimeout(() => r({ done: false }), 1500))]);
+      expect(end.done).toBe(true);
+      expect((await app.request(`/meets/${meet.meetId}/events?rt=${encodeURIComponent(host.resumeToken)}`)).status).toBe(410); // over
+    } finally {
+      await app.request(`/meets/${meet.meetId}/end`, { method: 'POST', headers: as('alice') });
+    }
+  });
+
   it('meets: a crowd of forty costs a poll a dozen names and a count', async () => {
     const created = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('carol'), body: JSON.stringify({ title: 'Big night' }) }));
     const host = await json<JoinMeetResponse>(await app.request(`/meets/${created.meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ role: 'audience' }) }));

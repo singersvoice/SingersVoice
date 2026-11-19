@@ -258,20 +258,62 @@ mounted until it wraps up, even once the meet is back in the lobby. The full wal
    (The recorder worklet — a Studio take's — drops frames between a pause and a resume and, at a jump,
    inserts that much silence or keeps only the frames before the new position, so a take stays on the
    track timeline; in a live meet nothing records per song.) The film of the meet runs on in wall time
-   (the song simply jumps in it, a chapter mark at the jump). Performers poll every 1.5 s while
-   live, the audience every 2 s — and every link of the mesh carries a small negotiated data channel
+   (the song simply jumps in it, a chapter mark at the jump). **The service pushes** (`events.ts`,
+   `GET /meets/:id/events`): every device in a meet keeps one event stream open (SSE — the resume
+   token in its query is the credential, the browser's EventSource sends no header; it is the meet's
+   own token, never the Google one), and after every action of any device the service says *changed*
+   on every stream of that meet (told once per turn of the service, though an action may write the
+   meet twice) — each device fetches its snapshot at once (`MeetSession.poke`); *signal* tells the one
+   device a WebRTC signal waits for, and its mesh polls now (`PerformerMesh.pollNow`). With the stream
+   open the heartbeat polls are the safety net and the clock report: every 4 s while the room forms or
+   counts down, 3 s on stage and in the show view while live, 4 s in the audience while live, 8 s
+   otherwise (`POLL_PUSHED`); without it (a browser that cannot keep a stream, a proxy that will not)
+   the old pace — 2 / 1.5 / 2 / 5 s. The stream is pinged every 25 s, re-made by the browser when it
+   drops (a snapshot is fetched on every open, so nothing said meanwhile is missed), and closed by
+   the service when the meet ends. On Cloudflare every request of every meet goes through the one
+   Durable Object, so an in-memory map of who listens is the whole truth there too; on Node one
+   process serves every meet. Every link of the mesh also carries a small negotiated data channel
    (`sv`, id 1, made on both sides before the first offer so it never renegotiates): after any
-   action of a device (`MeetSession.onActed`) it says *changed* to every linked peer, and each one
-   fetches the snapshot at once (`MeetSession.poke`) — the singers and the show view follow a
-   background switch, a song pick or a transport cue within a few hundred milliseconds, the poll
-   remaining the safety net (the channel carries the word only, never state). The audience's lyrics
+   action of a device (`MeetSession.onActed`) it says *changed* to every linked peer as well, and
+   each one fetches the snapshot at once — belt and braces: the singers and the show view follow a
+   background switch, a song pick or a transport cue in a few hundred milliseconds (the probe
+   below: a slot taken on a phone shows on the host's screen in 0.3 s, a resume in 0.04 s), the poll
+   remaining the safety net (neither channel carries state, only the word). The audience's lyrics
    and "listen" player follow `playbackPositionMs()` (the mix player's own clock when the mix plays).
+
+   **What a tap costs on the device itself** (`tools/ci/latency-probe.mjs`: two performers and an
+   audience device on the local service, click → DOM timing, a CPU profile of the host around the
+   song start): an action's round trip is 15–60 ms; the singing screen is in the DOM 70 ms after
+   the tap. What used to stand between a tap and the screen was the main thread: the cut-out model
+   and its GPU readbacks ran on the page (100–120 ms long tasks every 200 ms on a two-core machine),
+   the whole singing screen re-rendered on every animation frame for the song's clock, and the stage
+   canvas filled the whole phone screen. All three are gone: the camera pipeline runs in a worker
+   (below), the clock is a signal only the lyrics and the seek bar read (`components/clocked.ts`),
+   the stage is a strip under the lyrics, and the riser with its glow and the name tags is drawn
+   once per layout and laid over the row every frame (`StageCompositor.drawRiserLayer`).
 
 ## The virtual stage
 
 Nobody is shown as a boxed camera tile. `video/segmenter.ts` cuts the singer out of their camera with
 MediaPipe Selfie Segmentation (bundled under `/mediapipe`, ~6 MB, cached by the service worker after
-the first use; CDN fallback). The model's mask comes back either in the alpha channel or only as
+the first use; CDN fallback). **The whole camera pipeline runs in a worker** wherever it can
+(`video/feed.worker.ts`, its page end `video/feedWorker.ts`): the camera's frames go to the worker
+as a stream (`MediaStreamTrackProcessor`, Chrome / Edge — the page never sees a frame) or one bitmap
+at a time (Safari), the model, the feathering, the stage frame, the lift and the alpha-packing all
+happen there, and the page gets one bitmap per frame to draw (the framed cut-out) plus what was
+measured (`FeedMeta`: the seat's state, the lift, the distance note, the mask's coverage); the
+outgoing packed track is fed straight from the worker where the browser hand-feeds video tracks
+(`MediaStreamTrackGenerator`, `AlphaPacker.startRemote`), so the stage, the lyrics and every tap stay
+quick on a phone. The legacy solution's own worker path is half there, and the worker makes up for it:
+it `importScripts` every file it lists (the model's data files too), so scripts are fetched and
+evaluated by a shim that skips those; it asks its wasm for a GL context without a version (a name
+lost in its own minification) and gets WebGL 1, on which the model's GPU inference answers noise, so
+the context maker is wrapped to ask for WebGL 2 (what the page branch gets); and it never keeps the
+context it makes, so the worker keeps it. Where a worker cannot do the work (no OffscreenCanvas, the
+worker failing to start) the same pipeline runs on the page as before (`PersonSegmenter`,
+`LocalFeed.pipeline` says which; `localStorage['sv.feedWorker'] = '0'` keeps it on the page for
+support). `segmentCore.ts` is the arithmetic both share (the mask into feathered alpha, the
+silhouette, the centre crop). The model's mask comes back either in the alpha channel or only as
 brightness with opaque alpha depending on the browser/GPU path, so — as in the original SingersVoice
 app — `alphaFromMaskPixels` uses whichever channel varies, normalises and feathers it, and falls back
 to a soft head-and-shoulders silhouette when the mask is unusable (never a rectangle). The model is
@@ -337,8 +379,14 @@ and zoomed between 0.85× and 1.19× in 16 s; the seat glides once and holds. Th
 alone: **Publisher mode** ('show': Publishing, the lobby stage, the saved performance) — slots
 taller than the picture (1.2×, width permitting), their lower part behind the riser and below the
 picture, the heads from a tenth down, the riser band bounded to 9–40 % of the picture so ten small
-slots sit lower rather than behind a wall; **Performer mode** ('stage': the live stage, Studio) —
-the lyrics are the picture, big, and each frame sits small in the lower part over a slim riser.
+slots sit lower rather than behind a wall; **Performer mode** ('stage', kept for a stage that wants
+the lyrics drawn over the performers) — each frame sits small in the lower part over a slim riser.
+The live stage and the Studio draw the singers in 'show' mode in **a strip of their own under the
+lyrics** (`.sing`: the status strip · the lyrics, large, the words up from the count-in · the stage
+strip, a quarter of a phone's screen, a third of a wide one, little in landscape · one row of
+controls, the sound settings — the voice preset and its tweaks, the microphone, the track and vocal
+volumes — in a drawer behind one button), so the lyrics have the screen and the stage canvas is a
+fraction of what it was.
 A frame that arrived tiny (a weak link) is never blown up past 4.5× its pixels — the packed stream
 itself is never capped, so a phone's frame is as big as a computer's. The cut-out
 itself is the camera picture **centre-cropped to 3:4** (`drawCover` in the segmenter — a 16:9
@@ -393,8 +441,10 @@ not audio only. **Video hours** are counted on the service on every heartbeat wh
 stage with the picture on (`video_usage`, by pool — the account's, or the club owner's — and
 calendar month, UTC; two minutes at most per gap); at the limit the next heartbeat sets the
 participant's `media` to `audio` (every device draws the name card, the singer's camera closes) with
-the reason on the room's chip (`yourVideo` on the snapshot), and the first of the month starts the
-count again. `canPublish` is the entitlement's: a super admin, or an own active plan that carries
+the reason on the room's chip (`yourVideo` on the snapshot: the hours used up, an audio-only account),
+and the first of the month starts the count again. A free account on stage simply sings — its camera
+button is off and the stage says nothing about it (the Plans page says what a plan brings; the strip
+carries `data-video-allowed` / `data-video-why` for the tests). `canPublish` is the entitlement's: a super admin, or an own active plan that carries
 Publishing (Club owner) — enforced on every `/publishing/*` route and the publisher join
 (`403 publishing_closed` with the reason in words, which the app shows on its gate). The app only
 mirrors the verdict (`role`, `media`, `entitlement`, `subscription`, `publishingNote` from `/me`,
@@ -765,7 +815,10 @@ A meet is light by construction, and light in a different way for each kind of p
   segment (immutable) for two minutes, the playlist, the live status, the mix batches and the
   public meet page for a second or two. A hundred viewers in a city cost the single Durable Object
   one request per segment, not a hundred — the DO's own load stays what ten singers and a
-  publisher make of it (their polls, every 1.5–5 s, are per user and small). The public watch
+  publisher make of it (their polls, every 3–8 s with the push stream open, are per user and
+  small). Every participant also holds one event stream open to the DO (a few bytes per change,
+  a ping every 25 s, re-made every 20 minutes): a hundred idle connections cost the object next
+  to nothing, and a change is told to all of them in one loop. The public watch
   routes answer every origin (`*`), which is what makes one cached answer serve everyone.
 - **What every participant's poll carries is independent of the crowd**: a snapshot names the
   stage, the host, the publishers, the wait list and the first dozen of the audience
@@ -873,7 +926,14 @@ and a factory preset chosen by name always means its current values.
 The microphone is opened **raw** — no browser echo cancellation, noise suppression or automatic
 gain (all three chop and thin a singing voice; AGC pumps, AEC ducks the voice whenever it
 correlates with the music) — mono, at the device's own rate. Echo cancellation is on only when the
-singer says *I'm on speakers* (the track would otherwise leak into the mic). `AudioEngine.inputInfo`
+singer says *I'm on speakers* (the track would otherwise leak into the mic) — and, in a live meet,
+while talk-back plays (between songs, during a pause: the other singers' voices out of this device's
+speakers would otherwise come back through its mic to everyone, late, and loop between two phones on
+speakers): `AudioEngine.setTalkback` asks the live track for it (`applyConstraints` — Firefox
+changes the track in place; Chrome and Safari answer and change nothing, so there the mic is
+captured again with the setting and swapped in under the chain — the new source connected, then the
+old let go, the leveller's analyser moved with it — never on iOS, where a second capture ends the
+camera: there it waits for the next opening of the mic) and turns it off again for the song. `AudioEngine.inputInfo`
 reports the device, its sample rate and channels; a rate under 32 kHz is a phone-call line (a
 Bluetooth headset's HFP mic) and the `MicStatus` component says so and offers another mic. The
 **instrument** is a second capture beside the microphone (`openInstrument`: a guitar, keys, a

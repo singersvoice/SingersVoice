@@ -281,14 +281,14 @@ const perfFiles = (who, performanceId) => {
   }
   return { show, cutout, manifest, d };
 };
-/** How many singers a frame of a saved show carries: the fake person's magenta badge, once per cut-out, clustered by where it is. */
+/** How many singers a frame of a saved show carries: the fake person's brown head, once per cut-out (always above the riser, whatever the seat's framing), clustered by where it is. */
 const singersInFrame = (file, atS) => {
   const W = 640, H = 360;
   const rgb = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(Math.max(0, atS)), '-i', file, '-frames:v', '1', '-vf', `scale=${W}:${H}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1 << 25 });
   const xs = [];
   for (let i = 0, px = 0; i + 2 < rgb.length && px < W * H; i += 3, px++) {
     const [r, g, b] = [rgb[i], rgb[i + 1], rgb[i + 2]];
-    if (r > 170 && b > 170 && g < 100) xs.push(px % W);
+    if (r > 110 && r < 240 && g > 60 && g < 150 && b > 10 && b < 85 && r > g + 30 && g > b + 20) xs.push(px % W);
   }
   xs.sort((a, b) => a - b);
   const clusters = [];
@@ -299,7 +299,7 @@ const singersInFrame = (file, atS) => {
       c.n++;
     } else clusters.push({ min: x, max: x, n: 1 });
   }
-  const real = clusters.filter((c) => c.n >= 12);
+  const real = clusters.filter((c) => c.n >= 150);
   return { singers: real.length, at: real.map((c) => Math.round((c.min + c.max) / 2)), pixels: xs.length };
 };
 const saveShow = (who, performanceId, name) => {
@@ -379,7 +379,9 @@ try {
   check(/joining alice · you are singer 2/.test(await bob.page.locator('[data-join-with]').innerText()), `the stage says so (${(await bob.page.locator('[data-join-with]').innerText()).trim()})`);
   check(await waitForModel(bob.page), "bob's camera is on — a free account's camera in the Studio is as free as anyone's");
   const bobStage = await stageWithPictures(bob.page, 2);
-  check(bobStage.performers === '2' && bobStage.headLeft > 200 && bobStage.headRight > 200, `two performers on bob's stage before a note is sung: alice's picture on the left (${bobStage.headLeft} px of her), bob's on the right (${bobStage.headRight} px)`);
+  const bobLayers0 = await bob.page.evaluate(() => window.__svJoin?.layers?.state() ?? null);
+  writeFileSync(`${out}/bob-stage-canvas.png`, Buffer.from((await bob.page.evaluate(() => document.querySelector('.sing canvas.stagecanvas').toDataURL('image/png'))).split(',')[1], 'base64')); // what the stage drew (support)
+  check(bobStage.performers === '2' && bobStage.headLeft > 200 && bobStage.headRight > 200, `two performers on bob's stage before a note is sung: alice's picture on the left (${bobStage.headLeft} px of her), bob's on the right (${bobStage.headRight} px) — layers ${JSON.stringify(bobLayers0)}, canvas ${bobStage.w}×${bobStage.h}`);
   check(!/audio only/.test(bobStage.text), 'nothing about audio only on a join');
   await bob.page.getByRole('button', { name: 'Stage setup' }).click();
   await bob.page.locator('.sheet').waitFor();
@@ -387,7 +389,7 @@ try {
   await bob.page.locator('.sheet').getByRole('button', { name: 'Close' }).click(); // (Escape reaches the window only once the page has the focus; the X always does)
   await bob.page.locator('.sheet').waitFor({ state: 'detached', timeout: 10000 });
   check((await bob.page.locator('.lyrics').count()) === 1, 'the lyrics are there: the song came from the track database');
-  await bob.page.getByRole('button', { name: 'Voice FX' }).click();
+  await bob.page.getByRole('button', { name: 'Sound' }).click();
   await bob.page.locator('.sheet').waitFor();
   check((await bob.page.locator('.sheet [data-tempo][disabled]').count()) === 1 && (await bob.page.locator('.sheet [data-key-shift][disabled]').count()) === 1, 'tempo and key are fixed on a join (the show is sung as it was)');
   await bob.page.locator('.sheet').getByRole('button', { name: 'Close' }).click();
@@ -410,7 +412,7 @@ try {
   check(b.manifest?.kind === 'show' && b.manifest?.singerSlot === 2, 'a show, sung as singer 2');
   const bobShow = saveShow('bob', bobId, 'show-bob');
   const bobFrame = bobShow ? singersInFrame(bobShow, 8) : { singers: 0 };
-  check(bobFrame.singers === 2, `bob's saved show has two singers on it — alice's cut-out and his (${bobFrame.singers}, badges at x ${bobFrame.at?.join(',')})`);
+  check(bobFrame.singers === 2, `bob's saved show has two singers on it — alice's cut-out and his (${bobFrame.singers}, heads at x ${bobFrame.at?.join(',')})`);
   check(bobShow && duration(bobShow) > SONG_S - 6 && loudness(bobShow) > -35, `his show runs the song (${bobShow ? duration(bobShow).toFixed(1) : '?'} s) with sound (${bobShow ? loudness(bobShow).toFixed(1) : '?'} dB)`);
 
   // ---- 4. bob opens his; alice sees the join ----
@@ -450,7 +452,7 @@ try {
   check(c.manifest?.join?.fromPerformanceId === bobId && c.manifest?.join?.layers?.length === 2, "it joined bob's and inherited two layers");
   const carolShow = saveShow('carol', carolId, 'show-carol');
   const carolFrame = carolShow ? singersInFrame(carolShow, 8) : { singers: 0 };
-  check(carolFrame.singers === 3, `carol's saved show has three singers on it (${carolFrame.singers}, badges at x ${carolFrame.at?.join(',')})`);
+  check(carolFrame.singers === 3, `carol's saved show has three singers on it (${carolFrame.singers}, heads at x ${carolFrame.at?.join(',')})`);
   check(carolFrame.at && carolFrame.at[0] < carolFrame.at[1] && carolFrame.at[1] < carolFrame.at[2], 'alice, bob, carol — left to right');
 
   // ---- 6. Closing ----

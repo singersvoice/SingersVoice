@@ -1,6 +1,7 @@
 import type { TrackPackageV2 } from '@singersvoice/protocol';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { trackVideoUrl } from '../lib/trackVideo.ts';
+import { ms, type Clocked } from './clocked.ts';
 import { Spinner } from './ui.tsx';
 
 /**
@@ -11,7 +12,8 @@ import { Spinner } from './ui.tsx';
  * Drive (lib/trackVideo.ts); until it does, and if it cannot, the song still runs — the words are then
  * only on the sound.
  */
-export function KaraokeVideo(props: { track: Pick<TrackPackageV2, 'trackId' | 'video' | 'title'>; catalogTrackId?: string | null; tMs: number; playing: boolean; rate?: number; countdown: number | null }) {
+export function KaraokeVideo(props: { track: Pick<TrackPackageV2, 'trackId' | 'video' | 'title'>; catalogTrackId?: string | null; tMs: Clocked; playing: boolean; rate?: number; countdown: number | null }) {
+  const tMs = ms(props.tMs);
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const ref = useRef<HTMLVideoElement>(null);
@@ -48,10 +50,10 @@ export function KaraokeVideo(props: { track: Pick<TrackPackageV2, 'trackId' | 'v
   useEffect(() => {
     const v = ref.current;
     if (!v || !url) return;
-    const want = Math.max(0, props.tMs) / 1000;
+    const want = Math.max(0, tMs) / 1000;
     const slack = props.playing ? 0.2 : 0.04;
     if (v.readyState >= 1 && Math.abs(v.currentTime - want) > slack) v.currentTime = want;
-  }, [url, props.tMs, props.playing]);
+  }, [url, tMs, props.playing]);
 
   return (
     <section class="lyrics karaoke" aria-live="off" data-karaoke={url ? 'ready' : error ? 'error' : 'loading'}>

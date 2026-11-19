@@ -110,9 +110,9 @@ for (const m of matrix) {
       await shot('12-sing-countdown');
       await wait(7500);
       await shot('13-sing-playing');
-      await page.getByRole('button', { name: /Voice FX/ }).click();
+      await page.getByRole('button', { name: 'Sound' }).click();
       await wait(400);
-      await shot('14-sing-fx');
+      await shot('14-sing-sound');
       await page.keyboard.press('Escape');
       // Move back in the song (the take follows on the track timeline), then finish.
       await page.locator('.sing .timeline.seekable input[type="range"]').fill('3000');

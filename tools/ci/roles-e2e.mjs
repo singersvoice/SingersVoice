@@ -106,8 +106,8 @@ try {
   await bob.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
   await bob.page.getByRole('button', { name: 'Take a stage slot' }).click();
   await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor();
-  await bob.page.locator('[data-audio-only][data-video-note="plan"]').waitFor();
-  check(/voice alone|comes with a plan/.test(await bob.page.locator('[data-video-reason]').innerText()), 'a free singer on stage has the voice alone, and the chip says a picture comes with a plan');
+  await bob.page.locator('.stagestrip[data-onstage="1"][data-video-allowed="0"][data-video-why="plan"]').waitFor();
+  check((await bob.page.locator('[data-video-reason], [data-audio-only]').count()) === 0 && !/Plans page|voice alone|comes with a plan/.test(await bob.page.locator('.stagestrip').innerText()), 'a free singer on stage has the voice alone — and no message about it on the stage (the Plans page says what a plan brings)');
   const bobSeat = (await asUser('alice', 'GET', `/meets/${meetId}`)).json?.participants?.find((p) => p.displayName === 'bob');
   check(bobSeat?.media === 'audio' && bobSeat?.slot !== null, `the room carries "audio" for him to every device (slot ${bobSeat?.slot})`);
   const bobId0 = (await userRow('alice', 'bob@dev.local'))?.userId;
@@ -117,7 +117,7 @@ try {
   const leftChip = (await bob.page.locator('[data-video-left]').innerText()).trim();
   check(/video · (10 h 0 m|9 h 5\d m) left this month/.test(leftChip), `his seat gets the picture on the next heartbeat, the chip the hours left (${leftChip})`);
   await bob.page.locator('.stagestrip[data-onstage="1"] .showpic video, .stagestrip[data-onstage="1"] canvas').first().waitFor({ timeout: 20000 }).catch(() => undefined);
-  await wait(4000); // on stage with the picture on: the seconds count on the service
+  await wait(9000); // on stage with the picture on: the seconds count on the service, heartbeat by heartbeat (every 4 s in a lobby with the push stream open)
   const usedOnStage = (await asUser('bob', 'GET', '/me')).json?.user?.entitlement?.videoUsedSeconds ?? 0;
   check(usedOnStage >= 2 && usedOnStage < 120, `the service counts his time on stage with the picture on (${usedOnStage} s so far)`);
   check((await asUser('alice', 'PUT', `/admin/users/${bobId0}/video-usage`, { seconds: 36000 })).status === 200, "the admin sets his month's hours to the limit (what the stage clock would reach)");
@@ -130,7 +130,7 @@ try {
   await bob.page.locator('[data-video-left]').waitFor({ timeout: 20000 });
   check(true, 'hours back (a new month): the picture returns');
   await asUser('alice', 'PATCH', `/admin/users/${bobId0}`, { subscription: { action: 'revoke' } });
-  await bob.page.locator('[data-audio-only][data-video-note="plan"]').waitFor({ timeout: 20000 });
+  await bob.page.locator('.stagestrip[data-onstage="1"][data-video-allowed="0"][data-video-why="plan"]').waitFor({ timeout: 20000 });
   check((await asUser('bob', 'GET', '/me')).json?.user?.entitlement?.plan === 'free', 'the plan revoked: the voice alone again, the Free plan');
   await bob.page.getByRole('button', { name: 'Leave stage' }).click();
   await bob.page.locator('.stagestrip[data-onstage="0"]').waitFor();

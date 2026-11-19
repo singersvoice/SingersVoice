@@ -1,4 +1,4 @@
-import { CanvasTrack } from './canvasTrack.ts';
+import { CanvasTrack, handFedTracks } from './canvasTrack.ts';
 import { SHARPEN, upscaleFor } from './enhance.ts';
 
 /**
@@ -50,11 +50,44 @@ export class AlphaPacker {
     return this.stream;
   }
 
+  /**
+   * The packed frames come from elsewhere (the feed worker): the track to send, and — where the browser has
+   * hand-fed tracks — its writable, for the worker to feed (transfer it); where it has not, the worker's packed
+   * frames are drawn in with `pushBitmap` and the track is the canvas capture.
+   */
+  startRemote(fps = 15): { stream: MediaStream; writable: WritableStream<VideoFrame> | null } {
+    this.stop();
+    const Gen = (globalThis as { MediaStreamTrackGenerator?: new (init: { kind: 'video' }) => MediaStreamTrack & { readonly writable: WritableStream<VideoFrame> } }).MediaStreamTrackGenerator;
+    if (handFedTracks() && Gen) {
+      const gen = new Gen({ kind: 'video' });
+      this.remote = gen;
+      this.stream = new MediaStream([gen]);
+      return { stream: this.stream, writable: gen.writable };
+    }
+    const track = this.canvas.captureStream(fps).getVideoTracks()[0]!;
+    this.remote = track;
+    this.stream = new MediaStream([track]);
+    return { stream: this.stream, writable: null };
+  }
+
+  /** A packed frame made elsewhere (closed here once drawn). */
+  pushBitmap(bitmap: ImageBitmap): void {
+    try {
+      this.ctx.drawImage(bitmap, 0, 0, this.width * 2, this.height);
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  private remote: MediaStreamTrack | null = null;
+
   stop(): void {
     clearInterval(this.timer);
     this.timer = undefined;
     this.track?.stop();
     this.track = null;
+    this.remote?.stop();
+    this.remote = null;
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
   }

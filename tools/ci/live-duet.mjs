@@ -895,19 +895,27 @@ try {
     b3 = await stageInfo(bob.page);
   }
   check(a3.performers === '3' && b3.performers === '3' && /2\/2 video linked/.test(a3.text) && /2\/2 video linked/.test(b3.text), `the second song runs on the same stage, now with three singers (${a3.text} / ${b3.text}, ${Math.round((Date.now() - t3) / 1000)} s)`);
-  check(/Up next|Now singing/.test(await carol.page.locator('.show-top').innerText().catch(() => '')) || (await carol.page.locator('.show[data-state="live"]').isVisible()), 'the show view follows the second song');
+  // The show view (its page busy with the broadcast encoder) follows within a moment: the state is waited for, not read once.
+  const showFollows = async () => /Up next|Now singing/.test(await carol.page.locator('.show-top').innerText().catch(() => '')) || (await carol.page.locator('.show[data-state="live"]').isVisible().catch(() => false));
+  const tFollow = Date.now();
+  while (Date.now() - tFollow < 8000 && !(await showFollows())) await wait(250);
+  check(await showFollows(), `the show view follows the second song (${Math.round((Date.now() - tFollow) / 100) / 10} s)`);
   // The songs are at hand on the live stage: the drawer shows what is playing and lets anyone pick the next one.
   await bob.page.getByRole('button', { name: 'Songs' }).click();
   await bob.page.locator('.sing .drawer .setlist').waitFor({ timeout: 10000 });
   check(/Now singing/.test(await bob.page.locator('.sing .drawer').innerText()), 'the live stage has a Songs drawer (song picker) for the singers');
-  // Every singer has the stage's own controls: Restart, and the Track / Vocal volume of their mix.
+  await bob.page.getByRole('button', { name: 'Close the songs' }).click();
+  // Every singer has the stage's own controls: Restart, and — in the Sound drawer — the Track / Vocal volume of their mix.
   check((await bob.page.getByRole('button', { name: /Restart the song for everyone/ }).count()) === 1, 'a singer (not the host) has the Restart button');
+  await bob.page.getByRole('button', { name: 'Sound' }).click();
+  await bob.page.locator('.sing .drawer.sound').waitFor({ timeout: 10000 });
   await bob.page.locator('.sing [data-mix="trackDb"] button[aria-label="Track volume up"]').click();
   await bob.page.locator('.sing [data-mix="trackDb"] button[aria-label="Track volume up"]').click();
   await bob.page.locator('.sing [data-mix="vocalDb"] button[aria-label="Vocal volume down"]').click();
   const balance = await bob.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}'));
   check(balance.trackDb === 6 && balance.vocalDb === -3, `Track / Vocal volume move in 3 dB steps (±30 dB) and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
-  await bob.page.getByRole('button', { name: 'Close the songs' }).click();
+  check((await bob.page.locator('.sing .drawer.sound .micstatus').count()) === 1 && (await bob.page.locator('.sing .drawer.sound .fxbar').count()) === 1, 'the Sound drawer holds the microphone and the voice presets too (the stage itself keeps one row of controls)');
+  await bob.page.getByRole('button', { name: 'Close the sound settings' }).click();
   // A singer may leave the song alone (the song goes on for the host) and join back in…
   await bob.page.getByRole('button', { name: 'Leave the song' }).click();
   await bob.page.getByRole('button', { name: 'Join the song' }).waitFor({ timeout: 30000 });

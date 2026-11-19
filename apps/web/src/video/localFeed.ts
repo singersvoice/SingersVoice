@@ -5,12 +5,28 @@
  * never steered after my every sway — and applied to the cut-out, and — in a live meet — the alpha
  * packer that turns the framed cut-out into the stream other performers receive. One instance per
  * stage session.
+ *
+ * The work runs in a worker wherever it can (`feed.worker.ts`, `feedWorker.ts`): the model, the
+ * feathering, the framing, the lift and the packing happen off this thread, which only draws the
+ * framed cut-out it is handed (one bitmap a frame) — so the stage, the lyrics and every tap stay
+ * quick on a phone. Where a worker cannot do that (no OffscreenCanvas, no WebGL in workers), the same
+ * pipeline runs here, as it always did.
  */
 import { AlphaPacker } from './alphaPack.ts';
 import { EXPOSURE_EVERY_MS, Exposure, isComputer, PACK_HEIGHT, PACK_WIDTH, personLuma } from './enhance.ts';
+import { FeedWorkerLink, feedWorkerSupported, type FeedMeta } from './feedWorker.ts';
 import { cropFactor, distanceNote, measureMask, plausibleHead, Seat, visiblePart, type PersonMeasure, type SeatState } from './framing.ts';
 import { PersonSegmenter, type SegmenterMode } from './segmenter.ts';
 import type { PerformerSource } from './stage.ts';
+
+/** Tests and support: `localStorage['sv.feedWorker'] = '0'` keeps the pipeline on the page. */
+const workerWanted = (): boolean => {
+  try {
+    return localStorage.getItem('sv.feedWorker') !== '0';
+  } catch {
+    return true;
+  }
+};
 
 /** The cut-out's own size: computers work at 720×960 so a singer standing full-height in a 720p show is drawn near 1:1; phones at 480×640. */
 const COMPUTER = isComputer();
@@ -60,9 +76,33 @@ function feather(c: CanvasRenderingContext2D, x: number, w: number, from: number
   c.restore();
 }
 
+/** What the page reads of the cut-out's making when it happens in the worker (the same names as the page's own segmenter). */
+class SegmenterFacade {
+  mode: SegmenterMode = 'off';
+  maskMode: 'adaptive-alpha' | 'adaptive-luma' | 'soft-center' | 'none' = 'none';
+  maskCoverage = 0;
+  frame = 0;
+  fps = 0;
+  stalls = 0;
+}
+
 export class LocalFeed {
   readonly video: HTMLVideoElement;
-  readonly segmenter = new PersonSegmenter(W, H);
+  /** The page's own segmenter (the fallback), or, in worker mode, what the worker reports of it. */
+  readonly segmenter: PersonSegmenter | SegmenterFacade;
+  private readonly own: PersonSegmenter;
+  private readonly facade = new SegmenterFacade();
+  /** The worker that runs the pipeline off this thread (null: the page does it). */
+  private link: FeedWorkerLink | null = null;
+  private workerOn = false;
+  /** Frames handed to the worker one at a time (no track stream here): at most this many on their way. */
+  private inflight = 0;
+  private streamed = false;
+  private packedStreamRemote: { stream: MediaStream; writable: WritableStream<VideoFrame> | null } | null = null;
+  /** Where the cut-out is made: in the worker, or on the page. */
+  get pipeline(): 'worker' | 'page' {
+    return this.workerOn ? 'worker' : 'page';
+  }
   /** The framed cut-out: what the stage draws for me and what other performers receive. */
   readonly canvas: HTMLCanvasElement;
   readonly maskCanvas: HTMLCanvasElement;
@@ -142,6 +182,9 @@ export class LocalFeed {
     this.maskCtx.fillStyle = '#000';
     this.maskCtx.fillRect(0, 0, W, H);
     this.canFilter = typeof (this.ctx as { filter?: unknown }).filter === 'string';
+    this.own = new PersonSegmenter(W, H);
+    this.workerOn = feedWorkerSupported() && workerWanted();
+    this.segmenter = this.workerOn ? this.facade : this.own;
   }
 
   /** Point the feed at a camera stream (or null to go dark). */
@@ -149,11 +192,18 @@ export class LocalFeed {
     if (stream === this.stream && stream && useModel === this.useModel) return;
     this.stream = stream;
     this.useModel = useModel;
-    this.segmenter.stop();
+    this.own.stop();
     clearInterval(this.timer);
     this.unwatch();
     if (!stream) {
       this.video.srcObject = null;
+      this.link?.stop();
+      this.link = null;
+      this.workerInit = '';
+      this.streamed = false;
+      this.inflight = 0;
+      this.packedStreamRemote = null;
+      this.setMode('off');
       return;
     }
     this.watch(stream.getVideoTracks()[0] ?? null);
@@ -166,12 +216,146 @@ export class LocalFeed {
     };
     this.video.srcObject = stream;
     void this.video.play().catch(() => undefined);
-    void this.segmenter.start(this.video, useModel, (m) => {
-      this.mode = m;
-      this.onMode?.(m);
-    });
+    if (this.workerOn) this.startWorker(stream, useModel);
+    else this.startOnPage(useModel);
+  }
+
+  private setMode(m: SegmenterMode): void {
+    if (this.mode === m) return;
+    this.mode = m;
+    this.onMode?.(m);
+  }
+
+  /** The pipeline on this thread (the fallback): the page's own segmenter and the tick that frames its cut-out. */
+  private startOnPage(useModel: boolean): void {
+    void this.own.start(this.video, useModel, (m) => this.setMode(m));
     this.timer = setInterval(() => this.tick(), 1000 / 15);
   }
+
+  /** What the running worker was started with: another camera stream with the same wants is handed to it, the model kept. */
+  private workerInit = '';
+
+  /** The pipeline in the worker: the camera's frames go over (as a stream, or one by one), the framed cut-out comes back. */
+  private startWorker(stream: MediaStream, useModel: boolean): void {
+    const link = this.link ?? new FeedWorkerLink();
+    this.link = link;
+    const init = { base: import.meta.env.BASE_URL, width: W, height: H, packWidth: PACK_WIDTH, packHeight: PACK_HEIGHT, modelSelection: (COMPUTER ? 0 : 1) as 0 | 1, useModel };
+    const initKey = JSON.stringify(init);
+    const keep = link.running && this.workerInit === initKey;
+    if (!keep) {
+      this.facade.mode = useModel ? 'loading' : 'oval';
+      this.setMode(this.facade.mode);
+    }
+    link.onMode = (m) => {
+      this.facade.mode = m;
+      this.setMode(m);
+    };
+    link.onFrame = (person, packed, meta) => this.takeFrame(person, packed, meta);
+    link.onModelError = (why) => console.warn('feed worker:', why);
+    link.onFail = (why) => {
+      if (this.link !== link) return;
+      // The worker cannot do it here: the page does, as it always did (the same cut-out, on this thread).
+      console.warn('feed worker failed, the page takes over:', why);
+      clearInterval(this.timer);
+      this.workerOn = false;
+      (this as { segmenter: PersonSegmenter | SegmenterFacade }).segmenter = this.own;
+      link.stop();
+      this.link = null;
+      this.workerInit = '';
+      this.streamed = false;
+      this.inflight = 0;
+      if (this.packedStreamRemote && this.packer) {
+        // The outgoing track was the worker's: it ends, and the next packedStream() makes the page's own (the stage asks again).
+        this.packer.stop();
+        this.packedStreamRemote = null;
+        this.onPackedLost?.();
+      }
+      if (this.stream) this.startOnPage(this.useModel);
+    };
+    // Whoever sends my picture asks packedStream() again after every attach (as with the page's own packer): the packing stops meanwhile.
+    this.packedStreamRemote = null;
+    if (keep) {
+      link.pack(false);
+      link.sink(null);
+    } else {
+      link.start(init);
+      this.workerInit = initKey;
+    }
+    if (this.link !== link) return; // failed on the spot: the page has taken over
+    clearInterval(this.timer);
+    const track = stream.getVideoTracks()[0];
+    this.streamed = Boolean(track) && link.stream(track!);
+    this.inflight = 0;
+    if (!this.streamed) this.timer = setInterval(() => this.feedWorkerFrame(), 1000 / 15); // no track streams here (Safari): a bitmap at a time
+  }
+
+  /** The worker's outgoing track ended (the page took over): whoever holds the packed stream asks for it again. */
+  onPackedLost: (() => void) | null = null;
+
+  /** One camera frame to the worker, as a bitmap (where the camera cannot be read as a stream). */
+  private feedWorkerFrame(): void {
+    const link = this.link;
+    if (!link || this.inflight >= 2 || this.video.readyState < 2 || !this.video.videoWidth) return;
+    this.inflight++;
+    createImageBitmap(this.video).then(
+      (bmp) => {
+        if (this.link === link) link.frame(bmp);
+        else bmp.close();
+      },
+      () => undefined,
+    );
+  }
+
+  /** The worker's framed cut-out for this frame: drawn, and what it measured taken over. */
+  private takeFrame(person: ImageBitmap, packed: ImageBitmap | null, meta: FeedMeta): void {
+    if (this.inflight > 0) this.inflight--;
+    try {
+      this.ctx.clearRect(0, 0, W, H);
+      this.ctx.drawImage(person, 0, 0, W, H);
+      // The grey mask (what the Studio packs beside a take's cut-out) from the cut-out's own alpha: white where the person is, black elsewhere.
+      const m = this.maskCtx;
+      m.globalCompositeOperation = 'source-over';
+      m.fillStyle = '#fff';
+      m.fillRect(0, 0, W, H);
+      m.globalCompositeOperation = 'destination-in';
+      m.drawImage(person, 0, 0, W, H);
+      m.globalCompositeOperation = 'destination-over';
+      m.fillStyle = '#000';
+      m.fillRect(0, 0, W, H);
+      m.globalCompositeOperation = 'source-over';
+    } finally {
+      person.close();
+    }
+    if (packed) {
+      if (this.packer && this.packedStreamRemote && !this.packedStreamRemote.writable) this.packer.pushBitmap(packed);
+      else packed.close();
+    }
+    this.facade.frame = meta.frame;
+    this.facade.fps = meta.fps;
+    this.facade.maskMode = meta.maskMode;
+    this.facade.maskCoverage = meta.coverage;
+    this.facade.stalls = meta.stalls;
+    this.exposure.gain = meta.gain;
+    this.workerSeatState = meta.seatState;
+    if (meta.note !== this.note) {
+      this.note = meta.note;
+      this.onNote?.(meta.note);
+    }
+    // The stillness clock (a camera presenting the same picture over and over) runs on the worker's measurements.
+    const now = performance.now();
+    if (meta.measure === null) {
+      this.lastMeasure = null;
+      this.stillSince = 0;
+    } else if (meta.measure === this.lastMeasure) {
+      if (!this.stillSince) this.stillSince = now;
+    } else {
+      this.lastMeasure = meta.measure;
+      this.stillSince = 0;
+    }
+    this.frame++;
+  }
+
+  private workerSeatState: SeatState = 'settling';
 
   private setHealth(h: FeedHealth): void {
     if (this.health === h) return;
@@ -255,7 +439,7 @@ export class LocalFeed {
 
   /** The measurement just made, against the last: the same one again starts (or continues) the stillness clock. */
   private noteStillness(found: PersonMeasure | null, now: number): void {
-    if (!found || this.segmenter.mode !== 'model') {
+    if (!found || this.own.mode !== 'model') {
       this.lastMeasure = null;
       this.stillSince = 0;
       return;
@@ -274,8 +458,8 @@ export class LocalFeed {
    * PROBE_EVERY_MS: undefined when there is nothing new to measure, null when nobody is there.
    */
   private probePerson(now: number): PersonMeasure | null | undefined {
-    if (this.segmenter.frame === this.lastProbedSeg || now - this.lastProbe < PROBE_EVERY_MS) return undefined;
-    this.lastProbedSeg = this.segmenter.frame;
+    if (this.own.frame === this.lastProbedSeg || now - this.lastProbe < PROBE_EVERY_MS) return undefined;
+    this.lastProbedSeg = this.own.frame;
     this.lastProbe = now;
     if (!this.probe) {
       const pc = document.createElement('canvas');
@@ -285,7 +469,7 @@ export class LocalFeed {
       if (!this.probe) return undefined;
     }
     try {
-      this.probe.drawImage(this.segmenter.maskCanvas, 0, 0, PROBE_W, PROBE_H);
+      this.probe.drawImage(this.own.maskCanvas, 0, 0, PROBE_W, PROBE_H);
       return measureMask(this.probe.getImageData(0, 0, PROBE_W, PROBE_H).data, PROBE_W, PROBE_H);
     } catch {
       return undefined; // a lost context: nothing to learn this time
@@ -302,7 +486,7 @@ export class LocalFeed {
     const found = this.probePerson(now);
     if (found === undefined) return;
     this.noteStillness(found, now);
-    const trusted = this.segmenter.mode === 'model' && this.segmenter.maskMode !== 'soft-center';
+    const trusted = this.own.mode === 'model' && this.own.maskMode !== 'soft-center';
     this.lastHead = trusted && found && plausibleHead(found) ? found.head : null;
     this.seat.sample(this.lastHead, now);
     const t = this.seat.target;
@@ -315,12 +499,12 @@ export class LocalFeed {
 
   /** Where the seat is: settling (the whole camera frame goes out), gliding to a new frame, or held. */
   get seatState(): SeatState {
-    return this.seat.state(performance.now());
+    return this.workerOn ? this.workerSeatState : this.seat.state(performance.now());
   }
 
   /** What the camera is doing, in words for the stage strip: its frame rate (or that the browser tells no frames), the cut-out, the lift of the picture, and how long it has stood still. */
   get cameraLine(): string {
-    const cut = this.segmenter.mode === 'model' ? 'cut-out model' : this.segmenter.mode === 'oval' ? 'cut-out silhouette' : this.segmenter.mode === 'loading' ? 'cut-out loading' : 'cut-out off';
+    const cut = `${this.segmenter.mode === 'model' ? 'cut-out model' : this.segmenter.mode === 'oval' ? 'cut-out silhouette' : this.segmenter.mode === 'loading' ? 'cut-out loading' : 'cut-out off'}${this.workerOn ? ' (worker)' : ''}`;
     const frames = this.framesSeen > 0 ? `camera ${this.cameraFps} fps` : 'camera (frames not told)';
     const lift = this.exposure.lift >= 3 ? ` · lifted +${this.exposure.lift}%` : '';
     const still = this.stillSince ? ` · picture still ${Math.round((performance.now() - this.stillSince) / 1000)} s` : '';
@@ -343,7 +527,7 @@ export class LocalFeed {
     }
     try {
       this.lumaProbe.clearRect(0, 0, LUMA_W, LUMA_H);
-      this.lumaProbe.drawImage(this.segmenter.canvas, 0, 0, LUMA_W, LUMA_H);
+      this.lumaProbe.drawImage(this.own.canvas, 0, 0, LUMA_W, LUMA_H);
       this.exposure.sample(personLuma(this.lumaProbe.getImageData(0, 0, LUMA_W, LUMA_H).data, LUMA_W, LUMA_H, this.lastHead));
     } catch {
       /* a lost context: the lift stays where it is */
@@ -355,8 +539,8 @@ export class LocalFeed {
     this.measure(now);
     this.measureLuma(now);
     const gain = this.exposure.step();
-    if (this.segmenter.frame === this.lastSeg && this.seat.state(now) !== 'gliding' && gain === this.lastGain) return; // nothing new to draw
-    this.lastSeg = this.segmenter.frame;
+    if (this.own.frame === this.lastSeg && this.seat.state(now) !== 'gliding' && gain === this.lastGain) return; // nothing new to draw
+    this.lastSeg = this.own.frame;
     this.lastGain = gain;
     const r = visiblePart(this.seat.crop(now), W, H); // the crop may reach past the camera picture: that part stays transparent
     const c = this.ctx;
@@ -367,9 +551,9 @@ export class LocalFeed {
     if (r) {
       // The picture goes out lifted and polished (enhance.ts) — the one place, so every stage, the show and the recordings get the same picture I see.
       if (this.canFilter) c.filter = this.exposure.filter();
-      c.drawImage(this.segmenter.canvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+      c.drawImage(this.own.canvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
       if (this.canFilter) c.filter = 'none';
-      m.drawImage(this.segmenter.maskCanvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+      m.drawImage(this.own.maskCanvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
       // A camera that sees little of the singer (close up) ends above the stage's riser: its bottom edge is
       // feathered, so the figure fades out instead of ending in a straight cut across the chest.
       const bottom = r.dy + r.dh;
@@ -389,14 +573,37 @@ export class LocalFeed {
   /** The alpha-packed outgoing stream (created on first use): the frame at its full size (enhance.ts) — each link scales it as it needs. */
   packedStream(): MediaStream {
     if (!this.packer) this.packer = new AlphaPacker(PACK_WIDTH, PACK_HEIGHT);
+    if (this.workerOn && this.link) {
+      // The worker packs: straight down the track where the browser hand-feeds tracks, else as bitmaps drawn into the packer's canvas.
+      this.packedStreamRemote = this.packer.startRemote(15);
+      this.link.sink(this.packedStreamRemote.writable);
+      this.link.pack(true);
+      return this.packedStreamRemote.stream;
+    }
+    this.packedStreamRemote = null;
     return this.packer.start(this.canvas, this.maskCanvas, 15);
+  }
+
+  /** Support / tests: the worker's canvases as they stand (null when the page runs the pipeline). */
+  peek(): Promise<{ person: ImageBitmap; mask: ImageBitmap; framed: ImageBitmap; framedMask: ImageBitmap; about: Record<string, unknown> } | null> {
+    return this.link ? this.link.peek() : Promise.resolve(null);
+  }
+
+  /** The outgoing stream is no longer wanted (off stage, camera off): the packing stops (the worker's too). */
+  stopPacking(): void {
+    this.link?.pack(false);
+    this.link?.sink(null);
+    this.packer?.stop();
+    this.packedStreamRemote = null;
   }
 
   dispose(): void {
     clearInterval(this.timer);
     this.unwatch();
     this.onHealth = null;
-    this.segmenter.stop();
+    this.own.stop();
+    this.link?.stop();
+    this.link = null;
     this.packer?.stop();
     this.packer = null;
     this.video.onpause = null;

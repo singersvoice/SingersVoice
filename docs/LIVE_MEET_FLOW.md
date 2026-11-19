@@ -131,8 +131,16 @@ receiving side); the cure on their side is the restart above, by itself or from 
   over the stage's own links), and the audience hears the stage through the host's device — so a
   stage can talk, count in, agree on the next song. From the countdown to the end of the song
   **nobody on stage hears anyone else** (Solo foldback: latency never pulls a duet apart), while the
-  audience, the recording and any broadcast get the whole blend. Headphones are recommended on stage
-  (the chip says so): with speakers, talk-back feeds the room back into every mic.
+  audience, the recording and any broadcast get the whole blend; a paused song opens talk-back again
+  until the resume. While talk-back plays out of a device's speakers, the browser's **echo
+  cancellation** takes those voices back out of its microphone (`AudioEngine.setTalkback`: on for
+  talk-back, off again for the song, when it would chew at a singing voice over the backing track —
+  the track is changed in place where the browser does that, else the microphone is captured again
+  with the setting and swapped in under the voice chain without a break; on iPhone and iPad, which
+  keep one capture per page, it waits for the next opening of the microphone, and a singer on
+  speakers ticks *I'm on speakers* in the Sound drawer, which keeps it on throughout), so nobody
+  hears themselves come back late and no loop builds up between two phones on speakers. Headphones
+  are still the cleanest way to sing (the chip says so).
 - **A running song belongs to the singers on stage.** From the count-in to the end of the song
   nobody new steps on: a newcomer sees *Ask to sing next* and joins the wait list (the host sees
   *wait list · N* on the live stage, nothing else), *Let them sing* waits until the song is over,

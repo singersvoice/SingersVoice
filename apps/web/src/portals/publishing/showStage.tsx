@@ -94,6 +94,7 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant, 
     mesh.onMessage = (_from, m) => {
       if (m.type === 'changed') session.poke();
     };
+    session.onSignal = () => mesh.pollNow(); // the service says a signal waits: fetched now, not at the next poll
     void mesh.start();
     session.onLeave = () => mesh.close(); // goodbyes before the session leaves
     const w = window as unknown as { __svShowMeshes?: PerformerMesh[] }; // support / e2e hooks
@@ -101,6 +102,7 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant, 
     return () => {
       w.__svShowMeshes = (w.__svShowMeshes ?? []).filter((m) => m !== mesh);
       mesh.onMessage = null;
+      session.onSignal = null;
       if (session.onLeave) session.onLeave = null;
       void mesh.close();
       for (const r of remoteVideos.current.values()) {

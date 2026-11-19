@@ -65,6 +65,7 @@ export class CanvasTrack {
       .write(frame)
       .catch(() => undefined)
       .finally(() => {
+        frame.close(); // the track took its copy; a frame left open is a stall waiting to happen (and a warning in the console)
         this.busy = false;
       });
   }

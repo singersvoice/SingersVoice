@@ -1,19 +1,32 @@
 /**
- * Client-side meet session: join, poll (heartbeat), actions. Polling cadence: 2 s while the room
- * is forming or counting down (the kickstart instant is absolute, so 2 s is plenty), 1.5 s on stage
- * and in the show view while live, 2 s in the audience while live, 5 s otherwise — and `poke()`
- * fetches the state at once when a peer says over the mesh that something changed (`onActed`
- * fires after every action of this device, so the room can tell the others).
+ * Client-side meet session: join, the push stream, poll (heartbeat), actions.
+ *
+ * The service pushes: one event stream per device (`GET /meets/:id/events`, SSE) says 'changed' the moment
+ * anything about the meet changed — on any device — and the session fetches the snapshot at once (`poke()`);
+ * 'signal' says a WebRTC signal waits, and the mesh polls it now (`onSignal`). The heartbeat polls stay as the
+ * safety net and the clock report, at a relaxed pace while the stream is open: 4 s while the room is forming or
+ * counting down, 3 s on stage and in the show view while live, 4 s in the audience while live, 8 s otherwise.
+ * Without the stream (a browser without EventSource, a proxy that will not stream) the polls run at the old
+ * pace: 2 s / 1.5 s / 2 s / 5 s. A peer's word over the mesh that something changed (`onActed` fires after every
+ * action of this device, so the room can tell the others) fetches the state at once as well.
  */
 import { signal } from '@preact/signals';
 import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type MixBatch, type Participant, type RegisterPerformanceRequest, type SongPick, type StagePolicy } from '@singersvoice/protocol';
-import { api, ApiError, clock, serverNow, syncClock } from '../../lib/api.ts';
+import { api, ApiError, clock, controlUrl, serverNow, syncClock } from '../../lib/api.ts';
 
-const POLL_FORMING_MS = 2000;
-const POLL_ONSTAGE_MS = 1500;
-/** The audience while the stage is live: the song, the background and who is on stage change under them too. */
-const POLL_AUDIENCE_LIVE_MS = 2000;
-const POLL_SETTLED_MS = 5000;
+interface Pace {
+  forming: number;
+  onStage: number;
+  /** The audience while the stage is live: the song, the background and who is on stage change under them too. */
+  audienceLive: number;
+  settled: number;
+}
+/** The polls alone (no push stream). */
+const POLL: Pace = { forming: 2000, onStage: 1500, audienceLive: 2000, settled: 5000 };
+/** The polls with the push stream open: the safety net and the clock report. */
+const POLL_PUSHED: Pace = { forming: 4000, onStage: 3000, audienceLive: 4000, settled: 8000 };
+/** A stream the service refused (or a browser that cannot keep one) is tried again this often. */
+const EVENTS_RETRY_MS = 15_000;
 
 export class MeetSession {
   readonly snapshot = signal<MeetSnapshot | null>(null);
@@ -33,6 +46,16 @@ export class MeetSession {
   private pokeAgain = false;
   /** After every action of this device went through (the snapshot is applied): the room tells its peers to fetch it now. */
   onActed: (() => void) | null = null;
+  /** The service says a WebRTC signal waits for this device: the mesh polls its signals now. */
+  onSignal: (() => void) | null = null;
+  /** The push stream, while the device is in the meet. */
+  private source: EventSource | null = null;
+  private pushed = false;
+  private lastOpenTry = 0;
+  /** Whether the service pushes changes to this device right now (the mesh relaxes its own polling when it does). */
+  get pushing(): boolean {
+    return this.pushed;
+  }
 
   /**
    * Resume token per meet — and per kind: the member record (host / performer / audience), the
@@ -72,6 +95,7 @@ export class MeetSession {
       this.you.value = r.you;
       this.error.value = null;
       await this.heartbeat();
+      this.openEvents();
       this.schedule();
     } catch (e) {
       this.error.value = e instanceof ApiError ? e.message : String(e);
@@ -88,7 +112,55 @@ export class MeetSession {
     const forming = m && (m.state === 'lobby' || m.state === 'countdown');
     // Performers (and a publisher's show view) follow the host's transport cues, so they poll faster while live.
     const onStageLive = m?.state === 'live' && (this.you.value?.slot != null || this.you.value?.role === 'publisher');
-    this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), forming ? POLL_FORMING_MS : onStageLive ? POLL_ONSTAGE_MS : m?.state === 'live' ? POLL_AUDIENCE_LIVE_MS : POLL_SETTLED_MS);
+    const pace = this.pushed ? POLL_PUSHED : POLL;
+    this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), forming ? pace.forming : onStageLive ? pace.onStage : m?.state === 'live' ? pace.audienceLive : pace.settled);
+  }
+
+  /**
+   * Open the push stream (the resume token is its credential: the meet's own, never the Google token). A Preview tile
+   * polls instead: a page of tiles would hold a stream each, and a monitor is fine a few seconds behind.
+   */
+  private openEvents(): void {
+    this.closeEvents();
+    const base = controlUrl.value;
+    if (this.stopped || this.kind === 'preview' || !this.resumeToken || !base || typeof EventSource !== 'function') return;
+    this.lastOpenTry = Date.now();
+    let es: EventSource;
+    try {
+      es = new EventSource(`${base}/meets/${encodeURIComponent(this.meetId)}/events?rt=${encodeURIComponent(this.resumeToken)}`);
+    } catch {
+      return;
+    }
+    this.source = es;
+    es.onopen = () => {
+      if (this.source !== es) return;
+      const first = !this.pushed;
+      this.pushed = true;
+      this.poke(); // whatever happened while the stream was down
+      if (first) this.schedule();
+    };
+    es.addEventListener('changed', () => {
+      if (this.source === es) this.poke();
+    });
+    es.addEventListener('signal', () => {
+      if (this.source === es) this.onSignal?.();
+    });
+    es.onerror = () => {
+      if (this.source !== es) return;
+      // Down (the browser reconnects by itself) or refused for good (readyState CLOSED: tried again later): the polls run at the old pace meanwhile.
+      if (this.pushed) {
+        this.pushed = false;
+        this.schedule();
+      }
+      if (es.readyState === EventSource.CLOSED) this.source = null;
+    };
+  }
+
+  private closeEvents(): void {
+    const es = this.source;
+    this.source = null;
+    this.pushed = false;
+    es?.close();
   }
 
   /** Something changed (a peer said so over the mesh): fetch the snapshot now, not at the next poll. */
@@ -128,6 +200,7 @@ export class MeetSession {
       });
       this.apply(snap);
       this.error.value = null;
+      if (!this.source && !this.stopped && Date.now() - this.lastOpenTry > EVENTS_RETRY_MS) this.openEvents();
     } catch (e) {
       if (e instanceof ApiError && e.code === 'not_participant' && this.lastRole !== 'publisher' && !this.rejoining) {
         // The service forgot this device (asleep for a minute, a service restart): back in quietly — on a free
@@ -286,6 +359,7 @@ export class MeetSession {
   stop(): void {
     this.stopped = true;
     clearTimeout(this.timer);
+    this.closeEvents();
   }
 
   /** ms until the idle expiry, by the server clock. */

@@ -1,5 +1,6 @@
 import { useMemo } from 'preact/hooks';
 import { cueDeckFor, isMyLine, lyricsPace, lyricsWindow, partColor, partLabel, planParts, SLOT_COLORS, type LyricLine, type PartPlan, type SingerSlot } from '@singersvoice/protocol';
+import { ms, type Clocked } from './clocked.ts';
 
 /** A line lights up this long before it starts: a breath to read it, as every karaoke screen gives. */
 export const LYRIC_LEAD_MS = 150;
@@ -19,22 +20,19 @@ export function SlotBadge(props: { slot: SingerSlot; label?: string; class?: str
  * whole — the song's parts divided among the singers in the song (`plan`, `planParts` in the
  * protocol: two singers, two colours; ten singers on a five-part song, 1 and 6 share one), with the
  * chip naming the stage slot(s) that sing it; the lines of *your* slot carry a ringed chip.
+ *
+ * The words are up from the first moment: through the count-in the opening lines stand ready under
+ * the count, so a singer reads the first line before the first beat (nothing to wait for on a phone).
  */
-export function LyricsPanel(props: { lines: LyricLine[]; tMs: number; mySlot: number; plan?: PartPlan; countdown: number | null; showWho: boolean; title?: string }) {
+export function LyricsPanel(props: { lines: LyricLine[]; tMs: Clocked; mySlot: number; plan?: PartPlan; countdown: number | null; showWho: boolean; title?: string }) {
   const pace = useMemo(() => lyricsPace(props.lines), [props.lines]);
   const plan = props.plan ?? planParts(1, []);
-  const w = lyricsWindow(props.lines, props.tMs, 1, 3, { leadMs: LYRIC_LEAD_MS, paceMsPerChar: pace });
-  if (props.countdown !== null && props.countdown > 0) {
-    return (
-      <section class="lyrics" aria-live="off">
-        <div class="countdown">{props.countdown}</div>
-        <div class="muted">{props.lines[0]?.text ?? ''}</div>
-      </section>
-    );
-  }
+  const counting = props.countdown !== null && props.countdown > 0;
+  const w = lyricsWindow(props.lines, counting ? 0 : ms(props.tMs), 1, 3, { leadMs: counting ? 0 : LYRIC_LEAD_MS, paceMsPerChar: pace });
   if (!props.lines.length) {
     return (
-      <section class="lyrics">
+      <section class="lyrics" data-counting={counting ? '1' : undefined}>
+        {counting && <div class="countdown">{props.countdown}</div>}
         <div class="lyric upcoming">{props.title ?? 'No lyrics on this track'}</div>
         <div class="muted small">Add lyrics in Track Maker to light up the stage.</div>
       </section>
@@ -42,7 +40,12 @@ export function LyricsPanel(props: { lines: LyricLine[]; tMs: number; mySlot: nu
   }
   let upcomingSeen = 0;
   return (
-    <section class="lyrics" aria-live="off">
+    <section class="lyrics" aria-live="off" data-counting={counting ? '1' : undefined}>
+      {counting && (
+        <div class="countdown" aria-label={`Starting in ${props.countdown}`}>
+          {props.countdown}
+        </div>
+      )}
       {w.items.map((it) => {
         const far = it.state === 'upcoming' && upcomingSeen++ >= 1;
         const mine = isMyLine(plan, it.line.singerSlot, props.mySlot);
@@ -64,12 +67,13 @@ export function LyricsPanel(props: { lines: LyricLine[]; tMs: number; mySlot: nu
 }
 
 /** Personal "cue deck": the next 3 lines you sing (your parts in the plan), with the countdown to the first one. */
-export function CueDeck(props: { lines: LyricLine[]; tMs: number; mySlot: number; plan?: PartPlan }) {
+export function CueDeck(props: { lines: LyricLine[]; tMs: Clocked; mySlot: number; plan?: PartPlan }) {
   const plan = props.plan ?? planParts(1, []);
-  const next = cueDeckFor(props.lines, props.tMs, (l) => isMyLine(plan, l.singerSlot, props.mySlot), 3);
+  const t = ms(props.tMs);
+  const next = cueDeckFor(props.lines, t, (l) => isMyLine(plan, l.singerSlot, props.mySlot), 3);
   if (!next.length) return null;
   const first = next[0]!;
-  const secs = Math.max(0, (first.startMs - props.tMs) / 1000);
+  const secs = Math.max(0, (first.startMs - t) / 1000);
   return (
     <aside class="cue" aria-hidden="true">
       <div>

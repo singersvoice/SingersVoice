@@ -6,16 +6,18 @@
  */
 import { formatMs } from '@singersvoice/protocol';
 import { useState } from 'preact/hooks';
+import { ms as clocked, type Clocked } from './clocked.ts';
 
-export function SeekBar(props: { tMs: number; durationMs: number; onSeek?: (ms: number) => void; pending?: number | null; disabled?: boolean }) {
+export function SeekBar(props: { tMs: Clocked; durationMs: number; onSeek?: (ms: number) => void; pending?: number | null; disabled?: boolean }) {
   const [drag, setDrag] = useState<number | null>(null);
   const dur = Math.max(1, props.durationMs);
-  const shown = drag ?? props.pending ?? props.tMs;
+  const tMs = clocked(props.tMs);
+  const shown = drag ?? props.pending ?? tMs;
   const pct = (ms: number) => `${Math.min(100, Math.max(0, (ms / dur) * 100))}%`;
   const seekable = Boolean(props.onSeek) && !props.disabled;
   return (
     <div class={`timeline ${seekable ? 'seekable' : ''}`} data-pending={props.pending != null ? Math.round(props.pending) : undefined}>
-      <span class="mono">{formatMs(drag ?? props.tMs)}</span>
+      <span class="mono">{formatMs(drag ?? tMs)}</span>
       <div class="track">
         <i style={{ width: pct(shown) }} />
         {props.pending != null && <b class="cue" style={{ left: pct(props.pending) }} title={`Jumping to ${formatMs(props.pending)}`} />}

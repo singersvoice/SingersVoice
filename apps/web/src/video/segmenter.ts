@@ -7,62 +7,13 @@
  * If the model cannot load (old device, blocked network before first cache) the segmenter falls
  * back to an oval vignette so the singer still appears blended into the stage, never as a box.
  */
+import { alphaFromMaskPixels, drawCover, fillSoftCenterMask, MASK_H, MASK_W, MODEL_RETRY_MS, SEND_TIMEOUT_MS, TARGET_FPS, withTimeout } from './segmentCore.ts';
+
+export { alphaFromMaskPixels, coverRect, drawCover, MODEL_RETRY_MS, SEND_TIMEOUT_MS, smoothStep } from './segmentCore.ts';
+
 const CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747';
 const LOCAL = `${import.meta.env.BASE_URL}mediapipe`;
-const TARGET_FPS = 15;
 const LOAD_TIMEOUT_MS = 20_000;
-const MASK_W = 240;
-const MASK_H = 320;
-/** A frame the model has not answered in this long gets as long again; still no answer and the model counts as stuck. */
-export const SEND_TIMEOUT_MS = 1500;
-/** How long the silhouette stands in for a stuck model before the model is asked again. */
-export const MODEL_RETRY_MS = 8000;
-
-export const smoothStep = (e0: number, e1: number, v: number): number => {
-  const t = Math.max(0, Math.min(1, (v - e0) / (e1 - e0)));
-  return t * t * (3 - 2 * t);
-};
-
-/**
- * Turn the model's raw mask pixels into a white-with-alpha mask, in place. The legacy MediaPipe
- * solution returns the person probability either in the alpha channel or only as brightness with
- * alpha fully opaque (it differs by browser / GPU path), so use whichever channel actually varies,
- * normalise it and feather with a smoothstep. Returns 'unusable' only when the mask carries no
- * information at all (a broken readback); an empty mask (nobody in frame) is a valid answer and
- * leaves that spot on the stage empty rather than showing the real background.
- */
-export function alphaFromMaskPixels(d: Uint8ClampedArray): { mode: 'adaptive-alpha' | 'adaptive-luma' | 'unusable'; coverage: number } {
-  let minLuma = 255;
-  let maxLuma = 0;
-  let minAlpha = 255;
-  let maxAlpha = 0;
-  for (let i = 0; i < d.length; i += 4) {
-    const luma = d[i]! * 0.2126 + d[i + 1]! * 0.7152 + d[i + 2]! * 0.0722;
-    if (luma < minLuma) minLuma = luma;
-    if (luma > maxLuma) maxLuma = luma;
-    const a = d[i + 3]!;
-    if (a < minAlpha) minAlpha = a;
-    if (a > maxAlpha) maxAlpha = a;
-  }
-  const lumaRange = maxLuma - minLuma;
-  const alphaRange = maxAlpha - minAlpha;
-  const useAlpha = alphaRange > lumaRange && alphaRange > 8;
-  const min = useAlpha ? minAlpha : minLuma;
-  const range = useAlpha ? alphaRange : lumaRange;
-  if (range < 6) return { mode: 'unusable', coverage: 0 };
-  let visible = 0;
-  for (let i = 0; i < d.length; i += 4) {
-    const raw = useAlpha ? d[i + 3]! : d[i]! * 0.2126 + d[i + 1]! * 0.7152 + d[i + 2]! * 0.0722;
-    const alpha = Math.round(smoothStep(0.18, 0.58, (raw - min) / range) * 255);
-    if (alpha > 8) visible++;
-    d[i] = 255;
-    d[i + 1] = 255;
-    d[i + 2] = 255;
-    d[i + 3] = alpha;
-  }
-  const coverage = visible / (d.length / 4);
-  return { mode: useAlpha ? 'adaptive-alpha' : 'adaptive-luma', coverage };
-}
 
 interface SegResults {
   image: CanvasImageSource;
@@ -343,26 +294,7 @@ export class PersonSegmenter {
       cv.height = MASK_H;
       const sc = cv.getContext('2d')!;
       const img = sc.createImageData(MASK_W, MASK_H);
-      const d = img.data;
-      const cx = MASK_W * 0.5;
-      const cy = MASK_H * 0.48;
-      const rx = MASK_W * 0.28;
-      const ry = MASK_H * 0.46;
-      for (let y = 0; y < MASK_H; y++) {
-        for (let x = 0; x < MASK_W; x++) {
-          const i = (y * MASK_W + x) * 4;
-          const dx = (x - cx) / rx;
-          const dy = (y - cy) / ry;
-          const torso = smoothStep(1.05, 0.52, Math.sqrt(dx * dx + dy * dy));
-          const hx = (x - cx) / (MASK_W * 0.18);
-          const hy = (y - MASK_H * 0.32) / (MASK_H * 0.22);
-          const head = smoothStep(1.0, 0.42, Math.sqrt(hx * hx + hy * hy));
-          d[i] = 255;
-          d[i + 1] = 255;
-          d[i + 2] = 255;
-          d[i + 3] = Math.round(Math.max(torso, head) * 230);
-        }
-      }
+      fillSoftCenterMask(img.data, MASK_W, MASK_H);
       sc.putImageData(img, 0, 0);
       this.softMask = cv;
     }
@@ -411,35 +343,4 @@ export class PersonSegmenter {
     this.video = null;
     this.setMode('off');
   }
-}
-
-/** The part of a sw×sh picture that covers a w×h box (centre crop, the picture's proportions kept). */
-export function coverRect(sw: number, sh: number, w: number, h: number): { sx: number; sy: number; sw: number; sh: number } {
-  const sr = sw / sh;
-  const dr = w / h;
-  if (sr > dr) {
-    const cw = sh * dr;
-    return { sx: (sw - cw) / 2, sy: 0, sw: cw, sh };
-  }
-  const ch = sw / dr;
-  return { sx: 0, sy: (sh - ch) / 2, sw, sh: ch };
-}
-
-/** Draw `source` covering a w×h box (centre crop). */
-export function drawCover(c: CanvasRenderingContext2D, source: CanvasImageSource, w: number, h: number): void {
-  const el = source as { videoWidth?: number; videoHeight?: number; width?: number | SVGAnimatedLength; height?: number | SVGAnimatedLength };
-  const sw = el.videoWidth || (typeof el.width === 'number' ? el.width : 0) || 1;
-  const sh = el.videoHeight || (typeof el.height === 'number' ? el.height : 0) || 1;
-  const r = coverRect(sw, sh, w, h);
-  c.drawImage(source, r.sx, r.sy, r.sw, r.sh, 0, 0, w, h);
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('timeout')), ms);
-    p.then(
-      (v) => (clearTimeout(t), resolve(v)),
-      (e) => (clearTimeout(t), reject(e)),
-    );
-  });
 }

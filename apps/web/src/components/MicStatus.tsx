@@ -175,3 +175,9 @@ export function MicStatus(props: { engine: AudioEngine | null; onChange?: () => 
     </div>
   );
 }
+
+/** The microphone's level, as a dot that breathes with the voice — its own component, so the meter moves nothing but the dot. */
+export function LevelDot(props: { engine: AudioEngine | null }) {
+  const level = props.engine?.recorder?.level.value ?? 0;
+  return <span class="dot" style={{ background: level > 0.9 ? 'var(--danger)' : 'var(--ok)', opacity: 0.4 + level * 0.6 }} />;
+}

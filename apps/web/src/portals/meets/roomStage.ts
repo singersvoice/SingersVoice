@@ -141,8 +141,16 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   useEffect(() => {
     feed.onMode = (m) => setBlend(m);
     feed.attach(camOn ? camStream : null, true);
-    if (camOn && camStream && onStage) mesh?.setLocalStream(feed.packedStream());
-    else if (!camOn || !camStream) mesh?.setLocalStream(null);
+    const sending = Boolean(camOn && camStream && onStage);
+    if (sending) mesh?.setLocalStream(feed.packedStream());
+    else if (!camOn || !camStream) {
+      mesh?.setLocalStream(null);
+      feed.stopPacking();
+    }
+    // The outgoing track was the feed worker's and the page had to take over: the mesh gets the page's.
+    feed.onPackedLost = () => {
+      if (sending) mesh?.setLocalStream(feed.packedStream());
+    };
   }, [camStream, camOn, onStage]);
   // The stage frame's word on my distance to the camera (sit back / come closer), for the stage strip.
   const [distance, setDistance] = useState<'close' | 'far' | null>(null);
@@ -260,12 +268,14 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     session.onActed = () => {
       (window as unknown as { __svSaid?: number }).__svSaid = mesh.say({ type: 'changed' }); // support / e2e: how many peers were told
     };
+    session.onSignal = () => mesh.pollNow(); // the service says a signal waits: fetched now, not at the next poll
     (window as unknown as { __svMesh?: PerformerMesh; __svFeed?: LocalFeed }).__svMesh = mesh; // support / e2e hooks
     (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed;
     session.onLeave = () => mesh.close(); // goodbyes before the session leaves
     return () => {
       session.onLeave = null;
       session.onActed = null;
+      session.onSignal = null;
       mesh.onMessage = null;
       void mesh.close();
       for (const r of remoteVideos.current.values()) {
@@ -327,9 +337,13 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   // silence of a count-in and a restart.
   const songRunning = meet.state === 'countdown' || (meet.state === 'live' && !opts.paused);
   const host = you.userId === meet.hostUserId;
+  // Talk-back between songs and while paused: the others' voices play here — and echo cancellation keeps them out of this
+  // microphone (engine.setTalkback) — Solo foldback from the count-in to the end of the song.
   useEffect(() => {
-    show.setHearOthers(onStage && !songRunning);
-  }, [show, onStage, songRunning]);
+    const hear = onStage && !songRunning;
+    show.setHearOthers(hear);
+    opts.engine?.setTalkback(hear);
+  }, [show, onStage, songRunning, opts.engine, micOpen]);
   useEffect(() => {
     const engine = opts.engine;
     if (!host || !onStage || !micOpen || !engine) return;

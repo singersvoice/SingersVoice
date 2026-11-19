@@ -10,6 +10,7 @@
  */
 import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
+import { streamSSE } from 'hono/streaming';
 import {
   DESTINATIONS,
   MAX_OPEN_MEETS,
@@ -97,6 +98,7 @@ import {
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
+import { MeetEvents } from './events.ts';
 import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setBackground, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
@@ -174,8 +176,17 @@ const userTouch = new Map<string, number>();
 
 const requestLog = typeof process !== 'undefined' && process.env?.SV_REQUEST_LOG === '1';
 
+/** A device's event stream is kept this long at most; the browser opens it again at once (and fetches the state as it does). */
+const EVENTS_MAX_MS = 20 * 60_000;
+/** A comment line this often keeps the event stream's connection alive through proxies and the edge. */
+const EVENTS_PING_MS = 25_000;
+/** The event stream's own path: the resume token in its query is the credential (the browser's EventSource sends no headers). */
+const EVENTS_PATH = /^\/meets\/[^/]+\/events$/;
+
 export function createApp(getDeps: (env: Record<string, unknown>) => Promise<AppDeps> | AppDeps): Hono<Env> {
   const app = new Hono<Env>();
+  /** Who listens to which meet (events.ts): told after every change, so every device fetches it at once. */
+  const events = new MeetEvents();
 
   app.use('*', async (c, next) => {
     const deps = await getDeps(c.env ?? {});
@@ -292,6 +303,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   app.use('*', async (c, next) => {
     const path = c.req.path;
     if (path === '/health' || path === '/time' || path === '/billing/webhook' || path.startsWith('/watch/') || path.startsWith('/fake/') || c.req.method === 'OPTIONS') return next();
+    if (c.req.method === 'GET' && EVENTS_PATH.test(path)) return next(); // the stream: by resume token (below)
     const deps = c.get('deps');
     const id = await deps.auth(c.req.raw);
     if (!id) return err(c, 401, 'unauthenticated', 'Sign in with Google to use SingersVoice');
@@ -649,7 +661,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const stored = await store.listParticipants(meetId);
     const rec = reconcile(meet, stored);
     changed = changed || rec.changed;
-    if (changed) await store.saveMeet(meet);
+    if (changed) {
+      await store.saveMeet(meet);
+      events.changed(meetId);
+    }
     const participants: Participant[] = (visibleParticipants(meet, rec.active, you && isHost(meet, you) ? Infinity : undefined) as StoredParticipant[]).map(({ resumeToken: _t, meetId: _m, ...p }) => p);
     const chat = chatSince !== undefined ? await store.chatSince(meetId, chatSince) : await store.chatTail(meetId, 50);
     const [recordings, performances] = await Promise.all([store.listRecordings(meetId), store.listPerformancesForMeet(meetId)]);
@@ -702,6 +717,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       stop(meet);
       await store.saveMeet(meet);
       await store.clearSignals(meet.meetId).catch(() => undefined);
+      events.changed(meet.meetId);
+      events.close(meet.meetId);
     }
     return c.json({ meet });
   });
@@ -797,8 +814,63 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!publisher) await store.addMember(meet.meetId, user.userId); // the shows of this meet are shared with everyone who was ever in it
     await store.saveMeet(meet);
     const snap = (await snapshot(c, meet.meetId, p))!;
+    events.changed(meet.meetId);
     const { resumeToken: _t, meetId: _m, ...you } = p;
     return c.json({ meet: snap.meet, you, resumeToken: p.resumeToken, serverEpochMs: Date.now() });
+  });
+
+  /**
+   * The push channel (events.ts): one event stream per device, open for as long as it is in the meet. `changed`
+   * says the meet's state moved (the device fetches its snapshot now); `signal` says a WebRTC signal waits for
+   * this device (it polls its signals now). The resume token in the query is the credential — the browser's
+   * EventSource can send no header, and the token is the meet's own (never the Google token).
+   */
+  app.get('/meets/:id/events', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const token = (c.req.query('rt') ?? '').trim();
+    const p = token ? await store.getParticipantByToken(meet.meetId, token) : null;
+    if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (isBanned(meet, p.userId)) return err(c, 403, 'removed', 'The host removed you from this meet');
+    if (!meetIsOpen(meet)) return err(c, 410, 'meet_closed', 'This meet has ended');
+    return streamSSE(c, async (stream) => {
+      let seq = 0;
+      let over = false;
+      let wake: (() => void) | null = null;
+      // One writer, in order: an event told while the stream is closing still goes out before the close.
+      let writes: Promise<unknown> = Promise.resolve();
+      const send = (event: string, data: string, retry?: number) => {
+        writes = writes.then(() => stream.writeSSE({ event, data, ...(event === 'hello' ? {} : { id: String(++seq) }), ...(retry ? { retry } : {}) })).catch(() => undefined);
+        return writes;
+      };
+      const off = events.subscribe(
+        meet.meetId,
+        p.participantId,
+        (ev) => void send(ev.type, JSON.stringify(ev)),
+        () => {
+          over = true;
+          wake?.();
+        },
+      );
+      stream.onAbort(() => {
+        over = true;
+        wake?.();
+      });
+      c.req.raw.signal?.addEventListener('abort', () => stream.abort(), { once: true });
+      await send('hello', JSON.stringify({ participantId: p.participantId, serverEpochMs: Date.now() }), 1500);
+      const until = Date.now() + EVENTS_MAX_MS;
+      while (!over && !stream.aborted && Date.now() < until) {
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          setTimeout(resolve, EVENTS_PING_MS);
+        });
+        wake = null;
+        if (!over && !stream.aborted) await send('ping', '');
+      }
+      off();
+      await writes;
+    });
   });
 
   app.post('/meets/:id/heartbeat', async (c) => {
@@ -858,6 +930,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     touch(meet);
     await store.saveParticipant(p);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -877,6 +950,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     touch(meet);
     await store.saveParticipant(p);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -891,6 +965,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     withdrawRequest(meet, p);
     await store.saveParticipant(p);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -911,6 +986,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     touch(meet);
     await store.saveParticipant(target);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, host))!);
   });
 
@@ -929,6 +1005,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     touch(meet);
     await store.saveParticipant(target);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, host))!);
   });
 
@@ -954,6 +1031,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     await store.saveMeet(meet);
     // The song was there already: nothing added, the snapshot says where it is (the room tells the singer).
     if (r.duplicate) c.header('X-Song-Duplicate', r.duplicate);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -970,6 +1048,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const r = nextSong(meet);
     if (!r.ok) return err(c, 409, r.reason ?? 'song', 'This meet has ended');
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -991,6 +1070,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     }
     touch(meet);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -1010,6 +1090,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     reconcile(meet, await store.listParticipants(meet.meetId));
     touch(meet);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, host))!);
   });
 
@@ -1025,6 +1106,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!r.ok) return err(c, r.reason === 'bad_background' ? 400 : r.reason === 'meet_closed' ? 409 : 403, r.reason ?? 'refused', r.reason === 'not_on_stage' ? 'Only the host and the singers on stage choose the background' : r.reason === 'meet_closed' ? 'This meet is over' : 'That is not a background');
     touch(meet);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -1041,6 +1123,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     setStagePolicy(meet, body.stagePolicy);
     touch(meet);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, host))!);
   });
 
@@ -1054,6 +1137,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     setReady(meet, p, Boolean(body.ready));
     touch(meet);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -1070,6 +1154,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const saved = await store.addChat(meet.meetId, message);
     touch(meet);
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json({ message: saved }, 201);
   });
 
@@ -1085,6 +1170,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const r = start(meet, Number(body.leadMs ?? 5000));
     if (!r.ok) return err(c, 409, r.reason ?? 'start', r.reason === 'no_performers' ? 'Nobody is on stage yet' : r.reason === 'no_song' ? 'Pick a song first' : r.reason === 'choice_pending' ? 'More than one song is put forward — the stage chooses one first' : 'The meet is not in the lobby');
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -1099,6 +1185,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     stop(meet);
     await store.saveMeet(meet);
     await store.clearSignals(meet.meetId).catch(() => undefined);
+    events.changed(meet.meetId);
+    events.close(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -1128,7 +1216,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
               : resume(meet, Number(body.leadMs ?? 3000), Date.now(), Math.max(0, Number(body.fromMs ?? 0)));
       if (!r.ok) return err(c, 409, r.reason ?? action, r.reason === 'not_started' ? 'Start the song first' : r.reason === 'already_playing' ? 'The song is already playing' : r.reason === 'pausing' ? 'A pause is on its way — seek once it landed' : 'The song is not playing');
       await store.saveMeet(meet);
-      return c.json((await snapshot(c, meet.meetId, p))!);
+      events.changed(meet.meetId);
+    return c.json((await snapshot(c, meet.meetId, p))!);
     });
   }
 
@@ -1151,6 +1240,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     // They left (a publisher view closed, a singer gone): nothing to deliver, nothing to shout about.
     if (!(await store.getParticipant(meet.meetId, to))) return c.json({ seq: 0, gone: true });
     const sig = await store.addSignal(meet.meetId, { meetId: meet.meetId, from: p.participantId, to, type, data, sentAt: new Date().toISOString() });
+    events.signal(meet.meetId, to);
     return c.json({ seq: sig.seq });
   });
 
@@ -1181,6 +1271,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     await store.removeParticipant(meet.meetId, p.participantId);
     reconcile(meet, (await store.listParticipants(meet.meetId)).map((x) => x));
     await store.saveMeet(meet);
+    events.changed(meet.meetId);
     return c.json({ ok: true as const });
   });
 
@@ -1242,6 +1333,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     await store.addPerformance(performance);
     touch(meet);
     await store.saveMeet(meet);
+    events.changed(meet.meetId); // the film is on the meet: every device's Ended screen lists it at once
     const members = await store.listMembers(meet.meetId);
     const shareWith = members.filter((m) => m.userId !== user.userId && m.email && !m.email.endsWith('.local')).map((m) => m.email);
     return c.json({ performance, shareWith }, 201);

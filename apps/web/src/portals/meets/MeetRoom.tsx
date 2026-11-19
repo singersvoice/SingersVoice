@@ -11,13 +11,14 @@ import { clampSlot, formatMs, hoursLabel, MAX_PERFORMERS, planParts, playbackPos
 import { activeRoomInfo } from './activeRoom.ts';
 import { useRoomStage, type RoomStage } from './roomStage.ts';
 import { SetListPanel } from './SetListPanel.tsx';
+import { useSignal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, type AudioEngine } from '../../audio/engine.ts';
 import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
 import { StageBackground, StageBackgroundChoice } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
@@ -36,7 +37,7 @@ import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/
 import { Camera } from '../../video/camera.ts';
 import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
 import { filmSound, type MeetRecorder } from '../../video/meetRecorder.ts';
-import { MicStatus } from '../../components/MicStatus.tsx';
+import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { marksLine } from '../../video/chapters.ts';
@@ -806,11 +807,13 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean; ses
   const { stage, meet } = props;
   const app = appSettings.value;
   const n = meet.stage.filter((s) => s.participantId).length;
-  // The plan's video hours, as the service counts them (every heartbeat): the chip says what is left, or why there is no picture.
+  // The plan's video hours, as the service counts them (every heartbeat): the chip says what is left, or — the hours used up, an
+  // audio-only account — why there is no picture. A free account simply sings (the camera button is off; the Plans page tells the rest).
   const video = props.session.yourVideo.value;
-  const videoNote = video?.note || (stage.videoAllowed ? '' : 'Your account sings with sound only in live meets — a picture on stage comes with a plan (the Plans page)');
+  const planOnly = !stage.videoAllowed && (video?.reason ?? 'plan') === 'plan';
+  const videoNote = planOnly ? '' : video?.note || '';
   return (
-    <div class="stagestrip" data-blend={stage.blend} data-mask={stage.feed.segmenter.maskMode} data-performers={n} data-linked={stage.linked} data-onstage={props.onStage ? '1' : '0'}>
+    <div class="stagestrip" data-blend={stage.blend} data-mask={stage.feed.segmenter.maskMode} data-performers={n} data-linked={stage.linked} data-onstage={props.onStage ? '1' : '0'} data-video-allowed={stage.videoAllowed ? '1' : '0'} data-video-why={stage.videoAllowed ? undefined : video?.reason || 'plan'}>
       <div class="showpic">
         <StageBackground id={meet.backgroundId} />
         <VirtualStage compositor={stage.compositor} />
@@ -826,12 +829,12 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean; ses
           <IcUsers size={14} /> {n} on stage{props.onStage && stage.others ? ` · ${stage.linked}/${stage.others} video linked` : ''}
         </span>
         {props.onStage && stage.camOn && stage.blend === 'loading' && <span class="chip">blending you into the stage…</span>}
-        {props.onStage && !stage.videoAllowed && (
+        {props.onStage && !stage.videoAllowed && !planOnly && (
           <span class="chip" title={videoNote} data-audio-only data-video-note={video?.reason || 'plan'}>
             audio only · no camera
           </span>
         )}
-        {props.onStage && !stage.videoAllowed && videoNote && (
+        {props.onStage && !stage.videoAllowed && !planOnly && videoNote && (
           <a class="chip warn" href={href('/plans')} style="pointer-events:auto" data-video-reason>
             {videoNote.length > 90 ? `${videoNote.slice(0, 88)}…` : videoNote}
           </a>
@@ -953,7 +956,8 @@ function LiveStage(props: {
 }) {
   const { session, meet, engine, camera, loaded, stage } = props;
   const { feed, compositor, blend, peerStates } = stage;
-  const [tMs, setTMs] = useState(0);
+  // The song's position, written every frame: a signal, read by the lyrics and the seek bar alone — the stage around them never re-renders for it.
+  const tMs = useSignal(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [started, setStarted] = useState(false);
   const [finishing, setFinishing] = useState(false);
@@ -993,7 +997,7 @@ function LiveStage(props: {
     const added = inSong.filter((s) => !before.includes(s));
     if (!added.length || inSong.length <= before.length) return;
     const names = added.map((slot) => meet.stage.find((s) => s.slot === slot)?.displayName.split(' ')[0] ?? `S${slot}`).join(', ');
-    toast(tMs > LATE_JOIN_RESTART_MS ? `${names} joined the song — it restarts from the top, divided for ${inSong.length} singers` : `${names} joined the song — divided for ${inSong.length} singers`, 'info', 6000);
+    toast(tMs.peek() > LATE_JOIN_RESTART_MS ? `${names} joined the song — it restarts from the top, divided for ${inSong.length} singers` : `${names} joined the song — divided for ${inSong.length} singers`, 'info', 6000);
   }, [inSongKey, started]);
   const host = props.you.userId === meet.hostUserId;
   const pb = meet.playback ?? { state: 'idle' as const, offsetMs: 0, pausedAtMs: 0, pauseAtEpochMs: null, epoch: 0 };
@@ -1005,13 +1009,7 @@ function LiveStage(props: {
     engine.player?.setGain(audio.backingGain);
   }, [audio]);
 
-  // The room's stage (camera, cut-out, mesh) is already running since the lobby; here the lyrics sit above the performers.
-  useEffect(() => {
-    compositor.mode = 'stage';
-    return () => {
-      compositor.mode = 'show';
-    };
-  }, []);
+  // The room's stage (camera, cut-out, mesh) is already running since the lobby; here it stands in its own strip under the lyrics, the singers filling it as on the lobby stage.
   const camOn = stage.camOn;
   const stagePerformers = meet.stage.filter((s) => s.participantId);
 
@@ -1058,7 +1056,7 @@ function LiveStage(props: {
       if (nowCtx < t0) setCountdown(Math.ceil(t0 - nowCtx));
       else {
         setCountdown(null);
-        setTMs(Math.max(0, player.positionMs() - engine.outputLatencyMs));
+        tMs.value = Math.max(0, player.positionMs() - engine.outputLatencyMs);
       }
       (window as unknown as { __svPos?: unknown }).__svPos = { posMs: Math.round(player.positionMs()), epoch: pb.epoch, state: pb.state, offsetMs: pb.offsetMs, ks: meet.kickstartEpochMs, playing: player.playing }; // support / e2e
       raf.current = requestAnimationFrame(tick);
@@ -1081,14 +1079,14 @@ function LiveStage(props: {
       props.onPaused(true);
       if (player.playing) player.pause();
       player.seek(pb.pausedAtMs);
-      setTMs(pb.pausedAtMs);
+      tMs.value = pb.pausedAtMs;
     };
     if (pb.state === 'paused') {
       if (!pausedLocally.current) doPause();
       else if (Math.abs(player.positionMs() - pb.pausedAtMs) > 1) {
         // A seek while paused: everyone's paused position moves.
         player.seek(pb.pausedAtMs);
-        setTMs(pb.pausedAtMs);
+        tMs.value = pb.pausedAtMs;
       }
       setSeekTarget(null);
       return;
@@ -1177,13 +1175,12 @@ function LiveStage(props: {
 
   const others = stagePerformers.filter((s) => s.participantId !== props.you.participantId);
   const connected = others.filter((s) => peerStates[s.participantId!] === 'connected').length;
-  const level = engine.recorder?.level.value ?? 0;
   const paused = pb.state === 'paused';
   const micOpenNow = engine.micOpen.value;
 
   return (
     <Page title={meet.title} nav={false} full>
-      <div class="sing">
+      <div class="sing" data-layout="strip">
         <StageBackground id={meet.backgroundId} />
         <VirtualStage compositor={compositor} />
         <section class="stagebar" data-blend={blend} data-mask={feed.segmenter.maskMode} data-performers={compositor.tiles.length}>
@@ -1250,31 +1247,33 @@ function LiveStage(props: {
         )}
         {app.showCueDeck && (track.singerCount > 1 || plan.singers.length > 1) && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={plan} />}
         {fxOpen && (
-          <div class="drawer" role="dialog" aria-label="Voice FX">
+          <div class="drawer sound" role="dialog" aria-label="Sound">
             <div class="row between">
-              <b>Voice FX — every control, live on your voice</b>
-              <button class="btn icon sm" aria-label="Close the voice FX" onClick={() => setFxOpen(false)}>
+              <b>Sound</b>
+              <button class="btn icon sm" aria-label="Close the sound settings" onClick={() => setFxOpen(false)}>
                 <IcX size={16} />
               </button>
             </div>
-            <FxPanel value={audio} onChange={updateAudio} compact />
+            <PresetChips value={audio} onChange={updateAudio} />
+            <MicStatus engine={engine} onChange={() => void reopenMic(engine, camera)} />
+            <MixBalance />
+            <details class="tweaks">
+              <summary>Tweak the voice FX — every control of the vocal chain, live on your voice</summary>
+              <FxPanel value={audio} onChange={updateAudio} compact />
+            </details>
           </div>
         )}
-        <section class="controls">
-          <div class="row" style="align-items:flex-start;gap:8px">
-            <PresetChips value={audio} onChange={updateAudio} />
-            <button class={`btn sm ${fxOpen ? 'accent' : ''}`} aria-pressed={fxOpen} aria-label="Tweak the voice FX" title="Every control of the vocal chain — EQ, compression, de-esser, air, tune, space — live on your voice" onClick={() => setFxOpen((o) => !o)}>
-              Tweak
-            </button>
-          </div>
-          <MicStatus engine={engine} onChange={() => void reopenMic(engine, camera)} />
+        <section class="controls compact">
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={started && props.prepared ? (ms) => void seek(ms) : undefined} pending={seekTarget} disabled={countdown !== null} />
           <div class="main">
-            <button class={`btn icon ${app.cameraOn && stage.videoAllowed ? 'on' : ''}`} aria-label="Camera" disabled={!stage.videoAllowed} title={stage.videoAllowed ? 'Camera' : session.yourVideo.value?.note || 'No picture on stage under your plan — see the Plans page'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
+            <button class={`btn icon ${app.cameraOn && stage.videoAllowed ? 'on' : ''}`} aria-label="Camera" disabled={!stage.videoAllowed} title={stage.videoAllowed || session.yourVideo.value?.reason === 'plan' ? 'Camera' : session.yourVideo.value?.note || 'Camera'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
               {app.cameraOn && stage.videoAllowed ? <IcCamera /> : <IcCameraOff />}
             </button>
-            <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" onClick={() => updateAudio({ monitor: !audio.monitor })}>
+            <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" title="Hear myself (use headphones)" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />
+            </button>
+            <button class={`btn icon ${fxOpen ? 'on' : ''}`} aria-label="Sound" title="Sound: the voice preset and its tweaks, the microphone, the track and vocal volumes" aria-pressed={fxOpen} onClick={() => setFxOpen((o) => !o)}>
+              <IcSliders />
             </button>
             <button class={`btn icon ${songsOpen ? 'on' : ''}`} aria-label="Songs" title="Songs: what is playing, what follows, pick the next one" aria-pressed={songsOpen} onClick={() => setSongsOpen((o) => !o)}>
               <IcMusic />
@@ -1297,8 +1296,8 @@ function LiveStage(props: {
                     <IcPause /> {pauseAt !== null ? 'Pausing…' : 'Pause'}
                   </button>
                 )}
-                <button class="btn" aria-label="Restart the song for everyone" title="Restart from the top — for everyone on stage" onClick={() => void transport('restart')}>
-                  <IcSkipBack /> Restart
+                <button class="btn icon" aria-label="Restart the song for everyone" title="Restart from the top — for everyone on stage" onClick={() => void transport('restart')}>
+                  <IcSkipBack />
                 </button>
                 <button class="btn big accent" disabled={finishing} aria-label="Stop the song for everyone" title="Stops the song for everyone on stage — the next one on the set list comes up" onClick={() => void finish(true)}>
                   {finishing ? <Spinner /> : <IcStop />} Stop song
@@ -1315,7 +1314,7 @@ function LiveStage(props: {
               </button>
             )}
             <span class="pitch-pill">
-              <span class="dot" style={{ background: level > 0.9 ? 'var(--danger)' : 'var(--ok)', opacity: 0.4 + level * 0.6 }} /> ±{Math.round(clock.value.rttMs / 2)} ms
+              <LevelDot engine={engine} /> ±{Math.round(clock.value.rttMs / 2)} ms
             </span>
             <span class="chip" style={{ borderColor: SLOT_COLORS[clampSlot(mySlot)] }} title={`Your lines are in this colour${plan.singers.length > 1 ? ` — the song is divided among ${plan.singers.length} singers` : ''}`}>
               S{mySlot}
@@ -1326,7 +1325,6 @@ function LiveStage(props: {
               </a>
             )}
           </div>
-          <MixBalance />
         </section>
       </div>
     </Page>

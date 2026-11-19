@@ -401,3 +401,27 @@ publisher's Performances page must list *Broadcast* with its video. The show vie
 check** (`[data-stream-check="ok"]`: the playlist played back on a hidden player half a minute in)
 must say the stream plays, the bar must carry the **Mic off** chip, and the public watch page must
 offer no way into the meet.
+
+## Where a tap's time goes (`tools/ci/latency-probe.mjs`)
+
+Not a pass/fail test: a table. Two performers (the host on a desktop, a second singer on a phone
+viewport) and an audience device on the local service; every row is a tap on one device and, on
+the device's own clock (a MutationObserver inside the page), the moment its own screen showed the
+result and the moment the other devices' screens did — a slot taken, *I'm ready*, a chat line,
+*Start the song*, *Pause*, *Resume* — with a CPU profile of the host around the song start (the
+hottest functions by self time), the main-thread stalls and long tasks on both singers since the
+tap, the lyrics panel's size on the phone, and the heartbeat and action round trips as the
+browser timed them.
+
+```bash
+BASE_PATH=/SingersVoice/ npm run build && node tools/ci/latency-probe.mjs probe-out
+```
+
+On this two-core machine with three browsers and a software GPU the absolute figures are the
+machine's (a 300 ms stall is the stage canvas drawn by SwiftShader), but the shape is the app's: an
+action's round trip is 15–60 ms, the singing screen is in the DOM 70 ms after the tap on an idle
+device, and with the push stream the other devices follow in 40–300 ms (3.5 s when they waited for
+their next poll). The page-side profile is where to look when a tap feels slow again: with the camera
+pipeline in its worker the profile around a song start shows no segmentation, no `createImageBitmap`
+and no `getImageData` on the page at all. `localStorage['sv.feedWorker'] = '0'` runs the pipeline
+on the page for comparison (100–120 ms long tasks every 200 ms here).
