@@ -1,6 +1,12 @@
 /**
  * Google Identity Services (browser-only, no client secret).
  *  - OAuth token client with `drive.file` + openid/email/profile → short-lived access token.
+ *  - A second, separate token for YouTube (`youtube` alone): Google refuses `drive.file` and
+ *    `youtube` in one authorization ("scopes that cannot be requested together"), so the publisher's
+ *    YouTube permission is asked for on its own and kept on its own (`requestYoutubeToken`), and no
+ *    request lets Google merge the scopes it granted before into it (`include_granted_scopes: false`
+ *    — the library's default would add `youtube` to the next Drive sign-in, or `drive.file` to the
+ *    YouTube one, and Google would refuse both).
  *  - userinfo for the profile card.
  *  - Google Picker (optional, needs an API key) to pull in tracks other singers shared with you.
  *
@@ -69,6 +75,8 @@ interface Gis {
         client_id: string;
         scope: string;
         prompt?: string;
+        /** Whether Google adds the scopes this account granted the app before (its default: true — never here, see the header). */
+        include_granted_scopes?: boolean;
         callback: (r: TokenResponse) => void;
         error_callback?: (e: { type: string; message?: string }) => void;
       }): TokenClient;
@@ -100,10 +108,12 @@ export function loadGis(): Promise<Gis> {
 }
 
 const TOKEN_KEY = 'sv.google.token';
+/** The YouTube token, kept apart from the Drive one (the two permissions cannot share an authorization). */
+export const YOUTUBE_TOKEN_KEY = 'sv.youtube.token';
 
-export function loadStoredToken(): GoogleToken | null {
+function loadToken(key: string): GoogleToken | null {
   try {
-    const raw = sessionStorage.getItem(TOKEN_KEY) ?? localStorage.getItem(TOKEN_KEY);
+    const raw = sessionStorage.getItem(key) ?? localStorage.getItem(key);
     if (!raw) return null;
     const t = JSON.parse(raw) as GoogleToken;
     if (!t.accessToken || t.expiresAt < Date.now() + 30_000) return null;
@@ -113,20 +123,25 @@ export function loadStoredToken(): GoogleToken | null {
   }
 }
 
-export function storeToken(t: GoogleToken | null): void {
+function keepToken(key: string, t: GoogleToken | null): void {
   try {
     if (!t) {
-      sessionStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(key);
+      localStorage.removeItem(key);
     } else {
       const raw = JSON.stringify(t);
-      sessionStorage.setItem(TOKEN_KEY, raw);
-      localStorage.setItem(TOKEN_KEY, raw); // survives the iOS "installed PWA" cold start
+      sessionStorage.setItem(key, raw);
+      localStorage.setItem(key, raw); // survives the iOS "installed PWA" cold start
     }
   } catch {
     /* storage may be unavailable in private mode */
   }
 }
+
+export const loadStoredToken = (): GoogleToken | null => loadToken(TOKEN_KEY);
+export const storeToken = (t: GoogleToken | null): void => keepToken(TOKEN_KEY, t);
+export const loadStoredYoutubeToken = (): GoogleToken | null => loadToken(YOUTUBE_TOKEN_KEY);
+export const storeYoutubeToken = (t: GoogleToken | null): void => keepToken(YOUTUBE_TOKEN_KEY, t);
 
 /**
  * What a refused sign-in means, in words the person (or the app's owner) can act on. Google's own
@@ -140,27 +155,18 @@ export function signInError(error?: string, description?: string): string {
   return description ?? error ?? 'No token returned';
 }
 
-/**
- * Request an access token. `prompt: 'consent'` on first link (shows the Drive consent),
- * `''` afterwards (silent re-issue while the Google session is alive; still needs a user gesture on iOS).
- */
-/** Whether the publisher connected YouTube (Destinations → Connect YouTube): every token asked for from then on carries the YouTube scope too. */
-export const YOUTUBE_WANTED_KEY = 'sv.youtube';
-export const youtubeWanted = (): boolean => {
-  try {
-    return localStorage.getItem(YOUTUBE_WANTED_KEY) === '1';
-  } catch {
-    return false;
-  }
-};
+/** The YouTube permission's box on Google's screen. */
+export const YOUTUBE_TICK = 'Manage your YouTube account';
 
-export async function requestToken(opts: { prompt: '' | 'consent' | 'select_account'; hint?: string; youtube?: boolean }): Promise<GoogleToken> {
+/**
+ * One token request to Google, for one set of scopes, with nothing merged in from earlier grants. The
+ * sign-in window must open from the tap itself: a browser allows a popup only within the user's
+ * gesture, and a script download in between is longer than that. The library is loaded when the
+ * sign-in screen appears (loadGis there), so here it is normally already in hand; when it is not, it
+ * is loaded now and one more tap asked for rather than a window opened that the browser will block.
+ */
+async function askGoogle(scopes: string[], opts: { prompt: '' | 'consent' | 'select_account'; hint?: string }, must: { scope: string; missing: () => Error } | null): Promise<GoogleToken> {
   if (!googleConfigured) throw new Error('Google sign-in is not configured (VITE_GOOGLE_CLIENT_ID)');
-  const scopes = opts.youtube || youtubeWanted() ? [...DRIVE_SCOPES, YOUTUBE_SCOPE] : DRIVE_SCOPES;
-  // The sign-in window must open from the tap itself: a browser allows a popup only within the
-  // user's gesture, and a script download in between is longer than that. The library is loaded
-  // when the sign-in screen appears (loadGis there), so here it is normally already in hand; when it
-  // is not, load it now and ask for one more tap rather than open a window the browser will block.
   const ready = window.google?.accounts?.oauth2 ? window.google : null;
   if (!ready) {
     await loadGis();
@@ -171,17 +177,13 @@ export async function requestToken(opts: { prompt: '' | 'consent' | 'select_acco
     const client = gis.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
       scope: scopes.join(' '),
+      include_granted_scopes: false,
       callback: (r) => {
         if (!r.access_token) return reject(new Error(signInError(r.error, r.error_description)));
         // What was ticked (Google names the scopes it granted; a response without the list is taken at its word).
         const granted = r.scope ? r.scope.split(' ') : null;
-        if (granted && !granted.includes('https://www.googleapis.com/auth/drive.file')) return reject(new DriveScopeMissingError());
-        if (granted && opts.youtube && !granted.includes(YOUTUBE_SCOPE)) {
-          return reject(new Error('YouTube access was not granted — tick "Manage your YouTube account" on the Google screen'));
-        }
-        const token: GoogleToken = { accessToken: r.access_token, expiresAt: Date.now() + ((r.expires_in ?? 3600) - 60) * 1000, scope: r.scope ?? '', issuedAt: Date.now() };
-        storeToken(token);
-        resolve(token);
+        if (granted && must && !granted.includes(must.scope)) return reject(must.missing());
+        resolve({ accessToken: r.access_token, expiresAt: Date.now() + ((r.expires_in ?? 3600) - 60) * 1000, scope: r.scope ?? '', issuedAt: Date.now() });
       },
       error_callback: (e) =>
         reject(
@@ -196,6 +198,28 @@ export async function requestToken(opts: { prompt: '' | 'consent' | 'select_acco
     });
     client.requestAccessToken({ prompt: opts.prompt, hint: opts.hint });
   });
+}
+
+/**
+ * Request the sign-in's access token (Drive + the profile). `prompt: 'consent'` on first link (shows the
+ * Drive consent), `''` afterwards (silent re-issue while the Google session is alive; still needs a user
+ * gesture on iOS). Never the YouTube scope: that is `requestYoutubeToken`, its own authorization.
+ */
+export async function requestToken(opts: { prompt: '' | 'consent' | 'select_account'; hint?: string }): Promise<GoogleToken> {
+  const token = await askGoogle(DRIVE_SCOPES, opts, { scope: 'https://www.googleapis.com/auth/drive.file', missing: () => new DriveScopeMissingError() });
+  storeToken(token);
+  return token;
+}
+
+/**
+ * Request the YouTube token — the `youtube` scope alone, kept apart from the Drive token (Google refuses
+ * the two in one authorization). `prompt: 'consent'` from Connect YouTube (the box to tick), `''` for a
+ * silent re-issue while the Google session is alive; `hint` keeps it on the signed-in account.
+ */
+export async function requestYoutubeToken(opts: { prompt: '' | 'consent'; hint?: string }): Promise<GoogleToken> {
+  const token = await askGoogle([YOUTUBE_SCOPE], opts, { scope: YOUTUBE_SCOPE, missing: () => new Error(`YouTube access was not granted — tick "${YOUTUBE_TICK}" on the Google screen`) });
+  storeYoutubeToken(token);
+  return token;
 }
 
 /** A token Google handed out within the last minute and a half: its first refusals are tried again before they count. */
@@ -218,6 +242,7 @@ export async function fetchProfile(token: GoogleToken): Promise<GoogleProfile> {
 
 export async function revokeToken(token: GoogleToken | null): Promise<void> {
   storeToken(null);
+  storeYoutubeToken(null); // signed out: the YouTube permission's token goes with the account
   if (!token) return;
   try {
     const gis = await loadGis();

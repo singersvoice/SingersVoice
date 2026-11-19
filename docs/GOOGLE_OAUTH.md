@@ -61,10 +61,10 @@ Without a client ID the app still runs fully in **device mode** (IndexedDB), so 
    **Retry** — the sign-in itself is never reported as failed once it has succeeded.
 4. When the token expires a **Reconnect Drive** button appears in the top bar (a tap, no re-consent).
 
-## 3a. YouTube run by the app (Publishing → Destinations → Connect YouTube)
+## 3a. YouTube run by the app (Connect YouTube — in the show view's bar, or Publishing → Destinations)
 
 A publisher who connects YouTube lets the app run their channel for them through the YouTube Data API v3:
-the HLS stream key is made once, every show gets a YouTube broadcast of its own with its public link
+the HLS stream key is made once, every show gets a YouTube broadcast of its own with its link
 (`youtube.com/watch?v=…`) the moment they tap **Go live**, the show view reads YouTube's own word on the
 stream while it runs, and the broadcast is ended on **Stop publishing**. Nothing is pasted or looked up in
 YouTube Studio. Two switches in the same Google Cloud project make it possible (once, by whoever owns the
@@ -74,8 +74,11 @@ project):
    *The YouTube Data API is not enabled for this app yet*.
 2. **OAuth consent screen → Data access (Scopes) → Add or remove scopes → tick
    `https://www.googleapis.com/auth/youtube`** ("Manage your YouTube account") → Update → Save. The
-   app asks for this scope only when the publisher taps Connect YouTube (incremental consent); Drive
-   sign-in alone never asks for it. It is a *sensitive* scope: with the app published and not yet
+   app asks for this scope only when the publisher taps Connect YouTube, **in an authorization of its
+   own** — Google refuses `drive.file` and `youtube` in one request (*"This request contains scopes
+   that cannot be requested together"*), so the YouTube permission is asked for alone, kept as its own
+   token, and no request lets Google merge the scopes granted before into it (`include_granted_scopes`
+   off); the Drive sign-in never asks for it. It is a *sensitive* scope: with the app published and not yet
    verified by Google, the consent screen shows *"Google hasn't verified this app"* — the publisher
    clicks **Advanced → Go to SingersVoice (unsafe)** once; up to 100 users may do so. (Google's
    verification review removes that screen; it is optional for a channel's own publisher.)
@@ -84,9 +87,11 @@ The publisher's channel itself must have live streaming enabled (YouTube Studio 
 YouTube asks for a phone verification and takes up to 24 hours the first time) — otherwise YouTube
 answers *liveStreamingNotEnabled* and the show view says so in those words.
 
-The token the app holds carries the YouTube scope from then on (`sv.youtube` in local storage marks the
-account as connected; **Disconnect YouTube** under Destinations forgets it). Broadcasts are made
-**public** by default — the setting under Destinations switches them to unlisted.
+The YouTube token is kept apart from the sign-in's (`sv.youtube.token`; it lasts an hour and is re-issued
+silently at the next tap — Go live, Stop, Make it unlisted; the show view's 15-second status poll never
+opens a window for it); signing out drops it, and **Disconnect YouTube** under Destinations forgets it.
+Broadcasts are made **unlisted** by default (anyone with the link) — the select beside the destination
+chips in the show view, or the setting under Destinations, switches them to public; never private.
 
 ## 4. Native iOS / Android apps (later)
 

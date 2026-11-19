@@ -679,10 +679,14 @@ link; the first four tiles connect by themselves, the rest on request.
    the browser can feed (`fedDestinations` in the protocol). Tests: the control test drives the
    service against a fake relay (`deps.relay.fetchImpl`), the relay's own test runs the server
    against a stub ffmpeg.
-4b′. **YouTube, run by the app** (`lib/youtube.ts`, the YouTube Data API v3 with the publisher's own
-   Google token carrying `YOUTUBE_SCOPE` — asked for once, incrementally, by **Connect YouTube**
-   — a button right in the show view's bar, and under Destinations — and from then on by every
-   token request, `youtubeWanted`): Connect (`portals/publishing/destinations.ts`,
+4b′. **YouTube, run by the app** (`lib/youtube.ts`, the YouTube Data API v3 with a token of its own
+   carrying `YOUTUBE_SCOPE` alone — asked for by **Connect YouTube**, a button right in the show
+   view's bar and under Destinations, in an authorization of its own: Google refuses `drive.file`
+   and `youtube` together, so `requestYoutubeToken` asks for `youtube` by itself with
+   `include_granted_scopes` off — the library's default would merge the Drive grant back in — and
+   keeps the token apart (`sv.youtube.token`; the sign-in's token never carries YouTube, and the
+   sign-in never asks for it); a re-issue wants a tap (Go live, Stop), the status poll uses the token
+   in hand or waits): Connect (`portals/publishing/destinations.ts`,
    `connectYoutubeDestination`) finds the channel's reusable HLS `liveStream` or makes one
    (`ensureHlsStream`) and hands its key to the service like a pasted one
    (`PUT /publishing/destinations/youtube` with `auto: true`); **Go live** finds that very stream

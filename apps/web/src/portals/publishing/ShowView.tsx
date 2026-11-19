@@ -43,7 +43,7 @@ import { connectYoutubeDestination, saveDestination } from './destinations.ts';
 import { LiveLinks } from './LiveLinks.tsx';
 import { ShowPicture, useCountdown, useShowFeed, Vocals } from './showStage.tsx';
 import { chapterCue } from '../../video/chapters.ts';
-import { endBroadcast, ensureHlsStream, keyMatchesHint, setBroadcastPrivacy, startBroadcast, youtubeStatus, youtubeToken, youtubeWord, type YoutubeWord } from '../../lib/youtube.ts';
+import { endBroadcast, ensureHlsStream, keyMatchesHint, setBroadcastPrivacy, startBroadcast, storedYoutubeToken, youtubeStatus, youtubeToken, youtubeWord, type YoutubeWord } from '../../lib/youtube.ts';
 
 const IDLE_MS = 3000;
 const JOB_POLL_MS = 8000;
@@ -372,8 +372,11 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
     if (!y || !job || !activeJob(job)) return;
     let stopped = false;
     const read = async () => {
+      // The token ran out mid-show (an hour): no popup from a timer — YouTube's word stands until the next tap renews it (Stop does).
+      const token = storedYoutubeToken();
+      if (!token) return;
       try {
-        const st = await youtubeStatus(await youtubeToken(profile.value?.email), y.broadcastId, y.streamId);
+        const st = await youtubeStatus(token, y.broadcastId, y.streamId);
         if (!stopped) setYt(youtubeWord(st));
       } catch (e) {
         if (!stopped) setYt({ text: `YouTube: ${errorText(e)}`, ok: false });

@@ -1,14 +1,17 @@
 /**
- * YouTube, run by the app (the YouTube Data API v3, with the publisher's own Google sign-in and one
- * extra permission — Destinations → Connect YouTube): the HLS stream key is made once (a reusable
- * stream of the channel), every show gets a broadcast of its own with its public link
- * (youtube.com/watch?v=…) the moment the publisher taps Go live, the stream's status is YouTube's
- * own word while the show runs (receiving / not receiving, live), and the broadcast is ended on Stop.
- * Nothing to paste, nothing to look up in YouTube Studio. See docs/GOOGLE_OAUTH.md for the two
- * switches in the Google Cloud console this needs (the API enabled, the scope on the consent screen).
+ * YouTube, run by the app (the YouTube Data API v3, with the publisher's own Google account and one
+ * extra permission — Connect YouTube, in the show view's bar or under Destinations): the HLS stream
+ * key is made once (a reusable stream of the channel), every show gets a broadcast of its own with
+ * its link (youtube.com/watch?v=…) the moment the publisher taps Go live, the stream's status is
+ * YouTube's own word while the show runs (receiving / not receiving, live), and the broadcast is
+ * ended on Stop. Nothing to paste, nothing to look up in YouTube Studio. The permission is its own
+ * authorization with its own token (`requestYoutubeToken`): Google refuses `youtube` together with
+ * the sign-in's `drive.file`, so the two are never asked for or kept together. See docs/GOOGLE_OAUTH.md
+ * for the two switches in the Google Cloud console this needs (the API enabled, the scope on the
+ * consent screen).
  */
 import { YOUTUBE_SCOPE, youtubeBroadcastUrl } from '@singersvoice/protocol';
-import { loadStoredToken, requestToken, YOUTUBE_WANTED_KEY, type GoogleToken } from './google.ts';
+import { loadStoredYoutubeToken, requestYoutubeToken, storeYoutubeToken, type GoogleToken } from './google.ts';
 
 const API = 'https://www.googleapis.com/youtube/v3';
 /** Fetch, replaceable by the tests. */
@@ -22,30 +25,33 @@ export type YoutubePrivacy = 'public' | 'unlisted' | 'private';
 /** Whether a token carries the YouTube permission (and is still good). */
 export const youtubeGranted = (t: GoogleToken | null): t is GoogleToken => Boolean(t && t.expiresAt > Date.now() && t.scope.split(' ').includes(YOUTUBE_SCOPE));
 
-/** Connect YouTube: the Google screen once more, with the YouTube permission; from now on every token carries it. Must run from a tap. */
+/** Connect YouTube: the Google screen once more, with the YouTube permission alone (its own token from now on). Must run from a tap. */
 export async function connectYoutube(hint?: string): Promise<GoogleToken> {
-  try {
-    localStorage.setItem(YOUTUBE_WANTED_KEY, '1');
-  } catch {
-    /* no storage: the permission is asked for each time */
-  }
-  return requestToken({ prompt: 'consent', hint, youtube: true });
+  return requestYoutubeToken({ prompt: 'consent', hint });
 }
 
+/** Disconnect: the YouTube token is dropped (the Drive sign-in is untouched). */
 export function forgetYoutube(): void {
-  try {
-    localStorage.removeItem(YOUTUBE_WANTED_KEY);
-  } catch {
-    /* nothing to forget */
-  }
+  storeYoutubeToken(null);
 }
+
+/** The YouTube token in hand, still good — or null (a poll with no tap behind it asks for none: a re-issue wants a gesture). */
+export const storedYoutubeToken = (): GoogleToken | null => {
+  const t = loadStoredYoutubeToken();
+  return youtubeGranted(t) ? t : null;
+};
 
 /** A token with the YouTube permission: the stored one, else a silent re-issue (needs a user gesture on iOS). */
 export async function youtubeToken(hint?: string): Promise<GoogleToken> {
-  const stored = loadStoredToken();
+  const stored = loadStoredYoutubeToken();
   if (youtubeGranted(stored)) return stored;
-  const t = await requestToken({ prompt: '', hint, youtube: true });
-  if (!youtubeGranted(t)) throw new YoutubeError('YouTube access is missing — Connect YouTube again under Publishing › Destinations', 'insufficientPermissions');
+  let t: GoogleToken;
+  try {
+    t = await requestYoutubeToken({ prompt: '', hint });
+  } catch (e) {
+    throw new YoutubeError(`YouTube access is missing — Connect YouTube again (${e instanceof Error ? e.message : String(e)})`, 'insufficientPermissions');
+  }
+  if (!youtubeGranted(t)) throw new YoutubeError('YouTube access is missing — Connect YouTube again', 'insufficientPermissions');
   return t;
 }
 
@@ -66,7 +72,7 @@ export function youtubeReason(reason: string, fallback: string): string {
     case 'insufficientPermissions':
     case 'authError':
     case 'forbidden':
-      return 'YouTube access is missing — Connect YouTube again under Publishing › Destinations';
+      return 'YouTube access is missing — Connect YouTube again';
     case 'quotaExceeded':
     case 'rateLimitExceeded':
       return "YouTube's daily API allowance is used up — try again tomorrow, or paste a stream key and your live link by hand";
