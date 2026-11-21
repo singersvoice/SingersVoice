@@ -371,7 +371,7 @@ try {
   await bob.page.locator('[data-join-watch-open]').click();
   await bob.page.locator('video[data-join-watch]').waitFor({ timeout: 60000 });
   const watched = await bob.page.evaluate(() => new Promise((res) => { const v = document.querySelector('video[data-join-watch]'); const done = () => res({ w: v.videoWidth, h: v.videoHeight, d: v.duration }); if (v.readyState >= 1) done(); else { v.addEventListener('loadedmetadata', done, { once: true }); setTimeout(done, 15000); } }));
-  check(watched.w === 1280 && watched.h === 720, `Watch it first plays alice's show right there (${watched.w}×${watched.h})`);
+  check((watched.w === 1280 && watched.h === 720) || (watched.w === 1920 && watched.h === 1080), `Watch it first plays alice's show right there (${watched.w}×${watched.h})`);
   await bob.page.screenshot({ path: `${out}/bob-join-landing.png` });
   await bob.page.locator('[data-join-go]').click();
   await bob.page.locator('.sing[data-join]').waitFor({ timeout: 120000 });

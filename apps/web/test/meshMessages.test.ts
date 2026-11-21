@@ -119,6 +119,6 @@ describe('mesh messages', () => {
     expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBeLessThanOrEqual(1_200_000);
     viewer.channels[0]!.onmessage!({ data: '{"type":"want","width":0}' }); // the whole frame: the show view
     expect((applied!.encodings[0] as { scaleResolutionDownBy: number }).scaleResolutionDownBy).toBe(1);
-    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBe(3_000_000);
+    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBe(4_500_000);
   });
 });

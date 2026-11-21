@@ -26,7 +26,8 @@ import { audioSettings } from '../state/settings.ts';
 import { withProvider } from '../state/session.ts';
 import { CanvasTrack } from './canvasTrack.ts';
 import type { ChapterCue } from './chapters.ts';
-import { pickShowMime, SHOW_FPS, showSupported, type ShowRecorder } from './showRecorder.ts';
+import { showBitrate } from './enhance.ts';
+import { pickShowMime, showSupported, type ShowRecorder } from './showRecorder.ts';
 
 /** How often a piece of the film goes to the upload (and how much a dying tab can lose). */
 const PIECE_MS = 10_000;
@@ -215,11 +216,11 @@ export class MeetRecorder {
     };
     this.meter = meter;
     // H.264 in MP4 is hardware-encoded wherever it is offered (Windows, Mac, iOS, Android): the film is the full
-    // 1280×720 show at 24 fps. A browser that only offers WebM encodes in software — the film then runs lighter
+    // show at its size and rate (1080p30 on a computer, 720p24 on a phone — enhance.ts). A browser that only offers WebM encodes in software — the film then runs lighter
     // (960×540, 15 fps, drawn from the show canvas) so the stage itself never slows down.
     const soft = !mime.includes('mp4');
     // The picture's track is fed frame by frame (CanvasTrack): the film goes on while the host's tab is hidden.
-    const track = soft ? this.scaledSource() : this.show.takeTrack(SHOW_FPS);
+    const track = soft ? this.scaledSource() : this.show.takeTrack(this.show.fps);
     this.track = track;
     this.media = new MediaStream([track.track, ...dest.stream.getAudioTracks()]);
     this.mime = mime;
@@ -321,7 +322,7 @@ export class MeetRecorder {
     const manifest = this.filmManifest(startedAt);
     let mr: MediaRecorder;
     try {
-      mr = new MediaRecorder(this.media, { mimeType: this.mime, videoBitsPerSecond: this.soft ? 1_200_000 : 2_500_000, audioBitsPerSecond: 160_000 });
+      mr = new MediaRecorder(this.media, { mimeType: this.mime, videoBitsPerSecond: this.soft ? 1_600_000 : showBitrate(this.show.width, this.show.height), audioBitsPerSecond: 160_000 });
     } catch (e) {
       this.state.value = { ...this.state.value, note: `This browser cannot record the meet: ${e instanceof Error ? e.message : String(e)}` };
       return false;

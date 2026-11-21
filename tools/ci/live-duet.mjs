@@ -1023,7 +1023,7 @@ try {
     return { w: v.videoWidth, h: v.videoHeight };
   });
   console.log('film video:', JSON.stringify(filmMeta));
-  check(filmMeta && filmMeta.w === 1280 && filmMeta.h === 720, `the film is the 1280×720 broadcast picture (${JSON.stringify(filmMeta)})`);
+  check(filmMeta && ((filmMeta.w === 1280 && filmMeta.h === 720) || (filmMeta.w === 1920 && filmMeta.h === 1080)), `the film is the broadcast picture, 720p or 1080p (${JSON.stringify(filmMeta)})`);
   // The player has a button per mark, each with its place in the file and when it was.
   await alice.page.locator('[data-film-marks-row] [data-film-mark]').first().waitFor({ timeout: 10000 });
   const markButtons = await alice.page.locator('[data-film-marks-row] [data-film-mark]').evaluateAll((els) => els.map((e) => ({ index: Number(e.getAttribute('data-film-mark')), kind: e.getAttribute('data-film-mark-kind'), at: Date.parse(e.getAttribute('data-film-mark-at') || ''), ms: Number(e.getAttribute('data-film-mark-ms')), text: e.innerText.replace(/\s+/g, ' ').trim() })));

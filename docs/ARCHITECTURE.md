@@ -482,7 +482,7 @@ code, Delete. Tests: `packages/protocol/test/coupons.test.ts`, `services/control
 A solo take is sung alone; anyone with its link can sing their part over it — the Smule idea, on
 the virtual stage. Every Studio take records, beside the show, **the singer's own cut-out**
 (`ShowRecorder.setCutoutSource`: the local feed's person canvas and grey mask, alpha-packed as the
-mesh packs them — `alphaPack.ts` — at 320×426, 15 fps, a second MediaRecorder started and paused
+mesh packs them — `alphaPack.ts` — at the packed frame's size (720×960 on a computer, 480×640 on a phone, 320×426 on a weak device), 15 fps, a second MediaRecorder started and paused
 with the show's; one more file in Drive, `svType performanceCutout`, named from the show's own
 properties `svCutoutId`, shared, kept and deleted with it; `timeline.cutoutOffsetMs` is its frame
 0 on the song). **Invite others to join** (the review after a take, or any take on Performances):
@@ -563,12 +563,16 @@ staircase. The show layout is the chaired row above: one or two singers stand bi
 ten make one even row. The show view plays the vocals (hidden audio elements) and the backing track
 a quarter second behind the shared clock to meet them; Preview tiles are muted unless asked to listen.
 
-**Picture quality** (`video/enhance.ts`). At the source: the packed frame goes out at 640×852 on
-computers (near 1:1 with the 540×720 a 720p camera gives a 3:4 crop) and 480×640 on phones (a weak
-device, three cores or fewer, keeps to 320×426) — it was 320×426 everywhere, half the detail gone
-before it was sent and blown up two to three times on a show stage;
-each singer link scales it back down on the way (`scaleResolutionDownBy`), so the mesh costs what it
-did, and the publisher's link gets it whole. The exposure is lifted at the source too: the face's
+**Picture quality** (`video/enhance.ts`). At the source: a computer asks its camera for 1080p (a 3:4
+crop of 810×1080 real pixels; a phone keeps to 720p, its pipeline light), makes the cut-out at
+720×960 and sends it at that size, 1:1 — no resampling between the model and the packed frame;
+phones send 480×640 (a weak device, three cores or fewer, keeps to 320×426) — it was 320×426
+everywhere once, half the detail gone before it was sent and blown up two to three times on a show
+stage; each singer link scales it back down on the way (`scaleResolutionDownBy`), so the mesh costs
+what it did, and the publisher's link gets it whole, at 4.5 Mbps. Every video transceiver prefers
+**H.264** (`preferredVideoCodecs`: hardware-encoded on nearly every phone and computer, so a 1440×960
+packed frame costs the stage's device little and the picture stays steady), then VP9, VP8, AV1; the
+answerer's order decides, and both sides set it. The exposure is lifted at the source too: the face's
 brightness — the brighter quarter of the pixels in the head box the framing measures (of the whole
 person when the model has no head), weighted by the mask so the room behind them counts for
 nothing — is read off a 48×64 sample of the cut-out every half second; a gain towards a lit face
@@ -582,10 +586,15 @@ size through a Catmull-Rom bicubic upscaler, and every frame gets an unsharp mas
 software renderer (SwiftShader, llvmpipe — CI's headless browser, a machine without acceleration)
 gets the plain unpack, every texel it fetches costing a CPU the stage needs elsewhere; the
 compositor draws the result with the canvas's high-quality resampling. The broadcast encodes at
-4.5 Mbps (720p30 H.264).
+4.5 Mbps (720p30 H.264). **The show's own size** (`showSize`): 1920×1080 at 30 fps on a computer
+with a hardware encoder (the browser offers H.264 in MP4 only with one — Windows, Mac, iOS, Android),
+1280×720 at 24 fps on a phone or where the encoder is software (a software encoder at 1080p would
+take the stage's own frames), recorded at 8 / 4.5 Mbps (`showBitrate`) in H.264 **High** profile
+where the browser has it (Main next, Baseline last: the same bitrate buys a cleaner picture). A Studio
+take's cut-out recording is at the packed frame's size (720×960 on a computer) at a bitrate for it.
 
 **The show (`video/showRecorder.ts`).** Every singer's device draws the show beside its stage: its
-own 1280×720 canvas (the meet's background drawn as the show view shows it, then a 'show'
+own canvas — 1920×1080 or 1280×720, `showSize` — (the meet's background drawn as the show view shows it, then a 'show'
 compositor over the same cut-outs the stage draws — the remote frames are unpacked once and
 shared, `UnpackedFrame`), its own audio bus on the engine's context (backing track + own vocal
 after FX, held back by the same quarter second through a DelayNode — and this device's own cut-out
@@ -766,8 +775,8 @@ link; the first four tiles connect by themselves, the rest on request.
 4c. **The film of the meet** (`video/meetRecorder.ts`): on the host's device, from the host on
    stage with the mic open until the meet is over — **never stopped by the song's transport**: a
    singer's Start, Pause, Stop, Restart or seek changes nothing about the film running — on the
-   room's ShowRecorder canvas (drawn for the whole meet — `keepDrawing`; 1280×720 at 24 fps where
-   the browser has hardware H.264 in MP4 — Windows, Mac, iOS, Android — and a 960×540, 15 fps copy
+   room's ShowRecorder canvas (drawn for the whole meet — `keepDrawing`; the show's size and rate — 1080p30 on a
+   computer, 720p24 on a phone — where the browser has hardware H.264 in MP4 — Windows, Mac, iOS, Android — and a 960×540, 15 fps copy
    of it where it only encodes WebM in software, so the stage itself never slows down) with a tap
    (`setTap`) on the mix bus the host's device keeps up the whole time it is on stage (the talk
    between songs, the count-in, the song: one bus, `startTalk`). **The film is ONE file** — one

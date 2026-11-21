@@ -5,6 +5,7 @@
  * feed to the cut-out it sends; nothing here steers the picture.
  */
 import { signal } from '@preact/signals';
+import { cameraSize } from './enhance.ts';
 
 export class Camera {
   stream: MediaStream | null = null;
@@ -15,10 +16,11 @@ export class Camera {
   async open(opts: { deviceId?: string; facing?: 'user' | 'environment' } = {}): Promise<MediaStream> {
     this.close();
     const facing = opts.facing ?? this.facing.value;
+    const size = cameraSize(); // 1080p on a computer, 720p on a phone (enhance.ts)
     const constraints: MediaStreamConstraints = {
       video: opts.deviceId
-        ? { deviceId: { exact: opts.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
-        : { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+        ? { deviceId: { exact: opts.deviceId }, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } }
+        : { facingMode: facing, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } },
       audio: false,
     };
     const stream = await navigator.mediaDevices.getUserMedia(constraints);

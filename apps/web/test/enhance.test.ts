@@ -4,7 +4,7 @@
  * receiver upscales.
  */
 import { describe, expect, it } from 'vitest';
-import { EXPOSURE_MAX_GAIN, EXPOSURE_TARGET, Exposure, exposureGain, PACK_HEIGHT, PACK_WIDTH, packSize, personLuma, SINGER_LINK_WIDTH, singerLinkScale, upscaleFor } from '../src/video/enhance.ts';
+import { cameraSize, EXPOSURE_MAX_GAIN, EXPOSURE_TARGET, Exposure, exposureGain, PACK_HEIGHT, PACK_WIDTH, packSize, personLuma, showBitrate, showSize, SINGER_LINK_WIDTH, singerLinkScale, upscaleFor } from '../src/video/enhance.ts';
 
 /** An RGBA sample of `n` pixels of one colour at one alpha. */
 const pixels = (n: number, rgb: [number, number, number], alpha = 255): number[] => Array.from({ length: n }, () => [...rgb, alpha]).flat();
@@ -63,16 +63,16 @@ describe('the lift at the source', () => {
 });
 
 describe('the packed frame and the links', () => {
-  it('goes out 3:4 at the size this device can afford — a computer 640, a phone 480, a weak device the 320 it always sent; a singer link scales it to the old width, half as much again on a crowded stage; a publisher link gets it whole', () => {
+  it('goes out 3:4 at the size this device can afford — a computer 720 (the cut-out itself, 1:1), a phone 480, a weak device the 320 it always sent; a singer link scales it to the old width, half as much again on a crowded stage; a publisher link gets it whole', () => {
     expect(PACK_WIDTH / PACK_HEIGHT).toBeCloseTo(0.75, 1);
-    expect([320, 480, 640]).toContain(PACK_WIDTH);
-    expect(packSize(true, false)).toEqual({ width: 640, height: 852 });
+    expect([320, 480, 720]).toContain(PACK_WIDTH);
+    expect(packSize(true, false)).toEqual({ width: 720, height: 960 });
     expect(packSize(false, false)).toEqual({ width: 480, height: 640 });
     expect(packSize(false, true)).toEqual({ width: 320, height: 426 });
     expect(packSize(true, true)).toEqual({ width: 320, height: 426 }); // (a computer with two cores is a weak one)
-    expect(singerLinkScale(2, 640)).toBe(2); // 640 → 320
+    expect(singerLinkScale(2, 720)).toBe(2.25); // 720 → 320
     expect(singerLinkScale(2, 480)).toBe(1.5); // 480 → 320
-    expect(singerLinkScale(7, 640)).toBe(3);
+    expect(singerLinkScale(7, 720)).toBe(3.375);
     expect(singerLinkScale(1, SINGER_LINK_WIDTH)).toBe(1); // an older build's frame is not scaled below itself
     expect(singerLinkScale(1, 200)).toBe(1);
   });
@@ -81,6 +81,19 @@ describe('the packed frame and the links', () => {
     expect(upscaleFor(320)).toBe(2);
     expect(upscaleFor(400)).toBe(2);
     expect(upscaleFor(480)).toBe(1);
-    expect(upscaleFor(640)).toBe(1);
+    expect(upscaleFor(720)).toBe(1);
+  });
+
+  it('the camera, the show and its bitrate follow the device: 1080p30 at 8 Mbps on a computer, 720p24 at 4.5 on a phone', () => {
+    expect(cameraSize(true)).toEqual({ width: 1920, height: 1080 });
+    expect(cameraSize(false)).toEqual({ width: 1280, height: 720 });
+    expect(showSize(true, true)).toEqual({ width: 1920, height: 1080, fps: 30 });
+    expect(showSize(true, false)).toEqual({ width: 1280, height: 720, fps: 24 }); // a computer without a hardware encoder: the software one keeps to 720p
+    expect(showSize(false, true)).toEqual({ width: 1280, height: 720, fps: 24 });
+    expect(showBitrate(1920, 1080)).toBe(8_000_000);
+    expect(showBitrate(1280, 720)).toBe(4_500_000);
+    expect(showBitrate(960, 540)).toBe(4_500_000);
+    expect(showBitrate(1600, 900)).toBeGreaterThan(4_500_000);
+    expect(showBitrate(1600, 900)).toBeLessThan(8_000_000);
   });
 });

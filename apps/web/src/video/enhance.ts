@@ -1,11 +1,15 @@
 /**
  * Picture quality on the virtual stage — what each device can do for the singers' pictures:
  *
- * AT THE SOURCE (the singer's own device, `localFeed.ts`): the cut-out goes out larger. A 720p camera
- * gives a 3:4 crop of 540×720 real pixels; the packed frame other devices receive used to be
- * 320×426 — half the detail gone before it was sent — and stood blown up two to three times on a
- * show stage. Computers now send 640×852 (near 1:1 with the camera), phones 480×640 (a weak device,
- * three cores or fewer, the 320×426 it always did). The links to
+ * AT THE SOURCE (the singer's own device, `localFeed.ts`): the camera is asked for 1080p on a computer
+ * (a 3:4 crop of 810×1080 real pixels; 720p on a phone, where the pipeline has to stay light), the
+ * cut-out is made at 720×960 there and goes out at that size, 1:1 — no resampling between the model
+ * and the packed frame; the frame other devices receive used to be 320×426 — half the detail gone
+ * before it was sent — and stood blown up two to three times on a show stage. Phones send 480×640
+ * (a weak device, three cores or fewer, the 320×426 it always did). The show itself (the saved
+ * performance, the film of a meet) is 1080p30 on a computer, 720p24 on a phone (`showSize`), at a
+ * bitrate for the size (`showBitrate`), in H.264 High or Main profile where the browser encodes it
+ * (`showRecorder.ts`), the baseline it used to ask for last. The links to
  * the other singers' devices are scaled back down to the old size on the way (`singerLinkScale`:
  * their stage draws small tiles, and the uplink is shared), so the mesh costs what it did; the link
  * to a publisher (the show view, the Preview — the broadcast's source) gets the whole frame at a
@@ -30,9 +34,32 @@ export const isComputer = (): boolean => cores() >= 4 && !/Android|iPhone|iPad|i
 /** A weak device (three cores or fewer: an old phone) sends the frame as it always did — one more encoder's worth of pixels is not for it. */
 export const isWeak = (): boolean => cores() <= 3;
 
-/** The person's half of the alpha-packed frame sent to other devices (3:4): the size this device can afford. */
+/** The person's half of the alpha-packed frame sent to other devices (3:4): the size this device can afford — the cut-out's own size, 1:1. */
 export function packSize(computer = isComputer(), weak = isWeak()): { width: number; height: number } {
-  return weak ? { width: 320, height: 426 } : computer ? { width: 640, height: 852 } : { width: 480, height: 640 };
+  return weak ? { width: 320, height: 426 } : computer ? { width: 720, height: 960 } : { width: 480, height: 640 };
+}
+/** What the camera is asked for: 1080p on a computer (the cut-out's pixels are real ones), 720p on a phone (the pipeline stays light). */
+export function cameraSize(computer = isComputer()): { width: number; height: number } {
+  return computer ? { width: 1920, height: 1080 } : { width: 1280, height: 720 };
+}
+/** Whether this browser records H.264 in MP4 — which it offers only with a platform (hardware) encoder: Windows, Mac, iOS, Android; not Linux. */
+export function hardwareShow(): boolean {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') return false;
+  return ['video/mp4;codecs="avc1.42E01E,mp4a.40.2"', 'video/mp4;codecs="avc1.42E01E,opus"', 'video/mp4;codecs=avc1'].some((m) => MediaRecorder.isTypeSupported(m));
+}
+/**
+ * The show — the saved performance, the film of a meet: 1080p30 on a computer with a hardware encoder (a
+ * software encoder at 1080p would take the stage's own frames), 720p24 on a phone or without one.
+ */
+export function showSize(computer = isComputer(), hardware = hardwareShow()): { width: number; height: number; fps: number } {
+  return computer && hardware ? { width: 1920, height: 1080, fps: 30 } : { width: 1280, height: 720, fps: 24 };
+}
+/** The bitrate a show of this size is recorded at: 8 Mbps for 1080p, 4.5 for 720p (what the platforms ask of an upload at that size), in proportion between. */
+export function showBitrate(width: number, height: number): number {
+  const px = width * height;
+  if (px >= 1920 * 1080) return 8_000_000;
+  if (px <= 1280 * 720) return 4_500_000;
+  return Math.round(4_500_000 + ((px - 1280 * 720) / (1920 * 1080 - 1280 * 720)) * 3_500_000);
 }
 export const PACK_WIDTH = packSize().width;
 export const PACK_HEIGHT = packSize().height;

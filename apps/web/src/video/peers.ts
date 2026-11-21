@@ -95,8 +95,25 @@ const POLL_PUSHED_CONNECTING_MS = 2500;
 const POLL_PUSHED_STEADY_MS = 6000;
 /** A singer's whole video uplink, shared by their links to the other singers (a publisher's link gets its own, generous cap). */
 const TOTAL_UPLINK_BPS = 2_400_000;
-/** A publisher's link carries what goes out to the world — the whole packed frame (enhance.ts): up to this, always. */
-const PUBLISHER_BPS = 3_000_000;
+/** A publisher's link carries what goes out to the world — the whole packed frame (enhance.ts, 1440×960 from a computer): up to this, always. */
+const PUBLISHER_BPS = 4_500_000;
+
+/**
+ * The video codecs in the order this device would send them: H.264 first — hardware-encoded on nearly every phone
+ * and computer, so a 1440×960 packed frame costs the stage's device little and the picture stays steady — then
+ * VP9, VP8, AV1 (software, heavy). The order is set on every video transceiver before the offer or the answer
+ * (the answerer's order decides what both sides use). Null where the browser cannot say what it has.
+ */
+export function preferredVideoCodecs(): RTCRtpCodec[] | null {
+  const caps = typeof RTCRtpSender !== 'undefined' && 'getCapabilities' in RTCRtpSender ? RTCRtpSender.getCapabilities('video') : null;
+  if (!caps?.codecs.length) return null;
+  const order = ['video/h264', 'video/vp9', 'video/vp8', 'video/av1'];
+  const rank = (c: RTCRtpCodec): number => {
+    const i = order.indexOf(c.mimeType.toLowerCase());
+    return i < 0 ? order.length : i; // rtx, red, ulpfec and the rest keep their place after the codecs
+  };
+  return [...caps.codecs].sort((a, b) => rank(a) - rank(b));
+}
 /** A vocal over the mesh: Opus at 96 kbps (the browser's phone-call default is ~32 kbps and thins a singing voice). */
 const VOCAL_BPS = 96_000;
 /** An offer unanswered this long (a lost signal, a peer that reloaded) is made again from a fresh connection. */
@@ -395,6 +412,17 @@ export class PerformerMesh {
     const track = this.local?.getVideoTracks()[0] ?? null;
     if (track && this.local && !this.receiveOnly) pc.addTrack(track, this.local);
     else pc.addTransceiver('video', { direction: this.receiveOnly ? 'recvonly' : 'sendrecv' });
+    const codecs = preferredVideoCodecs();
+    if (codecs) {
+      for (const t of pc.getTransceivers()) {
+        if (t.receiver.track?.kind !== 'video') continue;
+        try {
+          t.setCodecPreferences(codecs);
+        } catch {
+          /* a browser that cannot order them: its own order */
+        }
+      }
+    }
     // A publisher asks every singer for their vocal (the broadcast mix); a singer recording the show
     // asks the others for theirs and offers their own — received for the recording, never played.
     if (this.receiveOnly) pc.addTransceiver('audio', { direction: 'recvonly' });

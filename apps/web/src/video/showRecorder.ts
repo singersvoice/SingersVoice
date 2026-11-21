@@ -21,14 +21,16 @@ import { MixBus } from '../audio/mixBus.ts';
 import { LAG_MAX_MS } from './align.ts';
 import { BrandMark } from './brandMark.ts';
 import { CanvasTrack, canvasTracks } from './canvasTrack.ts';
+import { packSize, showBitrate, showSize } from './enhance.ts';
 import { StageCompositor, type StagePerformer } from './stage.ts';
 
 export { dbToGain, MIX_DB_MAX, MIX_DB_MIN } from '../audio/gain.ts';
 export { safetyStage } from '../audio/dynamics.ts';
 
-export const SHOW_WIDTH = 1280;
-export const SHOW_HEIGHT = 720;
-export const SHOW_FPS = 24;
+/** The show's size and rate on this device (enhance.ts: 1080p30 on a computer, 720p24 on a phone). */
+export const SHOW_WIDTH = showSize().width;
+export const SHOW_HEIGHT = showSize().height;
+export const SHOW_FPS = showSize().fps;
 /** How far behind the shared clock the other singers' video and vocals arrive: the local sources are held back to meet them. */
 export const VOCAL_LAG_MS = 250;
 
@@ -43,15 +45,17 @@ export interface ShowRecording {
   cutout: { video: Blob; mimeType: string; startCtxTime: number } | null;
 }
 
-/** The cut-out video's frame: the person over black on the left, the grey mask on the right (alphaPack.ts), at the packer's size. */
-export const CUTOUT_WIDTH = 320;
-export const CUTOUT_HEIGHT = 426;
+/** The cut-out video's frame: the person over black on the left, the grey mask on the right (alphaPack.ts), at the packer's size (enhance.ts: 720×960 on a computer). */
+export const CUTOUT_WIDTH = packSize().width;
+export const CUTOUT_HEIGHT = packSize().height;
 export const CUTOUT_FPS = 15;
+/** The cut-out video's bitrate for its size: 600 kbps at 320×426, in proportion to the pixels above that. */
+export const cutoutBitrate = (width: number, height: number): number => Math.round(600_000 * Math.max(1, (width * height) / (320 * 426)));
 
 /** The best container for the cut-out video on this browser ('' = none): a video track alone, light to encode. */
 export function pickCutoutMime(): string {
   if (typeof MediaRecorder === 'undefined') return '';
-  const candidates = ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/mp4;codecs="avc1.42E01E"', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm'];
+  const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/mp4;codecs="avc1.64002A"', 'video/mp4;codecs="avc1.42E01E"', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm'];
   return candidates.find((c) => MediaRecorder.isTypeSupported(c)) ?? '';
 }
 
@@ -62,10 +66,14 @@ export function pickCutoutMime(): string {
  */
 export function pickShowMime(): string {
   if (typeof MediaRecorder === 'undefined') return '';
+  // H.264 High profile, level 4.2 (1080p60 room) first, Main next, the Baseline last: the same bitrate buys a cleaner picture.
   const candidates = [
+    'video/mp4;codecs="avc1.64002A,mp4a.40.2"',
+    'video/mp4;codecs="avc1.4D402A,mp4a.40.2"',
     'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
     'video/mp4;codecs="avc1.4D401F,mp4a.40.2"',
     'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4;codecs="avc1.64002A,opus"',
     'video/mp4;codecs="avc1.42E01E,opus"',
     'video/mp4;codecs=avc1,opus',
     'video/mp4',
@@ -158,7 +166,7 @@ export class ShowRecorder {
   private readonly tracks = new Set<CanvasTrack>();
   private recTrack: CanvasTrack | null = null;
   /** A track of the picture for another recorder (the film of the meet): fed with every frame drawn here until `releaseTrack`. */
-  takeTrack(fps = SHOW_FPS): CanvasTrack {
+  takeTrack(fps = this.fps): CanvasTrack {
     const t = new CanvasTrack(this.canvas, fps);
     this.tracks.add(t);
     return t;
@@ -187,7 +195,7 @@ export class ShowRecorder {
     const v = Math.max(VOCAL_LAG_MS, Math.round(ms));
     if (v === this.lag || this.recording) return;
     this.lag = v;
-    const frames = Math.max(1, Math.round((v / 1000) * SHOW_FPS));
+    const frames = Math.max(1, Math.round((v / 1000) * this.fps));
     for (const d of this.delayed.values()) d.frames = frames;
     if (this.audio && this.engine) {
       const lagS = v / 1000;
@@ -196,9 +204,13 @@ export class ShowRecorder {
     }
   }
 
-  constructor(width = SHOW_WIDTH, height = SHOW_HEIGHT) {
+  /** Frames a second the picture is drawn and recorded at. */
+  readonly fps: number;
+
+  constructor(width = SHOW_WIDTH, height = SHOW_HEIGHT, fps = SHOW_FPS) {
     this.width = width;
     this.height = height;
+    this.fps = fps;
     this.canvas = document.createElement('canvas');
     this.canvas.width = width;
     this.canvas.height = height;
@@ -251,7 +263,7 @@ export class ShowRecorder {
   setPerformers(list: StagePerformer[]): void {
     const ids = new Set(list.map((p) => p.id));
     for (const id of [...this.delayed.keys()]) if (!ids.has(id)) this.delayed.delete(id);
-    const frames = Math.max(1, Math.round((this.lagMs / 1000) * SHOW_FPS));
+    const frames = Math.max(1, Math.round((this.lagMs / 1000) * this.fps));
     this.performers = list.map((p) => {
       if (!p.isMe || p.source.kind !== 'person') return { ...p, mirror: false };
       let d = this.delayed.get(p.id);
@@ -329,7 +341,7 @@ export class ShowRecorder {
   /** Someone reads the canvas for the whole meet (the film of the meet, `MeetRecorder`): the picture is drawn between songs too, and `stop` leaves it running. */
   keepDrawing = false;
 
-  private ensureDrawing(fps = SHOW_FPS): void {
+  private ensureDrawing(fps = this.fps): void {
     this.running = true;
     if (this.timer) return;
     this.timer = setInterval(() => this.frame(), 1000 / fps);
@@ -337,7 +349,7 @@ export class ShowRecorder {
   }
 
   /** Draw the picture only (the publisher's broadcast encoder, the film of the meet read the canvas); no recorder, no audio bus. */
-  startDrawing(fps = SHOW_FPS): void {
+  startDrawing(fps = this.fps): void {
     this.ensureDrawing(fps);
   }
 
@@ -416,7 +428,7 @@ export class ShowRecorder {
     const stream = new MediaStream([recTrack.track, ...this.audio.dest.stream.getAudioTracks()]);
     let mr: MediaRecorder;
     try {
-      mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 2_500_000, audioBitsPerSecond: 192_000 });
+      mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: showBitrate(this.width, this.height), audioBitsPerSecond: 192_000 });
     } catch {
       this.releaseTrack(recTrack);
       return;
@@ -458,7 +470,7 @@ export class ShowRecorder {
     const track = new CanvasTrack(canvas, CUTOUT_FPS);
     let mr: MediaRecorder;
     try {
-      mr = new MediaRecorder(new MediaStream([track.track]), { mimeType: mime, videoBitsPerSecond: 600_000 });
+      mr = new MediaRecorder(new MediaStream([track.track]), { mimeType: mime, videoBitsPerSecond: cutoutBitrate(CUTOUT_WIDTH, CUTOUT_HEIGHT) });
     } catch {
       track.stop();
       return null;

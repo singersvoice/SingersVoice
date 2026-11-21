@@ -11,20 +11,22 @@ import type { AudioEngine } from '../audio/engine.ts';
 import { isIOS } from '../lib/platform.ts';
 import { appSettings, audioSettings } from '../state/settings.ts';
 import type { Camera } from './camera.ts';
+import { cameraSize } from './enhance.ts';
 
 /** Open (or re-open) the mic with the saved settings — and, on iOS with the camera on, the camera with it. */
 export async function openMicWithCamera(engine: AudioEngine, camera: Camera): Promise<void> {
   const app = appSettings.peek();
   const audio = audioSettings.peek();
   const combined = isIOS && app.cameraOn;
+  const size = cameraSize();
   if (combined) camera.close();
   const video = await engine.openMic({
     deviceId: app.audioInputId || undefined,
     echoCancellation: app.echoCancellation,
     video: combined
       ? app.cameraDeviceId
-        ? { deviceId: { exact: app.cameraDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
-        : { facingMode: app.cameraFacing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } }
+        ? { deviceId: { exact: app.cameraDeviceId }, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } }
+        : { facingMode: app.cameraFacing, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } }
       : false,
   });
   if (video) camera.adopt(video, app.cameraFacing);
