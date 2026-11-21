@@ -410,7 +410,7 @@ describe('sv-control API', () => {
     expect((await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: '{}' })).status).toBe(410);
   });
 
-  it('meets: the event stream tells a device of every change at once, and whom a signal waits for', async () => {
+  it('meets: the event stream hands a device the room itself at every change, each chat line, and each signal addressed to it', async () => {
     const created = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Push meet' }) }));
     const meet = created.meet;
     const host = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'audience' }) }));
@@ -433,30 +433,42 @@ describe('sv-control API', () => {
       expect(text).toMatch(re);
     };
     const settle = () => new Promise((r) => setTimeout(r, 30)); // a change is told once the service's turn is over
+    /** The events so far, parsed. */
+    const events = () => [...text.matchAll(/event: (\w+)\ndata: (.*)\n/g)].map((m) => ({ event: m[1]!, data: m[2]! ? (JSON.parse(m[2]!) as Record<string, unknown>) : null }));
     try {
       await until(/event: hello\ndata: \{"participantId":"p-[^"]+","serverEpochMs":\d+\}\nretry: 1500/);
-      // Somebody joins: the host's stream says 'changed' — once, though the join wrote the meet twice (the device then fetches its snapshot).
+      // Somebody joins: the host's stream gets the room — once, though the join wrote the meet twice — with the host's whole list of people in it.
       const bob = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ role: 'performer' }) }));
       expect(bob.you.slot).toBe(2);
       await settle();
-      await until(/event: changed\ndata: \{"type":"changed"\}\nid: 1\n/);
-      // A signal for the host: the host's stream says so; one for bob is not the host's business.
-      await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, to: host.you.participantId, type: 'offer', data: '{}' }) });
-      await until(/event: signal\ndata: \{"type":"signal","to":"p-[^"]+"\}\nid: 2\n/);
+      await until(/event: room\ndata: .*\nid: 1\n/);
+      const room = events().find((e) => e.event === 'room')!.data!.room as { meet: Meet; participants: { participantId: string }[]; mixListening: boolean };
+      expect(room.meet.stage[1]!.participantId).toBe(bob.you.participantId);
+      expect(room.participants.map((p) => p.participantId).sort()).toEqual([bob.you.participantId, host.you.participantId].sort());
+      expect(room.mixListening).toBe(false);
+      // A signal for the host: the host's stream carries it, offer and all; one for bob is not the host's business.
+      await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, to: host.you.participantId, type: 'offer', data: '{"sdp":"v=0"}' }) });
+      await until(/event: signal\ndata: \{"type":"signal","to":"p-[^"]+","signal":\{.*"type":"offer".*\}\}\nid: 2\n/);
       await app.request(`/meets/${meet.meetId}/signal`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, to: bob.you.participantId, type: 'answer', data: '{}' }) });
-      // A chat line (a song pick, the transport, a slot: the same): 'changed'.
+      // A chat line: the line itself, not a 'changed' to fetch.
       await app.request(`/meets/${meet.meetId}/chat`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, text: 'hi' }) });
       await settle();
-      await until(/event: changed\ndata: \{"type":"changed"\}\nid: 3\n/);
+      await until(/event: chat\ndata: \{"type":"chat","message":\{.*"text":"hi".*\}\}\nid: 3\n/);
       expect((text.match(/event: signal/g) ?? []).length).toBe(1); // bob's answer was bob's alone
-      expect((text.match(/event: changed/g) ?? []).length).toBe(2);
-      // The host ends the meet: 'changed' once more, and the stream is closed by the service.
+      expect((text.match(/event: room/g) ?? []).length).toBe(1); // the chat line did not re-send the room
+      // A listener of the mix appears: the room says so (the host's device starts sending the mix then).
+      await app.request(`/watch/${meet.meetId}/mix?since=0`);
+      await settle();
+      await until(/event: room\ndata: .*"mixListening":true.*\nid: 4\n/);
+      // The host ends the meet: the room once more (ended), and the stream is closed by the service.
       await app.request(`/meets/${meet.meetId}/stop`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken }) });
       await settle();
-      await until(/id: 4\n/);
+      await until(/"state":"ended".*\nid: 5\n/);
       const end = await Promise.race([reader.read(), new Promise<{ done: boolean }>((r) => setTimeout(() => r({ done: false }), 1500))]);
       expect(end.done).toBe(true);
       expect((await app.request(`/meets/${meet.meetId}/events?rt=${encodeURIComponent(host.resumeToken)}`)).status).toBe(410); // over
+      // Closed twice over: the second stop changes nothing and fails nothing.
+      expect((await app.request(`/meets/${meet.meetId}/end`, { method: 'POST', headers: as('alice') })).status).toBe(200);
     } finally {
       await app.request(`/meets/${meet.meetId}/end`, { method: 'POST', headers: as('alice') });
     }

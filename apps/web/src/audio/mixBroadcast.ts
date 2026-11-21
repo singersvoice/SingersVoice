@@ -49,7 +49,12 @@ export class MixBroadcaster {
     private readonly send: (batch: MixBatch) => Promise<void>,
     /** The track position (ms) of the mix at an audio-clock time. */
     private readonly positionAt: (ctxTime: number) => number,
+    /** Whether anybody is listening right now: while nobody is, no block is encoded and nothing is sent (the device's CPU and the service's day are spared). */
+    private readonly wanted: () => boolean = () => true,
   ) {}
+
+  /** Seconds not even encoded because nobody was listening (for the UI / e2e). */
+  idle = 0;
 
   start(source: AudioNode): void {
     if (this.running || !mixBroadcastSupported()) return;
@@ -81,6 +86,15 @@ export class MixBroadcaster {
     tap.port.onmessage = (e: MessageEvent<{ type: string; data: Float32Array<ArrayBuffer>; contextTime: number; sampleRate: number }>) => {
       const m = e.data;
       if (m.type !== 'block' || !this.running || this.failed || encoder.state !== 'configured') return;
+      if (!this.wanted()) {
+        // Nobody listening: the block is let go (the batches are labelled by track position, so the sound picks up where the stage is when a listener comes).
+        if (this.packets.length || this.marks.length) {
+          this.packets = [];
+          this.marks = [];
+          this.batchPeak = 0;
+        }
+        return;
+      }
       // An encoder that cannot keep up (the device is starved) would queue sound without end and the audience
       // would drift ever further behind: past the bound the block is left out — a skip, and the audience stays near.
       if (this.skipping ? encoder.encodeQueueSize > RESUME_QUEUE_BLOCKS : encoder.encodeQueueSize > MAX_QUEUE_BLOCKS) {
@@ -125,7 +139,10 @@ export class MixBroadcaster {
   }
 
   private async flush(): Promise<void> {
-    if (!this.packets.length) return;
+    if (!this.packets.length) {
+      if (this.running && !this.wanted()) this.idle++;
+      return;
+    }
     const silent = this.batchPeak < SILENCE_PEAK;
     const first = this.packets[0]!;
     const batch: MixBatch = { seq: ++this.seq, atMs: this.positionOfFrame(Math.round((first.ts / 1e6) * OUT_RATE)), codec: 'opus', sampleRate: OUT_RATE, channels: 1, packets: this.packets };

@@ -277,7 +277,7 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     session.onActed = () => {
       (window as unknown as { __svSaid?: number }).__svSaid = mesh.say({ type: 'changed' }); // support / e2e: how many peers were told
     };
-    session.onSignal = () => mesh.pollNow(); // the service says a signal waits: fetched now, not at the next poll
+    session.onSignal = (sig) => (sig ? void mesh.take(sig) : mesh.pollNow()); // the stream hands the signal itself over; a bare word means poll now
     (window as unknown as { __svMesh?: PerformerMesh; __svFeed?: LocalFeed }).__svMesh = mesh; // support / e2e hooks
     (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed;
     session.onLeave = () => mesh.close(); // goodbyes before the session leaves
@@ -328,8 +328,10 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   show.youLabel = you.displayName.split(' ')[0] || 'You';
   // The mix balance this device records and relays at: the singer's Track / Vocal controls.
   useEffect(() => show.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
-  // The host's device sends the mix to the audience (nobody on stage ever hears it).
+  // The host's device sends the mix to the audience (nobody on stage ever hears it) — and only while somebody is
+  // listening (the service says so with every room it hands over): no listener, no encoding, no requests.
   show.broadcast = you.userId === meet.hostUserId ? (b) => session.sendMix(b) : null;
+  show.broadcastWanted = () => session.mixWanted();
 
   // My vocal (after FX) goes out over the mesh from the moment my mic is open on stage: to the other
   // singers (heard between songs only — talk-back), to the host's mix (the audience) and to a publisher.

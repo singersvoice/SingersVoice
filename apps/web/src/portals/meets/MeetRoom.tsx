@@ -29,7 +29,8 @@ import { TvPanel } from '../../components/TvPanel.tsx';
 import { tvLink } from '../../lib/tv.ts';
 import { Page } from '../../components/Shell.tsx';
 import { Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
-import { clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
+import { ApiError, clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
+import { ServiceBanner } from '../../components/ServiceBanner.tsx';
 import { recordAccess } from '../../lib/registry.ts';
 import { shareOrCopy } from '../../lib/download.ts';
 import { href, safeHref } from '../../lib/nav.ts';
@@ -67,8 +68,19 @@ export function MeetRoom(props: { id: string }) {
   useEffect(() => {
     if (!controlConfigured.value) return;
     void refreshAccount(); // the account's role as it stands (audio only, dual): the room applies it from the start
-    void session.join('audience').catch(() => undefined);
+    // The join, tried again with backoff while the trouble is the link's (no answer, a failure answered) — not for a
+    // refusal (the meet is over, the host removed this account), which the screen says as it is.
+    let gone = false;
+    let wait = 3000;
+    const tryJoin = () =>
+      session.join('audience').catch((e: unknown) => {
+        if (gone || !(e instanceof ApiError) || (e.status !== 0 && e.status < 500) || e.code === 'storage_limit') return;
+        setTimeout(() => !gone && void tryJoin(), wait * (0.8 + Math.random() * 0.4));
+        wait = Math.min(60_000, wait * 2);
+      });
+    void tryJoin();
     return () => {
+      gone = true;
       // Unmounted = you left the meet (Leave, another meet, sign-out): free the slot right away.
       void session.leave();
       camera.close();
@@ -230,7 +242,13 @@ export function MeetRoom(props: { id: string }) {
     return (
       <Page title={meet?.title ?? 'Meet'}>
         <div class="stack" data-closed={session.over.value?.code ?? 'error'}>
-          <div class="callout danger">{session.over.value?.code === 'removed' ? `${meet?.hostName ?? 'The host'} removed you from this meet.` : (session.over.value?.message ?? session.error.value)}</div>
+          <ServiceBanner what="The room" />
+          {session.over.value || session.link.value === 'ok' ? <div class="callout danger">{session.over.value?.code === 'removed' ? `${meet?.hostName ?? 'The host'} removed you from this meet.` : (session.over.value?.message ?? session.error.value)}</div> : null}
+          {!session.over.value && session.link.value !== 'ok' && session.link.value !== 'storage_limit' && (
+            <div class="row">
+              <Spinner /> Trying to join again…
+            </div>
+          )}
           <a class="btn primary" href={href('/meets')}>
             Back to meets
           </a>
@@ -512,7 +530,7 @@ function Lobby(props: {
       setMixState({ hearing: false, silent: true, seq: 0, behindS: 0 });
       return;
     }
-    const mp = new MixPlayer(e.ctx, e.master, (since) => session.fetchMix(since));
+    const mp = new MixPlayer(e.ctx, e.master, (since) => session.fetchMix(since), (since) => session.mixStreamUrl(since));
     mixRef.current = mp;
     (window as unknown as { __svMix?: MixPlayer | null }).__svMix = mp; // support / e2e: the sound the audience hears
     mp.start();

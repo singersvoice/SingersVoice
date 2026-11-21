@@ -30,10 +30,44 @@ function readOverride(): string {
 
 export const controlUrl = signal((readOverride() || builtInUrl).trim().replace(/\/$/, ''));
 export const controlConfigured = computed(() => controlUrl.value.length > 0);
+/**
+ * The link to the service as the last request found it: 'offline' is no answer at all (the network, a service
+ * down); a service that answered with a failure is still 'online' — what it said is in `serviceNotice`.
+ */
 export type ControlStatus = 'unconfigured' | 'checking' | 'online' | 'offline';
 export const controlStatus = signal<ControlStatus>(controlUrl.value ? 'checking' : 'unconfigured');
 export const controlVersion = signal('');
+/**
+ * What the service itself said is wrong, when it did: its storage allowance spent for the day (nothing can be
+ * saved until 00:00 UTC — every screen says so once, with the time), or a failure it answered with. Cleared by
+ * the next request that goes through.
+ */
+export const serviceNotice = signal<{ kind: 'storage_limit' | 'failing'; message: string; until: number | null } | null>(null);
 export const clock = signal<{ offsetMs: number; rttMs: number; syncedAt: number }>({ offsetMs: 0, rttMs: 0, syncedAt: 0 });
+
+/** How long a request may take: a JSON call, and an upload (a segment, a clip) that carries a body of size. */
+const TIMEOUT_MS = 20_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+/** The words for no answer: the network, or a service that is down — never "check your connection" alone, which was wrong half the time. */
+export const NO_ANSWER = 'No answer from the SingersVoice service — your connection, or the service, is down right now';
+
+/** A fetch with a deadline (AbortSignal.timeout where the browser has it; a controller otherwise). */
+export function fetchWithTimeout(input: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+  const t = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : undefined;
+  return fetch(input, { ...init, ...(ctl ? { signal: ctl.signal } : {}) }).finally(() => clearTimeout(t));
+}
+
+/** A failure the service answered with (a 5xx): told apart from no answer, and said as the service said it. */
+function serviceFailed(status: number, code: string | undefined, message: string | undefined, retryAfterS?: number): ApiError {
+  if (status === 503 && code === 'storage_limit') {
+    const until = retryAfterS ? Date.now() + retryAfterS * 1000 : null;
+    serviceNotice.value = { kind: 'storage_limit', message: message ?? 'The SingersVoice service cannot save anything more today', until };
+    return new ApiError(503, 'storage_limit', message ?? 'The SingersVoice service cannot save anything more today');
+  }
+  serviceNotice.value = { kind: 'failing', message: message ?? `The SingersVoice service failed (${status})`, until: null };
+  return new ApiError(status, code ?? 'server_error', message ?? `The SingersVoice service failed (${status})`);
+}
 
 export function setControlUrl(url: string): void {
   const v = url.trim().replace(/\/$/, '');
@@ -80,14 +114,19 @@ async function request<T>(method: string, path: string, body?: unknown, raw?: Ra
   let r: Response;
   try {
     // A form (a file with its fields) goes as multipart; the browser writes the boundary into the Content-Type itself.
-    r = await fetch(`${base}${path}`, {
-      method,
-      headers: { ...authHeaders(), ...(form ? {} : raw ? { 'Content-Type': raw.contentType } : body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-      body: form ?? (raw ? (raw.bytes as unknown as BodyInit) : body !== undefined ? JSON.stringify(body) : undefined),
-    });
-  } catch {
+    r = await fetchWithTimeout(
+      `${base}${path}`,
+      {
+        method,
+        headers: { ...authHeaders(), ...(form ? {} : raw ? { 'Content-Type': raw.contentType } : body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+        body: form ?? (raw ? (raw.bytes as unknown as BodyInit) : body !== undefined ? JSON.stringify(body) : undefined),
+      },
+      raw || form ? UPLOAD_TIMEOUT_MS : TIMEOUT_MS,
+    );
+  } catch (e) {
+    // No answer: the network, the service down, or a deadline passed — not a failure the service answered with.
     controlStatus.value = 'offline';
-    throw new ApiError(0, 'offline', 'Cannot reach the SingersVoice service — check your connection');
+    throw new ApiError(0, 'offline', e instanceof Error && e.name === 'AbortError' ? 'The SingersVoice service did not answer in time — trying again' : NO_ANSWER);
   }
   if (controlStatus.value !== 'online') controlStatus.value = 'online';
   if (r.status === 204) return undefined as T;
@@ -99,7 +138,9 @@ async function request<T>(method: string, path: string, body?: unknown, raw?: Ra
     json = null;
   }
   if (!r.ok) {
-    const e = (json ?? {}) as { error?: string; code?: string };
+    const e = (json ?? {}) as { error?: string; code?: string; retryAfterS?: number };
+    if (r.status >= 500) throw serviceFailed(r.status, e.code, e.error, e.retryAfterS);
+    if (serviceNotice.value) serviceNotice.value = null; // the service answers as itself again
     if (r.status === 401 && profile.value?.mode === 'drive') {
       // Google access tokens live one hour: offer the one-tap reconnect instead of a dead end.
       needsReconnect.value = true;
@@ -118,6 +159,7 @@ async function request<T>(method: string, path: string, body?: unknown, raw?: Ra
     }
     throw new ApiError(r.status, e.code ?? `http_${r.status}`, e.error ?? `Request failed (${r.status})`);
   }
+  if (serviceNotice.value) serviceNotice.value = null;
   return json as T;
 }
 
@@ -140,19 +182,20 @@ async function requestBlob(path: string): Promise<Blob> {
   if (!base) throw new ApiError(0, 'unconfigured', 'Live services are not configured for this build (VITE_CONTROL_URL)');
   let r: Response;
   try {
-    r = await fetch(`${base}${path}`, { headers: authHeaders() });
+    r = await fetchWithTimeout(`${base}${path}`, { headers: authHeaders() }, UPLOAD_TIMEOUT_MS);
   } catch {
     controlStatus.value = 'offline';
-    throw new ApiError(0, 'offline', 'Cannot reach the SingersVoice service — check your connection');
+    throw new ApiError(0, 'offline', NO_ANSWER);
   }
   if (controlStatus.value !== 'online') controlStatus.value = 'online';
   if (!r.ok) {
-    let e: { error?: string; code?: string } = {};
+    let e: { error?: string; code?: string; retryAfterS?: number } = {};
     try {
-      e = JSON.parse(await r.text()) as { error?: string; code?: string };
+      e = JSON.parse(await r.text()) as { error?: string; code?: string; retryAfterS?: number };
     } catch {
       /* not JSON */
     }
+    if (r.status >= 500) throw serviceFailed(r.status, e.code, e.error, e.retryAfterS);
     if (r.status === 401 && profile.value?.mode === 'drive') {
       needsReconnect.value = true;
       offerReconnect();
@@ -183,11 +226,17 @@ export const serviceUrl = (path: string): string => `${controlUrl.value}${path}`
 export async function checkControl(): Promise<ControlStatus> {
   if (!controlUrl.value) return (controlStatus.value = 'unconfigured');
   try {
-    const r = await fetch(`${controlUrl.value}/health`);
+    const r = await fetchWithTimeout(`${controlUrl.value}/health`, {}, 10_000);
     if (!r.ok) throw new Error('bad status');
-    const j = (await r.json()) as { version?: string };
+    const j = (await r.json()) as { version?: string; storage?: { writes?: string; note?: string } };
     controlVersion.value = j.version ?? '';
     controlStatus.value = 'online';
+    // The service is up but cannot save (its storage allowance spent): said once, on every screen, with the time it comes back.
+    if (j.storage?.writes === 'failing' && /rows written|rows read/i.test(j.storage.note ?? '')) {
+      const d = new Date();
+      const until = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+      serviceNotice.value = { kind: 'storage_limit', message: `The SingersVoice service cannot save anything more today — its daily storage allowance is spent. It starts over at 00:00 UTC (${new Date(until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} your time). Nothing already saved is lost.`, until };
+    } else if (serviceNotice.value?.kind === 'storage_limit') serviceNotice.value = null;
   } catch {
     controlStatus.value = 'offline';
   }
@@ -200,7 +249,7 @@ export async function syncClock(samples = 5): Promise<{ offsetMs: number; rttMs:
   for (let i = 0; i < samples; i++) {
     const sentAt = Date.now();
     try {
-      const r = await fetch(`${controlUrl.value}/time`, { cache: 'no-store' });
+      const r = await fetchWithTimeout(`${controlUrl.value}/time`, { cache: 'no-store' }, 8000);
       const j = (await r.json()) as { serverEpochMs: number };
       out.push(clockOffsetMs(sentAt, j.serverEpochMs, Date.now()));
     } catch {

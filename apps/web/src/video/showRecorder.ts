@@ -141,6 +141,8 @@ export class ShowRecorder {
   private audio: { ctx: AudioContext; dest: MediaStreamAudioDestinationNode; bus: MixBus; localTrack: DelayNode; localVocal: DelayNode; taps: { node: AudioNode; to: AudioNode }[] } | null = null;
   /** The host's device: the mix goes out to the audience in one-second batches through this (null elsewhere). */
   broadcast: ((batch: MixBatch) => Promise<void>) | null = null;
+  /** Whether anybody is listening to the mix right now (the service's word): no listener, no encoding, nothing sent. */
+  broadcastWanted: (() => boolean) | null = null;
   private broadcaster: MixBroadcaster | null = null;
   /** Batches sent to the audience so far in this song. */
   get broadcastSent(): number {
@@ -640,7 +642,7 @@ export class ShowRecorder {
     // The audience hears this very mix: the host's device sends it out a second at a time (WebCodecs/Opus).
     if (this.broadcast) {
       const send = this.broadcast;
-      this.broadcaster = new MixBroadcaster(ctx, send, (t) => engine.player?.positionAt(t - this.lagMs / 1000) ?? 0);
+      this.broadcaster = new MixBroadcaster(ctx, send, (t) => engine.player?.positionAt(t - this.lagMs / 1000) ?? 0, this.broadcastWanted ?? (() => true));
       this.broadcaster.start(bus.output);
     }
   }

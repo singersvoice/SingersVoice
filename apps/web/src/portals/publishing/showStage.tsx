@@ -94,7 +94,7 @@ export function useShowFeed(session: MeetSession, meet: Meet, you: Participant, 
     mesh.onMessage = (_from, m) => {
       if (m.type === 'changed') session.poke();
     };
-    session.onSignal = () => mesh.pollNow(); // the service says a signal waits: fetched now, not at the next poll
+    session.onSignal = (sig) => (sig ? void mesh.take(sig) : mesh.pollNow()); // the stream hands the signal itself over; a bare word means poll now
     void mesh.start();
     session.onLeave = () => mesh.close(); // goodbyes before the session leaves
     const w = window as unknown as { __svShowMeshes?: PerformerMesh[] }; // support / e2e hooks

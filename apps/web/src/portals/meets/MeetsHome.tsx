@@ -9,7 +9,8 @@ import { BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { IcChat, IcPlus, IcStop, IcTrash, IcUsers } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Sheet, Spinner, Switch } from '../../components/ui.tsx';
-import { api, ApiError, checkControl, controlConfigured, controlStatus, refreshAccount } from '../../lib/api.ts';
+import { api, ApiError, checkControl, controlConfigured, refreshAccount } from '../../lib/api.ts';
+import { ServiceBanner } from '../../components/ServiceBanner.tsx';
 import { canPublish, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, searchCatalog } from '../../lib/catalog.ts';
 import { go, href } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
@@ -157,7 +158,7 @@ export function MeetsHome() {
             Live meets need the SingersVoice service (SVT DB). This build has no <span class="kbd">VITE_CONTROL_URL</span> yet — deploy <span class="kbd">services/control</span> (see docs/DEPLOY_CONTROL.md) and redeploy the web app.
           </div>
         )}
-        {configured && controlStatus.value === 'offline' && <div class="callout danger">The SingersVoice service is unreachable right now — retrying in the background.</div>}
+        {configured && <ServiceBanner what="Live meets" />}
 
         <section class="card stack">
           <h2>

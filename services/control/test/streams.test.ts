@@ -7,11 +7,11 @@ describe('stream caps', () => {
   it('a participant keeps at most a few event streams; the oldest is closed for a new one', () => {
     const ev = new MeetEvents();
     const ended: number[] = [];
-    const offs = Array.from({ length: STREAMS_PER_PARTICIPANT + 2 }, (_, i) => ev.subscribe('meet-1', 'p-1', () => undefined, () => ended.push(i)));
+    const offs = Array.from({ length: STREAMS_PER_PARTICIPANT + 2 }, (_, i) => ev.subscribe('meet-1', 'p-1', false, () => undefined, () => ended.push(i)));
     expect(ended).toEqual([0, 1]);
     expect(ev.listeners('meet-1')).toBe(STREAMS_PER_PARTICIPANT);
     // Another participant's streams are their own.
-    ev.subscribe('meet-1', 'p-2', () => undefined, () => ended.push(99));
+    ev.subscribe('meet-1', 'p-2', false, () => undefined, () => ended.push(99));
     expect(ended).toEqual([0, 1]);
     for (const off of offs) off();
   });

@@ -117,8 +117,12 @@ try {
   const leftChip = (await bob.page.locator('[data-video-left]').innerText()).trim();
   check(/video · (10 h 0 m|9 h 5\d m) left this month/.test(leftChip), `his seat gets the picture on the next heartbeat, the chip the hours left (${leftChip})`);
   await bob.page.locator('.stagestrip[data-onstage="1"] .showpic video, .stagestrip[data-onstage="1"] canvas').first().waitFor({ timeout: 20000 }).catch(() => undefined);
-  await wait(9000); // on stage with the picture on: the seconds count on the service, heartbeat by heartbeat (every 4 s in a lobby with the push stream open)
-  const usedOnStage = (await asUser('bob', 'GET', '/me')).json?.user?.entitlement?.videoUsedSeconds ?? 0;
+  // On stage with the picture on: the seconds count on the service, heartbeat by heartbeat (every 30 s with the push stream open — presence is the stream itself).
+  let usedOnStage = 0;
+  for (let i = 0; i < 45 && usedOnStage < 2; i++) {
+    await wait(1000);
+    usedOnStage = (await asUser('bob', 'GET', '/me')).json?.user?.entitlement?.videoUsedSeconds ?? 0;
+  }
   check(usedOnStage >= 2 && usedOnStage < 120, `the service counts his time on stage with the picture on (${usedOnStage} s so far)`);
   check((await asUser('alice', 'PUT', `/admin/users/${bobId0}/video-usage`, { seconds: 36000 })).status === 200, "the admin sets his month's hours to the limit (what the stage clock would reach)");
   await bob.page.locator('[data-audio-only][data-video-note="hours"]').waitFor({ timeout: 20000 });

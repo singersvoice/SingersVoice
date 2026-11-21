@@ -16,7 +16,7 @@ import { IcHeadphones, IcUsers } from '../../components/icons.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
 import { BrandWatermark, Logo } from '../../components/Shell.tsx';
 import { Spinner } from '../../components/ui.tsx';
-import { api, controlConfigured, serverNow, syncClock } from '../../lib/api.ts';
+import { api, controlConfigured, serverNow, serviceUrl, syncClock } from '../../lib/api.ts';
 import { asset } from '../../lib/nav.ts';
 
 export function Watch(props: { id: string }) {
@@ -56,7 +56,12 @@ export function Watch(props: { id: string }) {
     if (!listen || showHasSound || !mixPlaySupported()) return;
     const e = getEngine();
     void e.resume();
-    const mp = new MixPlayer(e.ctx, e.master, async (since) => api.get('GET /watch/:id/mix', `/watch/${encodeURIComponent(props.id)}/mix?since=${since}`));
+    const mp = new MixPlayer(
+      e.ctx,
+      e.master,
+      async (since) => api.get('GET /watch/:id/mix', `/watch/${encodeURIComponent(props.id)}/mix?since=${since}`),
+      (since) => serviceUrl(`/watch/${encodeURIComponent(props.id)}/mix/stream?since=${since}`),
+    );
     mixRef.current = mp;
     mp.start();
     const t = setInterval(() => setMix({ ...mp.state.value }), 500);

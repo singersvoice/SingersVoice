@@ -1,18 +1,23 @@
 /**
- * Client-side meet session: join, the push stream, poll (heartbeat), actions.
+ * Client-side meet session: join, the push stream, the heartbeat, actions.
  *
- * The service pushes: one event stream per device (`GET /meets/:id/events`, SSE) says 'changed' the moment
- * anything about the meet changed — on any device — and the session fetches the snapshot at once (`poke()`);
- * 'signal' says a WebRTC signal waits, and the mesh polls it now (`onSignal`). The heartbeat polls stay as the
- * safety net and the clock report, at a relaxed pace while the stream is open: 4 s while the room is forming or
- * counting down, 3 s on stage and in the show view while live, 4 s in the audience while live, 8 s otherwise.
- * Without the stream (a browser without EventSource, a proxy that will not stream) the polls run at the old
- * pace: 2 s / 1.5 s / 2 s / 5 s. A peer's word over the mesh that something changed (`onActed` fires after every
+ * The service pushes: one event stream per device (`GET /meets/:id/events`, SSE) hands this device the room
+ * itself the moment anything about the meet changed — on any device — as a `room` event (the meet, who is in it,
+ * the saved shows), each chat line as a `chat` event, and each WebRTC signal addressed to this device as a
+ * `signal` event (the mesh takes it straight from here). With the stream open the session asks the service for
+ * nothing between changes: the heartbeat runs every 30 s as presence's safety net and the clock report (the open
+ * stream itself is presence to the service). Without the stream (a browser without EventSource, a proxy that
+ * will not stream) the heartbeat polls the state: 3 s while the room is forming or counting down, 2 s on stage
+ * while live, 5 s otherwise. A peer's word over the mesh that something changed (`onActed` fires after every
  * action of this device, so the room can tell the others) fetches the state at once as well.
+ *
+ * Failures are told apart (lib/api.ts): no answer at all, a service that answered with a failure, a service
+ * whose storage allowance is spent. The heartbeat backs off on failures (with jitter, never a hammer) and the
+ * room shows the real reason; the stream, watched for silence, is opened again when it goes quiet.
  */
 import { signal } from '@preact/signals';
-import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type MixBatch, type Participant, type RegisterPerformanceRequest, type SongPick, type StagePolicy } from '@singersvoice/protocol';
-import { api, ApiError, clock, controlUrl, serverNow, syncClock } from '../../lib/api.ts';
+import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type MixBatch, type Participant, type RegisterPerformanceRequest, type RoomUpdate, type SongPick, type StagePolicy } from '@singersvoice/protocol';
+import { api, ApiError, clock, controlUrl, serverNow, serviceUrl, syncClock } from '../../lib/api.ts';
 
 interface Pace {
   forming: number;
@@ -21,12 +26,17 @@ interface Pace {
   audienceLive: number;
   settled: number;
 }
-/** The polls alone (no push stream). */
-const POLL: Pace = { forming: 2000, onStage: 1500, audienceLive: 2000, settled: 5000 };
-/** The polls with the push stream open: the safety net and the clock report. */
-const POLL_PUSHED: Pace = { forming: 4000, onStage: 3000, audienceLive: 4000, settled: 8000 };
+/** The polls alone (no push stream): the state comes from them. */
+const POLL: Pace = { forming: 3000, onStage: 2000, audienceLive: 3000, settled: 5000 };
+/** With the push stream open: presence's safety net and the clock report, nothing else. */
+const POLL_PUSHED: Pace = { forming: 30_000, onStage: 30_000, audienceLive: 30_000, settled: 30_000 };
 /** A stream the service refused (or a browser that cannot keep one) is tried again this often. */
 const EVENTS_RETRY_MS = 15_000;
+/** The service pings the stream every 25 s; a stream silent this long is dead (a proxy, a sleeping phone) and is opened again. */
+const EVENTS_SILENT_MS = 70_000;
+/** A heartbeat that fails is tried again after this long at first, doubling each time, to this at most — with jitter. */
+const BACKOFF_MIN_MS = 2000;
+const BACKOFF_MAX_MS = 30_000;
 
 export class MeetSession {
   readonly snapshot = signal<MeetSnapshot | null>(null);
@@ -38,20 +48,26 @@ export class MeetSession {
   /** Set when the meet is over for this device for good (removed by the host, the meet ended or expired): the room shows why and offers the way out. */
   readonly over = signal<{ code: string; message: string } | null>(null);
   readonly joining = signal(false);
+  /** The link to the service as this session sees it: fine, no answer, a failure answered, or its storage spent (lib/api.ts tells them apart). */
+  readonly link = signal<'ok' | 'offline' | 'failing' | 'storage_limit'>('ok');
   resumeToken = '';
   private lastSeq = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
   private inFlight = false;
   private pokeAgain = false;
+  /** Heartbeats failed in a row (the backoff doubles with each). */
+  private failures = 0;
   /** After every action of this device went through (the snapshot is applied): the room tells its peers to fetch it now. */
   onActed: (() => void) | null = null;
-  /** The service says a WebRTC signal waits for this device: the mesh polls its signals now. */
-  onSignal: (() => void) | null = null;
+  /** The service says a WebRTC signal waits for this device (polled when the event carries none). */
+  onSignal: ((signal: MeetSignal | null) => void) | null = null;
   /** The push stream, while the device is in the meet. */
   private source: EventSource | null = null;
   private pushed = false;
   private lastOpenTry = 0;
+  private lastEventAt = 0;
+  private watchdog: ReturnType<typeof setInterval> | undefined;
   /** Whether the service pushes changes to this device right now (the mesh relaxes its own polling when it does). */
   get pushing(): boolean {
     return this.pushed;
@@ -94,11 +110,14 @@ export class MeetSession {
       }
       this.you.value = r.you;
       this.error.value = null;
+      this.link.value = 'ok';
+      this.failures = 0;
       await this.heartbeat();
       this.openEvents();
       this.schedule();
     } catch (e) {
       this.error.value = e instanceof ApiError ? e.message : String(e);
+      if (e instanceof ApiError) this.noteFailure(e);
       throw e;
     } finally {
       this.joining.value = false;
@@ -113,7 +132,10 @@ export class MeetSession {
     // Performers (and a publisher's show view) follow the host's transport cues, so they poll faster while live.
     const onStageLive = m?.state === 'live' && (this.you.value?.slot != null || this.you.value?.role === 'publisher');
     const pace = this.pushed ? POLL_PUSHED : POLL;
-    this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), forming ? pace.forming : onStageLive ? pace.onStage : m?.state === 'live' ? pace.audienceLive : pace.settled);
+    let wait = forming ? pace.forming : onStageLive ? pace.onStage : m?.state === 'live' ? pace.audienceLive : pace.settled;
+    // Failing: back off, doubling, with jitter — a service in trouble is not helped by a hammer.
+    if (this.failures > 0) wait = Math.max(wait, Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** (this.failures - 1)) * (0.8 + Math.random() * 0.4));
+    this.timer = setTimeout(() => void this.heartbeat().finally(() => this.schedule()), wait);
   }
 
   /**
@@ -132,18 +154,57 @@ export class MeetSession {
       return;
     }
     this.source = es;
+    this.lastEventAt = Date.now();
+    const alive = () => {
+      this.lastEventAt = Date.now();
+    };
     es.onopen = () => {
       if (this.source !== es) return;
+      alive();
       const first = !this.pushed;
       this.pushed = true;
-      this.poke(); // whatever happened while the stream was down
+      this.poke(); // whatever happened while the stream was down (and the heartbeat's own: the video hours, the clock)
       if (first) this.schedule();
     };
-    es.addEventListener('changed', () => {
-      if (this.source === es) this.poke();
+    es.addEventListener('ping', () => {
+      if (this.source === es) alive();
     });
-    es.addEventListener('signal', () => {
-      if (this.source === es) this.onSignal?.();
+    es.addEventListener('room', (ev) => {
+      if (this.source !== es) return;
+      alive();
+      try {
+        const data = JSON.parse(String((ev as MessageEvent).data)) as { room?: RoomUpdate };
+        if (data.room) this.applyRoom(data.room);
+      } catch {
+        this.poke();
+      }
+    });
+    es.addEventListener('changed', () => {
+      if (this.source !== es) return;
+      alive();
+      this.poke();
+    });
+    es.addEventListener('chat', (ev) => {
+      if (this.source !== es) return;
+      alive();
+      try {
+        const data = JSON.parse(String((ev as MessageEvent).data)) as { message?: ChatMessage };
+        if (data.message) this.takeChat([data.message]);
+      } catch {
+        /* a line the next heartbeat brings */
+      }
+    });
+    es.addEventListener('signal', (ev) => {
+      if (this.source !== es) return;
+      alive();
+      let sig: MeetSignal | null = null;
+      try {
+        sig = (JSON.parse(String((ev as MessageEvent).data)) as { signal?: MeetSignal }).signal ?? null;
+      } catch {
+        sig = null;
+      }
+      if (sig && sig.seq > this.lastSignalSeq) this.lastSignalSeq = sig.seq;
+      this.onSignal?.(sig);
     });
     es.onerror = () => {
       if (this.source !== es) return;
@@ -154,12 +215,20 @@ export class MeetSession {
       }
       if (es.readyState === EventSource.CLOSED) this.source = null;
     };
+    // A stream that stopped speaking (no ping for over a minute: a proxy that dropped it quietly, a phone back from sleep) is made again.
+    clearInterval(this.watchdog);
+    this.watchdog = setInterval(() => {
+      if (this.source !== es || this.stopped) return;
+      if (Date.now() - this.lastEventAt > EVENTS_SILENT_MS) this.openEvents();
+    }, 10_000);
   }
 
   private closeEvents(): void {
     const es = this.source;
     this.source = null;
     this.pushed = false;
+    clearInterval(this.watchdog);
+    this.watchdog = undefined;
     es?.close();
   }
 
@@ -174,18 +243,46 @@ export class MeetSession {
     void this.heartbeat().finally(() => this.schedule());
   }
 
+  private takeChat(lines: ChatMessage[]): void {
+    if (!lines.length) return;
+    const known = new Set(this.chat.value.map((c) => c.seq));
+    const fresh = lines.filter((c) => !known.has(c.seq));
+    if (!fresh.length) return;
+    this.chat.value = [...this.chat.value, ...fresh].sort((a, b) => a.seq - b.seq).slice(-200);
+    this.lastSeq = Math.max(this.lastSeq, ...fresh.map((c) => c.seq));
+  }
+
   private apply(snap: MeetSnapshot): void {
     this.snapshot.value = snap;
     if (snap.you) this.you.value = snap.you;
     if (snap.yourVideo) this.yourVideo.value = snap.yourVideo;
-    if (snap.chat.length) {
-      const known = new Set(this.chat.value.map((c) => c.seq));
-      const fresh = snap.chat.filter((c) => !known.has(c.seq));
-      if (fresh.length) {
-        this.chat.value = [...this.chat.value, ...fresh].sort((a, b) => a.seq - b.seq).slice(-200);
-        this.lastSeq = Math.max(this.lastSeq, ...fresh.map((c) => c.seq));
+    this.takeChat(snap.chat);
+  }
+
+  /**
+   * The room as the stream handed it: the state of everyone, applied over what this device had. What is this
+   * device's own comes from its heartbeat (the chat position, the video hours) — and when the room no longer
+   * names this device where it was (taken off the stage by the host, say), the heartbeat is asked now.
+   */
+  private applyRoom(room: RoomUpdate): void {
+    const prev = this.snapshot.value;
+    const me = this.you.value;
+    const named = me ? room.participants.find((p) => p.participantId === me.participantId) : undefined;
+    this.snapshot.value = { ...(prev ?? { chat: [] }), ...room, chat: prev?.chat ?? [], ...(named ? { you: named } : prev?.you ? { you: prev.you } : {}) };
+    if (named) {
+      const mediaChanged = me !== null && named.media !== me.media;
+      this.you.value = named;
+      if (mediaChanged) {
+        this.yourVideo.value = null; // the picture permission moved (a plan, the hours): the hours and the reason are the heartbeat's to say, now
+        this.poke();
       }
-    }
+    } else if (me && me.slot !== null && !room.meet.stage.some((s) => s.participantId === me.participantId)) this.poke(); // off the stage: my own record, now
+    if (!meetIsOpen(room.meet)) this.poke(); // the end: the heartbeat answers with why (ended, expired) and stops this session
+  }
+
+  /** The failure, told apart, for the room to show the real reason. */
+  private noteFailure(e: ApiError): void {
+    this.link.value = e.code === 'offline' ? 'offline' : e.code === 'storage_limit' ? 'storage_limit' : e.status >= 500 ? 'failing' : this.link.value;
   }
 
   async heartbeat(): Promise<void> {
@@ -200,6 +297,8 @@ export class MeetSession {
       });
       this.apply(snap);
       this.error.value = null;
+      this.link.value = 'ok';
+      this.failures = 0;
       if (!this.source && !this.stopped && Date.now() - this.lastOpenTry > EVENTS_RETRY_MS) this.openEvents();
     } catch (e) {
       if (e instanceof ApiError && e.code === 'not_participant' && this.lastRole !== 'publisher' && !this.rejoining) {
@@ -215,8 +314,11 @@ export class MeetSession {
         this.error.value = e.message;
         this.over.value = { code: e.code, message: e.message };
         this.stop();
-      } else if (e instanceof ApiError && e.code === 'offline') {
-        this.error.value = 'Connection lost — retrying';
+      } else if (e instanceof ApiError) {
+        // No answer, a failure answered, the storage spent: said as it is, and tried again with backoff.
+        this.failures++;
+        this.noteFailure(e);
+        this.error.value = e.message;
       }
     } finally {
       this.inFlight = false;
@@ -273,7 +375,7 @@ export class MeetSession {
   setStagePolicy(stagePolicy: StagePolicy): Promise<void> {
     return this.act('policy', { stagePolicy });
   }
-  /** The stage background — the host or any singer on stage, whenever; every device and the show follow at their next poll. */
+  /** The stage background — the host or any singer on stage, whenever; every device and the show follow at once. */
   setBackground(backgroundId: string): Promise<void> {
     return this.act('background', { backgroundId });
   }
@@ -309,9 +411,17 @@ export class MeetSession {
   async sendMix(batch: MixBatch): Promise<void> {
     await api.post('POST /meets/:id/mix', `/meets/${encodeURIComponent(this.meetId)}/mix`, { ...batch, resumeToken: this.resumeToken });
   }
+  /** Somebody is hearing the mix right now (the service says so with every room it hands over): the host's device encodes and sends it only then. */
+  mixWanted(): boolean {
+    return this.snapshot.value?.mixListening === true;
+  }
   /** The audience fetches what came after `since` — through the public watch route, which the edge caches: a hundred listeners at the live edge ask the same question and the service answers it once. */
   fetchMix(since: number): Promise<{ batches: MixBatch[]; latest: number }> {
     return api.get('GET /watch/:id/mix', `/watch/${encodeURIComponent(this.meetId)}/mix?since=${since}`);
+  }
+  /** The mix as a stream (one request for the whole listen); the player falls back to `fetchMix` where streams fail. */
+  mixStreamUrl(since: number): string {
+    return serviceUrl(`/watch/${encodeURIComponent(this.meetId)}/mix/stream?since=${since}`);
   }
 
   // ---- WebRTC signalling relay (performer ↔ performer) ----
@@ -328,7 +438,7 @@ export class MeetSession {
     const r = await api.post('POST /meets/:id/signal', `/meets/${encodeURIComponent(this.meetId)}/signal`, { resumeToken: this.resumeToken, to, type, data: typeof data === 'string' ? data : JSON.stringify(data) });
     return !r.gone;
   }
-  /** Signals addressed to me that arrived since the last poll. */
+  /** Signals addressed to me that arrived since the last one seen (the stream hands most of them over; this is the safety net). */
   async pollSignals(): Promise<MeetSignal[]> {
     if (!this.resumeToken || this.closed) return [];
     const r = await api.post('POST /meets/:id/signals', `/meets/${encodeURIComponent(this.meetId)}/signals`, { resumeToken: this.resumeToken, since: this.lastSignalSeq });
@@ -337,7 +447,7 @@ export class MeetSession {
   }
   async say(text: string): Promise<void> {
     const r = await api.post('POST /meets/:id/chat', `/meets/${encodeURIComponent(this.meetId)}/chat`, { resumeToken: this.resumeToken, text });
-    this.apply({ ...(this.snapshot.value as MeetSnapshot), chat: [r.message] });
+    this.takeChat([r.message]);
   }
   /** The host registers the film of the meet (one file, its chapter marks on it) with the meet; the answer names who else to share it with. */
   async registerPerformance(body: Omit<RegisterPerformanceRequest, 'resumeToken'>): Promise<{ performance: MeetPerformance; shareWith: string[] }> {

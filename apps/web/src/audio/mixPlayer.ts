@@ -1,6 +1,8 @@
 /**
- * Hearing the stage: an audience device (or the public watch page) fetches the host's one-second
- * mix batches, decodes the Opus packets with WebCodecs and hands the sound to one AudioWorklet
+ * Hearing the stage: an audience device (or the public watch page) takes the host's one-second mix
+ * batches — from the service's stream (one request for the whole listen, each batch the moment it is
+ * sent), or by polling a second at a time where a stream cannot be kept — decodes the Opus packets
+ * with WebCodecs and hands the sound to one AudioWorklet
  * (`sv-mix-out`) that plays it as a single continuous stream on the audio clock — resampled in
  * one piece to whatever rate this device runs at, never a seam between packets, a couple of seconds
  * behind the stage (a cushion against a late batch; silence, not a stutter, if it ever runs dry) —
@@ -22,6 +24,8 @@ export const mixPlaySupported = (): boolean => typeof AudioDecoder !== 'undefine
  */
 const JITTER_S = 3.0;
 const POLL_MS = 1000;
+/** A stream that failed is tried again this often (the polls carry the sound meanwhile). */
+const STREAM_RETRY_MS = 20_000;
 /** No batch for this long → the host is not sending (never was, or stopped). */
 const SILENT_MS = 6000;
 /** The worklet module, loaded on the context if the engine has not loaded it already. */
@@ -67,10 +71,18 @@ export class MixPlayer {
   /** The player's output (support / e2e: a tap here hears exactly what the audience hears). */
   readonly out: GainNode;
 
+  /** The stream, while one is open; the polls run when there is none. */
+  private es: EventSource | null = null;
+  private streamTriedAt = 0;
+  /** Batches taken from the stream rather than a poll (for the UI / e2e). */
+  streamed = 0;
+
   constructor(
     readonly ctx: AudioContext,
     destination: AudioNode,
     private readonly fetchSince: (since: number) => Promise<{ batches: MixBatch[]; latest: number }>,
+    /** The stream's address for a position (SSE, `batch` events); without one the player polls alone. */
+    private readonly streamUrl: ((since: number) => string) | null = null,
   ) {
     this.out = ctx.createGain();
     this.out.connect(destination);
@@ -88,13 +100,59 @@ export class MixPlayer {
     this.pendingMarks = [];
     this.fed = 0;
     this.decoded = 0;
+    this.streamed = 0;
     this.state.value = { hearing: false, seq: 0, behindS: 0, silent: false };
+    this.openStream();
     void this.poll();
+  }
+
+  /** Whether the stream carries the sound right now (the polls then only keep the state fresh). */
+  get streaming(): boolean {
+    return this.es !== null && this.es.readyState === EventSource.OPEN;
+  }
+
+  private openStream(): void {
+    if (!this.streamUrl || typeof EventSource !== 'function' || this.es) return;
+    this.streamTriedAt = Date.now();
+    let es: EventSource;
+    try {
+      es = new EventSource(this.streamUrl(this.since));
+    } catch {
+      return;
+    }
+    this.es = es;
+    es.addEventListener('batch', (ev) => {
+      if (this.es !== es || !this.running) return;
+      try {
+        const b = JSON.parse(String((ev as MessageEvent).data)) as MixBatch;
+        if (b.seq <= this.since) return; // a poll had it already
+        this.play(b);
+        this.since = b.seq;
+        this.lastBatchAt = Date.now();
+        this.streamed++;
+      } catch {
+        /* a batch the next one makes up for */
+      }
+    });
+    es.addEventListener('end', () => {
+      if (this.es === es) this.closeStream();
+    });
+    es.onerror = () => {
+      // The browser reconnects by itself from where it was; closed for good: the polls carry on, the stream is tried again later.
+      if (this.es === es && es.readyState === EventSource.CLOSED) this.closeStream();
+    };
+  }
+
+  private closeStream(): void {
+    const es = this.es;
+    this.es = null;
+    es?.close();
   }
 
   stop(): void {
     this.running = false;
     clearTimeout(this.timer);
+    this.closeStream();
     const dec = this.decoder;
     this.decoder = null;
     if (dec && dec.state !== 'closed') dec.close();
@@ -131,18 +189,24 @@ export class MixPlayer {
 
   private async poll(): Promise<void> {
     if (!this.running) return;
-    try {
-      const r = await this.fetchSince(this.since);
-      if (!this.running) return;
-      // A late joiner starts from the newest few seconds, not from the beginning of the window.
-      if (this.since === 0 && r.batches.length > 3) r.batches = r.batches.slice(-3);
-      for (const b of r.batches) this.play(b);
-      if (r.batches.length) {
-        this.since = r.batches[r.batches.length - 1]!.seq;
-        this.lastBatchAt = Date.now();
-      } else if (r.latest > this.since) this.since = r.latest - 1; // we fell behind the window: skip ahead
-    } catch {
-      /* try again next second */
+    // The stream carries the sound; the poll is the fallback — and the way back to a stream that was lost.
+    if (!this.streaming) {
+      if (!this.es && this.streamUrl && Date.now() - this.streamTriedAt > STREAM_RETRY_MS) this.openStream();
+      try {
+        const r = await this.fetchSince(this.since);
+        if (!this.running) return;
+        // A late joiner starts from the newest few seconds, not from the beginning of the window.
+        if (this.since === 0 && r.batches.length > 3) r.batches = r.batches.slice(-3);
+        for (const b of r.batches) {
+          if (b.seq <= this.since) continue;
+          this.play(b);
+          this.since = b.seq;
+          this.lastBatchAt = Date.now();
+        }
+        if (!r.batches.length && r.latest > this.since) this.since = r.latest - 1; // we fell behind the window: skip ahead
+      } catch {
+        /* try again next second */
+      }
     }
     const quiet = this.lastBatchAt ? Date.now() - this.lastBatchAt : Date.now() - this.startedAt;
     const hearing = this.lastBatchAt > 0 && quiet < SILENT_MS;

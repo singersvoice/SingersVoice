@@ -41,6 +41,7 @@ import {
   type HeartbeatRequest,
   type IceServer,
   type JoinMeetRequest,
+  type Meet,
   type MeetSnapshot,
   type Participant,
   type PublishJob,
@@ -118,7 +119,7 @@ import {
 } from '@singersvoice/protocol';
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
-import { MeetEvents } from './events.ts';
+import { MeetEvents, type RoomViews } from './events.ts';
 import { normalizeTvCode, TV_SIGNAL_MAX_BYTES, TvScreens, type TvSide } from './tv.ts';
 import { fbPostVideo, fbVideoUrl, igContainerStatus, igCreateReel, igPublish, metaAuthorizeUrl, metaConfigured, metaExchange, metaPages, pkce, randomToken, xAuthorizeUrl, xConfigured, xCreatePost, xExchange, xMe, xPostUrl, xRefresh, xRevoke, xUploadVideo, type MetaPage, type SocialConfig } from './social.ts';
 import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setBackground, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
@@ -204,6 +205,25 @@ function err(c: Context<Env>, status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 
 
 const userTouch = new Map<string, number>();
 
+/** What a SQLite-backed Durable Object says when the day's storage allowance is spent (free plan: rows written, rows read). */
+const STORAGE_LIMIT = /exceeded allowed rows (written|read)|rows (written|read).*(limit|exceeded)|storage.*(limit|quota).*exceeded/i;
+
+/** Seconds until the next 00:00 UTC, when a Durable Object's daily allowances start over. */
+export function secondsToUtcMidnight(now = Date.now()): number {
+  const d = new Date(now);
+  const midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+  return Math.max(60, Math.ceil((midnight - now) / 1000));
+}
+
+/** The storage budget, in the singer's terms: what cannot happen, until when, and that nothing saved is lost. */
+export function storageLimitNote(runtimeMessage: string, retryAfterS: number): string {
+  const h = Math.floor(retryAfterS / 3600);
+  const m = Math.ceil((retryAfterS % 3600) / 60);
+  const when = h > 0 ? `${h} h ${m} min` : `${m} min`;
+  const what = /read/i.test(runtimeMessage) && !/written/i.test(runtimeMessage) ? 'read anything more' : 'save anything more';
+  return `The SingersVoice service cannot ${what} today — its daily storage allowance is spent. It starts over at 00:00 UTC (in ${when}). Nothing already saved is lost.`;
+}
+
 const requestLog = typeof process !== 'undefined' && process.env?.SV_REQUEST_LOG === '1';
 
 /** A device's event stream is kept this long at most; the browser opens it again at once (and fetches the state as it does). */
@@ -225,22 +245,30 @@ const SOCIAL_CLIP_MAX_BYTES = 95 * 1024 * 1024;
 
 export function createApp(getDeps: (env: Record<string, unknown>) => Promise<AppDeps> | AppDeps): Hono<Env> {
   const app = new Hono<Env>();
-  /** Who listens to which meet (events.ts): told after every change, so every device fetches it at once. */
-  const events = new MeetEvents();
+  /** Who listens to which meet (events.ts): handed the room after every change, so no device has to fetch it. */
+  const events = new MeetEvents(roomViews);
   /** The TV screens and the handshake between a phone and its TV (tv.ts). */
   const tv = new TvScreens();
   const tvCreates = new Map<string, { n: number; at: number }>();
   /** Chat lines per participant in a short window (a flood is kept out; the host kicks a pest). */
   const chatRate = new Map<string, { n: number; at: number }>();
 
+  // The dependencies first (no I/O: the CORS answer needs the allowed origins), then CORS — before anything that can
+  // fail, so an error answer carries the headers too and the browser reads it instead of calling it "unreachable" —
+  // then the schema.
   app.use('*', async (c, next) => {
     const deps = await getDeps(c.env ?? {});
     c.set('deps', deps);
-    await deps.store.migrate();
-    // SV_REQUEST_LOG=1 (dev / CI diagnostics): one line per request with its duration.
-    const t0 = requestLog ? Date.now() : 0;
+    // A meet persisted closed (stopped, expired, however it got there): its signals go, its streams are handed the
+    // last word and closed — once, from one place, whichever route or sweep closed it.
+    if (!deps.store.onMeetClosed) {
+      deps.store.onMeetClosed = (meetId) => {
+        void deps.store.clearSignals(meetId);
+        events.changed(meetId);
+        void events.close(meetId);
+      };
+    }
     await next();
-    if (requestLog) console.log(`${new Date().toISOString().slice(11, 23)} ${c.req.method} ${new URL(c.req.url).pathname} ${c.res.status} ${Date.now() - t0}ms`);
   });
 
   app.use(
@@ -258,11 +286,21 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     }),
   );
 
+  app.use('*', async (c, next) => {
+    // /health and /time answer even when the schema cannot be set up (the storage budget spent): they say so.
+    if (c.req.path !== '/health' && c.req.path !== '/time') await c.get('deps').store.migrate();
+    // SV_REQUEST_LOG=1 (dev / CI diagnostics): one line per request with its duration.
+    const t0 = requestLog ? Date.now() : 0;
+    await next();
+    if (requestLog) console.log(`${new Date().toISOString().slice(11, 23)} ${c.req.method} ${new URL(c.req.url).pathname} ${c.res.status} ${Date.now() - t0}ms`);
+  });
+
   // ---------- public ----------
 
   app.get('/health', async (c) => {
     const d = c.get('deps');
-    return c.json({ ok: true as const, service: 'sv-control' as const, version: d.version, runtime: d.runtime, now: Date.now() });
+    await d.store.migrate().catch(() => undefined); // the storage's word below says what went wrong
+    return c.json({ ok: true as const, service: 'sv-control' as const, version: d.version, runtime: d.runtime, now: Date.now(), storage: d.store.health() });
   });
   app.get('/time', (c) => c.json({ serverEpochMs: Date.now() }));
 
@@ -275,14 +313,64 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const { meetId, title, hostName, trackTitle, catalogTrackId, state, backgroundId, stage, audienceCount, kickstartEpochMs, streamUrl, expiresAt } = meet;
     return c.json({ meet: { meetId, title, hostName, trackTitle, catalogTrackId, state, backgroundId, stage, audienceCount, kickstartEpochMs, streamUrl, expiresAt }, chat, serverEpochMs: Date.now() });
   });
-  // The stage mix, for the public watch page too (the host shares that link on purpose).
+  // The stage mix, for the public watch page too (the host shares that link on purpose). A listener polling
+  // (the fallback) or streaming (below) is what makes the host's device send the mix at all: the first one
+  // in and the last one out are told to the room at once.
   app.get('/watch/:id/mix', async (c) => {
     const { store } = c.get('deps');
     const meet = await store.getMeet(c.req.param('id'));
     if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
     const since = Math.max(0, Number(c.req.query('since')) || 0);
+    const before = store.mixListening(meet.meetId);
     const r = await store.listMix(meet.meetId, since);
+    if (!before && store.mixListening(meet.meetId)) events.changed(meet.meetId);
     return c.json({ ...r, serverEpochMs: Date.now() });
+  });
+  // The mix as a stream: one request for the whole listen, every batch the moment the host's device sends it.
+  app.get('/watch/:id/mix/stream', async (c) => {
+    const { store } = c.get('deps');
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    if (!meetIsOpen(meet)) return err(c, 410, 'meet_closed', 'This meet has ended');
+    const since = Math.max(0, Number(c.req.query('since')) || 0);
+    return streamSSE(c, async (stream) => {
+      let over = false;
+      let wake: (() => void) | null = null;
+      let writes: Promise<unknown> = Promise.resolve();
+      const send = (event: string, data: string) => {
+        writes = writes.then(() => stream.writeSSE({ event, data })).catch(() => undefined);
+        return writes;
+      };
+      const before = store.mixListening(meet.meetId);
+      const off = store.streamMix(meet.meetId, since, (b) => void send('batch', JSON.stringify(b)));
+      if (!off) {
+        await send('end', '');
+        return;
+      }
+      if (!before) events.changed(meet.meetId);
+      const stop = () => {
+        over = true;
+        wake?.();
+      };
+      stream.onAbort(stop);
+      c.req.raw.signal?.addEventListener('abort', () => stream.abort(), { once: true });
+      await send('hello', JSON.stringify({ serverEpochMs: Date.now() }));
+      const until = Date.now() + EVENTS_MAX_MS;
+      while (!over && !stream.aborted && Date.now() < until) {
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          setTimeout(resolve, EVENTS_PING_MS);
+        });
+        wake = null;
+        if (!over && !stream.aborted) {
+          if (!store.mixListening(meet.meetId) && !store.live.meets.has(meet.meetId)) break; // the meet closed
+          await send('ping', '');
+        }
+      }
+      off();
+      if (!store.mixListening(meet.meetId)) events.changed(meet.meetId);
+      await writes;
+    });
   });
 
   // The show itself, as the publisher's browser delivers it: an HLS playlist of the last few segments.
@@ -357,8 +445,15 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const last = userTouch.get(id.userId) ?? 0;
     let user: UserRecord | null = null;
     if (Date.now() - last > 5 * 60 * 1000) {
-      user = await deps.store.upsertUser({ userId: id.userId, email: id.email, name: id.name, picture: id.picture, ...(privilegedByEnv ? { privileged: true } : {}) });
-      userTouch.set(id.userId, Date.now());
+      // The account's row follows the sign-in (the name, the picture, when last seen) a few times an hour — and when
+      // that write cannot happen (the storage budget spent) the account as it stands is good enough to go on with.
+      try {
+        user = await deps.store.upsertUser({ userId: id.userId, email: id.email, name: id.name, picture: id.picture, ...(privilegedByEnv ? { privileged: true } : {}) });
+        userTouch.set(id.userId, Date.now());
+      } catch (e) {
+        user = await deps.store.getUser(id.userId);
+        if (!user) throw e;
+      }
     } else {
       user = await deps.store.getUser(id.userId);
     }
@@ -887,8 +982,48 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 
   // ---------- Live Meets ----------
 
-  async function snapshot(c: Context<Env>, meetId: string, you?: StoredParticipant, chatSince?: number): Promise<MeetSnapshot | null> {
-    const { store } = c.get('deps');
+  const publicOf = ({ resumeToken: _t, meetId: _m, videoTickAt: _v, ...p }: StoredParticipant): Participant => p;
+
+  /**
+   * The meet ends — by the host, or when it expires: the one way to its end, and the same whether asked once or
+   * ten times at once (a meet already closed is left as it is). Persisting it closed is what releases everything
+   * of it: the store's `onMeetClosed` clears the signals and hands every stream the last word, then closes them.
+   */
+  async function closeMeet(store: SqlStore, meet: Meet, now = Date.now()): Promise<boolean> {
+    if (!meetIsOpen(meet)) return false;
+    stop(meet, now);
+    await store.saveMeet(meet);
+    return true;
+  }
+
+  /**
+   * An account's standing changed under the admin's hand (a plan granted or revoked, a role, the month's hours): every
+   * seat of theirs in an open meet carries the picture permission as it stands now, and the rooms are told at once —
+   * not at the device's next heartbeat, half a minute away.
+   */
+  async function refreshUserInMeets(store: SqlStore, userId: string): Promise<void> {
+    userTouch.delete(userId);
+    const user = await store.getUser(userId);
+    if (!user) return;
+    const media = user.role === 'audio' ? 'audio' : mediaOfEntitlement(user.entitlement);
+    for (const [meetId, e] of store.live.meets) {
+      let changed = false;
+      for (const p of [...e.participants.values()]) {
+        if (p.userId !== userId || p.role === 'publisher' || p.media === media) continue;
+        const next = { ...p, media, videoTickAt: p.slot !== null && media === 'dual' ? new Date().toISOString() : undefined };
+        await store.saveParticipant(next);
+        changed = true;
+      }
+      if (changed) events.changed(meetId);
+    }
+  }
+
+  /**
+   * The meet as it stands this instant: time-driven state advanced (the count-in over, a cued pause landed, the
+   * idle expiry), the people still heard from, the slots of those who are not freed — written and told when
+   * that moved anything. Every snapshot and every room event starts here.
+   */
+  async function roomOf(store: SqlStore, meetId: string): Promise<{ meet: Meet; active: StoredParticipant[] } | null> {
     const meet = await store.getMeet(meetId);
     if (!meet) return null;
     ensureMeet(meet);
@@ -900,11 +1035,32 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       await store.saveMeet(meet);
       events.changed(meetId);
     }
-    const participants: Participant[] = (visibleParticipants(meet, rec.active, you && isHost(meet, you) ? Infinity : undefined) as StoredParticipant[]).map(({ resumeToken: _t, meetId: _m, ...p }) => p);
+    return { meet, active: rec.active as StoredParticipant[] };
+  }
+
+  async function snapshot(c: Context<Env>, meetId: string, you?: StoredParticipant, chatSince?: number): Promise<MeetSnapshot | null> {
+    const { store } = c.get('deps');
+    const room = await roomOf(store, meetId);
+    if (!room) return null;
+    const { meet, active } = room;
+    const participants = visibleParticipants(meet, active, you && isHost(meet, you) ? Infinity : undefined).map((p) => publicOf(p as StoredParticipant));
     const chat = chatSince !== undefined ? await store.chatSince(meetId, chatSince) : await store.chatTail(meetId, 50);
     const [recordings, performances] = await Promise.all([store.listRecordings(meetId), store.listPerformancesForMeet(meetId)]);
-    const youPublic: Participant | undefined = you ? (({ resumeToken: _t, meetId: _m, ...p }: StoredParticipant) => p)(you) : undefined;
-    return { meet, participants, chat, recordings, performances, serverEpochMs: Date.now(), ...(youPublic ? { you: youPublic } : {}) };
+    return { meet, participants, chat, recordings, performances, serverEpochMs: Date.now(), mixListening: store.mixListening(meetId), ...(you ? { you: publicOf(you) } : {}) };
+  }
+
+  /** The room for the event stream (events.ts): built once per change, the host's view and everyone else's. */
+  async function roomViews(meetId: string): Promise<RoomViews | null> {
+    const store = (await getDeps({})).store;
+    const room = await roomOf(store, meetId);
+    if (!room) return null;
+    const { meet, active } = room;
+    const [recordings, performances] = await Promise.all([store.listRecordings(meetId), store.listPerformancesForMeet(meetId)]);
+    const base = { meet, recordings, performances, serverEpochMs: Date.now(), mixListening: store.mixListening(meetId) };
+    return {
+      host: { ...base, participants: visibleParticipants(meet, active, Infinity).map((p) => publicOf(p as StoredParticipant)) },
+      public: { ...base, participants: visibleParticipants(meet, active).map((p) => publicOf(p as StoredParticipant)) },
+    };
   }
 
   async function participantFromBody(c: Context<Env>, meetId: string, token: string | undefined): Promise<StoredParticipant | null> {
@@ -950,13 +1106,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (meet.hostUserId !== c.get('user').userId) return err(c, 403, 'not_host', 'Only the host can end the meet');
     ensureMeet(meet);
     tick(meet);
-    if (meetIsOpen(meet)) {
-      stop(meet);
-      await store.saveMeet(meet);
-      await store.clearSignals(meet.meetId).catch(() => undefined);
-      events.changed(meet.meetId);
-      events.close(meet.meetId);
-    }
+    await closeMeet(store, meet);
     return c.json({ meet });
   });
 
@@ -1089,6 +1239,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       const off = events.subscribe(
         meet.meetId,
         p.participantId,
+        isHost(meet, p),
         (ev) => void send(ev.type, JSON.stringify(ev)),
         () => {
           over = true;
@@ -1102,13 +1253,18 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       c.req.raw.signal?.addEventListener('abort', () => stream.abort(), { once: true });
       await send('hello', JSON.stringify({ participantId: p.participantId, serverEpochMs: Date.now() }), 1500);
       const until = Date.now() + EVENTS_MAX_MS;
+      // The open stream is the device's presence: seen now, and at every ping, without a row written.
+      store.touchParticipant(meet.meetId, p.participantId);
       while (!over && !stream.aborted && Date.now() < until) {
         await new Promise<void>((resolve) => {
           wake = resolve;
           setTimeout(resolve, EVENTS_PING_MS);
         });
         wake = null;
-        if (!over && !stream.aborted) await send('ping', '');
+        if (!over && !stream.aborted) {
+          store.touchParticipant(meet.meetId, p.participantId);
+          await send('ping', '');
+        }
       }
       off();
       await writes;
@@ -1149,6 +1305,9 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     await store.saveParticipant(p);
     if (clockChanged || touchDue) await store.saveMeet(meet);
     const snap = (await snapshot(c, meet.meetId, p, body.chatSince))!;
+    // What the live layer owes the rows (the expiries, a broadcast's counters, video seconds), written when due —
+    // never in the way of the answer: a flush that fails (the day's budget spent) is tried at the next one.
+    store.flush().catch(() => undefined);
     const e = user.entitlement;
     const reason = e.video && user.role !== 'audio' ? '' : user.role === 'audio' ? 'role' : e.videoHours > 0 && (e.videoLeftSeconds ?? 1) <= 0 ? 'hours' : 'plan';
     return c.json({ ...snap, yourVideo: { leftSeconds: e.videoLeftSeconds, note: e.videoNote, reason } });
@@ -1445,7 +1604,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const saved = await store.addChat(meet.meetId, message);
     touch(meet);
     await store.saveMeet(meet);
-    events.changed(meet.meetId);
+    events.chat(meet.meetId, saved);
     return c.json({ message: saved }, 201);
   });
 
@@ -1473,11 +1632,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const p = await participantFromBody(c, meet.meetId, body.resumeToken);
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
     if (!isHost(meet, p)) return err(c, 403, 'not_host', 'Only the host can end the meet');
-    stop(meet);
-    await store.saveMeet(meet);
-    await store.clearSignals(meet.meetId).catch(() => undefined);
-    events.changed(meet.meetId);
-    events.close(meet.meetId);
+    await closeMeet(store, meet);
     return c.json((await snapshot(c, meet.meetId, p))!);
   });
 
@@ -1531,7 +1686,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     // They left (a publisher view closed, a singer gone): nothing to deliver, nothing to shout about.
     if (!(await store.getParticipant(meet.meetId, to))) return c.json({ seq: 0, gone: true });
     const sig = await store.addSignal(meet.meetId, { meetId: meet.meetId, from: p.participantId, to, type, data, sentAt: new Date().toISOString() });
-    events.signal(meet.meetId, to);
+    events.signal(meet.meetId, sig);
     return c.json({ seq: sig.seq });
   });
 
@@ -2390,6 +2545,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     await store.setSubscription({ userId: target.userId, plan, planUntil: plan === 'free' ? null : until, startedAt: plan === 'free' ? null : new Date().toISOString(), status: 'active', source: 'grant' });
     await roleForPlan(deps, target.userId, plan);
     if (plan !== 'free') await recordGrant(deps, c.get('user'), target.userId, `${def.title} granted on the Admin page`);
+    await refreshUserInMeets(store, target.userId);
     return c.json({ user: (await store.getUser(target.userId))! });
   });
 
@@ -2587,6 +2743,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         await recordGrant(deps, c.get('user'), id, sub.action === 'renew' ? `${def.title} renewed on the Admin page` : sub.action === 'set' ? `${def.title}: dates set on the Admin page` : `${def.title} granted on the Admin page`);
       }
     }
+    await refreshUserInMeets(store, id);
     return c.json({ user: (await store.getUser(id))! });
   });
 
@@ -2639,6 +2796,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const target = await store.getUser(c.req.param('id'));
     if (!target) return err(c, 404, 'no_user', 'No such account');
     await store.setVideoSeconds(target.userId, periodKey(), seconds);
+    await refreshUserInMeets(store, target.userId);
     return c.json({ user: (await store.getUser(target.userId))! });
   });
 
@@ -2916,7 +3074,16 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   app.notFound((c) => c.json({ error: 'Not found', code: 'not_found' }, 404));
   app.onError((e, c) => {
     console.error('sv-control error', e);
-    return c.json({ error: e.message || 'Internal error', code: 'internal' }, 500);
+    const message = e instanceof Error ? e.message : String(e);
+    // The answer carries the CORS headers whatever failed, and wherever it failed: a browser reads a 5xx with them
+    // and tells the singer what is wrong; without them it can only say "unreachable".
+    const origin = c.req.header('origin') ?? '';
+    const cors: Record<string, string> = origin ? { 'Access-Control-Allow-Origin': c.req.path.startsWith('/watch/') ? '*' : originAllowed(origin, c.get('deps')?.allowedOrigins ?? []) ? origin : DEFAULT_ORIGINS[0]!, Vary: 'Origin' } : {};
+    if (STORAGE_LIMIT.test(message)) {
+      const retryAfterS = secondsToUtcMidnight();
+      return c.json({ error: storageLimitNote(message, retryAfterS), code: 'storage_limit', retryAfterS }, 503, { ...cors, 'Retry-After': String(retryAfterS) });
+    }
+    return c.json({ error: message || 'Internal error', code: 'internal' }, 500, cors);
   });
 
   return app;
@@ -2928,10 +3095,10 @@ export async function sweepMeets(store: SqlStore): Promise<number> {
   for (const m of await store.listOpenMeets()) {
     ensureMeet(m);
     if (tick(m)) {
-      await store.saveMeet(m);
-      if (!meetIsOpen(m)) await store.clearSignals(m.meetId).catch(() => undefined);
+      await store.saveMeet(m); // a meet that expired is closed by this write (the store's onMeetClosed does the rest)
       n++;
     }
   }
+  await store.flush().catch(() => undefined);
   return n;
 }

@@ -1,6 +1,7 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
 import { accessOf, cleanOffer, cleanPromo, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type BlockedUser, type Bookmark, type PlanOffer, type PlanOfferInput, type PromoCode, type PromoCodeInput, type SocialNetwork, type SocialPost, type SocialPostStatus, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
+import { clone, jobDurableKey, LiveRooms, liveWorthy, meetDurableKey, participantDurableKey, SOFT_FLUSH_MS, type LiveMeet } from './live.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
 /** One account's subscription row: the plan, its dates and standing, and the Stripe ids behind it (none for a grant). */
@@ -197,17 +198,73 @@ const cleanMeta = (m: { song?: string; artists?: string; movie?: string; year?: 
 });
 const searchText = (m: { song: string; artists: string; movie: string; year: number | null; language: string; source: string; ownerName: string }) => `${m.song} ${songKey(m.song)} ${m.artists} ${m.movie} ${m.year ?? ''} ${m.language} ${m.source} ${m.ownerName}`.toLowerCase();
 
+/** A migration that failed (the storage budget spent, a cold start under load) is tried again after this long, not on every request. */
+const MIGRATE_RETRY_MS = 10_000;
+/** A write that failed this recently means the service cannot save right now (/health says so). */
+const WRITE_FAIL_RECENT_MS = 60_000;
+
+/** What /health says of the storage: the counters, and whether writes go through. */
+export interface StorageHealth {
+  rowsRead: number;
+  rowsWritten: number;
+  statements: number;
+  since: string;
+  writes: 'ok' | 'failing';
+  note: string;
+  live: ReturnType<LiveRooms['summary']>;
+}
+
 export class SqlStore {
   private ready: Promise<void> | null = null;
+  private readyFailedAt = 0;
+  private readyError: unknown = null;
   private db: Driver;
+  /** What runs in memory for every open meet and broadcast (live.ts). */
+  readonly live = new LiveRooms();
+  /** Set by the app: a meet persisted closed (stopped, expired) — its streams are closed and told. */
+  onMeetClosed: ((meetId: string) => void) | null = null;
 
   constructor(db: Driver) {
     this.db = db;
   }
 
+  /**
+   * The schema and the standing settings, once per process (or Durable Object). A migration that fails is
+   * not the end of the service: it is tried again a little later, so a day whose write budget is spent still
+   * answers every read (and /health says what is wrong) instead of failing every request for good.
+   */
   migrate(): Promise<void> {
-    if (!this.ready) this.ready = this.runMigrations();
+    if (!this.ready) {
+      if (this.readyError && Date.now() - this.readyFailedAt < MIGRATE_RETRY_MS) return Promise.reject(this.readyError);
+      this.ready = this.runMigrations().catch((e: unknown) => {
+        this.ready = null;
+        this.readyFailedAt = Date.now();
+        this.readyError = e;
+        throw e;
+      });
+    }
     return this.ready;
+  }
+
+  /** The storage as it stands: the counters since the object started, and whether a write failed lately. */
+  health(now = Date.now()): StorageHealth {
+    const s = this.db.stats;
+    const failing = Boolean(s.lastError?.write && now - s.lastError.at < WRITE_FAIL_RECENT_MS);
+    return {
+      rowsRead: s.rowsRead,
+      rowsWritten: s.rowsWritten,
+      statements: s.statements,
+      since: new Date(s.since).toISOString(),
+      writes: failing ? 'failing' : 'ok',
+      note: failing ? (s.lastError?.message ?? '') : '',
+      live: this.live.summary(now),
+    };
+  }
+
+  /** The last storage error, if a write failed within the last minute (the app turns it into a clear answer). */
+  lastWriteError(now = Date.now()): string | null {
+    const e = this.db.stats.lastError;
+    return e?.write && now - e.at < WRITE_FAIL_RECENT_MS ? e.message : null;
   }
 
   private async runMigrations(): Promise<void> {
@@ -834,22 +891,71 @@ export class SqlStore {
     return null;
   }
 
-  /** Seconds of video on stage this month, by pool (an account, or a club owner's for the club). */
+  /** Seconds of video on stage this month, by pool (an account, or a club owner's for the club) — what is written plus what is counted in memory. */
   async videoUsed(poolUserId: string, period: string): Promise<number> {
+    const pending = this.live.video.get(`${poolUserId}|${period}`);
+    if (pending) return pending.persisted + pending.pending;
     const r = await this.db.get<{ seconds: number }>('SELECT seconds FROM video_usage WHERE pool_user_id=? AND period=?', [poolUserId, period]);
     return Number(r?.seconds ?? 0);
   }
 
-  /** Seconds of video on stage added to the month's count; the new total. */
+  /**
+   * Seconds of video on stage added to the month's count; the new total. Counted in memory heartbeat by
+   * heartbeat and written once a minute's worth has gathered (or at the next flush): a performer costs a
+   * row a minute, not a row every few seconds.
+   */
   async addVideoSeconds(poolUserId: string, period: string, seconds: number): Promise<number> {
-    const add = Math.max(0, seconds);
-    await this.db.run('INSERT INTO video_usage (pool_user_id, period, seconds, updated_at) VALUES (?,?,?,?) ON CONFLICT(pool_user_id, period) DO UPDATE SET seconds = seconds + excluded.seconds, updated_at = excluded.updated_at', [poolUserId, period, add, new Date().toISOString()]);
-    return this.videoUsed(poolUserId, period);
+    const key = `${poolUserId}|${period}`;
+    let persisted: number | null = null;
+    if (!this.live.video.has(key)) {
+      const r = await this.db.get<{ seconds: number }>('SELECT seconds FROM video_usage WHERE pool_user_id=? AND period=?', [poolUserId, period]);
+      persisted = Number(r?.seconds ?? 0);
+    }
+    const { total, due } = this.live.addVideoSeconds(key, persisted, seconds);
+    if (due > 0) await this.flushVideo(key, poolUserId, period, due);
+    return total;
+  }
+
+  private async flushVideo(key: string, poolUserId: string, period: string, seconds: number): Promise<void> {
+    await this.db.run('INSERT INTO video_usage (pool_user_id, period, seconds, updated_at) VALUES (?,?,?,?) ON CONFLICT(pool_user_id, period) DO UPDATE SET seconds = seconds + excluded.seconds, updated_at = excluded.updated_at', [poolUserId, period, seconds, new Date().toISOString()]);
+    this.live.videoFlushed(key, seconds);
   }
 
   /** Tests and the admin: the month's count set outright. */
   async setVideoSeconds(poolUserId: string, period: string, seconds: number): Promise<void> {
+    this.live.video.delete(`${poolUserId}|${period}`);
     await this.db.run('INSERT INTO video_usage (pool_user_id, period, seconds, updated_at) VALUES (?,?,?,?) ON CONFLICT(pool_user_id, period) DO UPDATE SET seconds = excluded.seconds, updated_at = excluded.updated_at', [poolUserId, period, Math.max(0, seconds), new Date().toISOString()]);
+  }
+
+  /**
+   * What the live layer owes SQLite, written now: the idle expiry of every open meet whose heartbeats moved it
+   * (at most once per SOFT_FLUSH_MS each), a broadcast's counters, the video seconds gathered. Run by the sweep
+   * and by a heartbeat that finds it due; a flush that fails (the budget spent) is tried at the next one.
+   */
+  async flush(now = Date.now(), force = false): Promise<number> {
+    let n = 0;
+    for (const [id, e] of this.live.meets) {
+      if (!e.soft || (!force && now - e.flushedAt < SOFT_FLUSH_MS)) continue;
+      await this.writeMeet(e.meet);
+      e.soft = false;
+      e.flushedAt = now;
+      n++;
+      if (!this.live.meets.has(id)) break;
+    }
+    for (const [id, j] of this.live.jobs) {
+      if (!j.soft) continue;
+      await this.writeJob(j.job);
+      j.soft = false;
+      n++;
+      if (!this.live.jobs.has(id)) break;
+    }
+    for (const [key, v] of this.live.video) {
+      if (v.pending <= 0) continue;
+      const [poolUserId, period] = key.split('|') as [string, string];
+      await this.flushVideo(key, poolUserId, period, v.pending);
+      n++;
+    }
+    return n;
   }
 
   /** A Super Admin sets an account's role; `privileged` follows it for older code paths. */
@@ -1260,6 +1366,11 @@ export class SqlStore {
   }
 
   // ---------- meets ----------
+  //
+  // An open meet lives in the live layer (live.ts) from its first read: every read answers from memory, and a
+  // save writes the row only when the meet's durable projection changed (a slot, a song, the transport, a
+  // stop) — the expiry that every heartbeat pushes out, the performers' clock reports and the audience count
+  // stay in memory and reach the row once a minute (`flush`). A closed meet is a row like any other.
 
   async createMeet(m: Meet): Promise<void> {
     await this.db.run('INSERT INTO meets (meet_id, join_code, host_user_id, state, data, last_activity_at, created_at) VALUES (?,?,?,?,?,?,?)', [
@@ -1271,20 +1382,69 @@ export class SqlStore {
       m.lastActivityAt,
       m.createdAt,
     ]);
+    if (liveWorthy(m)) this.live.admit(clone(m), [], 0, Date.now(), false);
   }
 
-  async saveMeet(m: Meet): Promise<void> {
+  private async writeMeet(m: Meet): Promise<void> {
     await this.db.run('UPDATE meets SET state=?, data=?, last_activity_at=? WHERE meet_id=?', [m.state, JSON.stringify(m), m.lastActivityAt, m.meetId]);
   }
 
+  async saveMeet(m: Meet): Promise<void> {
+    const e = this.live.meets.get(m.meetId);
+    if (!e) {
+      await this.writeMeet(m);
+      return;
+    }
+    e.meet = clone(m);
+    if (!liveWorthy(m)) {
+      // Closed: the row says so for good, and nothing of the meet runs here any more.
+      await this.writeMeet(m);
+      this.live.evict(m.meetId);
+      this.onMeetClosed?.(m.meetId);
+      return;
+    }
+    const key = meetDurableKey(m);
+    if (key === e.key) {
+      e.soft = true;
+      return;
+    }
+    await this.writeMeet(m);
+    e.key = key;
+    e.soft = false;
+    e.flushedAt = Date.now();
+  }
+
+  /** A meet read from its row: an open one is admitted to the live layer (with its participants) and answered from there. */
+  private async admit(m: Meet): Promise<LiveMeet> {
+    const rows = await this.db.all<{ data: string }>('SELECT data FROM participants WHERE meet_id=? ORDER BY last_seen_at DESC', [m.meetId]);
+    const latest = await this.db.get<{ m: number | null }>('SELECT MAX(seq) AS m FROM chat WHERE meet_id=?', [m.meetId]);
+    return this.live.admit(
+      m,
+      rows.map((r) => JSON.parse(r.data) as StoredParticipant),
+      Number(latest?.m ?? 0),
+      Date.now(),
+    );
+  }
+
+  private async liveOrRow(row: { data: string } | undefined): Promise<Meet | null> {
+    if (!row) return null;
+    const m = JSON.parse(row.data) as Meet;
+    const e = this.live.meets.get(m.meetId);
+    if (e) return clone(e.meet);
+    if (!liveWorthy(m)) return m;
+    return clone((await this.admit(m)).meet);
+  }
+
   async getMeet(meetId: string): Promise<Meet | null> {
-    const r = await this.db.get<{ data: string }>('SELECT data FROM meets WHERE meet_id=?', [meetId]);
-    return r ? (JSON.parse(r.data) as Meet) : null;
+    const e = this.live.meets.get(meetId);
+    if (e) return clone(e.meet);
+    return this.liveOrRow(await this.db.get<{ data: string }>('SELECT data FROM meets WHERE meet_id=?', [meetId]));
   }
 
   async getMeetByCode(code: string): Promise<Meet | null> {
-    const r = await this.db.get<{ data: string }>('SELECT data FROM meets WHERE join_code=?', [code.toUpperCase()]);
-    return r ? (JSON.parse(r.data) as Meet) : null;
+    const up = code.toUpperCase();
+    for (const e of this.live.meets.values()) if (e.meet.joinCode === up) return clone(e.meet);
+    return this.liveOrRow(await this.db.get<{ data: string }>('SELECT data FROM meets WHERE join_code=?', [up]));
   }
 
   async listMeetsForUser(userId: string, limit = 30): Promise<Meet[]> {
@@ -1294,17 +1454,27 @@ export class SqlStore {
        ORDER BY m.created_at DESC LIMIT ?`,
       [userId, userId, limit],
     );
-    return rows.map((r) => JSON.parse(r.data) as Meet);
+    const out: Meet[] = [];
+    for (const r of rows) {
+      const m = await this.liveOrRow(r);
+      if (m) out.push(m);
+    }
+    return out;
   }
 
   async listOpenMeets(): Promise<Meet[]> {
     const rows = await this.db.all<{ data: string }>("SELECT data FROM meets WHERE state IN ('lobby','countdown','live')");
-    return rows.map((r) => JSON.parse(r.data) as Meet);
+    const out: Meet[] = [];
+    for (const r of rows) {
+      const m = await this.liveOrRow(r);
+      if (m) out.push(m);
+    }
+    return out;
   }
 
   // ---------- participants ----------
 
-  async saveParticipant(p: StoredParticipant): Promise<void> {
+  private async writeParticipant(p: StoredParticipant): Promise<void> {
     await this.db.run(
       `INSERT INTO participants (meet_id, participant_id, user_id, resume_token, data, last_seen_at) VALUES (?,?,?,?,?,?)
        ON CONFLICT(meet_id, participant_id) DO UPDATE SET data=excluded.data, last_seen_at=excluded.last_seen_at, resume_token=excluded.resume_token`,
@@ -1312,12 +1482,42 @@ export class SqlStore {
     );
   }
 
+  /** A participant saved: the row written when their record changed (a join, a slot, a role), memory alone for a heartbeat. */
+  async saveParticipant(p: StoredParticipant): Promise<void> {
+    const e = this.live.meets.get(p.meetId);
+    if (!e) {
+      await this.writeParticipant(p);
+      return;
+    }
+    e.participants.set(p.participantId, clone(p));
+    const key = participantDurableKey(p);
+    if (key === e.pKeys.get(p.participantId)) return;
+    await this.writeParticipant(p);
+    e.pKeys.set(p.participantId, key);
+  }
+
+  /** A device heard from (its event stream is open): seen now, in memory — never a row. */
+  touchParticipant(meetId: string, participantId: string, now = Date.now()): void {
+    const p = this.live.meets.get(meetId)?.participants.get(participantId);
+    if (p) p.lastSeenAt = new Date(now).toISOString();
+  }
+
   async getParticipantByToken(meetId: string, token: string): Promise<StoredParticipant | null> {
+    const e = this.live.meets.get(meetId);
+    if (e) {
+      for (const p of e.participants.values()) if (p.resumeToken === token) return clone(p);
+      return null;
+    }
     const r = await this.db.get<{ data: string }>('SELECT data FROM participants WHERE meet_id=? AND resume_token=?', [meetId, token]);
     return r ? (JSON.parse(r.data) as StoredParticipant) : null;
   }
 
   async getParticipant(meetId: string, participantId: string): Promise<StoredParticipant | null> {
+    const e = this.live.meets.get(meetId);
+    if (e) {
+      const p = e.participants.get(participantId);
+      return p ? clone(p) : null;
+    }
     const r = await this.db.get<{ data: string }>('SELECT data FROM participants WHERE meet_id=? AND participant_id=?', [meetId, participantId]);
     return r ? (JSON.parse(r.data) as StoredParticipant) : null;
   }
@@ -1327,43 +1527,61 @@ export class SqlStore {
    * performer / audience) and, from a Publishing show view, as a publisher — `kind` picks which.
    */
   async getParticipantByUser(meetId: string, userId: string, kind: 'member' | 'publisher' | 'any' = 'member'): Promise<StoredParticipant | null> {
-    const rows = await this.db.all<{ data: string }>('SELECT data FROM participants WHERE meet_id=? AND user_id=? ORDER BY last_seen_at DESC', [meetId, userId]);
-    for (const r of rows) {
-      const p = JSON.parse(r.data) as StoredParticipant;
+    const all = await this.listParticipants(meetId);
+    for (const p of all) {
+      if (p.userId !== userId) continue;
       if (kind === 'any' || (kind === 'publisher') === (p.role === 'publisher')) return p;
     }
     return null;
   }
 
+  /** Everyone in the meet, the most recently heard from first. */
   async listParticipants(meetId: string): Promise<StoredParticipant[]> {
+    const e = this.live.meets.get(meetId);
+    if (e) return [...e.participants.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)).map(clone);
     const rows = await this.db.all<{ data: string }>('SELECT data FROM participants WHERE meet_id=? ORDER BY last_seen_at DESC', [meetId]);
     return rows.map((r) => JSON.parse(r.data) as StoredParticipant);
   }
 
+  async removeParticipant(meetId: string, participantId: string): Promise<void> {
+    const e = this.live.meets.get(meetId);
+    if (e) {
+      e.participants.delete(participantId);
+      e.pKeys.delete(participantId);
+    }
+    await this.db.run('DELETE FROM participants WHERE meet_id=? AND participant_id=?', [meetId, participantId]);
+  }
+
   /** Delete a meet and everything that hangs off it (the takes and shows themselves live in the singers' Drives). */
   async deleteMeet(meetId: string): Promise<void> {
+    this.live.evict(meetId);
     for (const t of ['mix', 'performances', 'meet_members', 'recordings', 'signals', 'chat', 'participants', 'meets']) await this.db.run(`DELETE FROM ${t} WHERE meet_id=?`, [meetId]);
   }
 
-  // ---------- the stage mix for the audience: a rolling window of one-second Opus batches per meet ----------
+  // ---------- the stage mix for the audience: a rolling window of one-second Opus batches per meet, in memory ----------
 
   /**
    * Keep a batch; the service numbers it — always one past the newest the meet has, whatever number
    * the host's device sent. The device's own count starts again whenever it rebuilds its mix (a new
    * song, a reload), and a listener who has seen batch 150 must never wait for the new count to pass
-   * 150: the numbers only ever go up. Resolves with the number given.
+   * 150: the numbers only ever go up. Resolves with the number given (0 for a meet that is not open).
    */
   async addMix(meetId: string, batch: MixBatch): Promise<number> {
-    const seq = ((await this.db.get<{ m: number | null }>('SELECT MAX(seq) AS m FROM mix WHERE meet_id=?', [meetId]))?.m ?? 0) + 1;
-    await this.db.run('INSERT INTO mix (meet_id, seq, created_at, data) VALUES (?,?,?,?) ON CONFLICT(meet_id, seq) DO UPDATE SET data=excluded.data', [meetId, seq, new Date().toISOString(), JSON.stringify({ ...batch, seq })]);
-    await this.db.run('DELETE FROM mix WHERE meet_id=? AND seq <= ?', [meetId, seq - MIX_KEEP]);
-    return seq;
+    return this.live.addMix(meetId, batch);
   }
 
   async listMix(meetId: string, since: number, limit = 8): Promise<{ batches: MixBatch[]; latest: number }> {
-    const latest = (await this.db.get<{ m: number | null }>('SELECT MAX(seq) AS m FROM mix WHERE meet_id=?', [meetId]))?.m ?? 0;
-    const rows = await this.db.all<{ data: string }>('SELECT data FROM mix WHERE meet_id=? AND seq > ? ORDER BY seq ASC LIMIT ?', [meetId, since, limit]);
-    return { batches: rows.map((r) => JSON.parse(r.data) as MixBatch), latest };
+    return this.live.listMix(meetId, since, limit, Date.now());
+  }
+
+  /** Every batch from now on to `send` (and the window's tail after `since`); the returned function stops it. Null for a meet that is not open. */
+  streamMix(meetId: string, since: number, send: (b: MixBatch) => void): (() => void) | null {
+    return this.live.streamMix(meetId, since, send);
+  }
+
+  /** Somebody is hearing the mix right now (the host's device sends it only then). */
+  mixListening(meetId: string): boolean {
+    return this.live.mixListening(meetId, Date.now());
   }
 
   // ---------- members: every account that was ever in a meet (participants come and go; the shows are shared with all of them) ----------
@@ -1388,6 +1606,8 @@ export class SqlStore {
        ON CONFLICT(performance_id) DO UPDATE SET data=excluded.data`,
       [p.performanceId, p.meetId, p.hostUserId, JSON.stringify(p), p.createdAt],
     );
+    const e = this.live.meets.get(p.meetId);
+    if (e) e.performances = null;
   }
 
   async getPerformance(performanceId: string): Promise<MeetPerformance | null> {
@@ -1396,8 +1616,12 @@ export class SqlStore {
   }
 
   async listPerformancesForMeet(meetId: string): Promise<MeetPerformance[]> {
+    const e = this.live.meets.get(meetId);
+    if (e?.performances) return clone(e.performances);
     const rows = await this.db.all<{ data: string }>('SELECT data FROM performances WHERE meet_id=? ORDER BY created_at ASC', [meetId]);
-    return rows.map((r) => JSON.parse(r.data) as MeetPerformance);
+    const out = rows.map((r) => JSON.parse(r.data) as MeetPerformance);
+    if (e) e.performances = clone(out);
+    return out;
   }
 
   /** Every show of every meet the user hosted or was ever in, newest first. */
@@ -1411,6 +1635,7 @@ export class SqlStore {
 
   async deletePerformance(performanceId: string): Promise<void> {
     await this.db.run('DELETE FROM performances WHERE performance_id=?', [performanceId]);
+    for (const e of this.live.meets.values()) e.performances = null; // whichever meet it was of: read again
   }
 
   // ---------- invites: performances open for others to join (join.ts) ----------
@@ -1456,20 +1681,21 @@ export class SqlStore {
     await this.db.run('DELETE FROM invites WHERE performance_id=?', [performanceId]);
   }
 
-  async removeParticipant(meetId: string, participantId: string): Promise<void> {
-    await this.db.run('DELETE FROM participants WHERE meet_id=? AND participant_id=?', [meetId, participantId]);
-  }
-
   // ---------- chat ----------
 
   async addChat(meetId: string, m: Omit<ChatMessage, 'seq'>): Promise<ChatMessage> {
-    const seq = Number((await this.db.get<{ n: number }>('SELECT COALESCE(MAX(seq),0)+1 AS n FROM chat WHERE meet_id=?', [meetId]))?.n ?? 1);
+    const e = this.live.meets.get(meetId);
+    const seq = e ? e.chatLatest + 1 : Number((await this.db.get<{ n: number }>('SELECT COALESCE(MAX(seq),0)+1 AS n FROM chat WHERE meet_id=?', [meetId]))?.n ?? 1);
     const msg: ChatMessage = { ...m, seq };
     await this.db.run('INSERT INTO chat (meet_id, seq, data) VALUES (?,?,?)', [meetId, seq, JSON.stringify(msg)]);
+    if (e) e.chatLatest = seq;
     return msg;
   }
 
+  /** Lines after `since` — nothing read when the live layer knows there is nothing new (a poll's common case). */
   async chatSince(meetId: string, since: number, limit = 100): Promise<ChatMessage[]> {
+    const e = this.live.meets.get(meetId);
+    if (e && since >= e.chatLatest) return [];
     const rows = await this.db.all<{ data: string }>('SELECT data FROM chat WHERE meet_id=? AND seq>? ORDER BY seq ASC LIMIT ?', [meetId, since, limit]);
     return rows.map((r) => JSON.parse(r.data) as ChatMessage);
   }
@@ -1479,26 +1705,24 @@ export class SqlStore {
     return rows.map((r) => JSON.parse(r.data) as ChatMessage).reverse();
   }
 
-  // ---------- WebRTC signalling (performer ↔ performer, relayed) ----------
+  // ---------- WebRTC signalling (performer ↔ performer, relayed): in memory, numbered on arrival ----------
 
   /**
-   * Append a signal. The per-meet sequence is assigned inside the INSERT itself (one statement, so
-   * two performers — or a publisher fanning out offers to the whole stage — signalling at the same
-   * instant can never collide on a seq and lose an offer); the seq column is authoritative on read.
+   * Append a signal: numbered one past the meet's newest (one thread of execution per service, so two
+   * performers — or a publisher fanning out offers to the whole stage — signalling at the same instant
+   * never collide on a seq). A signal is a moment's thing: nothing of it is ever written. Seq 0 for a
+   * meet that is not open (nothing to deliver to).
    */
   async addSignal(meetId: string, sig: Omit<MeetSignal, 'seq'>): Promise<MeetSignal> {
-    await this.db.run('INSERT INTO signals (meet_id, seq, to_id, data) SELECT ?, COALESCE(MAX(seq),0)+1, ?, ? FROM signals WHERE meet_id=?', [meetId, sig.to, JSON.stringify(sig), meetId]);
-    const r = await this.db.get<{ n: number }>('SELECT COALESCE(MAX(seq),0) AS n FROM signals WHERE meet_id=?', [meetId]);
-    return { ...sig, seq: Number(r?.n ?? 0) };
+    return this.live.addSignal(meetId, sig) ?? { ...sig, seq: 0 };
   }
 
   async signalsFor(meetId: string, to: string, since: number, limit = 200): Promise<MeetSignal[]> {
-    const rows = await this.db.all<{ seq: number; data: string }>('SELECT seq, data FROM signals WHERE meet_id=? AND to_id=? AND seq>? ORDER BY seq ASC LIMIT ?', [meetId, to, since, limit]);
-    return rows.map((r) => ({ ...(JSON.parse(r.data) as Omit<MeetSignal, 'seq'>), seq: Number(r.seq) }));
+    return this.live.signalsFor(meetId, to, since, limit);
   }
 
   async clearSignals(meetId: string): Promise<void> {
-    await this.db.run('DELETE FROM signals WHERE meet_id=?', [meetId]);
+    this.live.clearSignals(meetId);
   }
 
   // ---------- recordings ----------
@@ -1509,11 +1733,17 @@ export class SqlStore {
        ON CONFLICT(meet_id, performance_id) DO UPDATE SET data=excluded.data`,
       [r.meetId, r.participantId, r.performanceId, JSON.stringify(r), r.createdAt],
     );
+    const e = this.live.meets.get(r.meetId);
+    if (e) e.recordings = null;
   }
 
   async listRecordings(meetId: string): Promise<MeetRecording[]> {
+    const e = this.live.meets.get(meetId);
+    if (e?.recordings) return clone(e.recordings);
     const rows = await this.db.all<{ data: string }>('SELECT data FROM recordings WHERE meet_id=? ORDER BY created_at ASC', [meetId]);
-    return rows.map((r) => JSON.parse(r.data) as MeetRecording);
+    const out = rows.map((r) => JSON.parse(r.data) as MeetRecording);
+    if (e) e.recordings = clone(out);
+    return out;
   }
 
   // ---------- publishing ----------
@@ -1537,7 +1767,11 @@ export class SqlStore {
     );
   }
 
-  async saveJob(j: PublishJob): Promise<void> {
+  // A broadcast on the air lives in the live layer too: its row is written when its state or its verdicts change
+  // (requested → starting → live → stopped, YouTube's word), not for the counters every two-second segment moves;
+  // those reach the row at the next flush. The segments themselves (the portal's rolling window) are memory alone.
+
+  private async writeJob(j: PublishJob): Promise<void> {
     await this.db.run(
       `INSERT INTO publish_jobs (job_id, owner_user_id, meet_id, state, data, created_at, updated_at) VALUES (?,?,?,?,?,?,?)
        ON CONFLICT(job_id) DO UPDATE SET state=excluded.state, data=excluded.data, updated_at=excluded.updated_at`,
@@ -1545,58 +1779,109 @@ export class SqlStore {
     );
   }
 
+  private static jobOnAir(j: PublishJob): boolean {
+    return j.state === 'requested' || j.state === 'starting' || j.state === 'live';
+  }
+
+  async saveJob(j: PublishJob): Promise<void> {
+    const cur = this.live.jobs.get(j.jobId);
+    if (!SqlStore.jobOnAir(j)) {
+      await this.writeJob(j);
+      this.live.jobs.delete(j.jobId);
+      return;
+    }
+    const key = jobDurableKey(j);
+    if (!cur) {
+      await this.writeJob(j);
+      this.live.jobs.set(j.jobId, { job: clone(j), key, soft: false, segments: [] });
+      return;
+    }
+    cur.job = clone(j);
+    if (key === cur.key) {
+      cur.soft = true;
+      return;
+    }
+    await this.writeJob(j);
+    cur.key = key;
+    cur.soft = false;
+  }
+
   /**
-   * YouTube's verdict on a segment, landing after the answer to the show view went out: only these
-   * fields change (json_set), so a segment saved meanwhile is never overwritten with a stale copy.
+   * YouTube's verdict on a segment, landing after the answer to the show view went out: only these fields
+   * change, on the live copy — and on the row (json_set, so a segment saved meanwhile is never overwritten
+   * with a stale copy) only when the verdict itself moved, not for every segment that says "still fine".
    */
   async patchJobYoutube(jobId: string, youtube: PublishJobLive['youtube'], note: string, error: string | null | undefined): Promise<void> {
+    const cur = this.live.jobs.get(jobId);
+    if (cur?.job.live) {
+      const before = jobDurableKey(cur.job);
+      cur.job.live.youtube = youtube;
+      cur.job.live.youtubeNote = note;
+      if (error !== undefined) cur.job.error = error;
+      const after = jobDurableKey(cur.job);
+      if (before === after) {
+        cur.soft = true;
+        return;
+      }
+      cur.key = after;
+    }
     const args: unknown[] = ['$.live.youtube', youtube, '$.live.youtubeNote', note];
     if (error !== undefined) args.push('$.error', error);
     await this.db.run(`UPDATE publish_jobs SET data = json_set(data, ${args.map(() => '?').join(', ')}) WHERE job_id = ? AND json_type(data, '$.live') = 'object'`, [...args, jobId]);
   }
 
+  private jobOf(row: { data: string } | undefined): PublishJob | null {
+    if (!row) return null;
+    const j = JSON.parse(row.data) as PublishJob;
+    const cur = this.live.jobs.get(j.jobId);
+    return cur ? clone(cur.job) : j;
+  }
+
   async getJob(jobId: string): Promise<PublishJob | null> {
-    const r = await this.db.get<{ data: string }>('SELECT data FROM publish_jobs WHERE job_id=?', [jobId]);
-    return r ? (JSON.parse(r.data) as PublishJob) : null;
+    const cur = this.live.jobs.get(jobId);
+    if (cur) return clone(cur.job);
+    return this.jobOf(await this.db.get<{ data: string }>('SELECT data FROM publish_jobs WHERE job_id=?', [jobId]));
   }
 
   async listJobs(ownerUserId: string, meetId?: string): Promise<PublishJob[]> {
     const rows = meetId
       ? await this.db.all<{ data: string }>('SELECT data FROM publish_jobs WHERE owner_user_id=? AND meet_id=? ORDER BY created_at DESC LIMIT 50', [ownerUserId, meetId])
       : await this.db.all<{ data: string }>('SELECT data FROM publish_jobs WHERE owner_user_id=? ORDER BY created_at DESC LIMIT 50', [ownerUserId]);
-    return rows.map((r) => JSON.parse(r.data) as PublishJob);
+    return rows.map((r) => this.jobOf(r)!);
   }
 
   async liveJobsForMeet(meetId: string): Promise<PublishJob[]> {
+    // The ones on the air are all in memory: no row is read for a watch page's poll.
+    const out = [...this.live.jobs.values()].filter((j) => j.job.meetId === meetId).map((j) => clone(j.job));
+    if (out.length) return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     const rows = await this.db.all<{ data: string }>("SELECT data FROM publish_jobs WHERE meet_id=? AND state IN ('requested','starting','live') ORDER BY created_at DESC", [meetId]);
-    return rows.map((r) => JSON.parse(r.data) as PublishJob);
+    return rows.map((r) => this.jobOf(r)!);
   }
 
-  // ---------- live segments (the browser-published show, a rolling window per job) ----------
+  // ---------- live segments (the browser-published show, a rolling window per job, in memory) ----------
 
   async addLiveSegment(jobId: string, seg: LiveSegmentInfo, data: Uint8Array): Promise<void> {
-    // A publisher that started over (a reload) counts from 0 again: what remains of the earlier run is stale.
-    await this.db.run('DELETE FROM live_segments WHERE job_id=? AND seq>=?', [jobId, seg.seq]);
-    await this.db.run(
-      `INSERT INTO live_segments (job_id, seq, name, duration_ms, created_at, data) VALUES (?,?,?,?,?,?)
-       ON CONFLICT(job_id, seq) DO UPDATE SET name=excluded.name, duration_ms=excluded.duration_ms, created_at=excluded.created_at, data=excluded.data`,
-      [jobId, seg.seq, seg.name, seg.durationMs, seg.createdAt, data],
-    );
-    await this.db.run('DELETE FROM live_segments WHERE job_id=? AND seq<=?', [jobId, seg.seq - LIVE_KEEP]);
+    if (!this.live.jobs.has(jobId)) {
+      const j = await this.getJob(jobId);
+      if (!j || !SqlStore.jobOnAir(j)) return;
+      this.live.jobs.set(jobId, { job: j, key: jobDurableKey(j), soft: false, segments: [] });
+    }
+    this.live.addSegment(jobId, seg, data);
   }
 
   async listLiveSegments(jobId: string): Promise<LiveSegmentInfo[]> {
-    const rows = await this.db.all<{ seq: number; name: string; duration_ms: number; created_at: string }>('SELECT seq, name, duration_ms, created_at FROM live_segments WHERE job_id=? ORDER BY seq ASC', [jobId]);
-    return rows.map((r) => ({ seq: Number(r.seq), name: r.name, durationMs: Number(r.duration_ms), createdAt: r.created_at }));
+    return (this.live.jobs.get(jobId)?.segments ?? []).map((s) => ({ ...s.info }));
   }
 
   async getLiveSegment(jobId: string, name: string): Promise<Uint8Array | null> {
-    const r = await this.db.get<{ data: unknown }>('SELECT data FROM live_segments WHERE job_id=? AND name=?', [jobId, name]);
-    return r ? toBytes(r.data) : null;
+    return this.live.jobs.get(jobId)?.segments.find((s) => s.info.name === name)?.bytes ?? null;
   }
 
   async clearLiveSegments(jobId: string): Promise<void> {
-    await this.db.run('DELETE FROM live_segments WHERE job_id=?', [jobId]);
+    const j = this.live.jobs.get(jobId);
+    if (j) j.segments = [];
+    // Rows from before the live layer (a service upgraded mid-broadcast): gone with the job.
+    await this.db.run('DELETE FROM live_segments WHERE job_id=?', [jobId]).catch(() => undefined);
   }
 }
 

@@ -90,9 +90,9 @@ const DC_ID = 1;
 
 const POLL_CONNECTING_MS = 900;
 const POLL_STEADY_MS = 2500;
-/** With the service pushing a word for every signal, the polls are the safety net. */
-const POLL_PUSHED_CONNECTING_MS = 2500;
-const POLL_PUSHED_STEADY_MS = 6000;
+/** With the service handing every signal over its stream the moment it is sent, the polls are the safety net alone. */
+const POLL_PUSHED_CONNECTING_MS = 5000;
+const POLL_PUSHED_STEADY_MS = 20_000;
 /** A singer's whole video uplink, shared by their links to the other singers (a publisher's link gets its own, generous cap). */
 const TOTAL_UPLINK_BPS = 2_400_000;
 /** A publisher's link carries what goes out to the world — the whole packed frame (enhance.ts, 1440×960 from a computer): up to this, always. */
@@ -635,7 +635,14 @@ export class PerformerMesh {
     this.timer = setTimeout(() => void this.poll(), delayMs ?? (anyConnecting ? (pushed ? POLL_PUSHED_CONNECTING_MS : POLL_CONNECTING_MS) : pushed ? POLL_PUSHED_STEADY_MS : POLL_STEADY_MS));
   }
 
-  /** A signal waits (the service said so): poll now — once more right after, when a poll was already on its way. */
+  /** A signal handed over by the service's stream: handled now (the poll never sees it again — the session marks it seen). */
+  async take(sig: MeetSignal): Promise<void> {
+    if (!this.running) return;
+    await this.handle(sig);
+    this.heal();
+  }
+
+  /** A signal waits (the service said so without carrying it): poll now — once more right after, when a poll was already on its way. */
   pollNow(): void {
     if (!this.running) return;
     if (this.polling) {

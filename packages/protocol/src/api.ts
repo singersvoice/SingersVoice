@@ -24,6 +24,21 @@ export interface HealthResponse {
   version: string;
   runtime: 'node' | 'cloudflare';
   now: number;
+  /**
+   * The storage as it stands: rows read and written since the service (or its Durable Object) started, and
+   * whether writes go through right now — a SQLite-backed Durable Object on the free plan may write 100,000
+   * rows a day; past that every write fails until 00:00 UTC, and `writes` says 'failing' with the runtime's
+   * own words in `note`. What the live layer holds (open meets, their people, streams) rides along.
+   */
+  storage?: {
+    rowsRead: number;
+    rowsWritten: number;
+    statements: number;
+    since: string;
+    writes: 'ok' | 'failing';
+    note: string;
+    live: { meets: number; participants: number; signals: number; mixStreams: number; jobs: number; segmentBytes: number; listening: number };
+  };
 }
 
 export interface TimeResponse {
@@ -91,6 +106,22 @@ export interface MeetSnapshot {
   you?: Participant;
   /** On a heartbeat: the video hours left to this account this month (null = without limit), and why the picture is off when it is (plans.ts): the role, the plan, or the hours used up. */
   yourVideo?: { leftSeconds: number | null; note: string; reason: '' | 'role' | 'plan' | 'hours' };
+  /** Somebody is hearing the stage mix right now (a listener's stream or poll): the host's device sends it only then. */
+  mixListening?: boolean;
+}
+
+/**
+ * The room as the event stream hands it to every device the moment something changed (`room` event): the
+ * snapshot without what is a device's own (its chat position, its video hours). `participants` is the host's
+ * whole list on the host's stream and the named few on everyone else's (see MeetSnapshot).
+ */
+export interface RoomUpdate {
+  meet: Meet;
+  participants: Participant[];
+  recordings: MeetRecording[];
+  performances: MeetPerformance[];
+  serverEpochMs: number;
+  mixListening: boolean;
 }
 
 export interface DecideRequest {
@@ -303,6 +334,8 @@ export interface Routes {
   'POST /meets/:id/mix': { req: MixBatch & { resumeToken?: string }; res: { ok: true; seq: number } };
   'GET /meets/:id/mix': { res: { batches: MixBatch[]; latest: number; serverEpochMs: number } };
   'GET /watch/:id/mix': { res: { batches: MixBatch[]; latest: number; serverEpochMs: number } };
+  /** The mix as a stream (SSE): a `batch` event per batch from `since` on, a `ping` every so often; one request for the whole listen. */
+  'GET /watch/:id/mix/stream': { res: never };
   /** `gone`: the addressee left the meet (no error — the sender just forgets the link). */
   'POST /meets/:id/signal': { req: SignalRequest; res: { seq: number; gone?: boolean } };
   'POST /meets/:id/signals': { req: { resumeToken: string; since: number }; res: { signals: MeetSignal[]; serverEpochMs: number } };
