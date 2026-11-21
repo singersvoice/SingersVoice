@@ -259,6 +259,14 @@ export class MeetSession {
   kick(participantId: string): Promise<void> {
     return this.act(`participants/${encodeURIComponent(participantId)}/kick`, {});
   }
+  /** Host: out of the meet now, and blocked from every meet of the host's for good (Settings → Account lists them). */
+  block(participantId: string): Promise<void> {
+    return this.act(`participants/${encodeURIComponent(participantId)}/block`, {});
+  }
+  /** The club owner's switch: members only, or open to anyone with the link. */
+  setMembersOnly(membersOnly: boolean): Promise<void> {
+    return this.act('club', { membersOnly });
+  }
   removeFromStage(participantId: string): Promise<void> {
     return this.act(`stage/${encodeURIComponent(participantId)}/remove`, {});
   }

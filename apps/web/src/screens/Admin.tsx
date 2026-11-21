@@ -72,7 +72,7 @@ export function Admin() {
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return (users ?? []).filter((u) => !needle || `${u.name} ${u.email} ${roleTitle(u.role)}`.toLowerCase().includes(needle));
+    return (users ?? []).filter((u) => !needle || `${u.name} ${u.email} sv-${u.svNo} ${u.phone} ${roleTitle(u.role)}${u.blocked ? ' blocked' : ''}`.toLowerCase().includes(needle));
   }, [users, q]);
   const counts = useMemo(() => {
     const c: Record<UserRole, number> = { audio: 0, dual: 0, club_owner: 0, super_admin: 0 };
@@ -158,7 +158,7 @@ export function Admin() {
                   </div>
                   <div class="meta">
                     <div class="t">
-                      {u.name || u.email} {me && <span class="chip">you</span>} {u.role === 'super_admin' && <span class="chip ok">super admin</span>} {u.canPublish && u.role !== 'super_admin' && <span class="chip ok">publishing open</span>}{' '}
+                      {u.name || u.email} <span class="chip" data-user-sv-no={u.svNo}>SV-{u.svNo}</span> {me && <span class="chip">you</span>} {u.blocked && <span class="chip danger" data-user-blocked>blocked{u.blockedNote ? ` · ${u.blockedNote}` : ''}</span>} {u.role === 'super_admin' && <span class="chip ok">super admin</span>} {u.canPublish && u.role !== 'super_admin' && <span class="chip ok">publishing open</span>}{' '}
                       {u.role !== 'super_admin' && (
                         <span class={`chip ${e.video ? 'ok' : ''}`} data-user-plan={e.plan} data-user-via={e.via}>
                           {e.via === 'club' ? `${e.planTitle} · ${e.clubOwner?.name ?? 'a club'}'s member` : e.planTitle}
@@ -167,9 +167,28 @@ export function Admin() {
                       )}
                     </div>
                     <div class="s">
-                      {u.email} · joined {day(u.createdAt)} · last seen {day(u.lastSeenAt)}
+                      {u.email}
+                      {u.phone ? ` · ${u.phone}` : ''} · joined {day(u.createdAt)} · last seen {day(u.lastSeenAt)}
                     </div>
                     <div class="row wrap" style="gap:8px;margin-top:6px;align-items:center">
+                      {u.role !== 'super_admin' &&
+                        (u.blocked ? (
+                          <button class="btn sm" disabled={working} data-unblock onClick={() => void change(u, { blocked: false }, 'let back in')}>
+                            Unblock
+                          </button>
+                        ) : (
+                          <button
+                            class="btn sm danger"
+                            disabled={working}
+                            data-block-forever
+                            onClick={() => {
+                              const note = prompt(`Block ${u.name || u.email} (SV-${u.svNo}) for good? They are refused everything from their next tap. A note for the admins (optional):`);
+                              if (note !== null) void change(u, { blocked: true, blockedNote: note.trim() }, 'blocked for good');
+                            }}
+                          >
+                            Block for good
+                          </button>
+                        ))}
                       <label class="small muted">Role</label>
                       <select class="input" style="width:auto" value={u.role} disabled={working} data-role-select onChange={(e) => void change(u, { role: (e.currentTarget as HTMLSelectElement).value as UserRole }, `now ${roleTitle((e.currentTarget as HTMLSelectElement).value as UserRole)}`)}>
                         {USER_ROLES.map((r) => (

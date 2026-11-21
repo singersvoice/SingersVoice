@@ -430,9 +430,26 @@ function Lobby(props: {
       toast(errorText(e), 'warn');
     }
   };
+  /** Host: out of the meet now and blocked from every meet of mine, for good. */
+  const block = async (p: { participantId: string; displayName: string }) => {
+    if (!confirm(`Block ${p.displayName}? They are removed now and can never get into any meet of yours (Settings → Account lists who you blocked).`)) return;
+    try {
+      await session.block(p.participantId);
+      toast(`${p.displayName} is blocked from your meets`, 'ok');
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
   const setPolicy = async (open: boolean) => {
     try {
       await session.setStagePolicy(open ? 'open' : 'ask');
+    } catch (e) {
+      toast(errorText(e), 'warn');
+    }
+  };
+  const setMembersOnly = async (on: boolean) => {
+    try {
+      await session.setMembersOnly(on);
     } catch (e) {
       toast(errorText(e), 'warn');
     }
@@ -663,7 +680,7 @@ function Lobby(props: {
             )}
             <div class="stage-grid">
               {meet.stage.map((s) => (
-                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} canClaim={!s.participantId && (onStage || (!live && (host || openStage)))} onClaim={() => void claim(s.slot)} onRemove={host && s.participantId && s.participantId !== you.participantId ? () => void remove(s.participantId!) : undefined} onKick={host && s.participantId && s.participantId !== you.participantId ? () => void kick({ participantId: s.participantId!, displayName: s.displayName }) : undefined} />
+                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} canClaim={!s.participantId && (onStage || (!live && (host || openStage)))} onClaim={() => void claim(s.slot)} onRemove={host && s.participantId && s.participantId !== you.participantId ? () => void remove(s.participantId!) : undefined} onKick={host && s.participantId && s.participantId !== you.participantId ? () => void kick({ participantId: s.participantId!, displayName: s.displayName }) : undefined} onBlock={host && s.participantId && s.participantId !== you.participantId ? () => void block({ participantId: s.participantId!, displayName: s.displayName }) : undefined} />
               ))}
             </div>
             <div class="row">
@@ -729,6 +746,8 @@ function Lobby(props: {
               )}
             </div>
             {host && <Switch checked={openStage} onChange={(v) => void setPolicy(v)} label="Open stage: anyone may take a free slot" hint={openStage ? 'Switch off to be asked first' : 'Off: the audience asks, you decide who sings'} />}
+            {host && meet.membersOnly !== undefined && <Switch checked={meet.membersOnly} onChange={(v) => void setMembersOnly(v)} label="Club meet: members only" hint={meet.membersOnly ? 'Only the members of your club (and you) can come in — Club lists them' : 'Open: anyone with the link can come in'} />}
+            {!host && meet.membersOnly && <div class="small muted">A club meet: members only.</div>}
             {host && <MeetFilmSwitch film={stage.film} onStage={onStage} />}
             {host ? (
               <div class="small muted audience-list" data-audience={meet.audienceCount}>
@@ -742,9 +761,12 @@ function Lobby(props: {
                       <button type="button" class="chip-x" aria-label={`Remove ${p.displayName} from the meet`} title="Remove from the meet" onClick={() => void kick(p)}>
                         <IcX size={12} />
                       </button>
+                      <button type="button" class="chip-x" aria-label={`Block ${p.displayName} from all your meets`} title="Block: out now, and never into any meet of yours" data-block onClick={() => void block(p)}>
+                        ⛔
+                      </button>
                     </span>
                   ))}
-                <span class="faint"> · only you, the host, can remove anyone (× on a name or a slot)</span>
+                <span class="faint"> · only you, the host, can remove anyone (× on a name or a slot) or block them for good (⛔)</span>
               </div>
             ) : (
               <div class="small muted">
@@ -790,7 +812,7 @@ function MeetFilmSwitch(props: { film: MeetRecorder; onStage: boolean }) {
   );
 }
 
-function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; onClaim: () => void; onRemove?: () => void; onKick?: () => void }) {
+function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; onClaim: () => void; onRemove?: () => void; onKick?: () => void; onBlock?: () => void }) {
   const s = props.slot;
   return (
     <div class={`slot-card ${s.participantId ? 'taken' : ''} ${props.mine ? 'mine' : ''}`} style={{ borderColor: SLOT_COLORS[s.slot as SingerSlot] }}>
@@ -807,6 +829,11 @@ function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; on
       {props.onKick && (
         <button type="button" class="slot-kick" aria-label={`Remove ${s.displayName} from the meet`} title="Remove from the meet" onClick={props.onKick}>
           out
+        </button>
+      )}
+      {props.onBlock && (
+        <button type="button" class="slot-kick block" aria-label={`Block ${s.displayName} from all your meets`} title="Block: out now, and never into any meet of yours" onClick={props.onBlock}>
+          ⛔
         </button>
       )}
     </div>

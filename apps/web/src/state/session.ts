@@ -3,7 +3,7 @@
  * and the Google token lifecycle. Signals keep every screen in sync.
  */
 import { computed, signal } from '@preact/signals';
-import { asPlanId, type AccessStatus, type Entitlement, type MediaPermission, type PlanId, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { asPlanId, type AccessStatus, type Entitlement, type MediaPermission, type PlanId, type UserRecord, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import {
   AuthExpiredError,
   fetchProfile,
@@ -222,6 +222,19 @@ function readJson<T>(key: string): T | null {
     return null;
   }
 }
+
+/** My account as the service last gave it (/me): the SingersVoice number, the phone, blocked or not — beside the signals above. */
+export const account = signal<UserRecord | null>(readJson<UserRecord>('sv.account'));
+export function setAccount(u: UserRecord | null): void {
+  account.value = u;
+  try {
+    localStorage.setItem('sv.account', u ? JSON.stringify(u) : '');
+  } catch {
+    /* ignore */
+  }
+}
+/** Blocked for good by a super admin (a 403 `blocked` from any request lands here): every page shows the notice instead. */
+export const blockedAccount = computed(() => Boolean(account.value?.blocked) && role.value !== 'super_admin');
 
 /** My account id in the SVT DB (`g-<google sub>` / `dev-<id>`), from /me — what meets and catalog entries carry as owner. */
 export const accountUserId = signal<string>(localStorage.getItem('sv.accountUserId') ?? '');

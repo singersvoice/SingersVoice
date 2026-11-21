@@ -226,12 +226,27 @@ export interface PublishJobRequest {
 import type { Entitlement, PlanId } from './plans.ts';
 import type { AccessStatus } from './coupons.ts';
 
-/** Account record kept in the SVT DB (name/picture mirror the Google profile). */
+/**
+ * Account record kept in the SVT DB — the master table of every singer: one row per Google account, kept for
+ * good. `userId` is the key (`g-<Google id>`); `svNo` the SingersVoice number — a plain number given once, never
+ * reused, the one to quote (to block someone, to name a club member); name and picture mirror the Google profile.
+ * There is no password to reset: Google signs everyone in.
+ */
 export interface UserRecord {
   userId: string;
+  /** The SingersVoice number: SV-1000 upward, given when the account is made, never reused. */
+  svNo: number;
+  /** The Google account's id (the `sub` claim). */
+  googleId: string;
   email: string;
   name: string;
   picture: string;
+  /** A phone number the singer gave (Settings → Account), or ''. */
+  phone: string;
+  /** Blocked for good by a super admin: refused everything but their own standing (`/me`). */
+  blocked: boolean;
+  blockedAt: string | null;
+  blockedNote: string;
   /** The account's role (roles.ts): what it may send, record and open. */
   role: UserRole;
   /** The account's own subscription (null when it never had one). */
@@ -265,6 +280,9 @@ export interface AdminUsersResponse {
 /** A Super Admin's change to one account: its role, and/or what happens to its subscription. */
 export interface AdminUserUpdate {
   role?: UserRole;
+  /** Block the account for good (true) or let it back in (false), with a note for the admins. */
+  blocked?: boolean;
+  blockedNote?: string;
   /**
    * grant: the plan (`plan`, the Club owner plan when not named) for `months` months (the plan's own period when not
    * named) from now or from `startedAt`; renew: the same length on from the current expiry (or from now when it has

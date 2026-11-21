@@ -38,6 +38,18 @@ export interface CreateMeetRequest {
   trackTitle?: string;
   catalogTrackId?: string | null;
   backgroundId?: string;
+  /** A club owner's meet: members only (the default for a club owner), or open to anyone with the link. */
+  membersOnly?: boolean;
+}
+
+/** Someone a singer blocked (`GET /blocks`): they can never get into the singer's meets. */
+export interface BlockedUser {
+  userId: string;
+  svNo: number;
+  name: string;
+  picture: string;
+  email: string;
+  blockedAt: string;
 }
 
 export interface JoinMeetRequest {
@@ -149,6 +161,16 @@ export interface Routes {
   'GET /health': { res: HealthResponse };
   'GET /time': { res: TimeResponse };
   'GET /me': { res: MeResponse };
+  /** The singer's own details: the phone (optional; '' clears it). */
+  'PATCH /me': { req: { phone?: string }; res: MeResponse };
+  /** Who the singer blocked (none of them can get into the singer's meets); block by SingersVoice number or email; unblock. */
+  'GET /blocks': { res: { blocks: BlockedUser[] } };
+  'PUT /blocks': { req: { svNo?: number; email?: string; userId?: string }; res: { blocks: BlockedUser[]; blocked: BlockedUser } };
+  'DELETE /blocks/:userId': { res: { blocks: BlockedUser[] } };
+  /** The host removes someone from the meet and blocks them from every meet of theirs, for good. */
+  'POST /meets/:id/participants/:pid/block': { req: { resumeToken: string }; res: MeetSnapshot };
+  /** The club owner's switch on their meet: members only, or open. */
+  'POST /meets/:id/club': { req: { resumeToken: string; membersOnly: boolean }; res: MeetSnapshot };
   /** The coupon gate (coupons.ts): the code this account enters; the admin's list, the requirement, a coupon issued or changed (by email), one deleted. */
   'POST /coupon': { req: { code: string }; res: MeResponse };
   'GET /admin/coupons': { res: AdminCouponsResponse };

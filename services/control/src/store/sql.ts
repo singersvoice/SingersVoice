@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { accessOf, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type Bookmark, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { accessOf, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type BlockedUser, type Bookmark, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
@@ -16,7 +16,7 @@ export interface Subscription {
   updatedAt: string;
 }
 
-type UserRow = { user_id: string; email: string; name: string; picture: string; privileged: number; role?: string | null; created_at: string; last_seen_at: string; coupon_code?: string | null; coupon_at?: string | null; plan?: string | null; plan_until?: string | null; started_at?: string | null; sub_status?: string | null; sub_source?: string | null; sub_updated_at?: string | null };
+type UserRow = { user_id: string; email: string; name: string; picture: string; privileged: number; role?: string | null; created_at: string; last_seen_at: string; coupon_code?: string | null; coupon_at?: string | null; plan?: string | null; plan_until?: string | null; started_at?: string | null; sub_status?: string | null; sub_source?: string | null; sub_updated_at?: string | null; sv_no?: number | null; google_id?: string | null; phone?: string | null; blocked?: number | null; blocked_at?: string | null; blocked_note?: string | null };
 
 const ROLES: UserRole[] = ['audio', 'dual', 'club_owner', 'super_admin'];
 export const asRole = (v: unknown, fallback: UserRole = 'dual'): UserRole => (ROLES.includes(v as UserRole) ? (v as UserRole) : fallback);
@@ -55,9 +55,15 @@ export function userFromRow(r: UserRow, ctx: UserContext): UserRecord {
   const access = accessOf({ required: ctx.couponsRequired, superAdmin: role === 'super_admin', coupon: ctx.coupon, entered: r.coupon_code ?? '', now: ctx.now });
   return {
     userId: r.user_id,
+    svNo: Number(r.sv_no ?? 0),
+    googleId: r.google_id ?? (r.user_id.startsWith('g-') ? r.user_id.slice(2) : ''),
     email: r.email,
     name: r.name,
     picture: r.picture,
+    phone: r.phone ?? '',
+    blocked: Boolean(r.blocked),
+    blockedAt: r.blocked_at ?? null,
+    blockedNote: r.blocked_note ?? '',
     role,
     subscription,
     entitlement,
@@ -192,9 +198,49 @@ export class SqlStore {
     }
     const count = await this.countUsers();
     // The very first account becomes the super admin (bootstrap) unless told otherwise; everyone else starts as dual.
+    // The SingersVoice number: the next one, in order of creation, never a number given before (the unique index guards it).
     const privileged = u.privileged ?? count === 0;
-    await this.db.run('INSERT INTO users (user_id, email, name, picture, privileged, role, created_at, last_seen_at) VALUES (?,?,?,?,?,?,?,?)', [u.userId, u.email, u.name, u.picture, privileged ? 1 : 0, privileged ? 'super_admin' : 'dual', now, now]);
+    await this.db.run("INSERT INTO users (user_id, email, name, picture, privileged, role, created_at, last_seen_at, sv_no, google_id) VALUES (?,?,?,?,?,?,?,?,(SELECT COALESCE(MAX(sv_no), 999) + 1 FROM users),?)", [u.userId, u.email, u.name, u.picture, privileged ? 1 : 0, privileged ? 'super_admin' : 'dual', now, now, u.userId.startsWith('g-') ? u.userId.slice(2) : '']);
     return (await this.getUser(u.userId))!;
+  }
+
+  /** The singer's own details: the phone (optional). */
+  async setUserPhone(userId: string, phone: string): Promise<void> {
+    await this.db.run('UPDATE users SET phone=? WHERE user_id=?', [phone.trim().slice(0, 32), userId]);
+  }
+
+  /** A super admin blocks an account for good (or lets it back in), with a note for the admins. */
+  async setUserBlocked(userId: string, blocked: boolean, note = ''): Promise<void> {
+    await this.db.run('UPDATE users SET blocked=?, blocked_at=?, blocked_note=? WHERE user_id=?', [blocked ? 1 : 0, blocked ? new Date().toISOString() : null, note.slice(0, 200), userId]);
+  }
+
+  async getUserBySvNo(svNo: number): Promise<UserRecord | null> {
+    const r = await this.db.get<UserRow>(`${USER_SELECT} WHERE u.sv_no = ?`, [svNo]);
+    return r ? this.enrich(r) : null;
+  }
+
+  // ---------- blocks: who a singer keeps out of their meets ----------
+
+  async block(blockerUserId: string, blockedUserId: string): Promise<void> {
+    if (blockerUserId === blockedUserId) return;
+    await this.db.run('INSERT OR IGNORE INTO blocks (blocker_user_id, blocked_user_id, created_at) VALUES (?,?,?)', [blockerUserId, blockedUserId, new Date().toISOString()]);
+  }
+
+  async unblock(blockerUserId: string, blockedUserId: string): Promise<void> {
+    await this.db.run('DELETE FROM blocks WHERE blocker_user_id=? AND blocked_user_id=?', [blockerUserId, blockedUserId]);
+  }
+
+  async isBlocked(blockerUserId: string, blockedUserId: string): Promise<boolean> {
+    return Boolean(await this.db.get<{ x: number }>('SELECT 1 AS x FROM blocks WHERE blocker_user_id=? AND blocked_user_id=?', [blockerUserId, blockedUserId]));
+  }
+
+  /** Everyone a singer blocked, newest first, as they are known (name, number, picture). */
+  async listBlocks(blockerUserId: string): Promise<BlockedUser[]> {
+    const rows = await this.db.all<{ blocked_user_id: string; created_at: string; sv_no: number | null; name: string | null; picture: string | null; email: string | null }>(
+      'SELECT b.blocked_user_id, b.created_at, u.sv_no, u.name, u.picture, u.email FROM blocks b LEFT JOIN users u ON u.user_id = b.blocked_user_id WHERE b.blocker_user_id=? ORDER BY b.created_at DESC',
+      [blockerUserId],
+    );
+    return rows.map((r) => ({ userId: r.blocked_user_id, svNo: Number(r.sv_no ?? 0), name: r.name ?? 'Somebody', picture: r.picture ?? '', email: r.email ?? '', blockedAt: r.created_at }));
   }
 
   /**
@@ -498,6 +544,12 @@ export class SqlStore {
       out.push({ email: r.email, addedAt: r.added_at, user: r.user_id ? { userId: r.user_id, name: r.name ?? '', picture: r.picture ?? '' } : null });
     }
     return out;
+  }
+
+  /** Whether an address is on a club owner's list (a club meet's door). */
+  async isClubMember(ownerUserId: string, email: string): Promise<boolean> {
+    if (!email) return false;
+    return Boolean(await this.db.get<{ email: string }>('SELECT email FROM club_members WHERE owner_user_id=? AND email=?', [ownerUserId, lowerEmail(email)]));
   }
 
   async countClubMembers(ownerUserId: string): Promise<number> {

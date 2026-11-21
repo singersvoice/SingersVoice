@@ -18,12 +18,13 @@ import { Settings } from './screens/Settings.tsx';
 import { Plans } from './screens/Plans.tsx';
 import { BillingReturn } from './screens/BillingReturn.tsx';
 import { Club } from './screens/Club.tsx';
+import { Blocked } from './screens/Blocked.tsx';
 import { CouponGate } from './screens/CouponGate.tsx';
 import { AdminCoupons } from './screens/AdminCoupons.tsx';
 import { Admin } from './screens/Admin.tsx';
 import { TvCodeLink, TvScreen } from './screens/Tv.tsx';
 import { Setup, Welcome } from './screens/Welcome.tsx';
-import { couponNeeded, signedIn } from './state/session.ts';
+import { blockedAccount, couponNeeded, signedIn } from './state/session.ts';
 import { appSettings } from './state/settings.ts';
 
 /** Signed-in area. A deep link (e.g. a meet invite) is remembered and resumed after sign-in. */
@@ -41,7 +42,8 @@ function Guard(props: { children: preact.ComponentChildren }) {
     } else if (!appSettings.value.onboarded && relPath(loc.path) !== '/setup') loc.route(href('/setup'), true);
   }, [ok, loc.path]);
   if (!ok) return null;
-  // The coupon gate: an account the service says is out sees the Coupon screen in place of every page (coupons.ts).
+  // Blocked for good by a super admin: the notice in place of every page; the coupon gate likewise (coupons.ts).
+  if (blockedAccount.value) return <Blocked />;
   if (couponNeeded.value) return <CouponGate />;
   return <>{props.children}</>;
 }

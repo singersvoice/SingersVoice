@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { AdminBillingOverview, AdminCouponsResponse, BillingSettings, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlansResponse, UserRecord } from '@singersvoice/protocol';
+import type { AdminBillingOverview, AdminCouponsResponse, BillingSettings, BlockedUser, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlansResponse, UserRecord } from '@singersvoice/protocol';
 import { LIVE_KEEP } from '@singersvoice/protocol';
 import { createApp, type AppDeps } from '../src/app.ts';
 import { edgeCacheControl, edgeCacheTtl } from '../src/worker.ts';
@@ -523,6 +523,77 @@ describe('sv-control API', () => {
     expect((await app.request(`/tv/screens/${tvScreen.code}/events?tv=${tvScreen.token}`)).status).toBe(410);
     tvReader.cancel().catch(() => undefined);
     phoneReader.cancel().catch(() => undefined);
+  });
+
+  it('accounts: every account gets its SingersVoice number for good and may give a phone; a singer blocks somebody (by number) and they never get into the singer\'s meets; the host blocks from the room; a club owner\'s meets are members only until opened; a super admin blocks an account for good', async () => {
+    // The master table: a number each, in order, never two the same; the Google id beside it; a phone when given.
+    const me = async (who: string) => (await json<{ user: UserRecord }>(await app.request('/me', { headers: as(who) }))).user;
+    const nick = await me('nick');
+    const olga = await me('olga');
+    expect(nick.svNo).toBeGreaterThanOrEqual(1000);
+    expect(olga.svNo).toBeGreaterThan(nick.svNo);
+    expect((await me('nick')).svNo).toBe(nick.svNo); // kept
+    expect((await json<{ user: UserRecord }>(await app.request('/me', { method: 'PATCH', headers: as('nick'), body: JSON.stringify({ phone: ' +1 (555) 010-9999 <script>' }) }))).user.phone).toBe('+1 (555) 010-9999');
+    expect(nick.blocked).toBe(false);
+    // nick blocks olga by her number: she is on his list, and his meet is shut to her — and to nobody else.
+    const m = (await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('nick'), body: JSON.stringify({ title: "nick's night" }) }))).meet;
+    expect(m.membersOnly).toBeUndefined(); // not a club owner's meet
+    expect((await json<{ code: string }>(await app.request('/blocks', { method: 'PUT', headers: as('nick'), body: JSON.stringify({ svNo: 42 }) }))).code).toBe('no_such_singer');
+    expect((await json<{ code: string }>(await app.request('/blocks', { method: 'PUT', headers: as('nick'), body: JSON.stringify({ svNo: nick.svNo }) }))).code).toBe('self');
+    const blocked = await json<{ blocks: BlockedUser[] }>(await app.request('/blocks', { method: 'PUT', headers: as('nick'), body: JSON.stringify({ svNo: `SV-${olga.svNo}` }) }));
+    expect(blocked.blocks.map((b) => [b.svNo, b.name])).toEqual([[olga.svNo, 'olga']]);
+    expect((await json<{ code: string }>(await app.request(`/meets/${m.meetId}/join`, { method: 'POST', headers: as('olga'), body: JSON.stringify({ role: 'audience' }) }))).code).toBe('blocked_by_host');
+    expect((await app.request(`/meets/${m.meetId}/join`, { method: 'POST', headers: as('peggy'), body: JSON.stringify({ role: 'audience' }) })).status).toBe(200);
+    // Unblocked: she comes in. Blocked by email while in the meet: out of it at once, and shut out again.
+    await app.request(`/blocks/${olga.userId}`, { method: 'DELETE', headers: as('nick') });
+    const olgaIn = await json<JoinMeetResponse>(await app.request(`/meets/${m.meetId}/join`, { method: 'POST', headers: as('olga'), body: JSON.stringify({ role: 'audience' }) }));
+    expect(olgaIn.you.role).toBe('audience');
+    await app.request('/blocks', { method: 'PUT', headers: as('nick'), body: JSON.stringify({ email: 'Olga@dev.local' }) });
+    const host = await json<JoinMeetResponse>(await app.request(`/meets/${m.meetId}/join`, { method: 'POST', headers: as('nick'), body: JSON.stringify({ role: 'audience' }) }));
+    const snap = await json<MeetSnapshot>(await app.request(`/meets/${m.meetId}/heartbeat`, { method: 'POST', headers: as('nick'), body: JSON.stringify({ resumeToken: host.resumeToken, chatSince: 0 }) }));
+    expect(snap.participants.some((p) => p.userId === olga.userId)).toBe(false);
+    expect((await json<{ code: string }>(await app.request(`/meets/${m.meetId}/join`, { method: 'POST', headers: as('olga'), body: JSON.stringify({ role: 'audience' }) }))).code).toBe('blocked_by_host');
+    expect((await json<{ blocks: BlockedUser[] }>(await app.request('/blocks', { headers: as('nick') }))).blocks).toHaveLength(1);
+    // From the room: the host blocks peggy — removed now, on the list, shut out of this and every later meet of nick's.
+    const peggyP = snap.participants.find((p) => p.displayName === 'peggy')!;
+    expect((await app.request(`/meets/${m.meetId}/participants/${peggyP.participantId}/block`, { method: 'POST', headers: as('peggy'), body: JSON.stringify({ resumeToken: 'x' }) })).status).toBe(403);
+    const after = await json<MeetSnapshot>(await app.request(`/meets/${m.meetId}/participants/${peggyP.participantId}/block`, { method: 'POST', headers: as('nick'), body: JSON.stringify({ resumeToken: host.resumeToken }) }));
+    expect(after.participants.some((p) => p.displayName === 'peggy')).toBe(false);
+    expect((await json<{ blocks: BlockedUser[] }>(await app.request('/blocks', { headers: as('nick') }))).blocks.map((b) => b.name).sort()).toEqual(['olga', 'peggy']);
+    const m2 = (await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('nick'), body: JSON.stringify({ title: 'another night' }) }))).meet;
+    expect((await json<{ code: string }>(await app.request(`/meets/${m2.meetId}/join`, { method: 'POST', headers: as('peggy'), body: JSON.stringify({ role: 'audience' }) }))).code).toBe('blocked_by_host');
+    await app.request(`/meets/${m.meetId}/end`, { method: 'POST', headers: as('nick') });
+    await app.request(`/meets/${m2.meetId}/end`, { method: 'POST', headers: as('nick') });
+
+    // A club owner's meet: members only by default — a stranger is refused, a member (by email) comes in, the owner may open it; never members-only for anyone else.
+    await app.request(`/admin/users/${olga.userId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ subscription: { action: 'grant', plan: 'club' } }) });
+    expect((await me('olga')).role).toBe('club_owner');
+    await app.request('/club/members', { method: 'POST', headers: as('olga'), body: JSON.stringify({ email: 'quinn@dev.local' }) });
+    const club = (await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('olga'), body: JSON.stringify({ title: 'club night' }) }))).meet;
+    expect(club.membersOnly).toBe(true);
+    expect((await json<{ code: string }>(await app.request(`/meets/${club.meetId}/join`, { method: 'POST', headers: as('peggy'), body: JSON.stringify({ role: 'audience' }) }))).code).toBe('members_only');
+    expect((await app.request(`/meets/${club.meetId}/join`, { method: 'POST', headers: as('quinn'), body: JSON.stringify({ role: 'audience' }) })).status).toBe(200);
+    expect((await app.request(`/meets/${club.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'audience' }) })).status).toBe(200); // a super admin goes everywhere
+    const owner = await json<JoinMeetResponse>(await app.request(`/meets/${club.meetId}/join`, { method: 'POST', headers: as('olga'), body: JSON.stringify({ role: 'audience' }) }));
+    expect((await app.request(`/meets/${club.meetId}/club`, { method: 'POST', headers: as('quinn'), body: JSON.stringify({ resumeToken: 'x', membersOnly: false }) })).status).toBe(403);
+    const opened = await json<MeetSnapshot>(await app.request(`/meets/${club.meetId}/club`, { method: 'POST', headers: as('olga'), body: JSON.stringify({ resumeToken: owner.resumeToken, membersOnly: false }) }));
+    expect(opened.meet.membersOnly).toBe(false);
+    expect((await app.request(`/meets/${club.meetId}/join`, { method: 'POST', headers: as('peggy'), body: JSON.stringify({ role: 'audience' }) })).status).toBe(200);
+    const open2 = (await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('olga'), body: JSON.stringify({ title: 'open night', membersOnly: false }) }))).meet;
+    expect(open2.membersOnly).toBe(false);
+    expect((await json<{ code: string }>(await app.request(`/meets/${m2.meetId}/club`, { method: 'POST', headers: as('nick'), body: JSON.stringify({ resumeToken: host.resumeToken, membersOnly: true }) }))).code).not.toBe('ok'); // nick is no club owner (the meet is over anyway)
+    await app.request(`/meets/${club.meetId}/end`, { method: 'POST', headers: as('olga') });
+    await app.request(`/meets/${open2.meetId}/end`, { method: 'POST', headers: as('olga') });
+
+    // Blocked for good by the super admin: everything refused but /me, which says so; let back in; a super admin never.
+    expect((await json<{ user: UserRecord }>(await app.request(`/admin/users/${nick.userId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ blocked: true, blockedNote: 'abuse in the chat' }) }))).user).toMatchObject({ blocked: true, blockedNote: 'abuse in the chat' });
+    expect((await json<{ code: string }>(await app.request('/meets', { headers: as('nick') }))).code).toBe('blocked');
+    expect((await json<{ code: string }>(await app.request('/blocks', { headers: as('nick') }))).code).toBe('blocked');
+    expect((await me('nick')).blocked).toBe(true);
+    expect((await json<{ code: string }>(await app.request(`/admin/users/${(await me('alice')).userId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ blocked: true }) }))).code).toBe('super_admin');
+    await app.request(`/admin/users/${nick.userId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ blocked: false }) });
+    expect((await app.request('/meets', { headers: as('nick') })).status).toBe(200);
+    expect((await me('nick')).blocked).toBe(false);
   });
 
   it('meets: a crowd of forty costs a poll a dozen names and a count', async () => {

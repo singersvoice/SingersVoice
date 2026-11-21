@@ -181,6 +181,12 @@ export interface Meet {
   stagePolicy: StagePolicy;
   /** Accounts the host removed from this meet; they cannot come back in. */
   bannedUserIds?: string[];
+  /**
+   * A club meet (the host is a club owner): only the club's members — the accounts the owner named, by email —
+   * may come in, besides the host. The owner switches it in the room (`POST /meets/:id/club`); on by default
+   * for a club owner's meets, never on for anyone else's.
+   */
+  membersOnly?: boolean;
   /** Audience members waiting for the host's permission to sing. */
   requests: StageRequest[];
   /**

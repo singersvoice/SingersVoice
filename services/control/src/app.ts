@@ -172,6 +172,9 @@ const DEFAULT_ORIGINS = ['https://www.singersvoice.com', 'https://singersvoice.c
 const PREVIEW_ORIGIN = /^https:\/\/[a-z0-9-]+\.singersvoice\.pages\.dev$/;
 const originAllowed = (origin: string, extra: readonly string[] = []): boolean => DEFAULT_ORIGINS.includes(origin) || extra.includes(origin) || PREVIEW_ORIGIN.test(origin);
 
+/** An account whose meets are a club's: the club owner role with its plan in force (seats to name members). */
+const clubOwnerOf = (u: UserRecord): boolean => u.role === 'club_owner' && u.entitlement.plan === 'club';
+
 function err(c: Context<Env>, status: 400 | 401 | 403 | 404 | 409 | 410, code: string, message: string) {
   return c.json({ error: message, code }, status);
 }
@@ -329,6 +332,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     }
     if (!user) user = await deps.store.upsertUser({ userId: id.userId, email: id.email, name: id.name, picture: id.picture });
     c.set('user', user);
+    // An account a super admin blocked for good gets nothing but its own standing (/me) — on every request.
+    if (user.blocked && user.role !== 'super_admin' && path !== '/me') return err(c, 403, 'blocked', 'This account is blocked from SingersVoice');
     // The coupon gate (coupons.ts): an account that is not in gets nothing but its own standing (/me) and the way to enter
     // a code (/coupon) — on every request, so a coupon changed, expired or withdrawn by the admin denies at once.
     if (!user.access.ok && path !== '/me' && path !== '/coupon') return err(c, 403, 'coupon_required', user.access.note || 'A coupon is needed to use SingersVoice — ask the SingersVoice admin');
@@ -336,6 +341,69 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   });
 
   app.get('/me', (c) => c.json({ user: c.get('user') }));
+
+  /** The singer's own details: a phone number (optional; '' takes it off). */
+  app.patch('/me', async (c) => {
+    const { store } = c.get('deps');
+    const user = c.get('user');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { phone?: unknown };
+    if (typeof body.phone === 'string') {
+      const phone = body.phone.replace(/[^\d+() .-]/g, '').trim().slice(0, 32);
+      await store.setUserPhone(user.userId, phone);
+    }
+    return c.json({ user: (await store.getUser(user.userId))! });
+  });
+
+  // ---------- blocks: who a singer keeps out of their meets ----------
+
+  app.get('/blocks', async (c) => c.json({ blocks: await c.get('deps').store.listBlocks(c.get('user').userId) }));
+
+  /** Block somebody by their SingersVoice number, their email, or their id: they never get into this singer's meets (and are removed from the open ones). */
+  app.put('/blocks', async (c) => {
+    const { store } = c.get('deps');
+    const user = c.get('user');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { svNo?: unknown; email?: unknown; userId?: unknown };
+    let target: UserRecord | null = null;
+    if (typeof body.userId === 'string' && body.userId) target = await store.getUser(body.userId);
+    else if (typeof body.svNo === 'number' || (typeof body.svNo === 'string' && body.svNo)) {
+      const n = Number(String(body.svNo).replace(/^sv-?/i, ''));
+      if (Number.isInteger(n) && n > 0) target = await store.getUserBySvNo(n);
+    } else if (typeof body.email === 'string' && body.email.includes('@')) target = await store.getUserByEmail(body.email.trim());
+    if (!target) return err(c, 404, 'no_such_singer', 'No singer with that number or address — ask them for their SingersVoice number (Settings → Account)');
+    if (target.userId === user.userId) return err(c, 400, 'self', 'You cannot block yourself');
+    await store.block(user.userId, target.userId);
+    // Out of this host's open meets now.
+    for (const m of await store.listMeetsForUser(user.userId, 100)) {
+      if (m.hostUserId !== user.userId || !meetIsOpen(m)) continue;
+      const p = await store.getParticipantByUser(m.meetId, target.userId, 'member');
+      if (!p) continue;
+      ensureMeet(m);
+      m.bannedUserIds = [...new Set([...(m.bannedUserIds ?? []), target.userId])];
+      await store.removeParticipant(m.meetId, p.participantId);
+      reconcile(m, await store.listParticipants(m.meetId));
+      touch(m);
+      await store.saveMeet(m);
+      events.changed(m.meetId);
+    }
+    const blocks = await store.listBlocks(user.userId);
+    return c.json({ blocks, blocked: blocks.find((b) => b.userId === target!.userId)! });
+  });
+
+  /** Unblock: they may come into this singer's meets again — the open ones included (a block's removal is undone with it). */
+  app.delete('/blocks/:userId', async (c) => {
+    const { store } = c.get('deps');
+    const user = c.get('user');
+    const target = c.req.param('userId');
+    await store.unblock(user.userId, target);
+    for (const m of await store.listMeetsForUser(user.userId, 100)) {
+      if (m.hostUserId !== user.userId || !meetIsOpen(m) || !m.bannedUserIds?.includes(target)) continue;
+      ensureMeet(m);
+      m.bannedUserIds = m.bannedUserIds.filter((id) => id !== target);
+      await store.saveMeet(m);
+      events.changed(m.meetId);
+    }
+    return c.json({ blocks: await store.listBlocks(user.userId) });
+  });
 
   // ---------- TV screens (tv.ts): the handshake between a singer's phone and the TV showing their stage ----------
 
@@ -834,6 +902,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       catalogTrackId: body.catalogTrackId ?? null,
       backgroundId: String(body.backgroundId ?? 'mytestbg1'),
     });
+    // A club owner's meet is the club's: members only, unless the owner opens it (never on for anyone else's meet).
+    if (clubOwnerOf(user)) meet.membersOnly = body.membersOnly !== false;
     await c.get('deps').store.createMeet(meet);
     return c.json({ meet }, 201);
   });
@@ -905,6 +975,11 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     tick(meet);
     if (meet.state === 'expired') return err(c, 410, 'expired', 'This meet expired after 5 minutes without activity');
     if (meet.state === 'ended') return err(c, 410, 'ended', 'This meet has ended');
+    // The host's own word on who may come: somebody they blocked never does; a club meet takes the club's members alone.
+    if (user.userId !== meet.hostUserId && user.role !== 'super_admin') {
+      if (await store.isBlocked(meet.hostUserId, user.userId)) return err(c, 403, 'blocked_by_host', 'The host of this meet has blocked you');
+      if (meet.membersOnly && !(await store.isClubMember(meet.hostUserId, user.email))) return err(c, 403, 'members_only', `This is ${meet.hostName}'s club meet — members only. Ask ${meet.hostName} to add you to the club`);
+    }
     if (isBanned(meet, user.userId)) return err(c, 403, 'removed', 'The host removed you from this meet');
     const now = new Date().toISOString();
     const publisher = body.role === 'publisher';
@@ -1221,6 +1296,47 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!r.ok) return err(c, r.reason === 'not_host' ? 403 : 409, r.reason ?? 'kick', r.reason === 'not_host' ? 'Only the host removes people from the meet' : r.reason === 'self' ? 'The host cannot remove themselves' : 'This meet has ended');
     await store.removeParticipant(meet.meetId, target.participantId);
     reconcile(meet, await store.listParticipants(meet.meetId));
+    touch(meet);
+    await store.saveMeet(meet);
+    events.changed(meet.meetId);
+    return c.json((await snapshot(c, meet.meetId, host))!);
+  });
+
+  /** The host removes somebody and blocks them from every meet of theirs, for good (`blocks`). */
+  app.post('/meets/:id/participants/:pid/block', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const host = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!host) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (!isHost(meet, host)) return err(c, 403, 'not_host', 'Only the host blocks people');
+    const target = await store.getParticipant(meet.meetId, c.req.param('pid'));
+    if (!target) return err(c, 404, 'no_participant', 'They are no longer in the meet');
+    if (target.userId === host.userId) return err(c, 409, 'self', 'The host cannot block themselves');
+    await store.block(host.userId, target.userId);
+    const r = kick(meet, host, target);
+    if (r.ok) await store.removeParticipant(meet.meetId, target.participantId);
+    reconcile(meet, await store.listParticipants(meet.meetId));
+    touch(meet);
+    await store.saveMeet(meet);
+    events.changed(meet.meetId);
+    return c.json((await snapshot(c, meet.meetId, host))!);
+  });
+
+  /** The club owner's switch on their meet: members only (the club's rule), or open to anyone with the link. */
+  app.post('/meets/:id/club', async (c) => {
+    const { store } = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { resumeToken?: string; membersOnly?: unknown };
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    ensureMeet(meet);
+    const host = await participantFromBody(c, meet.meetId, body.resumeToken);
+    if (!host) return err(c, 403, 'not_participant', 'Join the meet first');
+    if (!isHost(meet, host)) return err(c, 403, 'not_host', 'Only the host sets who may come in');
+    if (!clubOwnerOf(c.get('user'))) return err(c, 403, 'not_club', 'Members only is for a club owner’s meets');
+    meet.membersOnly = Boolean(body.membersOnly);
     touch(meet);
     await store.saveMeet(meet);
     events.changed(meet.meetId);
@@ -1978,6 +2094,12 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const target = await store.getUser(id);
     if (!target) return err(c, 404, 'no_user', 'No such account');
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as AdminUserUpdate;
+    if (body.blocked !== undefined) {
+      // Blocked for good: refused everything from their next request. Never a super admin (make them something else first).
+      if (body.blocked && target.role === 'super_admin') return err(c, 409, 'super_admin', 'A super admin cannot be blocked — change their role first');
+      await store.setUserBlocked(id, Boolean(body.blocked), typeof body.blockedNote === 'string' ? body.blockedNote : '');
+      userTouch.delete(id); // the next request reads the row afresh
+    }
     if (body.role !== undefined) {
       if (!['audio', 'dual', 'club_owner', 'super_admin'].includes(body.role)) return err(c, 400, 'bad_request', 'role must be audio, dual, club_owner or super_admin');
       if (target.role === 'super_admin' && body.role !== 'super_admin' && (await store.countSuperAdmins()) <= 1) return err(c, 409, 'last_super_admin', 'This is the last super admin — make another one first');

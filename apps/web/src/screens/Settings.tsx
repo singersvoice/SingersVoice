@@ -1,4 +1,4 @@
-import { hoursLabel, roleTitle, type TvLook } from '@singersvoice/protocol';
+import { hoursLabel, roleTitle, type BlockedUser, type TvLook } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { BackgroundPicker } from '../components/BackgroundPicker.tsx';
 import { FxPanel } from '../components/FxPanel.tsx';
@@ -16,8 +16,8 @@ import { idb, STORES } from '../lib/idb.ts';
 import { asset, go, href } from '../lib/nav.ts';
 import { bytes, isStandalone, platformName } from '../lib/platform.ts';
 import { errorText, toast } from '../lib/toast.ts';
-import { canPublish, entitlement, isDrive, isSuperAdmin, ownsClub, profile, provider, role, signInWithGoogle, signOut, withProvider } from '../state/session.ts';
-import { checkControl, controlStatus, controlUrl, controlVersion, refreshAccount, setControlUrl } from '../lib/api.ts';
+import { account, canPublish, entitlement, isDrive, isSuperAdmin, ownsClub, profile, provider, role, setAccount, signInWithGoogle, signOut, withProvider } from '../state/session.ts';
+import { api, checkControl, controlStatus, controlUrl, controlVersion, refreshAccount, setControlUrl } from '../lib/api.ts';
 import { appSettings, audioSettings, pullSettings, updateApp, updateAudio } from '../state/settings.ts';
 
 interface Version {
@@ -114,8 +114,14 @@ export function Settings() {
             <div>
               <b>{p?.name ?? 'Not signed in'}</b>
               <div class="small muted">{isDrive.value ? p?.email : 'Device mode — files live in this browser'}</div>
+              {account.value?.svNo ? (
+                <div class="small" data-sv-no>
+                  Your SingersVoice number: <b>SV-{account.value.svNo}</b> <span class="faint">— yours for good; quote it to a club owner, or to be blocked or unblocked by name</span>
+                </div>
+              ) : null}
             </div>
           </div>
+          {controlStatus.value === 'online' && account.value && <AccountDetails />}
           {!isSuperAdmin.value && (
             <div class="row wrap" data-settings-standing>
               {entitlement.value && (
@@ -342,5 +348,94 @@ export function Settings() {
         </section>
       </div>
     </Page>
+  );
+}
+
+
+/** The singer's own details and their list: a phone (optional), and who they blocked — out of every meet of theirs, for good. */
+function AccountDetails() {
+  const a = account.value!;
+  const [phone, setPhone] = useState(a.phone);
+  const [savingPhone, setSavingPhone] = useState(false);
+  const [blocks, setBlocks] = useState<BlockedUser[] | null>(null);
+  const [who, setWho] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    void api
+      .get('GET /blocks', '/blocks')
+      .then((r) => setBlocks(r.blocks))
+      .catch(() => setBlocks([]));
+  }, []);
+  const savePhone = async () => {
+    setSavingPhone(true);
+    try {
+      const { user } = await api.patch('PATCH /me', '/me', { phone });
+      setAccount(user);
+      setPhone(user.phone);
+      toast(user.phone ? 'Phone saved' : 'Phone removed', 'ok');
+    } catch (e) {
+      toast(errorText(e), 'error');
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+  const block = async () => {
+    const w = who.trim();
+    if (!w) return;
+    setBusy(true);
+    try {
+      const r = await api.put('PUT /blocks', '/blocks', w.includes('@') ? { email: w } : { svNo: Number(w.replace(/^sv-?/i, '')) });
+      setBlocks(r.blocks);
+      setWho('');
+      toast(`${r.blocked.name} is blocked from your meets`, 'ok');
+    } catch (e) {
+      toast(errorText(e), 'error', 8000);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const unblock = async (u: BlockedUser) => {
+    try {
+      const r = await api.del('DELETE /blocks/:userId', `/blocks/${encodeURIComponent(u.userId)}`);
+      setBlocks(r.blocks);
+    } catch (e) {
+      toast(errorText(e), 'error');
+    }
+  };
+  return (
+    <>
+      <Field label="Phone (optional)" hint="Kept on your account for the SingersVoice admin to reach you. Nobody else sees it.">
+        <div class="row" style="gap:8px;align-items:center">
+          <input class="input" type="tel" value={phone} placeholder="+1 555 010 9999" data-phone onInput={(e) => setPhone((e.currentTarget as HTMLInputElement).value)} />
+          <button class="btn sm" disabled={savingPhone || phone === a.phone} onClick={() => void savePhone()}>
+            Save
+          </button>
+        </div>
+      </Field>
+      <Field label="People you blocked" hint="Somebody you block is out of your meets at once and can never get into any meet of yours — until you unblock them. Block by their SingersVoice number or email; the host's ⛔ in a meet does the same.">
+        <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+          <input class="input" style="max-width:260px" placeholder="SV-1234 or their email" value={who} data-block-who onInput={(e) => setWho((e.currentTarget as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && void block()} />
+          <button class="btn sm" disabled={busy || !who.trim()} data-block-add onClick={() => void block()}>
+            Block
+          </button>
+        </div>
+        {blocks === null ? (
+          <div class="small faint">Loading…</div>
+        ) : blocks.length === 0 ? (
+          <div class="small faint" data-blocks-empty>Nobody.</div>
+        ) : (
+          <div class="row wrap" data-blocks>
+            {blocks.map((u) => (
+              <span key={u.userId} class="chip" data-blocked={u.svNo}>
+                {u.name} · SV-{u.svNo}
+                <button type="button" class="chip-x" aria-label={`Unblock ${u.name}`} title="Unblock" onClick={() => void unblock(u)}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </Field>
+    </>
   );
 }

@@ -441,6 +441,36 @@ page closes (the phone forgets it). The TV page keeps the screen awake (wake loc
 stage is coming" from the claim until the picture's frames flow or a song's words arrive, and makes
 itself a new code when the service forgot it (a restart). `tools/ci/tv-e2e.mjs` runs the whole of it.
 
+## The master table of singers, blocking, club meets
+
+**One row per Google account, kept for good** (`users`, `store/schema.ts`): `user_id` (`g-<Google id>`,
+the key), `sv_no` — the **SingersVoice number**, SV-1000 upward in the order the accounts were made,
+given once by the insert's `MAX(sv_no) + 1` under a unique index, never reused; every account that
+existed before the column got its number in order of creation — `google_id`, `email`, `name`,
+`picture`, `phone` (optional, the singer's own, Settings → Account, `PATCH /me`), `coupon_code` (the
+gate, coupons.ts; its validity is the coupon's `expires_at`), `blocked` / `blocked_at` / `blocked_note`
+(a super admin's **block for good**, Admin → *Block for good* with a note: the service refuses the
+account everything but `/me` on every request from then — `403 blocked` — and the app shows the
+Blocked screen with the number; never a super admin), the role and, on `subscriptions`, the plan (Free,
+SVV, SVVPro, Club owner). There is no password or OTP to reset: Google signs everyone in, and the row
+carries the Google id. The number is what a singer quotes: Settings → Account shows it.
+
+**Blocking** (`blocks`: who blocked whom). A singer blocks somebody by their number or email
+(Settings → Account → *People you blocked*, `PUT /blocks`) or, as the host, from the room (⛔ on a
+name or a slot: `POST /meets/:id/participants/:pid/block` — out of the meet now and blocked): the
+blocked account is removed from the singer's open meets at once and **never gets into any meet of
+theirs** (`POST /meets/:id/join` → `403 blocked_by_host`, checked before anything else) until
+unblocked (`DELETE /blocks/:userId`, which also lifts the removal in the open meets). A super admin
+goes everywhere.
+
+**Club meets** — the club's rules on the club's own meets only. A meet created by a **club owner**
+(the role with its plan in force) is **members only** by default (`meet.membersOnly`, a switch when
+creating it and in the room — `POST /meets/:id/club`): besides the owner, only the accounts on the
+club's member list — the up-to-15 addresses the owner named on *My club* (`club_members`, the plan's
+seats) — may come in (`403 members_only`, with the owner's name and how to be let in); the owner may
+open the meet to anyone with the link. A meet of anyone else is never members-only, and a club's
+members are ordinary singers everywhere else.
+
 ## Roles, the Admin page and the club owner year
 
 Every account has one **role**, kept in the SVT DB (`users.role`) and read on every request

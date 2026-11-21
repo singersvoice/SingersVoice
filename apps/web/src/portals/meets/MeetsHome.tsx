@@ -8,13 +8,13 @@ import { useEffect, useState } from 'preact/hooks';
 import { BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { IcChat, IcPlus, IcStop, IcTrash, IcUsers } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
-import { Empty, Field, Progress, Sheet, Spinner } from '../../components/ui.tsx';
+import { Empty, Field, Progress, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { api, ApiError, checkControl, controlConfigured, controlStatus, refreshAccount } from '../../lib/api.ts';
 import { canPublish, isSameTrack, myCatalogUserId, myPublishedIds, publishTrack, searchCatalog } from '../../lib/catalog.ts';
 import { go, href } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
-import { accountUserId, profile, withProvider } from '../../state/session.ts';
+import { accountUserId, entitlement, isSuperAdmin, profile, withProvider } from '../../state/session.ts';
 import { appSettings, updateApp } from '../../state/settings.ts';
 
 export function MeetsHome() {
@@ -23,6 +23,9 @@ export function MeetsHome() {
   const [published, setPublished] = useState<Set<string>>(new Set());
   const [catalog, setCatalog] = useState<CatalogTrack[]>([]);
   const [title, setTitle] = useState('');
+  /** A club owner's meet is the club's: members only unless opened here (never a choice for anyone else). */
+  const clubOwner = entitlement.value?.via === 'own' && entitlement.value.plan === 'club' && !isSuperAdmin.value;
+  const [membersOnly, setMembersOnly] = useState(true);
   // "<id>" = one of my tracks, "catalog:<id>" = a public track straight from the catalog.
   const [trackId, setTrackId] = useState(() => {
     try {
@@ -84,6 +87,7 @@ export function MeetsHome() {
         trackTitle: fromCatalog?.title ?? t?.title ?? '',
         catalogTrackId,
         backgroundId: app.backgroundId,
+        ...(clubOwner ? { membersOnly } : {}),
       });
       go(`/meet/${encodeURIComponent(r.meet.meetId)}`);
     } catch (e) {
@@ -189,6 +193,7 @@ export function MeetsHome() {
             </select>
           </Field>
           {publishing && <Progress fraction={publishing.fraction} label={publishing.label} />}
+          {clubOwner && <Switch checked={membersOnly} onChange={setMembersOnly} label="Club meet: members only" hint={membersOnly ? 'Only the members of your club (and you) can come in — you can open it in the room' : 'Open: anyone with the link can come in'} />}
           <div class="row">
             <button class="btn" onClick={() => setBgOpen(true)}>
               Stage background

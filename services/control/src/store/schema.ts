@@ -183,6 +183,13 @@ CREATE TABLE IF NOT EXISTS coupons (
   updated_at TEXT NOT NULL,
   created_by TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS blocks (
+  blocker_user_id TEXT NOT NULL,
+  blocked_user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (blocker_user_id, blocked_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_user_id);
 CREATE TABLE IF NOT EXISTS video_usage (
   pool_user_id TEXT NOT NULL,
   period TEXT NOT NULL,
@@ -278,6 +285,11 @@ CREATE TABLE IF NOT EXISTS live_segments (
  *   payments.plan, …           — the plan paid for, Stripe's ids, the fee and the net, refunds (plans.ts)
  *   users.coupon_code          — the coupon the account entered at the gate (coupons.ts)
  *   users.prefs                — the songs the singer prefers (prefs.ts), as JSON
+ *   users.sv_no                — the SingersVoice number: SV-1000 upward in order of creation, given once, never reused
+ *   users.google_id            — the Google account's id (the user_id without its `g-`)
+ *   users.phone                — a phone number the singer gave (optional)
+ *   users.blocked, …           — blocked for good by a super admin (the flag, when, the admins' note)
+ * `blocks` is who blocked whom (a singer's own list): nobody blocked by a host gets into that host's meets.
  */
 export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string; after?: string }[] = [
   { table: 'users', column: 'role', ddl: "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'dual'", after: "UPDATE users SET role='super_admin' WHERE privileged=1" },
@@ -293,4 +305,11 @@ export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string; af
   { table: 'users', column: 'coupon_code', ddl: "ALTER TABLE users ADD COLUMN coupon_code TEXT NOT NULL DEFAULT ''" },
   { table: 'users', column: 'coupon_at', ddl: 'ALTER TABLE users ADD COLUMN coupon_at TEXT' },
   { table: 'users', column: 'prefs', ddl: "ALTER TABLE users ADD COLUMN prefs TEXT NOT NULL DEFAULT ''" },
+  // Every account that exists gets its number in the order it was made; the index keeps a number from ever being given twice.
+  { table: 'users', column: 'sv_no', ddl: 'ALTER TABLE users ADD COLUMN sv_no INTEGER', after: 'UPDATE users SET sv_no = 999 + (SELECT COUNT(*) FROM users u2 WHERE u2.created_at < users.created_at OR (u2.created_at = users.created_at AND u2.user_id <= users.user_id)); CREATE UNIQUE INDEX IF NOT EXISTS idx_users_sv_no ON users(sv_no)' },
+  { table: 'users', column: 'google_id', ddl: "ALTER TABLE users ADD COLUMN google_id TEXT NOT NULL DEFAULT ''", after: "UPDATE users SET google_id = substr(user_id, 3) WHERE user_id LIKE 'g-%'" },
+  { table: 'users', column: 'phone', ddl: "ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''" },
+  { table: 'users', column: 'blocked', ddl: 'ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0' },
+  { table: 'users', column: 'blocked_at', ddl: 'ALTER TABLE users ADD COLUMN blocked_at TEXT' },
+  { table: 'users', column: 'blocked_note', ddl: "ALTER TABLE users ADD COLUMN blocked_note TEXT NOT NULL DEFAULT ''" },
 ];
