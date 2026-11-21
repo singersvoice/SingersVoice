@@ -123,6 +123,9 @@ export function Settings() {
               ) : null}
             </div>
           </div>
+          <div class="small faint" data-no-passwords>
+            SingersVoice never sees or stores a password of yours: you sign in on Google's own page (and on X's or Facebook's, if you connect them for posting). Google's sign-in lives in this browser for an hour and is written nowhere else; a network's key is sealed on the SingersVoice service, never on your device or in your Drive, and Disconnect deletes it. Your settings sync through your own Drive (SingersVoice › Config).
+          </div>
           {controlStatus.value === 'online' && account.value && <AccountDetails />}
           {!isSuperAdmin.value && (
             <div class="row wrap" data-settings-standing>

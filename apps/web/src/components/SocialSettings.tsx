@@ -93,6 +93,9 @@ export function SocialSettings() {
       <div class="small muted">
         Connect your networks here and any performance saved to your Drive posts to them from SingersVoice, on your own handle: pick the section (from–to), the clip is made on this device, <b>Post</b> sends it, and the link comes back. On a phone, <b>Share…</b> can also hand a clip to any app installed.
       </div>
+      <div class="small faint" data-social-privacy>
+        You sign in on the network's own page — SingersVoice never sees your password there. The network hands SingersVoice a key, which is sealed on the SingersVoice service (never on this device, never in your Drive), used only when you post, and deleted by Disconnect.
+      </div>
       <Switch checked={app.socialOffer} onChange={(v) => updateApp({ socialOffer: v })} label="Offer to post a clip after I keep a take" hint="The clip sheet opens by itself when a take is kept; Post a clip is on every saved performance anyway." />
       <Field label="A clip starts out this long">
         <Seg<string> ariaLabel="Clip length" value={String(app.clipSeconds)} onChange={(v) => updateApp({ clipSeconds: Number(v) })} options={[{ v: '30', label: '30 s' }, { v: '60', label: '60 s' }, { v: '90', label: '90 s' }, { v: '120', label: '2 min' }]} />
