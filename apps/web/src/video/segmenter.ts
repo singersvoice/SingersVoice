@@ -15,6 +15,47 @@ export { alphaFromMaskPixels, coverRect, drawCover, MODEL_RETRY_MS, SEND_TIMEOUT
 const CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747';
 const LOCAL = `${import.meta.env.BASE_URL}mediapipe`;
 const LOAD_TIMEOUT_MS = 20_000;
+/** After the graphics failed the model (no WebGL context to be had), the silhouette stands in this long before the model is tried again. */
+const GPU_RETRY_MS = 30_000;
+
+/**
+ * The model draws through WebGL; when the browser has no context to give it (too many on the page, a GPU process
+ * gone, a tab the browser starved) MediaPipe's runtime calls `alert()` — "Failed to create WebGL canvas context
+ * when passing video frame" — once per frame, a modal over the stage every 60 ms. Here that call is taken away
+ * from it before it is ever loaded: the message goes to the console and `gpuFailedAt` marks the moment, the
+ * segmenter draws the silhouette and asks the model again later; any other alert passes through untouched.
+ */
+let gpuFailedAt = 0;
+let alertGuarded = false;
+function guardAlert(): void {
+  if (alertGuarded || typeof window === 'undefined' || typeof window.alert !== 'function') return;
+  alertGuarded = true;
+  const native = window.alert.bind(window);
+  window.alert = (message?: unknown) => {
+    if (/WebGL canvas context/i.test(String(message))) {
+      gpuFailedAt = Date.now();
+      console.warn('segmentation:', String(message), '— the soft silhouette stands in');
+      return;
+    }
+    native(message);
+  };
+}
+
+/** Whether the browser can give the model a WebGL context right now (the model never finds out the hard way). */
+export function webglAvailable(): boolean {
+  try {
+    const c = document.createElement('canvas');
+    const gl = (c.getContext('webgl2') ?? c.getContext('webgl')) as WebGLRenderingContext | null;
+    if (!gl) return false;
+    (gl.getExtension?.('WEBGL_lose_context') as { loseContext?: () => void } | null)?.loseContext?.(); // give the context back at once: the probe must not be one more context the page keeps
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** When the graphics last failed the model (0: never), for the stage's word on soft-focus mode. */
+export const gpuFailedAtMs = (): number => gpuFailedAt;
 
 interface SegResults {
   image: CanvasImageSource;
@@ -72,6 +113,8 @@ function acquireModel(): Promise<SelfieSegmentationLike> {
   if (sharedSeg) return Promise.resolve(sharedSeg);
   if (sharedSegPromise) return sharedSegPromise;
   sharedSegPromise = (async () => {
+    guardAlert();
+    if (!webglAvailable()) throw new Error('no WebGL context for the segmentation model');
     const base = await loadRuntime();
     const Ctor = (window as unknown as { SelfieSegmentation: SegCtor }).SelfieSegmentation;
     const seg = new Ctor({ locateFile: (f) => `${base}/${f}` });
@@ -208,6 +251,12 @@ export class PersonSegmenter {
     const timeout = () => new Promise<boolean>((r) => setTimeout(() => r(false), SEND_TIMEOUT_MS));
     const step = async () => {
       if (!this.running || this.gen !== gen || this.mode !== 'model' || !this.seg || !this.video) return;
+      // The graphics failed the model a moment ago (its runtime said so through the alert it no longer gets to show):
+      // the silhouette stands in, and the model is asked again once the context can be had.
+      if (gpuFailedAt && Date.now() - gpuFailedAt < GPU_RETRY_MS) {
+        this.gpuDown(gen);
+        return;
+      }
       const v = this.video;
       if (!this.busy && v.readyState >= 2 && v.videoWidth) {
         this.busy = true;
@@ -227,6 +276,27 @@ export class PersonSegmenter {
       this.timer = setTimeout(() => void step(), 1000 / TARGET_FPS);
     };
     void step();
+  }
+
+  /** No WebGL context for the model: the silhouette stands in, and the model is tried again once a context can be had. */
+  private gpuDown(gen: number): void {
+    this.stalls++;
+    this.busy = false;
+    this.setMode('oval');
+    this.loopOval(gen);
+    clearTimeout(this.retryTimer);
+    const again = () => {
+      clearTimeout(this.retryTimer);
+      if (!this.running || this.gen !== gen || !this.seg || this.mode !== 'oval') return;
+      if (!webglAvailable()) {
+        this.retryTimer = setTimeout(again, GPU_RETRY_MS);
+        return;
+      }
+      gpuFailedAt = 0;
+      this.setMode('model');
+      this.loopModel(gen);
+    };
+    this.retryTimer = setTimeout(again, GPU_RETRY_MS);
   }
 
   /** The model stopped answering: the silhouette stands in, and the model is asked again once it answers or after MODEL_RETRY_MS. */

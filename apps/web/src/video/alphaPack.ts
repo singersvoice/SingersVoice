@@ -159,37 +159,47 @@ export function softwareRenderer(gl: WebGLRenderingContext): boolean {
 }
 
 /**
- * Turns a packed <video> back into an RGBA canvas (person over transparent) — at `upscale` times
- * the frame's own size (enhance.ts: a small frame drawn larger than it arrived is upscaled
- * bicubically here rather than bilinearly by whoever draws it), sharpened. WebGL1 is enough and
- * universally available; without it the left half is drawn through an oval so the performer is
- * still never a rectangle.
+ * The one WebGL context every unpacker on the page draws through. A browser allows a page a dozen or so
+ * live WebGL contexts and quietly kills the oldest past that — with a context per singer, a ten-singer
+ * stage plus the cut-out model's own context was enough to lose one mid-show (and the model's alert
+ * about it was what singers saw). One context, lost and restored as one: while it is lost (or where there
+ * is none), every unpacker draws its soft-oval fallback and the show goes on; when it comes back, the
+ * shader is set up again and the next frame is unpacked properly.
  */
-export class AlphaUnpacker {
-  readonly canvas: HTMLCanvasElement;
-  private gl: WebGLRenderingContext | null;
+class SharedGl {
+  readonly canvas = document.createElement('canvas');
+  gl: WebGLRenderingContext | null = null;
   private tex: WebGLTexture | null = null;
-  private fallback: CanvasRenderingContext2D | null = null;
+  private prog: WebGLProgram | null = null;
+  private loc: { u: WebGLUniformLocation | null; sz: WebGLUniformLocation | null; k: WebGLUniformLocation | null; bic: WebGLUniformLocation | null } | null = null;
+  /** The context is lost right now (the fallback draws until it is restored). */
+  lost = false;
+  /** Lost contexts seen (diagnostics). */
+  losses = 0;
+  readonly software: boolean;
 
-  /** The size the frame is drawn at: `upscale` times its own — 1 where the GPU is software (the enhancement is not for a renderer that would pay for it in frames). */
-  readonly upscale: number;
-  /** Whether the sharpening and the bicubic upscale are on (off on a software renderer). */
-  readonly enhanced: boolean;
-
-  constructor(
-    readonly width = 320,
-    readonly height = 426,
-    upscale = 1,
-  ) {
-    this.canvas = document.createElement('canvas');
-    // The frame is read by whoever draws it (the stage, a recorder), in their own loops: keep it until the next draw.
-    this.gl = this.canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true, antialias: false, preserveDrawingBuffer: true }) as WebGLRenderingContext | null;
-    this.enhanced = this.gl !== null && !softwareRenderer(this.gl);
-    this.upscale = this.enhanced ? upscale : 1;
-    this.canvas.width = width * this.upscale;
-    this.canvas.height = height * this.upscale;
+  constructor() {
+    this.gl = this.canvas.getContext('webgl', { premultipliedAlpha: false, alpha: true, antialias: false, preserveDrawingBuffer: false }) as WebGLRenderingContext | null;
+    this.software = this.gl !== null && softwareRenderer(this.gl);
+    this.canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault(); // tells the browser we want it back
+      this.lost = true;
+      this.losses++;
+      this.tex = null;
+      this.prog = null;
+      this.loc = null;
+      console.warn('alpha unpacker: WebGL context lost — drawing the soft fallback until it is restored');
+    });
+    this.canvas.addEventListener('webglcontextrestored', () => {
+      this.lost = false;
+      if (this.gl) this.setup(this.gl);
+      console.warn('alpha unpacker: WebGL context restored');
+    });
     if (this.gl) this.setup(this.gl);
-    else this.fallback = this.canvas.getContext('2d')!;
+  }
+
+  get usable(): boolean {
+    return this.gl !== null && !this.lost && this.prog !== null;
   }
 
   private setup(gl: WebGLRenderingContext): void {
@@ -217,32 +227,90 @@ export class AlphaUnpacker {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.uniform1i(gl.getUniformLocation(prog, 't'), 0);
-    gl.uniform2f(gl.getUniformLocation(prog, 'u'), 1 / (this.width * 2), 1 / this.height);
-    gl.uniform2f(gl.getUniformLocation(prog, 'sz'), this.width * 2, this.height);
-    gl.uniform1f(gl.getUniformLocation(prog, 'k'), this.enhanced ? SHARPEN : 0);
-    gl.uniform1f(gl.getUniformLocation(prog, 'bic'), this.upscale > 1 ? 1 : 0);
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    this.prog = prog;
+    this.loc = { u: gl.getUniformLocation(prog, 'u'), sz: gl.getUniformLocation(prog, 'sz'), k: gl.getUniformLocation(prog, 'k'), bic: gl.getUniformLocation(prog, 'bic') };
+  }
+
+  /** Unpack `video` (packed 2W×H) at `outW`×`outH` onto this context's canvas; false when the context cannot do it right now. */
+  draw(video: HTMLVideoElement, frameW: number, frameH: number, outW: number, outH: number, sharpen: number, bicubic: boolean): boolean {
+    const gl = this.gl;
+    if (!gl || !this.usable || !this.tex || !this.loc) return false;
+    if (this.canvas.width !== outW || this.canvas.height !== outH) {
+      this.canvas.width = outW;
+      this.canvas.height = outH;
+    }
+    gl.viewport(0, 0, outW, outH);
+    gl.uniform2f(this.loc.u, 1 / (frameW * 2), 1 / frameH);
+    gl.uniform2f(this.loc.sz, frameW * 2, frameH);
+    gl.uniform1f(this.loc.k, sharpen);
+    gl.uniform1f(this.loc.bic, bicubic ? 1 : 0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    try {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, video);
+    } catch {
+      return false;
+    }
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    return true;
+  }
+}
+
+let shared: SharedGl | null = null;
+/** The page's one unpacking context (made on first use). */
+export function sharedGl(): SharedGl {
+  if (!shared) shared = new SharedGl();
+  return shared;
+}
+
+/**
+ * Turns a packed <video> back into an RGBA canvas (person over transparent) — at `upscale` times
+ * the frame's own size (enhance.ts: a small frame drawn larger than it arrived is upscaled
+ * bicubically here rather than bilinearly by whoever draws it), sharpened. The shader runs on the
+ * page's one shared WebGL context (above) and the result is copied onto this unpacker's own 2D
+ * canvas, which whoever draws the stage reads in their own loops. Without WebGL, or while the
+ * context is lost, the left half is drawn through an oval so the performer is still never a rectangle.
+ */
+export class AlphaUnpacker {
+  readonly canvas: HTMLCanvasElement;
+  private readonly ctx: CanvasRenderingContext2D;
+  private readonly gl: SharedGl;
+
+  /** The size the frame is drawn at: `upscale` times its own — 1 where the GPU is software (the enhancement is not for a renderer that would pay for it in frames). */
+  readonly upscale: number;
+  /** Whether the sharpening and the bicubic upscale are on (off on a software renderer, or without WebGL). */
+  readonly enhanced: boolean;
+  /** Frames drawn through the fallback (the context missing or lost), for diagnostics. */
+  fallbacks = 0;
+
+  constructor(
+    readonly width = 320,
+    readonly height = 426,
+    upscale = 1,
+  ) {
+    this.canvas = document.createElement('canvas');
+    this.gl = sharedGl();
+    this.enhanced = this.gl.gl !== null && !this.gl.software;
+    this.upscale = this.enhanced ? upscale : 1;
+    this.canvas.width = width * this.upscale;
+    this.canvas.height = height * this.upscale;
+    this.ctx = this.canvas.getContext('2d')!;
   }
 
   /** Unpack the current frame of `video` (packed 2W×H) into `canvas`. */
   draw(video: HTMLVideoElement): void {
     if (video.readyState < 2 || !video.videoWidth) return;
-    const gl = this.gl;
-    if (gl && this.tex) {
-      gl.bindTexture(gl.TEXTURE_2D, this.tex);
-      try {
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, video);
-      } catch {
-        return;
-      }
-      gl.clearColor(0, 0, 0, 0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      return;
-    }
-    const c = this.fallback!;
     const width = this.canvas.width;
     const height = this.canvas.height;
+    if (this.gl.draw(video, this.width, this.height, width, height, this.enhanced ? SHARPEN : 0, this.upscale > 1)) {
+      const c = this.ctx;
+      c.clearRect(0, 0, width, height);
+      c.drawImage(this.gl.canvas, 0, 0, width, height);
+      return;
+    }
+    this.fallbacks++;
+    const c = this.ctx;
     c.save();
     c.clearRect(0, 0, width, height);
     const g = c.createRadialGradient(width / 2, height * 0.42, Math.min(width, height) * 0.18, width / 2, height * 0.5, Math.min(width, height) * 0.62);
@@ -257,10 +325,7 @@ export class AlphaUnpacker {
   }
 
   dispose(): void {
-    const gl = this.gl;
-    if (gl && this.tex) gl.deleteTexture(this.tex);
-    this.tex = null;
-    this.gl = null;
+    /* nothing of the shared context is this unpacker's own */
   }
 }
 

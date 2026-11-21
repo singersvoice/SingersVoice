@@ -1227,7 +1227,7 @@ function LiveStage(props: {
   const paused = pb.state === 'paused';
   const micOpenNow = engine.micOpen.value;
   // Everything the stage has to say goes through the one notice control (stageNotices.ts); the bar keeps the count and the save state.
-  useStageNotices(stage, meet, session, true, { paused, pauseCued: pauseAt !== null, seekTarget, talkback: micOpenNow && stage.show.hearingOthers, requests: host ? meet.requests.length : 0, softFocus: camOn && blend === 'oval' && app.cutout });
+  useStageNotices(stage, meet, session, true, { paused, pauseCued: pauseAt !== null, seekTarget, talkback: micOpenNow && stage.show.hearingOthers, requests: host ? meet.requests.length : 0 });
   // The TV's clock: where the song is, several times a second (the TV runs it on between).
   const tvPlaying = started && !paused && countdown === null;
   useEffect(() => effect(() => tvLink.clock(tMs.value, tvPlaying, countdown)), [tvPlaying, countdown]);

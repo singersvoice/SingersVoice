@@ -169,8 +169,13 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       feed.onNote = null;
     };
   }, []);
-  // Another performer's picture standing still (frames arriving, nothing moving: their camera froze on their device): said on the strip, with Reconnect.
+  // Another performer's picture standing still: said in the notices, with Reconnect. Two things look the same on the stage
+  // and are told apart here — frames still arriving with nothing moving in them (their camera froze on their device: the
+  // link is fine, remaking it changes nothing; their own device restarts the camera once by itself) and frames that stopped
+  // arriving on a link that says it is connected (a decoder or transport that stalled): that one is re-made from here by
+  // itself, once a minute at most per singer, before anyone has to tap Reconnect.
   const [still, setStill] = useState<string[]>([]);
+  const autoRemadeAt = useRef(new Map<string, number>());
   useEffect(() => {
     compositor.onStill = setStill;
     return () => {
@@ -178,6 +183,22 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     };
   }, [compositor]);
   const reconnect = (id: string) => mesh?.remake(id);
+  useEffect(() => {
+    if (!still.length || !mesh) return;
+    const t0 = new Map(still.map((id) => [id, remoteVideos.current.get(id)?.video.currentTime ?? -1]));
+    const t = setTimeout(() => {
+      for (const id of still) {
+        const before = t0.get(id) ?? -1;
+        const now = remoteVideos.current.get(id)?.video.currentTime ?? -1;
+        if (before < 0 || now !== before) continue; // frames arrive: their camera, not the link
+        if (Date.now() - (autoRemadeAt.current.get(id) ?? 0) < 60_000) continue;
+        autoRemadeAt.current.set(id, Date.now());
+        console.warn(`stage: no frames from ${id} for a while on a connected link — re-making it`);
+        mesh.remake(id);
+      }
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [still.join(','), mesh]);
   // My camera's own line on the strip, once a second while it is on: what it does is never a guess.
   const [cameraLine, setCameraLine] = useState('');
   useEffect(() => {

@@ -11,6 +11,8 @@ import { useEffect } from 'preact/hooks';
 import { formatMs, hoursLabel } from '@singersvoice/protocol';
 import { serviceNotice } from '../../lib/api.ts';
 import { clearNotices, setNotice } from '../../lib/notices.ts';
+import { appSettings } from '../../state/settings.ts';
+import { gpuFailedAtMs } from '../../video/segmenter.ts';
 import type { MeetSession } from './meetSession.ts';
 import type { RoomStage } from './roomStage.ts';
 
@@ -20,7 +22,6 @@ export interface LiveNoticeContext {
   seekTarget: number | null;
   talkback: boolean;
   requests: number;
-  softFocus: boolean;
 }
 
 export function useStageNotices(stage: RoomStage, meet: Meet, session: MeetSession, onStage: boolean, live: LiveNoticeContext | null): void {
@@ -28,6 +29,8 @@ export function useStageNotices(stage: RoomStage, meet: Meet, session: MeetSessi
   const link = session.link.value;
   const notice = serviceNotice.value;
   const stillKey = stage.still.join(',');
+  const softFocus = onStage && stage.camOn && stage.blend === 'oval' && appSettings.value.cutout;
+  const gpuFailed = gpuFailedAtMs() > 0;
   const names = (id: string) => meet.stage.find((s) => s.participantId === id)?.displayName.split(' ')[0] || 'A singer';
 
   // ---- the link to the service ----
@@ -47,10 +50,10 @@ export function useStageNotices(stage: RoomStage, meet: Meet, session: MeetSessi
     setNotice('cam-error', stage.camError && stage.videoAllowed ? { severity: 'warn', text: `Camera: ${stage.camError}`, action: { label: 'Open the camera', run: () => void stage.openCamera() } } : null);
     setNotice('cam-health', stage.camOn && stage.camHealth !== 'ok' ? { severity: 'critical', text: stage.camHealth === 'frozen' ? 'Your camera froze — restart it' : stage.camHealth === 'muted' ? 'Your camera was muted by the browser — restart it' : 'Your camera stopped — restart it', detail: 'The stage restarts it once by itself; after that the restart is yours.', action: { label: 'Restart camera', run: () => void stage.restartCamera() } } : null);
     setNotice('cam-blend', stage.camOn && stage.blend === 'loading' ? { severity: 'info', text: 'Blending you into the stage…' } : null);
-    setNotice('cam-soft', live?.softFocus ? { severity: 'warn', text: 'Soft-focus mode', detail: 'The cut-out model could not run on this device (its graphics are busy or unavailable): your picture is framed with a soft edge instead.', dismissible: true } : null);
+    setNotice('cam-soft', softFocus ? { severity: 'warn', text: gpuFailed ? 'Soft-focus mode — the graphics could not run the cut-out' : 'Soft-focus mode', detail: gpuFailed ? 'The browser had no graphics context to give the cut-out model (too many pictures on the page, or the graphics process gave out): your picture is framed with a soft edge instead, and the model is tried again every half minute.' : 'The cut-out model is loading or could not run on this device: your picture is framed with a soft edge instead.', dismissible: true } : null);
     setNotice('cam-distance', stage.distance ? { severity: 'warn', text: stage.distance === 'close' ? 'Sit back a little — the stage shows what your camera sees' : 'Come a little closer to the camera' } : null);
     setNotice('cam-line', stage.camOn && stage.cameraLine ? { severity: 'info', text: stage.cameraLine, detail: 'Your camera, in words: frame rate, how the cut-out is made, a picture standing still.', dismissible: true } : null);
-  }, [onStage, stage.camError, stage.videoAllowed, stage.camOn, stage.camHealth, stage.blend, live?.softFocus, stage.distance, stage.cameraLine]);
+  }, [onStage, stage.camError, stage.videoAllowed, stage.camOn, stage.camHealth, stage.blend, softFocus, gpuFailed, stage.distance, stage.cameraLine]);
 
   // ---- the others' pictures ----
   useEffect(() => {
