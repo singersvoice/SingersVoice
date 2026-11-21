@@ -142,7 +142,7 @@ const google = createServer(async (req, res) => {
   }
   if (url.pathname === '/tokeninfo') {
     const m = /^tok-(\w+)$/.exec(url.searchParams.get('access_token') ?? '');
-    return m ? json(200, { sub: m[1], email: `${m[1]}@dev.local`, expires_in: '3600' }) : json(400, { error: 'invalid_token' });
+    return m ? json(200, { sub: m[1], email: `${m[1]}@dev.local`, expires_in: '3600', aud: 'e2e-client' }) : json(400, { error: 'invalid_token' });
   }
   if (url.pathname === '/oauth2/v3/userinfo') {
     const m = /^Bearer tok-(\w+)$/.exec(req.headers.authorization ?? '');

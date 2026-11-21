@@ -3,7 +3,12 @@
  * as `Authorization: Bearer …`. We verify it with Google's tokeninfo endpoint, check the audience
  * matches our OAuth client (when configured) and cache the result until the token expires.
  *
- * Dev/CI: with DEV_AUTH=1 a request may instead carry `X-Dev-User: <id>` (+ `X-Dev-Name`).
+ * Dev/CI: with DEV_AUTH=1 a request may instead carry `X-Dev-User: <id>` (+ `X-Dev-Name`) — Node only;
+ * the Worker never honours it (worker.ts).
+ *
+ * The audience check is what keeps a token issued to some other app (any site the singer signed into
+ * with Google) from passing as the singer here: without our client id to check against, Google
+ * sign-ins are refused outright (docs/SECURITY.md) rather than taken on trust.
  */
 export interface AuthIdentity {
   userId: string;
@@ -39,6 +44,7 @@ export type Authenticator = (req: Request) => Promise<AuthIdentity | null>;
 
 export function createAuthenticator(opts: AuthOptions): Authenticator {
   const f = opts.fetchImpl ?? fetch;
+  let warned = false;
   return async (req) => {
     if (opts.devAuth) {
       const dev = req.headers.get('x-dev-user');
@@ -48,7 +54,12 @@ export function createAuthenticator(opts: AuthOptions): Authenticator {
     }
     const auth = req.headers.get('authorization') ?? '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-    if (!token) return null;
+    if (!token || token.length > 4096) return null;
+    if (!opts.googleClientId) {
+      if (!warned) console.error('[auth] GOOGLE_CLIENT_ID is not set: Google sign-ins are refused (a token could be any app\'s)');
+      warned = true;
+      return null;
+    }
     const hit = cache.get(token);
     if (hit && hit.expiresAt > Date.now()) return hit.identity;
 
@@ -56,7 +67,8 @@ export function createAuthenticator(opts: AuthOptions): Authenticator {
     if (!infoRes.ok) return null;
     const info = (await infoRes.json()) as TokenInfo;
     if (!info.sub || info.error) return null;
-    if (opts.googleClientId && info.aud && info.aud !== opts.googleClientId) return null;
+    // The token must have been issued to this app: a token of any other app's is not a sign-in here.
+    if (info.aud !== opts.googleClientId) return null;
 
     let name = '';
     let picture = '';

@@ -117,6 +117,9 @@ Once sign-in works on the domain (a week or two for people to see the new addres
 
 `apps/web/scripts/postbuild.mjs`: on GitHub Pages a `404.html` copy of the app (its only way to a single-page app)
 and `.nojekyll`; on Cloudflare Pages no `404.html` (Pages serves `index.html` for every route by itself) and a
-`_headers` file: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options: DENY`, a `Permissions-Policy` that
-keeps the camera, the microphone and screen capture to the site itself, a year's immutable cache for the hashed
-`/assets/*`, a week for the model files, none for the service worker. `version.json` names the host.
+`_headers` file (`apps/web/scripts/headers.mjs`, the one place): a **Content-Security-Policy** (scripts from the
+site, Google's sign-in and Picker and the MediaPipe CDN only; frames from Google only; never framed; docs/SECURITY.md),
+`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options: DENY`, a `Permissions-Policy` that keeps the camera,
+the microphone and screen capture to the site itself, `Cross-Origin-Opener-Policy`, a year's immutable cache for the
+hashed `/assets/*`, a week for the model files, none for the service worker. `vite preview` sends the same headers,
+so every browser test runs under the site's policy. `version.json` names the host.

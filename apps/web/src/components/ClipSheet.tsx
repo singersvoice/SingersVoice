@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api, controlConfigured } from '../lib/api.ts';
 import { canShareFile, clipExt, makeClip, shareClip, type Clip, type ClipProgress } from '../lib/clip.ts';
 import { downloadBlob } from '../lib/download.ts';
-import { href } from '../lib/nav.ts';
+import { href, safeHref } from '../lib/nav.ts';
 import { errorText, toast } from '../lib/toast.ts';
 import { appSettings } from '../state/settings.ts';
 import { IcDownload, IcPlay, IcShare, IcStop } from './icons.tsx';
@@ -261,7 +261,7 @@ export function ClipSheet(props: { source: ClipSource; onClose: () => void }) {
                     {socialTitle[p.network]} · {p.status}
                   </span>
                   {p.url && (
-                    <a href={p.url} target="_blank" rel="noopener">
+                    <a href={safeHref(p.url)} target="_blank" rel="noopener">
                       {p.url}
                     </a>
                   )}

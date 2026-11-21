@@ -32,7 +32,7 @@ import { Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
 import { recordAccess } from '../../lib/registry.ts';
 import { shareOrCopy } from '../../lib/download.ts';
-import { href } from '../../lib/nav.ts';
+import { href, safeHref } from '../../lib/nav.ts';
 import { isIOS, keepAwake } from '../../lib/platform.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { canPublish as canPublishSignal } from '../../state/session.ts';
@@ -1490,7 +1490,7 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
                     <div class="s">{formatMs(r.durationMs)} · {new Date(r.createdAt).toLocaleTimeString()}</div>
                   </div>
                   {r.driveFolderLink ? (
-                    <a class="btn sm" href={r.driveFolderLink} target="_blank" rel="noopener">
+                    <a class="btn sm" href={safeHref(r.driveFolderLink)} target="_blank" rel="noopener">
                       Drive
                     </a>
                   ) : (

@@ -74,7 +74,7 @@ describe('sv-control API', () => {
   });
 
   it('catalog: publish, list/search, pull count, only the owner can unpublish', async () => {
-    const body = { trackId: 'trk-1', title: 'Amma', artist: 'SV', genre: 'Telugu', language: 'Telugu', durationMs: 283000, singerCount: 5, lineCount: 67, driveFolderId: 'f1', driveFolderLink: '', trackJsonId: 'j1', audioId: 'a1', audioMime: 'audio/mpeg' };
+    const body = { trackId: 'trk-1', title: 'Amma', artist: 'SV', genre: 'Telugu', language: 'Telugu', durationMs: 283000, singerCount: 5, lineCount: 67, driveFolderId: 'folder00000f1', driveFolderLink: '', trackJsonId: 'json0000000j1', audioId: 'audio000000a1', audioMime: 'audio/mpeg' };
     const r = await app.request('/catalog/tracks', { method: 'POST', headers: as('alice'), body: JSON.stringify(body) });
     expect(r.status).toBe(201);
     const list = await json<CatalogListResponse>(await app.request('/catalog/tracks?q=amma', { headers: as('bob') }));
@@ -87,7 +87,7 @@ describe('sv-control API', () => {
   });
 
   it("catalog: the service fetches a published track's files from the owner's Drive for another account (no key, no CORS)", async () => {
-    const body = { trackId: 'trk-2', title: 'Ammo', artist: 'SV', genre: 'Telugu', language: 'Telugu', durationMs: 283000, singerCount: 5, lineCount: 67, driveFolderId: 'f2', driveFolderLink: '', trackJsonId: 'json0000000002', audioId: 'audio000000002', audioMime: 'audio/mpeg' };
+    const body = { trackId: 'trk-2', title: 'Ammo', artist: 'SV', genre: 'Telugu', language: 'Telugu', durationMs: 283000, singerCount: 5, lineCount: 67, driveFolderId: 'folder00000f2', driveFolderLink: '', trackJsonId: 'json0000000002', audioId: 'audio000000002', audioMime: 'audio/mpeg' };
     expect((await app.request('/catalog/tracks', { method: 'POST', headers: as('alice'), body: JSON.stringify(body) })).status).toBe(201);
     // Drive as seen anonymously: the first endpoint answers with its HTML "cannot download" page, the next with the file.
     const asked: string[] = [];
@@ -1536,6 +1536,38 @@ describe('sv-control API', () => {
     } finally {
       delete deps.social;
     }
+  });
+
+  it('hardening: resume tokens are long and random; links kept for others are https or nothing (a javascript: link never); a chat flood is held; the Drive ids of a catalog entry are ids', async () => {
+    const created = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('alice'), body: JSON.stringify({ title: 'Hardening' }) }));
+    const meet = created.meet;
+    const host = await json<JoinMeetResponse>(await app.request(`/meets/${meet.meetId}/join`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ role: 'audience' }) }));
+    expect(host.resumeToken).toMatch(/^rt-[A-Za-z0-9_-]{32}$/);
+    // Twenty lines in ten seconds, then "slow down" — the lines before went through.
+    let held = 0;
+    for (let i = 0; i < 25; i++) {
+      const r = await app.request(`/meets/${meet.meetId}/chat`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, text: `line ${i}` }) });
+      if (r.status === 429) held++;
+      else expect(r.status).toBe(201);
+    }
+    expect(held).toBe(5);
+    // A performance registered with a javascript: link keeps no link; an https one is kept as given.
+    const perf = await json<{ performance: { link: string | null; videoLink: string | null } }>(await app.request(`/meets/${meet.meetId}/performances`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ performanceId: 'perf-hard-1', songTitle: 'S', link: 'javascript:alert(1)', videoLink: 'https://drive.google.com/file/d/abc123/view' }) }));
+    expect(perf.performance).toMatchObject({ link: null, videoLink: 'https://drive.google.com/file/d/abc123/view' });
+    expect((await app.request(`/meets/${meet.meetId}/performances`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ performanceId: 'not an id!', songTitle: 'S' }) })).status).toBe(400);
+    const rec = await json<{ recording: { driveFolderLink: string | null } }>(await app.request(`/meets/${meet.meetId}/recordings`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken, performanceId: 'perf-hard-2', driveFolderLink: 'data:text/html,hi' }) }));
+    expect(rec.recording.driveFolderLink).toBeNull();
+    // An invite needs an https link to the show.
+    const show = { driveId: 'show000000hard', mimeType: 'video/mp4', bytes: 10 };
+    expect((await app.request('/performances/perf-hard-3/invite', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ show: { ...show, link: 'javascript:void(0)' }, layers: [{ slot: 1, displayName: 'alice' }] }) })).status).toBe(400);
+    expect((await app.request('/performances/perf-hard-3/invite', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ show: { ...show, link: 'https://drive.google.com/file/d/show000000hard/view' }, layers: [{ slot: 1, displayName: 'alice' }] }) })).status).toBe(201);
+    // A catalog entry's ids are Drive ids; its folder link https.
+    const pub = { trackId: 'trk-hard', title: 'H', driveFolderId: 'folder0000hard', trackJsonId: 'json000000hard', audioId: 'audio00000hard' };
+    expect((await app.request('/catalog/tracks', { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...pub, audioId: 'x' }) })).status).toBe(400);
+    expect((await app.request('/catalog/tracks', { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...pub, trackId: '../etc' }) })).status).toBe(400);
+    expect((await app.request('/catalog/tracks', { method: 'POST', headers: as('alice'), body: JSON.stringify({ ...pub, driveFolderLink: 'javascript:1' }) })).status).toBe(400);
+    expect((await app.request('/catalog/tracks', { method: 'POST', headers: as('alice'), body: JSON.stringify(pub) })).status).toBe(201);
+    await app.request(`/meets/${meet.meetId}/end`, { method: 'POST', headers: as('alice') });
   });
 
   it('roles: a new account is dual; the super admin sees every account, sets roles and club owner subscriptions; Publishing opens with the subscription and closes by itself at its expiry; the last super admin stays', async () => {

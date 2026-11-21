@@ -6,6 +6,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { siteHeaders } from './headers.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(root, '..', 'dist');
@@ -22,10 +23,7 @@ if (host === 'github') {
     path.join(dist, '_headers'),
     [
       '/*',
-      '  X-Content-Type-Options: nosniff',
-      '  Referrer-Policy: strict-origin-when-cross-origin',
-      '  X-Frame-Options: DENY',
-      '  Permissions-Policy: camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=()',
+      ...Object.entries(siteHeaders()).map(([k, v]) => `  ${k}: ${v}`),
       '/assets/*',
       '  Cache-Control: public, max-age=31536000, immutable',
       '/mediapipe/*',

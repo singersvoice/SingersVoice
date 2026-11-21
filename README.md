@@ -67,7 +67,7 @@ tools/brand/           make_brand.py (icons from the logo render), export_logo_b
 tools/backgrounds/     convert.sh (jpg/mp4 → web sizes + index.json)
 tools/ci/              check-budget.mjs, screenshots.mjs (viewport matrix + solo and live-meet e2e), live-duet.mjs, audio-measure.mjs (clicks, gaps, the song located in a capture), mix-lab.mjs (the audience's player, measured), hls-lab.mjs (the watch page's player on the browser's own muxer, with sound), e2e-song.mjs, audio-lab.mjs (the vocal chain and mix bus, measured), control-smoke.mjs
 tools/cf/              deploy.mjs — sv-control to Cloudflare Workers in one run; control-url.mjs — finds the service URL for Deploy web
-docs/                  GOOGLE_OAUTH.md, RESTORE_POINTS.md, ARCHITECTURE.md, TESTING.md, BILLING.md
+docs/                  GOOGLE_OAUTH.md, RESTORE_POINTS.md, ARCHITECTURE.md, TESTING.md, BILLING.md, SOCIAL.md, SECURITY.md, HOSTING.md
 ```
 
 ## Develop

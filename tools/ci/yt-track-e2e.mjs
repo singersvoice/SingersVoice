@@ -117,7 +117,7 @@ try {
   await wait(1500);
   ok((await page.locator('[data-yt-unavailable]').count()) === 0, 'the YouTube section finds the relay (yt-dlp on it) through the service');
   await page.locator('[data-yt-query]').fill('amma karoake');
-  ok(/“amma karaoke track”/.test(await page.locator('[data-yt-asked]').innerText()), 'the words are asked of YouTube as a karaoke track — "karaoke track" added, the misspelling set right — and the page says so');
+  ok(/backing track of “amma karoake”/.test(await page.locator('[data-yt-asked]').innerText()), 'the page says YouTube is searched for a backing track of the words (the song without its lead vocal) — the word "karaoke" on no screen');
   const asked = [];
   page.on('request', (r) => r.url().includes('/yt/search') && asked.push(new URL(r.url()).searchParams.get('q')));
   await page.locator('[data-yt-search]').click();

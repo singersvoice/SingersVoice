@@ -65,6 +65,13 @@ after any change under `apps/web/src/audio` or `apps/web/public/worklets`. The s
 (`audio/sync.ts`: the lag between envelopes, a take laid against its track, the sync check's clicks)
 are unit-tested on synthetic signals in `apps/web/test/sync.test.ts`.
 
+## The site's headers in every browser test
+
+`vite preview` (what every e2e runs against, `tools/ci/servers.mjs`) sends the same hardening headers the site
+sends from Cloudflare Pages (`apps/web/scripts/headers.mjs`): the Content-Security-Policy above all. A script,
+a worker, a frame or a connection the policy would stop on the site stops in the tests first — the console
+errors every e2e collects say `Refused to …`, and the feature that needed it fails its check.
+
 ## The TV in the room (`tools/ci/tv-e2e.mjs`)
 
 `BASE_PATH=/SingersVoice/ node tools/ci/tv-e2e.mjs <outDir>` (after the build): a TV — a browser context

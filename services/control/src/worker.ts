@@ -3,7 +3,7 @@
  * Object ("main"), so deploying needs only the standard Workers permissions (no D1 setup).
  *
  * Bindings (wrangler.jsonc): SVT_DB (Durable Object namespace, class SvtDb)
- * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH, ICE_SERVERS, YOUTUBE_HLS_BASE, GOOGLE_API_KEY (optional),
+ * Vars/secrets: GOOGLE_CLIENT_ID (required: without it every Google sign-in is refused), ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, ICE_SERVERS, YOUTUBE_HLS_BASE, GOOGLE_API_KEY (optional),
  * STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_URL (the plans through Stripe — docs/BILLING.md),
  * RELAY_URL, RELAY_SECRET (the RTMP relay for low-latency YouTube, Facebook, Instagram, Twitch — docs/RELAY.md),
  * X_CLIENT_ID, X_CLIENT_SECRET, META_APP_ID, META_APP_SECRET, SERVICE_URL (posting clips — docs/SOCIAL.md)
@@ -20,7 +20,6 @@ interface Env {
   ALLOWED_ORIGINS?: string;
   PRIVILEGED_EMAILS?: string;
   PUBLISH_KEY_SECRET?: string;
-  DEV_AUTH?: string;
   ICE_SERVERS?: string;
   YOUTUBE_HLS_BASE?: string;
   GOOGLE_API_KEY?: string;
@@ -54,7 +53,8 @@ export class SvtDb {
   constructor(state: DurableState, env: Env) {
     this.deps = {
       store: Object.assign(new SqlStore(durableSqlDriver(state.storage.sql)), { couponsRequiredDefault: env.COUPONS_REQUIRED !== '0' }),
-      auth: createAuthenticator({ googleClientId: env.GOOGLE_CLIENT_ID, devAuth: env.DEV_AUTH === '1' }),
+      // Never dev headers on the Worker: a production service takes Google sign-ins alone (DEV_AUTH is Node's, for tests and local runs).
+      auth: createAuthenticator({ googleClientId: env.GOOGLE_CLIENT_ID, devAuth: false }),
       secrets: new SecretBox(env.PUBLISH_KEY_SECRET ?? ''),
       runtime: 'cloudflare',
       iceServers: parseIceServers(env.ICE_SERVERS),

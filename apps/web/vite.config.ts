@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import preact from '@preact/preset-vite';
 import { defineConfig } from 'vitest/config';
 import { VitePWA } from 'vite-plugin-pwa';
+import { siteHeaders } from './scripts/headers.mjs';
 
 // GitHub Pages serves the app from /SingersVoice/; local dev and Cloudflare serve from /.
 const base = process.env.BASE_PATH ?? '/';
@@ -81,6 +82,9 @@ export default defineConfig({
     },
   },
   server: { port: 5173 },
+  // The preview (what every browser test runs against) sends the site's own hardening headers — the Content-Security-Policy
+  // above all — so a script, a frame or a connection the policy would stop on the site stops in the tests first.
+  preview: { headers: siteHeaders({ local: true }) },
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],

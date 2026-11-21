@@ -18,6 +18,8 @@ import {
   type BookmarkKind,
   meetIsOpen,
   newId,
+  newToken,
+  httpsLink,
   normalizeWatchUrl,
   type CatalogPublishRequest,
   type CatalogTrack,
@@ -213,6 +215,8 @@ const TV_PATH = /^\/tv\/screens(\/[A-Za-z0-9]+\/(events|signal|bye))?$/;
 /** New screens an address may register a minute (a TV page reloading is a few; a flood is not). */
 const TV_CREATE_PER_MIN = 20;
 const SOCIAL_CALLBACK = /^\/social\/(x|meta)\/callback$/;
+const CHAT_WINDOW_MS = 10_000;
+const CHAT_PER_WINDOW = 20;
 /** Posts an account may start in an hour, and the clip's size (a Worker takes 100 MB in a request). */
 const SOCIAL_POSTS_PER_HOUR = 12;
 const SOCIAL_CLIP_MAX_BYTES = 95 * 1024 * 1024;
@@ -224,6 +228,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   /** The TV screens and the handshake between a phone and its TV (tv.ts). */
   const tv = new TvScreens();
   const tvCreates = new Map<string, { n: number; at: number }>();
+  /** Chat lines per participant in a short window (a flood is kept out; the host kicks a pest). */
+  const chatRate = new Map<string, { n: number; at: number }>();
 
   app.use('*', async (c, next) => {
     const deps = await getDeps(c.env ?? {});
@@ -612,6 +618,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   app.post('/catalog/tracks', async (c) => {
     const body = (await c.req.json().catch(() => null)) as CatalogPublishRequest | null;
     if (!body?.trackId || !body.title || !body.driveFolderId || !body.trackJsonId || !body.audioId) return err(c, 400, 'bad_request', 'trackId, title, driveFolderId, trackJsonId and audioId are required');
+    if (!/^[A-Za-z0-9_-]{1,120}$/.test(String(body.trackId)) || ![body.driveFolderId, body.trackJsonId, body.audioId].every((id) => DRIVE_FILE_ID.test(String(id)))) return err(c, 400, 'bad_request', 'trackId and the Drive ids must be ids');
+    if (body.driveFolderLink && !httpsLink(body.driveFolderLink, 300)) return err(c, 400, 'bad_request', 'driveFolderLink must be an https link');
     const user = c.get('user');
     const existing = await c.get('deps').store.getCatalogTrack(body.trackId);
     if (existing && existing.ownerUserId !== user.userId) return err(c, 409, 'not_owner', 'Another user owns this catalog entry');
@@ -628,7 +636,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       singerCount: Math.max(1, Math.min(10, Number(body.singerCount) || 1)),
       lineCount: Math.max(0, Number(body.lineCount) || 0),
       driveFolderId: body.driveFolderId,
-      driveFolderLink: body.driveFolderLink || `https://drive.google.com/drive/folders/${body.driveFolderId}`,
+      driveFolderLink: httpsLink(body.driveFolderLink, 300) ?? `https://drive.google.com/drive/folders/${body.driveFolderId}`,
       trackJsonId: body.trackJsonId,
       audioId: body.audioId,
       audioMime: body.audioMime || 'audio/mpeg',
@@ -1028,7 +1036,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         stageRequest: 'none',
         joinedAt: now,
         lastSeenAt: now,
-        resumeToken: newId('rt-'),
+        resumeToken: `rt-${newToken()}`,
       };
     }
     p.lastSeenAt = now;
@@ -1423,6 +1431,14 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!p) return err(c, 403, 'not_participant', 'Join the meet first');
     const text = String(body.text ?? '').trim().slice(0, 500);
     if (!text) return err(c, 400, 'empty', 'Say something');
+    // A flood from one device (a stuck key, a script): a few lines a second at most.
+    const slot = chatRate.get(p.participantId);
+    const nowMs = Date.now();
+    if (slot && nowMs - slot.at < CHAT_WINDOW_MS) {
+      if (slot.n >= CHAT_PER_WINDOW) return err(c, 429, 'rate_limited', 'Slow down a little');
+      slot.n++;
+    } else chatRate.set(p.participantId, { n: 1, at: nowMs });
+    if (chatRate.size > 10_000) chatRate.clear();
     const message: Omit<ChatMessage, 'seq'> = { id: newId('msg-'), meetId: meet.meetId, participantId: p.participantId, displayName: p.displayName, text, sentAt: new Date().toISOString() };
     const saved = await store.addChat(meet.meetId, message);
     touch(meet);
@@ -1565,8 +1581,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       userId: user.userId,
       displayName: p?.displayName ?? user.name,
       slot: p?.slot ?? (typeof body.slot === 'number' ? Math.max(1, Math.min(10, body.slot)) : null),
-      performanceId: String(body.performanceId),
-      driveFolderLink: body.driveFolderLink ?? null,
+      performanceId: String(body.performanceId).slice(0, 80),
+      driveFolderLink: httpsLink(body.driveFolderLink),
       durationMs: Math.max(0, Number(body.durationMs) || 0),
       createdAt: new Date().toISOString(),
     };
@@ -1582,7 +1598,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
     const user = c.get('user');
     if (user.userId !== meet.hostUserId) return err(c, 403, 'not_host', 'Only the host registers the saved show'); // by account: the upload may finish after the host left the room
-    if (!body.performanceId) return err(c, 400, 'bad_request', 'performanceId is required');
+    if (!body.performanceId || !/^[A-Za-z0-9_-]{1,80}$/.test(String(body.performanceId))) return err(c, 400, 'bad_request', 'performanceId is required');
     const singers = Array.isArray(body.singers) ? body.singers.slice(0, 10).map((s) => ({ slot: Math.max(1, Math.min(10, Number(s?.slot) || 1)), displayName: String(s?.displayName ?? '').slice(0, 60), ...(s?.userId ? { userId: String(s.userId) } : {}) })) : [];
     const performance: MeetPerformance = {
       performanceId: String(body.performanceId),
@@ -1593,8 +1609,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
       songTitle: String(body.songTitle ?? meet.trackTitle ?? '').slice(0, 120),
       trackId: String(body.trackId ?? ''),
       singers,
-      link: body.link ? String(body.link) : null,
-      videoLink: body.videoLink ? String(body.videoLink) : null,
+      link: httpsLink(body.link),
+      videoLink: httpsLink(body.videoLink),
       durationMs: Math.max(0, Number(body.durationMs) || 0),
       bytes: Math.max(0, Number(body.bytes) || 0),
       mimeType: String(body.mimeType ?? '').slice(0, 80),
@@ -1680,8 +1696,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const performanceId = c.req.param('id');
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<InviteRequest>;
     const show = fileRef(body.show);
-    const link = String((body.show as { link?: unknown } | undefined)?.link ?? '').slice(0, 300);
-    if (!show || !link) return err(c, 400, 'bad_request', 'The show (its Drive file id, type, size and link) is required');
+    const link = httpsLink((body.show as { link?: unknown } | undefined)?.link, 300);
+    if (!show || !link) return err(c, 400, 'bad_request', 'The show (its Drive file id, type, size and https link) is required');
     const had = await store.getInvite(performanceId);
     if (had && had.ownerUserId !== user.userId) return err(c, 403, 'not_owner', 'Only the singer who saved this performance can open it for joining');
     const layersIn = Array.isArray(body.layers) ? body.layers.slice(0, MAX_LAYERS) : [];

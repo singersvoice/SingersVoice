@@ -52,6 +52,8 @@ export async function startServers({ base = '/SingersVoice/', logDir = process.e
       ...process.env,
       PORT: String(controlPort),
       DEV_AUTH: '1',
+      // Google sign-ins are checked against this client id (auth.ts refuses every token without one); the fakes answer with it.
+      GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || 'e2e-client',
       SV_DB: ':memory:',
       ALLOWED_ORIGINS: `http://localhost:${port}`,
       PRIVILEGED_EMAILS: 'carol@dev.local',

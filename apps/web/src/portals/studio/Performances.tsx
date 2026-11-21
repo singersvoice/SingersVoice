@@ -21,7 +21,7 @@ import { Page } from '../../components/Shell.tsx';
 import { Empty, Seg, Sheet, Spinner } from '../../components/ui.tsx';
 import { api, controlConfigured } from '../../lib/api.ts';
 import { downloadBlob, shareOrCopy } from '../../lib/download.ts';
-import { href } from '../../lib/nav.ts';
+import { href, safeHref } from '../../lib/nav.ts';
 import { closeInvite, invitePerformance, joinUrl } from '../../lib/joins.ts';
 import type { LoadedPerformance, PerformanceSummary } from '../../lib/storage/types.ts';
 import { chapterGlyph, marksLine, markTitle } from '../../video/chapters.ts';
@@ -236,7 +236,7 @@ export function Performances() {
                         <IcPlay size={14} /> Play
                       </button>
                     ) : url ? (
-                      <a class="btn sm primary" href={url} target="_blank" rel="noopener" title={marks.length ? 'The whole film, streamed from Drive' : 'Watch'}>
+                      <a class="btn sm primary" href={safeHref(url)} target="_blank" rel="noopener" title={marks.length ? 'The whole film, streamed from Drive' : 'Watch'}>
                         <IcPlay size={14} /> Watch
                       </a>
                     ) : own ? (
@@ -289,7 +289,7 @@ export function Performances() {
                     </div>
                   </div>
                   <div class="actions">
-                    <a class="btn sm primary" href={i.show.link} target="_blank" rel="noopener">
+                    <a class="btn sm primary" href={safeHref(i.show.link)} target="_blank" rel="noopener">
                       <IcPlay size={14} /> Watch
                     </a>
                     <a class="btn sm accent" href={href(joinPath(i.performanceId))} data-join-too>
@@ -578,7 +578,7 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
           </button>
         )}
         {s.link && isDrive.value && (
-          <a class="btn ghost" href={s.videoLink ?? s.link} target="_blank" rel="noopener">
+          <a class="btn ghost" href={safeHref(s.videoLink ?? s.link)} target="_blank" rel="noopener">
             Open in Drive
           </a>
         )}

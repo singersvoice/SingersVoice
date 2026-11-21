@@ -18,6 +18,9 @@ interface Subscriber {
   end: () => void;
 }
 
+/** Streams one participant may keep open at once (a device reconnecting overlaps itself for a moment; a flood does not): the oldest is closed for a new one. */
+export const STREAMS_PER_PARTICIPANT = 4;
+
 export class MeetEvents {
   private subs = new Map<string, Set<Subscriber>>();
   /** Meets with a 'changed' on its way: one action often changes a meet twice over (its own write, then a tidy-up while answering) — the devices are told once. */
@@ -30,6 +33,16 @@ export class MeetEvents {
     if (!set) {
       set = new Set();
       this.subs.set(meetId, set);
+    }
+    // One participant, too many streams: the oldest goes (its route notices and closes).
+    const mine = [...set].filter((x) => x.participantId === participantId);
+    for (const old of mine.slice(0, Math.max(0, mine.length + 1 - STREAMS_PER_PARTICIPANT))) {
+      set.delete(old);
+      try {
+        old.end();
+      } catch {
+        /* ignore */
+      }
     }
     set.add(sub);
     return () => {

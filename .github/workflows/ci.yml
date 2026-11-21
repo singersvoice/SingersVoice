@@ -52,7 +52,8 @@ jobs:
       - name: Secret scan (no credentials in the repo)
         run: |
           set -e
-          if git grep -nE 'AIza[0-9A-Za-z_-]{30,}|[0-9]+-[0-9a-z]{32}\.apps\.googleusercontent\.com|GOCSPX-[0-9A-Za-z_-]{20,}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----|(sk|rk)_(live|test)_[0-9A-Za-z]{20,}|whsec_[0-9A-Za-z]{20,}' -- ':!package-lock.json' ; then
+          # Google API keys and OAuth client secrets, private keys, Stripe keys and webhook secrets, GitHub and Fly tokens, Meta access tokens, X bearer tokens.
+          if git grep -nE 'AIza[0-9A-Za-z_-]{30,}|[0-9]+-[0-9a-z]{32}\.apps\.googleusercontent\.com|GOCSPX-[0-9A-Za-z_-]{20,}|-----BEGIN (RSA|EC|OPENSSH) PRIVATE KEY-----|(sk|rk)_(live|test)_[0-9A-Za-z]{20,}|whsec_[0-9A-Za-z]{20,}|ghp_[0-9A-Za-z]{30,}|github_pat_[0-9A-Za-z_]{30,}|(fo1|fm2)_[0-9A-Za-z_-]{30,}|EAA[0-9A-Za-z]{80,}|AAAAAAAAAAAAAAAAAAAAA[0-9A-Za-z%]{40,}' -- ':!package-lock.json' ; then
             echo "::error::Possible credential committed"; exit 1; fi
           echo "no credentials found"
 

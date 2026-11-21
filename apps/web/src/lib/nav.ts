@@ -9,6 +9,9 @@ export const hrefFor = (p: string, base: string): string => normalizeBase(base) 
 export const href = (p: string): string => hrefFor(p, BASE);
 export const asset = href;
 
+/** A link that came from somewhere else (the service, a registry row) as an href: http(s) or nothing — never javascript: or data:. */
+export const safeHref = (u: string | null | undefined): string | undefined => (u && /^https?:\/\/[^\s]+$/i.test(u) ? u : undefined);
+
 /** Path relative to the app base, always starting with '/'. */
 export function relPathFor(fullPath: string, base: string): string {
   const b = normalizeBase(base).replace(/\/$/, '');

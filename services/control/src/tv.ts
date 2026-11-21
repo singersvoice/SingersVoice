@@ -43,6 +43,8 @@ export const TV_UNCLAIMED_MS = 15 * 60_000;
 export const TV_IDLE_MS = 5 * 60_000;
 /** A signal's size (a WebRTC offer is a few KB). */
 export const TV_SIGNAL_MAX_BYTES = 32 * 1024;
+/** Streams one side of a screen may keep open at once (a page reloading overlaps itself; a flood does not): the oldest is closed for a new one. */
+export const TV_STREAMS_PER_SIDE = 3;
 
 /** A code as typed: upper case, spaces and dashes dropped, the letters the alphabet has (I, O, 0 and 1 are never in a code). */
 export const normalizeTvCode = (s: string): string =>
@@ -158,6 +160,15 @@ export class TvScreens {
     if (!set) {
       set = new Set();
       this.subs.set(s.code, set);
+    }
+    const same = [...set].filter((x) => x.side === side);
+    for (const old of same.slice(0, Math.max(0, same.length + 1 - TV_STREAMS_PER_SIDE))) {
+      set.delete(old);
+      try {
+        old.end();
+      } catch {
+        /* ignore */
+      }
     }
     set.add(sub);
     return () => {

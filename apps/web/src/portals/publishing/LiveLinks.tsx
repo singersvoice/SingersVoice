@@ -9,7 +9,7 @@
 import { DESTINATIONS, type Destination, type DestinationKind } from '@singersvoice/protocol';
 import { IcShare } from '../../components/icons.tsx';
 import { shareOrCopy } from '../../lib/download.ts';
-import { href } from '../../lib/nav.ts';
+import { href, safeHref } from '../../lib/nav.ts';
 import { toast } from '../../lib/toast.ts';
 
 /**
@@ -50,7 +50,7 @@ export function LiveLinks(props: {
         l.url ? (
           <span key={l.kind} class="livelink" data-live-link-row={l.kind}>
             <b class="small">{l.short}</b>
-            <a class="url mono small" href={l.url} target="_blank" rel="noopener" data-live-url={l.kind} title={`Open the ${l.short} page viewers watch on`}>
+            <a class="url mono small" href={safeHref(l.url)} target="_blank" rel="noopener" data-live-url={l.kind} title={`Open the ${l.short} page viewers watch on`}>
               {l.url}
             </a>
             <button class="btn sm" aria-label={`${l.short} link`} title="Copies the link (or opens the share sheet)" data-live-link={l.kind} onClick={() => void giveLink(props.title, l.short, l.url!)}>

@@ -11,7 +11,7 @@ import { IcDownload, IcPlay } from '../../components/icons.tsx';
 import { Empty, Progress, Spinner } from '../../components/ui.tsx';
 import { controlConfigured } from '../../lib/api.ts';
 import { bookmarkOfYoutube } from '../../lib/bookmarks.ts';
-import { href } from '../../lib/nav.ts';
+import { href, safeHref } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { importYoutubeTrack, searchYoutube, ytStatus } from '../../lib/ytTracks.ts';
@@ -124,7 +124,7 @@ export function YoutubeTracks(props: { tracks: TrackSummary[]; onAdded: () => vo
                       {busy ? <Spinner /> : <IcDownload size={16} />} {busy ? 'Fetching…' : 'Add to my Drive'}
                     </button>
                   )}
-                  <a class="btn icon sm ghost" aria-label="Open on YouTube" href={it.url} target="_blank" rel="noopener">
+                  <a class="btn icon sm ghost" aria-label="Open on YouTube" href={safeHref(it.url)} target="_blank" rel="noopener">
                     ↗
                   </a>
                 </div>

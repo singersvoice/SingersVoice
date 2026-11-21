@@ -26,7 +26,7 @@ import { Field, Progress, Seg, Spinner } from '../../components/ui.tsx';
 import { canPublish, catalogAvailable, myPublishedIds, publishTrack } from '../../lib/catalog.ts';
 import { decodeBlob, probeDuration } from '../../lib/decode.ts';
 import { shareOrCopy } from '../../lib/download.ts';
-import { go, href } from '../../lib/nav.ts';
+import { go, href, safeHref } from '../../lib/nav.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { isDrive, withProvider } from '../../state/session.ts';
@@ -199,7 +199,7 @@ export function TrackMaker(props: { id?: string }) {
                       <>
                         {' '}
                         ·{' '}
-                        <a href={saved.link} target="_blank" rel="noopener">
+                        <a href={safeHref(saved.link)} target="_blank" rel="noopener">
                           Open in Drive
                         </a>
                       </>

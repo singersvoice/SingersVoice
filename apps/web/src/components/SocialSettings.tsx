@@ -7,6 +7,7 @@
  * device. Below: the box that offers a clip after every take kept, the clip's starting length, and the
  * posts made so far.
  */
+import { safeHref } from '../lib/nav.ts';
 import { socialTitle, type SocialNetwork, type SocialProvider, type SocialStatus } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { api, controlConfigured } from '../lib/api.ts';
@@ -197,7 +198,7 @@ export function SocialSettings() {
                   </span>
                   <span>{p.title}</span>
                   {p.url && (
-                    <a href={p.url} target="_blank" rel="noopener">
+                    <a href={safeHref(p.url)} target="_blank" rel="noopener">
                       open
                     </a>
                   )}

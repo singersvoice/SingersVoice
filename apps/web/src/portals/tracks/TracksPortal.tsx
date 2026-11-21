@@ -20,7 +20,7 @@ import { catalogAvailable, isSameTrack, myCatalogUserId, myPublishedIds, publish
 import { probeDuration } from '../../lib/decode.ts';
 import { downloadBlob, shareOrCopy } from '../../lib/download.ts';
 import { GOOGLE_API_KEY, pickFromDrive } from '../../lib/google.ts';
-import { go, href } from '../../lib/nav.ts';
+import { go, href, safeHref } from '../../lib/nav.ts';
 import { loadPrefs, pickName, preferredLanguages, songPick, songPrefs } from '../../lib/prefs.ts';
 import type { TrackSummary } from '../../lib/storage/types.ts';
 import { errorText, toast } from '../../lib/toast.ts';
@@ -296,7 +296,7 @@ export function TracksPortal() {
                     <button class="btn" onClick={() => void copyLink(sel)}>
                       Copy Drive link
                     </button>
-                    <a class="btn ghost" href={sel.link} target="_blank" rel="noopener">
+                    <a class="btn ghost" href={safeHref(sel.link)} target="_blank" rel="noopener">
                       Open in Drive
                     </a>
                   </div>
@@ -424,7 +424,7 @@ function Catalog(props: { onPulled: () => void; myIds: Set<string> }) {
                     <IcDownload size={16} /> Add to my {isDrive.value ? 'Drive' : 'device'}
                   </button>
                 )}
-                <a class="btn icon sm ghost" aria-label="Open Drive folder" href={t.driveFolderLink} target="_blank" rel="noopener">
+                <a class="btn icon sm ghost" aria-label="Open Drive folder" href={safeHref(t.driveFolderLink)} target="_blank" rel="noopener">
                   <IcDrive size={18} />
                 </a>
               </div>

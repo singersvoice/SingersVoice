@@ -578,6 +578,17 @@ and Instagram together). Tests: `packages/protocol/test/social.test.ts`, `apps/w
 upload, the renewal, the Page pick, Instagram's processing, the let-go), `tools/ci/social-e2e.mjs` (the
 whole flow in the browser against `tools/ci/fake-social.mjs`).
 
+## Security
+
+docs/SECURITY.md has the whole of it: Google sign-in checked against this app's client id on every request
+(`auth.ts`; no client id → no sign-in), the few routes with credentials of their own (the resume token —
+192 random bits —, the TV's token, Stripe's signature, the social sign-in state), secrets sealed on the
+service and never answered to the browser, what a client sends bounded and shaped before it is kept
+(links for others `https://` or nothing), the floods held (meets, chat, streams, posts), the site's
+headers (`apps/web/scripts/headers.mjs`: the Content-Security-Policy and the rest, on Cloudflare Pages
+and in `vite preview` so every browser test runs under them), and the review of 20 Nov 2026 with its
+findings and changes.
+
 ## Coupons: who may use SingersVoice
 
 The super admin's gate (`packages/protocol/src/coupons.ts`, `coupons` and `settings.coupons` rows,
