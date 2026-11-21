@@ -99,6 +99,7 @@ import {
 import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
 import { MeetEvents } from './events.ts';
+import { normalizeTvCode, TV_SIGNAL_MAX_BYTES, TvScreens, type TvSide } from './tv.ts';
 import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setBackground, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
@@ -185,11 +186,18 @@ const EVENTS_MAX_MS = 20 * 60_000;
 const EVENTS_PING_MS = 25_000;
 /** The event stream's own path: the resume token in its query is the credential (the browser's EventSource sends no headers). */
 const EVENTS_PATH = /^\/meets\/[^/]+\/events$/;
+/** A TV screen's own routes (tv.ts): the TV has no sign-in — its token is its credential; `tv=` in the query says a TV speaks. */
+const TV_PATH = /^\/tv\/screens(\/[A-Za-z0-9]+\/(events|signal|bye))?$/;
+/** New screens an address may register a minute (a TV page reloading is a few; a flood is not). */
+const TV_CREATE_PER_MIN = 20;
 
 export function createApp(getDeps: (env: Record<string, unknown>) => Promise<AppDeps> | AppDeps): Hono<Env> {
   const app = new Hono<Env>();
   /** Who listens to which meet (events.ts): told after every change, so every device fetches it at once. */
   const events = new MeetEvents();
+  /** The TV screens and the handshake between a phone and its TV (tv.ts). */
+  const tv = new TvScreens();
+  const tvCreates = new Map<string, { n: number; at: number }>();
 
   app.use('*', async (c, next) => {
     const deps = await getDeps(c.env ?? {});
@@ -306,6 +314,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const path = c.req.path;
     if (path === '/health' || path === '/time' || path === '/billing/webhook' || path.startsWith('/watch/') || path.startsWith('/fake/') || c.req.method === 'OPTIONS') return next();
     if (c.req.method === 'GET' && EVENTS_PATH.test(path)) return next(); // the stream: by resume token (below)
+    if (TV_PATH.test(path) && ((c.req.method === 'POST' && path === '/tv/screens') || (c.req.method === 'GET' && path.endsWith('/events')) || c.req.query('tv'))) return next(); // a TV (by its token), a screen's stream (by either side's token): below
     const deps = c.get('deps');
     const id = await deps.auth(c.req.raw);
     if (!id) return err(c, 401, 'unauthenticated', 'Sign in with Google to use SingersVoice');
@@ -327,6 +336,128 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   });
 
   app.get('/me', (c) => c.json({ user: c.get('user') }));
+
+  // ---------- TV screens (tv.ts): the handshake between a singer's phone and the TV showing their stage ----------
+
+  /** The TV registers a screen: its code (shown big, and as a QR) and its token (kept to itself). No sign-in; a few a minute per address. */
+  app.post('/tv/screens', (c) => {
+    const ip = c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? 'local';
+    const now = Date.now();
+    const slot = tvCreates.get(ip);
+    if (slot && now - slot.at < 60_000) {
+      if (slot.n >= TV_CREATE_PER_MIN) return c.json({ error: 'Too many screens from this address — wait a minute', code: 'rate_limited' }, 429);
+      slot.n++;
+    } else tvCreates.set(ip, { n: 1, at: now });
+    if (tvCreates.size > 10_000) tvCreates.clear();
+    const s = tv.create();
+    return c.json({ code: s.code, token: s.token });
+  });
+
+  /** The singer takes a screen (the code on the TV): theirs from now on; the phone's stream token comes back. */
+  app.post('/tv/screens/:code/claim', (c) => {
+    const user = c.get('user');
+    const code = normalizeTvCode(c.req.param('code'));
+    const screen = tv.get(code);
+    if (!screen) return err(c, 404, 'no_screen', 'No TV shows that code — open www.singersvoice.com/tv on the TV and read the code there');
+    const s = tv.claim(code, { userId: user.userId, name: user.name });
+    if (!s) return err(c, 409, 'screen_taken', 'That TV is showing somebody else’s stage');
+    return c.json({ code: s.code, phoneToken: s.phoneToken });
+  });
+
+  /** The phone lets the screen go: the TV shows its code again. */
+  app.post('/tv/screens/:code/release', (c) => {
+    const user = c.get('user');
+    const s = tv.get(c.req.param('code'));
+    if (!s) return c.json({ ok: true });
+    if (s.claimedBy && s.claimedBy.userId !== user.userId) return err(c, 403, 'not_yours', 'That TV is not yours');
+    tv.release(s.code);
+    return c.json({ ok: true });
+  });
+
+  /** The TV's own good-bye (its page closing): the screen is forgotten and the phone told. */
+  app.post('/tv/screens/:code/bye', (c) => {
+    const got = tv.sideOf(c.req.param('code'), c.req.query('tv') ?? '');
+    if (got?.side === 'tv') tv.close(got.screen.code);
+    return c.json({ ok: true });
+  });
+
+  /**
+   * A signal from one side to the other (an offer, an answer, a candidate — whatever JSON the client's link speaks),
+   * delivered on the other side's stream. The TV says who it is with its token (`?tv=`); the phone with its account.
+   */
+  app.post('/tv/screens/:code/signal', async (c) => {
+    const code = c.req.param('code');
+    const tvToken = c.req.query('tv') ?? '';
+    let side: TvSide;
+    const screen = tv.get(code);
+    if (!screen) return err(c, 404, 'no_screen', 'That TV is gone');
+    if (tvToken) {
+      const got = tv.sideOf(code, tvToken);
+      if (!got || got.side !== 'tv') return err(c, 403, 'bad_token', 'Not this TV’s token');
+      side = 'tv';
+    } else {
+      const user = c.get('user');
+      if (!screen.claimedBy || screen.claimedBy.userId !== user.userId) return err(c, 403, 'not_yours', 'That TV is not yours');
+      side = 'phone';
+    }
+    const text = await c.req.text();
+    if (text.length > TV_SIGNAL_MAX_BYTES) return err(c, 400, 'too_big', 'The signal is too big');
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return err(c, 400, 'bad_request', 'A JSON signal, please');
+    }
+    return c.json({ delivered: tv.signal(code, side, data) });
+  });
+
+  /**
+   * A screen's event stream, one per side (`?side=tv&tv=<token>`, `?side=phone&pt=<phoneToken>`): `hello`, then
+   * `claimed` / `released` (to the TV), `signal` (either way), `closed` (the screen is gone), a ping every 25 s.
+   */
+  app.get('/tv/screens/:code/events', (c) => {
+    const code = c.req.param('code');
+    const want = c.req.query('side') === 'phone' ? 'phone' : 'tv';
+    const got = tv.sideOf(code, (want === 'tv' ? c.req.query('tv') : c.req.query('pt')) ?? '');
+    if (!got || got.side !== want) return err(c, want === 'tv' ? 410 : 403, want === 'tv' ? 'no_screen' : 'not_yours', want === 'tv' ? 'This screen is gone — make a new code' : 'That TV is not yours');
+    const screen = got.screen;
+    return streamSSE(c, async (stream) => {
+      let seq = 0;
+      let over = false;
+      let wake: (() => void) | null = null;
+      let writes: Promise<unknown> = Promise.resolve();
+      const send = (event: string, data: string, retry?: number) => {
+        writes = writes.then(() => stream.writeSSE({ event, data, ...(event === 'hello' ? {} : { id: String(++seq) }), ...(retry ? { retry } : {}) })).catch(() => undefined);
+        return writes;
+      };
+      const off = tv.subscribe(
+        screen.code,
+        want,
+        (ev) => void send(ev.type, JSON.stringify(ev)),
+        () => {
+          over = true;
+          wake?.();
+        },
+      );
+      stream.onAbort(() => {
+        over = true;
+        wake?.();
+      });
+      c.req.raw.signal?.addEventListener('abort', () => stream.abort(), { once: true });
+      await send('hello', JSON.stringify({ code: screen.code, claimedBy: screen.claimedBy?.name ?? null, otherSide: tv.listening(screen.code, want === 'tv' ? 'phone' : 'tv') }), 1500);
+      const until = Date.now() + EVENTS_MAX_MS;
+      while (!over && !stream.aborted && Date.now() < until) {
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+          setTimeout(resolve, EVENTS_PING_MS);
+        });
+        wake = null;
+        if (!over && !stream.aborted) await send('ping', '');
+      }
+      off();
+      await writes;
+    });
+  });
 
   // ---------- coupons: the gate (coupons.ts) ----------
 

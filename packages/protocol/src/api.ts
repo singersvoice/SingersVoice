@@ -1,7 +1,7 @@
 /** sv-control HTTP API shapes shared by the client and the server. All routes are JSON. */
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
 import type { InviteRequest, JoinInvite } from './join.ts';
-import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy } from './meet.ts';
+import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy, TvSignal } from './meet.ts';
 import type { MixBatch } from './mix.ts';
 import type { AdminUserUpdate, AdminUsersResponse, Destination, DestinationKind, DestinationUpdate, LiveStatus, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 import type { AdminBillingOverview, BillingSettings, ClubStatus, OrderRecord, PlanId, PlansResponse } from './plans.ts';
@@ -261,6 +261,11 @@ export interface Routes {
   'POST /meets/:id/signal': { req: SignalRequest; res: { seq: number; gone?: boolean } };
   'POST /meets/:id/signals': { req: { resumeToken: string; since: number }; res: { signals: MeetSignal[]; serverEpochMs: number } };
   'GET /ice': { res: { iceServers: IceServer[] } };
+  /** TV screens (services/control/src/tv.ts): the TV registers a code (no sign-in); the singer claims it; the two trade WebRTC signals through the service. */
+  'POST /tv/screens': { res: { code: string; token: string } };
+  'POST /tv/screens/:code/claim': { res: { code: string; phoneToken: string } };
+  'POST /tv/screens/:code/release': { res: { ok: true } };
+  'POST /tv/screens/:code/signal': { req: TvSignal; res: { delivered: boolean } };
   'POST /meets/:id/leave': { req: { resumeToken: string }; res: { ok: true } };
   'POST /meets/:id/recordings': { req: RegisterRecordingRequest; res: { recording: MeetRecording } };
   /** The host registers a song's saved show; `shareWith` = the Google accounts of everyone else in the meet, for the host's Drive to share the folder with. */

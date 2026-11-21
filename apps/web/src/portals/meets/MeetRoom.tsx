@@ -11,20 +11,22 @@ import { clampSlot, formatMs, hoursLabel, MAX_PERFORMERS, planParts, playbackPos
 import { activeRoomInfo } from './activeRoom.ts';
 import { useRoomStage, type RoomStage } from './roomStage.ts';
 import { SetListPanel } from './SetListPanel.tsx';
-import { useSignal } from '@preact/signals';
+import { effect, useSignal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, type AudioEngine } from '../../audio/engine.ts';
 import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
 import { StageBackground, StageBackgroundChoice } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcUsers, IcX, IcZoom } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcTv, IcUsers, IcX, IcZoom } from '../../components/icons.tsx';
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { audienceLine } from './audience.ts';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
+import { TvPanel } from '../../components/TvPanel.tsx';
+import { tvLink } from '../../lib/tv.ts';
 import { Page } from '../../components/Shell.tsx';
 import { Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
@@ -289,6 +291,14 @@ function Room(props: {
   // The song is paused on THIS device (at the cued instant, not when the next poll says so): talk-back opens for the pause.
   const [paused, setPaused] = useState(false);
   const stage = useRoomStage(session, meet, you, camera, { preparing: props.preparing, engine, paused, restartCamera: () => restartCamera(engine, camera) });
+  // The TV in the room (lib/tv.ts): this stage's show picture goes to it while the room is open; a remembered TV is found again by itself.
+  const tvLook = appSettings.value.tvLook;
+  useEffect(() => {
+    tvLink.attach(stage.show);
+    void tvLink.autoConnect();
+    return () => tvLink.detach(stage.show);
+  }, [stage.show]);
+  useEffect(() => tvLink.setLook(tvLook, you.displayName), [tvLook, you.displayName]);
   const onStage = you.slot !== null;
   const live = meet.state === 'countdown' || meet.state === 'live';
   // A song running on this device keeps the live stage mounted until it wraps up, even once the meet is
@@ -975,6 +985,7 @@ function LiveStage(props: {
   };
   const [fxOpen, setFxOpen] = useState(false);
   const [pictureOpen, setPictureOpen] = useState(false);
+  const [tvOpen, setTvOpen] = useState(false);
   /** A seek on its way: where the song is about to jump (cleared when the cue lands). */
   const [seekTarget, setSeekTarget] = useState<number | null>(null);
   const raf = useRef(0);
@@ -990,6 +1001,11 @@ function LiveStage(props: {
   const inSong = meet.stage.filter((s) => s.participantId && s.ready).map((s) => s.slot);
   const inSongKey = inSong.join(',');
   const plan = useMemo(() => planParts(track.singerCount, inSong), [track.singerCount, inSongKey]);
+  // The TV in the room gets the song's words and its clock (lib/tv.ts); between songs it shows the stage alone.
+  useEffect(() => {
+    tvLink.setSong({ title: track.title, lines: track.lyrics, singerCount: track.singerCount, mySlot, plan });
+    return () => tvLink.setSong(null);
+  }, [track, mySlot, plan]);
   // Somebody joined the running song: say so — the song is divided again (and restarts from the top when it was well under way; the joiner's device cues that).
   const prevInSong = useRef(inSongKey);
   useEffect(() => {
@@ -1179,6 +1195,9 @@ function LiveStage(props: {
   const connected = others.filter((s) => peerStates[s.participantId!] === 'connected').length;
   const paused = pb.state === 'paused';
   const micOpenNow = engine.micOpen.value;
+  // The TV's clock: where the song is, several times a second (the TV runs it on between).
+  const tvPlaying = started && !paused && countdown === null;
+  useEffect(() => effect(() => tvLink.clock(tMs.value, tvPlaying, countdown)), [tvPlaying, countdown]);
 
   return (
     <Page title={meet.title} nav={false} full>
@@ -1248,6 +1267,17 @@ function LiveStage(props: {
           </div>
         )}
         {app.showCueDeck && (track.singerCount > 1 || plan.singers.length > 1) && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={plan} />}
+        {tvOpen && (
+          <div class="drawer" role="dialog" aria-label="TV">
+            <div class="row between">
+              <b>TV — your stage on the big screen</b>
+              <button class="btn icon sm" aria-label="Close the TV panel" onClick={() => setTvOpen(false)}>
+                <IcX size={16} />
+              </button>
+            </div>
+            <TvPanel compact />
+          </div>
+        )}
         {pictureOpen && (
           <div class="drawer" role="dialog" aria-label="My picture">
             <div class="row between">
@@ -1281,6 +1311,9 @@ function LiveStage(props: {
           <div class="main">
             <button class={`btn icon ${app.cameraOn && stage.videoAllowed ? 'on' : ''}`} aria-label="Camera" disabled={!stage.videoAllowed} title={stage.videoAllowed || session.yourVideo.value?.reason === 'plan' ? 'Camera' : session.yourVideo.value?.note || 'Camera'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
               {app.cameraOn && stage.videoAllowed ? <IcCamera /> : <IcCameraOff />}
+            </button>
+            <button class={`btn icon ${tvOpen || tvLink.state.value === 'on' ? 'on' : ''}`} aria-label="TV" title="TV: your stage on the TV in the room — type the code the TV shows" aria-pressed={tvOpen} data-tv-button onClick={() => setTvOpen((o) => !o)}>
+              <IcTv />
             </button>
             <button class={`btn icon ${pictureOpen ? 'on' : ''}`} aria-label="My picture" title="My picture: me on the stage or my camera as it is; still, following me, or zooming with my voice" aria-pressed={pictureOpen} disabled={!stage.videoAllowed} onClick={() => setPictureOpen((o) => !o)}>
               <IcZoom />

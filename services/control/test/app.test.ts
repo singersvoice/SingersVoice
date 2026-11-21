@@ -462,6 +462,69 @@ describe('sv-control API', () => {
     }
   });
 
+  it('TV screens: a TV registers a code with no sign-in, the singer claims it, the two trade signals on their streams, and the screen is let go or closed', async () => {
+    // The TV: a code of four letters (none of I, O, 0, 1) and a token; no account at all.
+    const made = await app.request('/tv/screens', { method: 'POST' });
+    expect(made.status).toBe(200);
+    const tvScreen = await json<{ code: string; token: string }>(made);
+    expect(tvScreen.code).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/);
+    expect(tvScreen.token).toMatch(/^[0-9a-f]{32}$/);
+    // A stranger's claim of a code that is not showing anywhere: not found; a claim without sign-in: refused.
+    expect((await app.request('/tv/screens/ZZZZ/claim', { method: 'POST', headers: as('bob') })).status).toBe(404);
+    expect((await app.request(`/tv/screens/${tvScreen.code}/claim`, { method: 'POST' })).status).toBe(401);
+    // The TV listens (its token in the query — a TV's EventSource sends no header); a wrong token is a gone screen.
+    expect((await app.request(`/tv/screens/${tvScreen.code}/events?tv=nope`)).status).toBe(410);
+    const tvRes = await app.request(`/tv/screens/${tvScreen.code}/events?tv=${tvScreen.token}`);
+    expect(tvRes.status).toBe(200);
+    const tvReader = tvRes.body!.getReader();
+    const dec = new TextDecoder();
+    const readerText = { tv: '', phone: '' };
+    const until = async (which: 'tv' | 'phone', reader: ReadableStreamDefaultReader<Uint8Array>, re: RegExp) => {
+      for (let i = 0; i < 20 && !re.test(readerText[which]); i++) {
+        const { value, done } = await Promise.race([reader.read(), new Promise<{ value: undefined; done: true }>((r) => setTimeout(() => r({ value: undefined, done: true }), 1500))]);
+        if (done) break;
+        readerText[which] += dec.decode(value, { stream: true });
+      }
+      expect(readerText[which]).toMatch(re);
+    };
+    await until('tv', tvReader, /event: hello\ndata: \{"code":"[A-Z2-9]{4}","claimedBy":null,"otherSide":false\}\nretry: 1500/);
+    // Bob claims the code — typed in lower case with a space, as people do — and gets his stream token; the TV is told who.
+    const claimed = await json<{ code: string; phoneToken: string }>(await app.request(`/tv/screens/${tvScreen.code.toLowerCase().slice(0, 2)}%20${tvScreen.code.slice(2)}/claim`, { method: 'POST', headers: as('bob') }));
+    expect(claimed.code).toBe(tvScreen.code);
+    expect(claimed.phoneToken).toMatch(/^[0-9a-f]{32}$/);
+    await until('tv', tvReader, /event: claimed\ndata: \{"type":"claimed","name":"bob"\}\nid: 1\n/);
+    // Carol cannot take bob's TV; bob claiming again is fine (a second stage on the same phone keeps the token).
+    expect((await app.request(`/tv/screens/${tvScreen.code}/claim`, { method: 'POST', headers: as('carol') })).status).toBe(409);
+    expect((await json<{ phoneToken: string }>(await app.request(`/tv/screens/${tvScreen.code}/claim`, { method: 'POST', headers: as('bob') }))).phoneToken).toBe(claimed.phoneToken);
+    // The phone's stream (by its own token; sign-in is no use to an EventSource); the TV's token does not open it.
+    expect((await app.request(`/tv/screens/${tvScreen.code}/events?side=phone&pt=${tvScreen.token}`)).status).toBe(403);
+    const phoneRes = await app.request(`/tv/screens/${tvScreen.code}/events?side=phone&pt=${claimed.phoneToken}`);
+    expect(phoneRes.status).toBe(200);
+    const phoneReader = phoneRes.body!.getReader();
+    await until('phone', phoneReader, /event: hello\ndata: \{"code":"[A-Z2-9]{4}","claimedBy":"bob","otherSide":true\}/);
+    // Signals: the phone's offer (its account) lands on the TV's stream; the TV's answer (its token) on the phone's; carol's is refused; a non-JSON one too.
+    expect((await json<{ delivered: boolean }>(await app.request(`/tv/screens/${tvScreen.code}/signal`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ kind: 'offer', sdp: 'v=0…' }) }))).delivered).toBe(true);
+    await until('tv', tvReader, /event: signal\ndata: \{"type":"signal","data":\{"kind":"offer","sdp":"v=0…"\}\}\nid: 3\n/); // (id 2: the second claim's 'claimed')
+    expect((await json<{ delivered: boolean }>(await app.request(`/tv/screens/${tvScreen.code}/signal?tv=${tvScreen.token}`, { method: 'POST', body: JSON.stringify({ kind: 'answer' }) }))).delivered).toBe(true);
+    await until('phone', phoneReader, /event: signal\ndata: \{"type":"signal","data":\{"kind":"answer"\}\}\nid: 1\n/);
+    expect((await app.request(`/tv/screens/${tvScreen.code}/signal`, { method: 'POST', headers: as('carol'), body: '{}' })).status).toBe(403);
+    expect((await app.request(`/tv/screens/${tvScreen.code}/signal?tv=wrong`, { method: 'POST', body: '{}' })).status).toBe(403);
+    expect((await app.request(`/tv/screens/${tvScreen.code}/signal`, { method: 'POST', headers: as('bob'), body: 'not json' })).status).toBe(400);
+    // Bob lets the TV go: it is told, its code is free again (carol may take it now); bob's stream is closed by the service.
+    expect((await app.request(`/tv/screens/${tvScreen.code}/release`, { method: 'POST', headers: as('bob') })).status).toBe(200);
+    await until('tv', tvReader, /event: released\ndata: \{"type":"released"\}\nid: 4\n/);
+    const phoneEnd = await Promise.race([phoneReader.read(), new Promise<{ done: boolean }>((r) => setTimeout(() => r({ done: false }), 1500))]);
+    expect(phoneEnd.done).toBe(true);
+    expect((await app.request(`/tv/screens/${tvScreen.code}/claim`, { method: 'POST', headers: as('carol') })).status).toBe(200);
+    // The TV says good-bye: the screen is gone — carol's stream closes, the code is nobody's.
+    expect((await app.request(`/tv/screens/${tvScreen.code}/bye?tv=${tvScreen.token}`, { method: 'POST' })).status).toBe(200);
+    await until('tv', tvReader, /event: closed\ndata: \{"type":"closed"\}/);
+    expect((await app.request(`/tv/screens/${tvScreen.code}/claim`, { method: 'POST', headers: as('carol') })).status).toBe(404);
+    expect((await app.request(`/tv/screens/${tvScreen.code}/events?tv=${tvScreen.token}`)).status).toBe(410);
+    tvReader.cancel().catch(() => undefined);
+    phoneReader.cancel().catch(() => undefined);
+  });
+
   it('meets: a crowd of forty costs a poll a dozen names and a count', async () => {
     const created = await json<{ meet: Meet }>(await app.request('/meets', { method: 'POST', headers: as('carol'), body: JSON.stringify({ title: 'Big night' }) }));
     const host = await json<JoinMeetResponse>(await app.request(`/meets/${created.meet.meetId}/join`, { method: 'POST', headers: as('carol'), body: JSON.stringify({ role: 'audience' }) }));

@@ -1,4 +1,4 @@
-import { hoursLabel, roleTitle } from '@singersvoice/protocol';
+import { hoursLabel, roleTitle, type TvLook } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { BackgroundPicker } from '../components/BackgroundPicker.tsx';
 import { FxPanel } from '../components/FxPanel.tsx';
@@ -10,6 +10,7 @@ import { SongPrefsCard } from '../components/SongPrefs.tsx';
 import { Field, Seg, Spinner, Switch } from '../components/ui.tsx';
 import { getEngine, readMeasuredLatency, writeMeasuredLatency } from '../audio/engine.ts';
 import { runSyncCheck } from '../audio/syncCheck.ts';
+import { tvLink } from '../lib/tv.ts';
 import { DriveScopeMissingError, googleConfigured, loadGis } from '../lib/google.ts';
 import { idb, STORES } from '../lib/idb.ts';
 import { asset, go, href } from '../lib/nav.ts';
@@ -303,6 +304,24 @@ export function Settings() {
           </Field>
           <div class="muted small">On every stage you are framed the same way as every other singer — head the same size, at the same place — however near or far you sit from the camera; the stage tells you when to sit back or come closer.</div>
           <PictureChoices />
+        </section>
+
+        <section class="card stack" id="tv">
+          <h2>TV</h2>
+          <div class="small muted">
+            Your stage on the TV in the room: on the TV, open <b>{location.host}{import.meta.env.BASE_URL}tv</b> in its browser (or on a laptop plugged into it) — it shows a code. On the stage, tap <b>TV</b> and type the code, or scan the TV's QR code with your phone. The TV shows the words and the stage, big; the sound plays here, on your device (a TV a few tenths of a second behind would echo it).
+          </div>
+          <Field label="What the TV shows">
+            <Seg<TvLook> ariaLabel="What the TV shows" value={app.tvLook} onChange={(v) => updateApp({ tvLook: v })} options={[{ v: 'both', label: 'Words and stage' }, { v: 'stage', label: 'The stage only' }, { v: 'lyrics', label: 'The words only' }]} />
+          </Field>
+          {tvLink.code.value && (
+            <div class="row" style="gap:8px;align-items:center">
+              <span class="chip">TV {tvLink.code.value} {tvLink.state.value === 'on' ? '· showing your stage' : tvLink.state.value === 'connecting' ? '· connecting' : '· remembered'}</span>
+              <button class="btn sm" onClick={() => tvLink.disconnect(true)}>
+                Forget this TV
+              </button>
+            </div>
+          )}
         </section>
 
         <section class="card stack" id="backgrounds">

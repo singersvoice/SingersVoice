@@ -217,3 +217,9 @@ export const IcStar = (p: P & { filled?: boolean }) => {
     </svg>
   );
 };
+export const IcTv = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="5" width="19" height="12.5" rx="2" />
+    <path d="M8 21h8M12 17.5V21" />
+  </svg>
+);

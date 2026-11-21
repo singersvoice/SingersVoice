@@ -1487,3 +1487,116 @@
 .sing .drawer.sound .tweaks[open] summary {
   margin-bottom: 8px;
 }
+
+/* ---- The TV in the room (screens/Tv.tsx): the code to type, then the stage big — the words on top, the picture below ---- */
+.tv {
+  position: fixed;
+  inset: 0;
+  background: #07020f;
+  color: #fff;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+  --lyric-size: clamp(28px, 4.2vw, 64px);
+}
+.tv-wait {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 18px;
+  padding: 4vh 6vw;
+  text-align: center;
+}
+.tv-brand {
+  font-size: clamp(28px, 4vw, 56px);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  background: linear-gradient(90deg, #ff6ad5, #ffb86b);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.tv-line {
+  font-size: clamp(18px, 2.4vw, 34px);
+  color: rgba(255, 255, 255, 0.85);
+  max-width: 28ch;
+}
+.tv-line.small {
+  font-size: clamp(14px, 1.8vw, 24px);
+  color: rgba(255, 255, 255, 0.6);
+}
+.tv-code {
+  display: flex;
+  gap: 2vw;
+}
+.tv-code span {
+  display: grid;
+  place-items: center;
+  width: clamp(64px, 12vw, 160px);
+  height: clamp(80px, 15vw, 200px);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  font-size: clamp(48px, 9vw, 120px);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+.tv-qr {
+  width: clamp(120px, 20vw, 260px);
+  background: #fff;
+  border-radius: 12px;
+  padding: 6px;
+}
+.tv-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.tv-stage {
+  display: grid;
+  grid-template-rows: minmax(0, 11fr) minmax(0, 9fr);
+  min-height: 0;
+}
+.tv[data-tv-look='stage'] .tv-stage,
+.tv[data-tv-look='lyrics'] .tv-stage {
+  grid-template-rows: minmax(0, 1fr);
+}
+.tv-lyrics {
+  display: grid;
+  min-height: 0;
+}
+.tv-lyrics .lyrics {
+  grid-row: auto;
+  grid-column: auto;
+  background: none;
+  padding: 3vh 6vw 2vh;
+  gap: 1.2vh;
+}
+.tv-video {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  background: #000;
+}
+.tv-tag {
+  position: absolute;
+  right: 1.2vw;
+  bottom: 1vh;
+  font-size: clamp(12px, 1.3vw, 18px);
+  color: rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+}
+
+/* The TV panel on the stages (components/TvPanel.tsx) */
+.tvpanel .tvcode {
+  width: 7ch;
+  text-align: center;
+  font-size: 1.4em;
+  font-weight: 800;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+}
+.warn-text {
+  color: var(--warn, #ffb86b);
+}

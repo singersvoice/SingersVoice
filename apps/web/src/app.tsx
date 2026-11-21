@@ -21,6 +21,7 @@ import { Club } from './screens/Club.tsx';
 import { CouponGate } from './screens/CouponGate.tsx';
 import { AdminCoupons } from './screens/AdminCoupons.tsx';
 import { Admin } from './screens/Admin.tsx';
+import { TvCodeLink, TvScreen } from './screens/Tv.tsx';
 import { Setup, Welcome } from './screens/Welcome.tsx';
 import { couponNeeded, signedIn } from './state/session.ts';
 import { appSettings } from './state/settings.ts';
@@ -113,7 +114,7 @@ function NotFound() {
 }
 
 const r = (p: string) => href(p);
-type P = { id?: string };
+type P = { id?: string; code?: string };
 const guarded = (el: (p: P) => preact.JSX.Element) => (p: P) => <Guard>{el(p)}</Guard>;
 
 export function App() {
@@ -143,6 +144,9 @@ export function App() {
           <Route path={r('/publishing')} component={guarded(() => <PublishingPortal />)} />
           <Route path={r('/publishing/show/:id')} component={guarded((p) => <ShowView id={p.id ?? ''} />)} />
           <Route path={r('/watch/:id')} component={(p: P) => <Watch id={p.id ?? ''} />} />
+          {/* The TV in the room (no sign-in); /tv/<code> on a phone connects it */}
+          <Route path={r('/tv')} component={TvScreen} />
+          <Route path={r('/tv/:code')} component={guarded((p) => <TvCodeLink code={p.code ?? ''} />)} />
           <Route path={r('/plans')} component={guarded(() => <Plans />)} />
           <Route path={r('/club-owner')} component={guarded(() => <Plans />)} />
           <Route path={r('/billing/return')} component={guarded(() => <BillingReturn />)} />

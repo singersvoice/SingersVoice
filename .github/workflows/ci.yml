@@ -103,6 +103,11 @@ jobs:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/join-e2e.mjs screenshots
 
+      - name: The TV in the room (a screen with no sign-in shows its code and QR; a Studio singer types it and the TV shows her stage — the words on top, the picture below, the clock running; disconnected; the QR's door)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/tv-e2e.mjs screenshots
+
       - name: Live meet with two performers on one stage (cut-outs, WebRTC relay, cued pause/resume, the film in chapters, nothing mirrored, the sound measured)
         env:
           BASE_PATH: /SingersVoice/

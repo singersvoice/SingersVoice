@@ -411,6 +411,36 @@ married the new connection to a dead one and the two sides re-made each other wi
 host that answered in ten seconds was enough to start it). An untagged signal (an older build) is
 taken as before, with the DTLS fingerprint telling a new connection from an old one.
 
+## The TV in the room (`lib/tv.ts`, `screens/Tv.tsx`, `services/control/src/tv.ts`)
+
+A singer's stage on the big screen, the living-room way: the TV's browser (or a laptop on the HDMI cable,
+a stick — anything with a browser) opens **www.singersvoice.com/tv**, with no sign-in, and shows a
+four-letter code (the alphabet has no I, O, 0 or 1) and a QR of `…/tv/<code>`. On the stage — the live
+stage's **TV** button, the Studio's — the singer types the code and Connects, or scans the QR with the
+phone's camera, which opens the app at `/tv/<code>`, claims the TV and goes home. The phone claims the
+screen on the service (`POST /tv/screens/:code/claim`: the account's; a TV somebody else holds is
+refused, the singer's own is re-claimed freely) and from then on the two trade WebRTC signals through
+the service — the TV by its token (given with the code, never shown; `?tv=` on its routes), the phone
+by its account and a stream token of its own (`GET /tv/screens/:code/events?side=phone&pt=`; a browser's
+EventSource sends no header) — on event streams like the meets' (`hello`, `claimed`, `released`,
+`signal`, `closed`, a ping; tv.ts: in memory, swept — a screen nobody claimed in fifteen minutes, or
+nobody spoke on for five with no stream open, goes; a TV page closing says good-bye). The service
+carries only the handshake: the picture goes straight from the phone to the TV over the room's Wi-Fi
+(host candidates; STUN for the rest), the phone's **show picture** — the ShowRecorder's canvas, the
+stage as the audience sees it, drawn the whole time a TV is attached (`keepDrawing`) — on one video
+track at up to 6 Mbps, and on a data channel the **song** (its words, who sings what: `LyricLine[]`,
+the part plan, the singer's slot), the **clock** four times a second (the TV runs it on between
+ticks: `base + (now − at)`), the count-in, and the **look** — what the TV shows, the singer's choice in
+Settings → TV: the words and the stage (the default: the words on the upper eleven twentieths, the
+picture below), the stage alone, the words alone. The sound stays on the phone: the track plays
+where the singer is, and a TV a few tenths of a second behind would echo it. One TV per phone, a
+module singleton (`tvLink`) every stage attaches its picture to (`attach(show)` / `detach`), the
+code kept on the device (`sv.tv.code`), so the next stage finds the TV again by itself
+(`autoConnect`) until Disconnect (which releases the screen: the TV shows its code again) or the TV
+page closes (the phone forgets it). The TV page keeps the screen awake (wake lock), shows "<name>'s
+stage is coming" from the claim until the picture's frames flow or a song's words arrive, and makes
+itself a new code when the service forgot it (a restart). `tools/ci/tv-e2e.mjs` runs the whole of it.
+
 ## Roles, the Admin page and the club owner year
 
 Every account has one **role**, kept in the SVT DB (`users.role`) and read on every request

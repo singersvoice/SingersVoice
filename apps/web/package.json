@@ -19,7 +19,8 @@
     "@singersvoice/protocol": "2.0.0",
     "hls.js": "^1.7.4",
     "preact": "^10.29.8",
-    "preact-iso": "^2.12.2"
+    "preact-iso": "^2.12.2",
+    "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.6",

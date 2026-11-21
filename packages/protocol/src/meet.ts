@@ -1,3 +1,4 @@
+import type { LyricLine, PartPlan } from './track.ts';
 /**
  * Live meets — a shareable room (like a Zoom/Teams meeting link) with up to 10 performers on
  * stage and any number of audience members with chat. The control plane keeps the room state;
@@ -45,6 +46,21 @@ export interface MeetPlayback {
 
 /** WebRTC signalling between performers, relayed by the SVT DB (no socket needed). */
 export type MeetSignalType = 'offer' | 'answer' | 'ice' | 'bye';
+
+/** A WebRTC signal between a singer's phone and their TV (the service carries it, nothing else — the picture goes straight over the room's Wi-Fi). */
+export type TvSignal = { kind: 'offer' | 'answer'; sdp: string } | { kind: 'ice'; candidate: { candidate?: string; sdpMid?: string | null; sdpMLineIndex?: number | null; usernameFragment?: string | null } } | { kind: 'bye' };
+/** What the TV shows beside the singer's stage: the words and the stage, the stage alone, the words alone (the singer's choice in Settings → TV). */
+export type TvLook = 'both' | 'stage' | 'lyrics';
+export const TV_LOOKS: readonly TvLook[] = ['both', 'stage', 'lyrics'];
+/**
+ * What the phone tells the TV over their data channel: the song (its words, who sings what), the clock (where the
+ * song is, several times a second; the TV runs it on between), the count-in, and what to show.
+ */
+export type TvMessage =
+  | { type: 'song'; title: string; lines: LyricLine[]; singerCount: number; mySlot: number; plan: PartPlan }
+  | { type: 'clock'; tMs: number; playing: boolean; countdown: number | null }
+  | { type: 'look'; look: TvLook; name: string }
+  | { type: 'bye' };
 export interface MeetSignal {
   seq: number;
   meetId: string;

@@ -4,7 +4,7 @@
  * `SingersVoice/Config/*.json` in the active provider (Drive or device).
  */
 import { effect, signal } from '@preact/signals';
-import { applyPreset, AUDIO_SETTINGS_DEFAULTS, CONFIG_FILES, clampParams, VOXFORGE_PRESETS, type AudioPluginSettings } from '@singersvoice/protocol';
+import { applyPreset, AUDIO_SETTINGS_DEFAULTS, CONFIG_FILES, clampParams, TV_LOOKS, VOXFORGE_PRESETS, type AudioPluginSettings, type TvLook } from '@singersvoice/protocol';
 import { FRAMINGS, PICTURES, type Framing, type Picture } from '../video/framing.ts';
 import { provider } from './session.ts';
 
@@ -46,6 +46,8 @@ export interface AppSettings {
    * on the channel for everyone to find.
    */
   youtubePrivacy: 'public' | 'unlisted';
+  /** What the TV in the room shows beside my stage (lib/tv.ts): the words and the stage, the stage alone, the words alone. */
+  tvLook: TvLook;
 }
 
 export const APP_DEFAULTS: AppSettings = {
@@ -74,6 +76,7 @@ export const APP_DEFAULTS: AppSettings = {
   vocalDb: 0,
   recordMeet: true,
   youtubePrivacy: 'unlisted',
+  tvLook: 'both',
 };
 
 const APP_KEY = 'sv.settings.app';
@@ -105,6 +108,7 @@ function migrateApp(v: AppSettings): AppSettings {
   // The picture and framing choices: a save from before them keeps what its cut-out switch said; anything odd is the default.
   if (!PICTURES.includes(v.picture)) v = { ...v, picture: v.cutout === false ? 'camera' : 'cutout' };
   if (!FRAMINGS.includes(v.framing)) v = { ...v, framing: 'still' };
+  if (!TV_LOOKS.includes(v.tvLook)) v = { ...v, tvLook: 'both' };
   return v;
 }
 

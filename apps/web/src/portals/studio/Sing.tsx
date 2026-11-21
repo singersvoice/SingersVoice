@@ -6,13 +6,15 @@ import { bleedOffset, lagIsStrong, monoOf } from '../../audio/sync.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcZoom } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcTv, IcZoom } from '../../components/icons.tsx';
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
+import { TvPanel } from '../../components/TvPanel.tsx';
+import { tvLink } from '../../lib/tv.ts';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { catalogAvailable, isSameTrack, myCatalogUserId, pullCatalogTrack, searchCatalog } from '../../lib/catalog.ts';
@@ -166,12 +168,13 @@ export function Sing(props: { id?: string; joinId?: string }) {
   const [heardShift, setHeardShift] = useState<number | null>(null);
   const camera = useMemo(() => new Camera(), []);
   const feed = useMemo(() => new LocalFeed(), []);
-  useEffect(() => {
-    (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed; // support / e2e hooks
-  }, [feed]);
   const compositor = useMemo(() => new StageCompositor('show'), []); // the singers fill their strip under the lyrics
   /** The take's video is the show: my cut-out on the stage background, as Publisher mode would show it, with the mix. */
   const show = useMemo(() => new ShowRecorder(), []);
+  useEffect(() => {
+    (window as unknown as { __svFeed?: LocalFeed; __svShow?: ShowRecorder }).__svFeed = feed; // support / e2e hooks
+    (window as unknown as { __svShow?: ShowRecorder }).__svShow = show;
+  }, [feed, show]);
   const [blend, setBlend] = useState<'loading' | 'model' | 'oval' | 'off'>('off');
   const startedEpoch = useRef(0);
   const raf = useRef(0);
@@ -182,6 +185,23 @@ export function Sing(props: { id?: string; joinId?: string }) {
   /** The part a joiner sings, chosen on the stage setup (null: the first part nobody on the stage has, else round the parts). */
   const [joinPart, setJoinPart] = useState<SingerSlot | null>(null);
   const mySlot = (join ? (joinPart ?? partFor(join, track?.singerCount ?? 1)) : Math.min(app.singerSlot, track?.singerCount ?? 1)) as SingerSlot;
+
+  // The TV in the room (lib/tv.ts): this stage's show picture while the Studio is open, the song's words and its clock while it runs.
+  const [tvOpen, setTvOpen] = useState(false);
+  useEffect(() => {
+    tvLink.attach(show);
+    void tvLink.autoConnect();
+    return () => tvLink.detach(show);
+  }, [show]);
+  useEffect(() => tvLink.setLook(app.tvLook, profile.value?.name || 'You'), [app.tvLook]);
+  useEffect(() => {
+    if (!track) return;
+    tvLink.setSong({ title: track.title, lines: track.lyrics, singerCount: track.singerCount, mySlot, plan: planParts(track.singerCount, []) });
+    return () => tvLink.setSong(null);
+  }, [track, mySlot]);
+  const tvPlaying = phase === 'playing';
+  const tvCountdown = phase === 'countdown' ? countdown : null;
+  useEffect(() => effect(() => tvLink.clock(tMs.value, tvPlaying, tvCountdown)), [tvPlaying, tvCountdown]);
 
   // Load the track — or, for a join, the performance to sing over: its show (the backing track from here on), the
   // singers' cut-outs and the song from the track database (its lyrics; the show carries the song without them).
@@ -636,6 +656,9 @@ export function Sing(props: { id?: string; joinId?: string }) {
             <button class="btn icon" aria-label="Stage background" title="Stage background" onClick={() => setBgOpen(true)}>
               <IcImage />
             </button>
+            <button class={`btn icon ${tvLink.state.value === 'on' ? 'on' : ''}`} aria-label="TV" title="TV: your stage on the TV in the room — type the code the TV shows" data-tv-button onClick={() => setTvOpen(true)}>
+              <IcTv />
+            </button>
             {live ? (
               <>
                 {phase === 'paused' ? (
@@ -707,6 +730,10 @@ export function Sing(props: { id?: string; joinId?: string }) {
           </div>
           <FxPanel value={audio} onChange={updateAudio} />
         </div>
+      </Sheet>
+
+      <Sheet open={tvOpen} onClose={() => setTvOpen(false)} title="TV — your stage on the big screen">
+        <TvPanel />
       </Sheet>
 
       <Sheet open={setupOpen} onClose={() => setSetupOpen(false)} title="Stage setup">

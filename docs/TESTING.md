@@ -65,6 +65,17 @@ after any change under `apps/web/src/audio` or `apps/web/public/worklets`. The s
 (`audio/sync.ts`: the lag between envelopes, a take laid against its track, the sync check's clicks)
 are unit-tested on synthetic signals in `apps/web/test/sync.test.ts`.
 
+## The TV in the room (`tools/ci/tv-e2e.mjs`)
+
+`BASE_PATH=/SingersVoice/ node tools/ci/tv-e2e.mjs <outDir>` (after the build): a TV — a browser context
+with no sign-in — opens `/tv` and shows its four-letter code and a QR of the link to it; a singer in the
+Studio taps TV, types the code and Connects; the TV links (the picture over a WebRTC link made through
+the service's handshake, the words and the clock over its data channel — `lib/tv.ts`,
+`services/control/src/tv.ts`): the words on top, the picture below, both on the screen, the line being
+sung lit and moving on; she disconnects (the TV shows its code again); the QR's door (`/tv/<code>` on
+the phone) claims the TV by itself and lands on Home; a TV page closed is forgotten on the phone.
+Screenshots: `tv-code.png`, `tv-linked.png`, `tv-singing.png`.
+
 ## Live meet with two performers (`tools/ci/live-duet.mjs`)
 
 Two Chromium contexts with a synthetic-person clip as the fake camera (`tools/ci/fake-person.mjs`,
