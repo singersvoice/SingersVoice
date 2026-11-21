@@ -54,6 +54,10 @@ export function Admin() {
   useEffect(() => {
     if (checked && isSuperAdmin.value && controlConfigured.value) void load();
   }, [checked, isSuperAdmin.value]);
+  // A link to a section of this page (`/admin#billing`, the Home search): scrolled to once the sections are up.
+  useEffect(() => {
+    if (checked && /^#[a-z]+$/.test(location.hash)) setTimeout(() => document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'start' }), 300);
+  }, [checked]);
 
   const change = async (u: UserRecord, body: Parameters<typeof api.patch<'PATCH /admin/users/:id'>>[2], done: string) => {
     setBusy(u.userId);
@@ -108,7 +112,7 @@ export function Admin() {
   return (
     <Page title="Admin">
       <div class="stack" data-admin>
-        <section class="card stack pad-sm" data-coupons-link>
+        <section class="card stack pad-sm" id="coupons" data-coupons-link>
           <div class="row between wrap">
             <div>
               <h3 style="margin:0">Coupons</h3>
@@ -120,7 +124,7 @@ export function Admin() {
           </div>
         </section>
         <AdminBilling onChanged={() => void load()} tick={tick} />
-        <section class="card stack pad-sm">
+        <section class="card stack pad-sm" id="accounts">
           <div class="row between wrap">
             <div>
               <h3 style="margin:0">Accounts</h3>

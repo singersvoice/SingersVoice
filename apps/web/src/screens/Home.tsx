@@ -1,9 +1,11 @@
 /**
- * Home — the portals, each usable on its own, named as the menu names them: Tracks (with Track Maker), Studio, Live
+ * Home — a search for any feature (components/FeatureSearch.tsx: a few letters list the matches, a tap goes there),
+ * then the portals, each usable on its own, named as the menu names them: Tracks (with Track Maker), Studio, Live
  * Meets, Publishing (for the accounts it is open to: club owners with a year, super admins — everyone else finds the
  * Club owner card in its place), Performances.
  */
 import { useEffect } from 'preact/hooks';
+import { FeatureSearch } from '../components/FeatureSearch.tsx';
 import { IcDrive, IcLibrary, IcMic, IcPlay, IcShare, IcUsers } from '../components/icons.tsx';
 import { Page } from '../components/Shell.tsx';
 import { checkControl, controlConfigured, controlStatus, refreshAccount } from '../lib/api.ts';
@@ -44,6 +46,8 @@ export function Home() {
             ) : null}
           </div>
         </section>
+
+        <FeatureSearch />
 
         <nav class="quick portals" aria-label="Portals">
           <a href={href('/tracks')}>

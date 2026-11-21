@@ -1,96 +1,112 @@
-# Social — posting clips of saved performances
+# Social — posting performances to X, Facebook and Instagram
 
-Any performance saved to a singer's Drive can go out as a **clip**: the singer picks the section
-(from–to), the app makes the clip on the device, and the clip goes where the singer wants. This page
-says what each network allows, what works with nothing set up, and what you (the operator) set up so
-singers can post **from inside SingersVoice**.
+Singers connect their own handles in **Settings → Social** and post a clip of any performance saved to
+their Drive straight from SingersVoice — to their **X** timeline, to a **Facebook Page** they manage,
+and to the **Instagram professional account** linked to that Page — with the post's link back in the
+app. For that to be offered, SingersVoice itself has to be registered once with X and once with Meta
+(a "developer app" each), by you, the operator. This page is that setup, click by click; the secrets
+go into GitHub and the deploy puts them on the service by itself. Nothing is pasted into chat, nothing
+goes into the repository.
 
 ## What singers get
 
 - **Post a clip** on every saved performance (Performances → the performance → *Post a clip*), and the
   same sheet opens by itself after a take is **kept** (Settings → Social → *Offer to post a clip after I
-  keep a take*; on by default; the starting length 30 s / 60 s / 90 s / 2 min).
-- The sheet: the video, two sliders (**from**, **to**), *Play section*, *First N s* / *Last N s*, the
-  **caption** (the song, who sang, the performance's link — editable), the connected networks to tick,
-  **Make the clip**. The clip is written by the browser itself (MediaRecorder) — the section plays once,
-  silently, at its own speed, so a one-minute clip takes a minute — as MP4 (H.264 + AAC) on Chrome for
-  Windows, Mac and Android and on Safari, which is what X and Instagram take; on Linux Chrome writes
-  VP9, which the share sheet and Facebook still take.
-- Then:
-  - **Share…** (phones and tablets): the system share sheet with the file — Instagram, Snapchat,
-    Facebook, X, WhatsApp, Messages… whatever is installed. This is the **only** way into **Snapchat**
-    and into a **personal Instagram account**: neither lets a web app post for you.
-  - **Download**: the file, to post from any app or site by hand. On a computer the sheet also opens
-    **X's** and **Facebook's** composers with the caption and the link; the clip is attached there by
-    hand (Instagram and Snapchat post from their phone apps only).
-  - **Post to …**: the networks connected in **Settings → Social** get the clip straight from
-    SingersVoice — the file goes browser → service → network, the post's link comes back and is listed
-    under *Posted from here*.
+  keep a take*, on by default; the starting length 30 s / 60 s / 90 s / 2 min; *Whole performance*
+  when it fits the networks ticked).
+- The sheet: the video, two sliders (**from**, **to**), *Play section*, the **caption** (the song, who
+  sang, the performance's link — editable), the connected networks ticked, **Make the clip** (written by
+  the browser itself: MP4 H.264/AAC on Chrome for Windows, Mac and Android and on Safari — what X and
+  Instagram take; a minute of clip takes a minute to write), then **Post to …** — the clip goes browser →
+  service → network, and the links come back (also listed under Settings → Social → *Posted from here*).
+- With no network connected yet, the sheet leads to Settings → Social. Beside posting: **Share…** (a
+  phone's share sheet with the file, any app installed) and **Download**.
 
-## What each network allows (as of late 2026 — verify against the networks' developer docs)
+## What the networks allow — and what is therefore not offered
 
-| Network | From inside SingersVoice | How | Needs |
+| Network | Posts from SingersVoice | Where it lands | The network's rule |
 | --- | --- | --- | --- |
-| **X** | yes — a post with the video | OAuth 2.0 (PKCE) sign-in on x.com; chunked media upload (`/2/media/upload`), then `POST /2/tweets` | an X developer app (free tier posts; check the tier's monthly write limit); video ≤ 140 s, ≤ 512 MB, MP4 H.264/AAC |
-| **Facebook Page** | yes — a video post on a Page the singer manages | Facebook Login; `POST /{page-id}/videos` with the Page's token | a Meta app with `pages_show_list`, `pages_manage_posts`, `pages_read_engagement` (App Review); a **personal profile cannot be posted to** by any app — Facebook's rule since 2018 |
-| **Instagram** (professional account linked to a Page) | yes — a Reel | the same Facebook Login; a media container (`/{ig-user-id}/media`, resumable upload), Instagram processes it, `media_publish` | the same Meta app with `instagram_basic`, `instagram_content_publish` (App Review); a business or creator account linked to the Page; video ≤ 3 min, ≤ 300 MB, MP4 H.264/AAC |
-| **Instagram** (personal account) | no | the phone's share sheet | — |
-| **Snapchat** | no | the phone's share sheet | — |
+| **X** | yes | a post with the video on the singer's own timeline | an X developer app; videos ≤ 140 s |
+| **Facebook Page** | yes | a video post on a Page the singer manages | a Meta app with Page permissions (App Review); **a personal profile cannot be posted to by any app** (since 2018) |
+| **Instagram professional** (business or creator) account linked to that Page | yes | a Reel on the account's profile | the same Meta app with Instagram permissions; videos ≤ 3 min |
+| Instagram personal account | no | — | no API; the account can be switched to professional, free, in Instagram → Settings → Account type |
+| Snapchat | no — not in the app | — | no API a web app may post through |
 
-## Setting it up (the operator)
+## Setting it up (once, by the operator)
 
-Secrets go on the service only — Worker secrets (`npx wrangler secret put NAME` from
-`services/control`, with the Cloudflare token in the environment) or `.env.local` for a Node run —
-**never in the repo** (the CI secret scan is there for a reason). The service also needs its **own
-public address** for the networks' redirect: `SERVICE_URL` (e.g. `https://sv-control.<you>.workers.dev`
-or your custom domain for the Worker); without it the service uses the origin of the request that started
-the sign-in, which is right on Cloudflare and wrong behind a local proxy.
+Everything here ends in **GitHub → your repository → Settings → Secrets and variables → Actions → New
+repository secret**. The *Deploy sv-control* workflow (it runs on every push, or from the Actions tab →
+*Deploy sv-control* → *Run workflow*) puts every secret it finds on the service. `SERVICE_URL` — the
+address the networks send the browser back to — is set by the deploy to the service's own URL; nothing
+to do unless the service lives at a custom domain (then a repo **variable** `SERVICE_URL` with it).
 
-### X
+You need the service's address for both forms below: open the app → Settings; a super admin sees it
+under *Live services (SVT DB)* as the Service URL (it looks like `https://sv-control.<name>.workers.dev`).
 
-1. developer.x.com → a project and an app (the Free tier allows posting; the limits are per month and
-   per app — check them against how many singers will post).
-2. User authentication settings: **OAuth 2.0**, type **Web App**; callback URL
-   `https://<SERVICE_URL>/social/x/callback`; website URL `https://www.singersvoice.com`.
-3. Copy the **OAuth 2.0 Client ID** and **Client Secret** into `X_CLIENT_ID` and `X_CLIENT_SECRET`.
-4. The scopes the service asks for: `tweet.read tweet.write users.read media.write offline.access`
-   (the last keeps the sign-in alive: X's tokens last two hours and the service renews them with the
-   refresh token).
+### X (10 minutes)
 
-### Meta (Facebook Pages and Instagram)
+1. Go to **developer.x.com** (it is called the X Developer Portal) and sign in with the X account that
+   will own the integration. Choose the **Free** plan (it allows posting; the limits are per month —
+   check them against how many singers will post) and create a **Project**, then an **App** in it.
+2. In the app's **Settings** tab, find **User authentication settings** → **Set up**:
+   - App permissions: **Read and write**.
+   - Type of App: **Web App, Automated App or Bot**.
+   - Callback URI: `https://<the service's address>/social/x/callback` — exactly that, with the service's
+     own address.
+   - Website URL: `https://www.singersvoice.com`.
+   - Save.
+3. In the app's **Keys and tokens** tab, under **OAuth 2.0 Client ID and Client Secret**, copy the two
+   values (regenerate the secret if it is not shown).
+4. In GitHub, add two repository secrets: `X_CLIENT_ID` and `X_CLIENT_SECRET`.
+5. Run *Deploy sv-control* (Actions → Deploy sv-control → Run workflow) — or just push. Open Settings →
+   Social: **Connect X** is there. Tap it, approve on X's page, and your handle shows.
 
-1. developers.facebook.com → an app of type **Business**; add the **Facebook Login for Business**
-   product; Valid OAuth Redirect URIs: `https://<SERVICE_URL>/social/meta/callback`.
-2. App Review for `pages_show_list`, `pages_manage_posts`, `pages_read_engagement`, `instagram_basic`,
-   `instagram_content_publish` (Instagram publishing needs the app on **Advanced Access** for these, which
-   needs business verification — allow a few weeks; until then only the app's own admins/testers can
-   connect).
-3. Copy the **App ID** and **App Secret** into `META_APP_ID` and `META_APP_SECRET`.
-4. Singers need a **Facebook Page** they manage and, for Instagram, a **professional** (business or
-   creator) Instagram account **linked to that Page** (Instagram → Settings → Account → Sharing to other
-   apps → Facebook). One sign-in connects both; when the singer manages several Pages, Settings → Social
-   asks which one.
+### Meta — Facebook Pages and Instagram (30 minutes, then Meta's review)
+
+1. Go to **developers.facebook.com** and sign in with the Facebook account that will own the
+   integration → **My Apps** → **Create App**. Use case: **Other** → type **Business** → a name (say
+   "SingersVoice") → create.
+2. In the app's dashboard, **Add product** → **Facebook Login for Business** → Set up. Under its
+   **Settings**: *Valid OAuth Redirect URIs*: `https://<the service's address>/social/meta/callback`
+   (exactly that). Save.
+3. **App settings → Basic**: copy the **App ID** and the **App Secret** (Show). Add the **Privacy Policy
+   URL** `https://www.singersvoice.com/privacy.html` and the **Terms of Service URL**
+   `https://www.singersvoice.com/terms.html` (Meta needs both before the app can go live).
+4. In GitHub, add two repository secrets: `META_APP_ID` and `META_APP_SECRET`. Run *Deploy sv-control*.
+5. **Try it at once**: while the app is in *Development* mode, it works for the app's own admins,
+   developers and testers — add yourself and any tester under **App roles**. Settings → Social →
+   **Connect Facebook & Instagram** → approve → pick the Page if you manage several. A Page you manage
+   and (for Reels) an Instagram **professional** account linked to that Page are the singer's side of it
+   (Instagram → Settings → Account type → Switch to professional; then link it to the Page from the
+   Page's settings → Linked accounts).
+6. **For everyone else**: **App Review** → *Permissions and features* → request **Advanced Access** for
+   `pages_show_list`, `pages_manage_posts`, `pages_read_engagement`, `instagram_basic`,
+   `instagram_content_publish`. Meta asks for a screen recording of the flow (connect in Settings →
+   Social, post a clip) and a short explanation ("singers post a clip of their own performance to a
+   Page/Instagram account they manage"), and for **Business verification** of the account (a business
+   document). Allow one to three weeks. Then switch the app to **Live** (the toggle at the top of the
+   dashboard). Until then singers outside the app's roles see Connect, and Meta's page refuses them.
 
 ### Checking
 
-- Settings → Social shows **Connect X** / **Connect Facebook & Instagram** once the ids are in (without
-  them it says posting from here is not set up and points at Share… and Download).
-- `tools/ci/social-e2e.mjs` runs the whole flow against a stand-in for both networks
-  (`tools/ci/fake-social.mjs`); `services/control/test/app.test.ts` ("social") covers the service with
-  fakes of the networks' answers.
+- Settings → Social shows **Connect X** / **Connect Facebook & Instagram** once the secrets are on the
+  service; without them it says the admin has to connect SingersVoice to the network first.
+- The whole flow runs in CI against stand-ins for both networks (`tools/ci/social-e2e.mjs`,
+  `tools/ci/fake-social.mjs`); the service side with fakes of the networks' answers
+  (`services/control/test/app.test.ts`, "social").
 
 ## What the service keeps, and where tokens go
 
 - `social_accounts`: per account and network, the target (the X user, the Page, the Instagram account),
   its handle, and the network's tokens **sealed** with the service's secret (`PUBLISH_KEY_SECRET`, like
   stream keys). They are opened only to make a post and never go to the browser (`GET /social` returns
-  handles, never tokens).
+  handles, never tokens). X's tokens last two hours and are renewed with the refresh token before a post;
+  a Page's token does not expire.
 - `social_states`: a sign-in under way — the random state the network sends back and, for X, the PKCE
-  verifier; taken once, gone in a quarter hour. The callback route needs no sign-in of ours: the state
-  is the credential, and a state presented at the wrong provider's door is ignored.
+  verifier; taken once, gone in a quarter hour, and only at its own provider's door.
 - `social_pending`: the Pages a Meta sign-in found when there were several to pick from (sealed; an hour).
 - `social_posts`: every post made from here and what became of it (posted with its link, processing,
-  failed with the note). Twelve posts an hour per account; a clip of 95 MB at most (the Worker's request
-  limit).
+  failed with the note). Twelve posts an hour per account; a clip of 95 MB at most (the Worker's
+  request limit — six minutes of 720p).
 - Disconnecting drops the row (and tells X to revoke the token); Facebook and Instagram go together (one
   token).

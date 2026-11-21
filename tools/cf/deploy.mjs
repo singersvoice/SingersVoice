@@ -2,7 +2,8 @@
 //   0. make sure the account has a workers.dev subdomain (a fresh account has none; wrangler can't ask in CI),
 //   1. write .generated/wrangler.jsonc with the vars filled in (the SVT DB is a SQLite Durable Object,
 //      so there is nothing to provision — a plain "Edit Cloudflare Workers" token is enough),
-//   2. wrangler deploy, 3. push secrets, 4. print the worker URL (also to $GITHUB_OUTPUT as `url`).
+//   2. wrangler deploy, 3. push secrets (PUBLISH_KEY_SECRET, then every optional one the repo holds — Stripe, the
+//   social networks' developer apps, the relay — and SERVICE_URL), 4. print the worker URL (also to $GITHUB_OUTPUT as `url`).
 //
 // Needs: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (env). Optional: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS,
 // PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET (generated and printed once if missing — save it as a secret!).
@@ -90,6 +91,23 @@ if (!keySecret) {
 if (keySecret) {
   execFileSync('npx', ['--yes', 'wrangler@4', 'secret', 'put', 'PUBLISH_KEY_SECRET', '--config', cfgPath], { cwd: svc, env, input: keySecret, stdio: ['pipe', 'inherit', 'inherit'] });
 }
+
+// 3b. the optional secrets, from repo secrets of the same names: Stripe, the social networks' developer apps
+//     (docs/SOCIAL.md), the relay. Each is put on the worker when the repo has it; one the repo does not have is
+//     left as the worker has it (secrets survive deploys). SERVICE_URL — the service's own address, which the
+//     networks send the browser back to — is the worker's URL unless the repo pins one. Never printed.
+const optional = ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'APP_URL', 'X_CLIENT_ID', 'X_CLIENT_SECRET', 'META_APP_ID', 'META_APP_SECRET', 'RELAY_URL', 'RELAY_SECRET', 'GOOGLE_API_KEY'];
+const put = (name, value) => execFileSync('npx', ['--yes', 'wrangler@4', 'secret', 'put', name, '--config', cfgPath], { cwd: svc, env, input: value, stdio: ['pipe', 'inherit', 'inherit'] });
+const putNames = [];
+for (const name of optional) {
+  const value = (env[name] ?? '').trim();
+  if (!value) continue;
+  put(name, value);
+  putNames.push(name);
+}
+put('SERVICE_URL', (env.SERVICE_URL ?? '').trim() || url);
+putNames.push('SERVICE_URL');
+console.log(`\nsecrets on the worker from this deploy: ${putNames.join(', ')}`);
 
 // 4. output
 console.log(`\nsv-control URL: ${url}`);

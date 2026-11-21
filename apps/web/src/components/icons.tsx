@@ -223,3 +223,9 @@ export const IcTv = (p: P) => (
     <path d="M8 21h8M12 17.5V21" />
   </svg>
 );
+export const IcSearch = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="10.5" cy="10.5" r="6.5" />
+    <path d="m20 20-4.8-4.8" />
+  </svg>
+);

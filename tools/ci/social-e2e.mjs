@@ -71,6 +71,35 @@ try {
   await page.getByText(/^Imported/).waitFor({ timeout: 30000 });
   const trackId = await page.evaluate(() => new Promise((res) => { const r = indexedDB.open('singersvoice'); r.onsuccess = () => { const db = r.result; const tx = db.transaction('tracks'); const q = tx.objectStore('tracks').getAllKeys(); q.onsuccess = () => res(q.result[0]); }; }));
 
+  // ---- The Home search: a few letters find any feature; Enter goes there (the section scrolled into view) ----
+  await page.goto(`${base}home?${control}`, { waitUntil: 'networkidle' });
+  await page.locator('[data-feature-query]').fill('tv');
+  await page.locator('[data-feature-hit]').first().waitFor();
+  const hitsTv = await page.locator('[data-feature-hit]').evaluateAll((els) => els.map((e) => e.dataset.featureHit));
+  check(hitsTv[0] === '/settings#tv', `"tv" lists the TV in the room first (${hitsTv.slice(0, 3).join(', ')})`);
+  await page.locator('[data-feature-query]').press('Enter');
+  await page.waitForURL(/\/settings#tv/, { timeout: 15000 });
+  await wait(600);
+  const tvTop = await page.evaluate(() => Math.round(document.getElementById('tv')?.getBoundingClientRect().top ?? 9999));
+  check(tvTop >= -40 && tvTop < 200, `Enter opens Settings scrolled to the TV section (top at ${tvTop}px)`);
+  await page.goto(`${base}home?${control}`, { waitUntil: 'networkidle' });
+  await page.locator('[data-feature-query]').fill('you tube');
+  await page.locator('[data-feature-hit]').first().waitFor();
+  check((await page.locator('[data-feature-hit]').first().getAttribute('data-feature-hit')) === '/tracks#youtube', '"you tube" finds the YouTube song tracks');
+  await page.locator('[data-feature-hit]').first().click();
+  await page.waitForURL(/\/tracks#youtube/, { timeout: 15000 });
+  await page.locator('[data-yt-query], [data-yt-unavailable]').first().waitFor({ timeout: 15000 });
+  check(true, 'a tap opens the Tracks portal on its YouTube tab');
+  await page.goto(`${base}home?${control}`, { waitUntil: 'networkidle' });
+  await page.locator('[data-feature-query]').fill('block someone');
+  await page.locator('[data-feature-hit]').first().waitFor();
+  check((await page.locator('[data-feature-hit]').first().getAttribute('data-feature-hit')) === '/settings#account', '"block someone" finds the account section with the block list');
+  await page.locator('[data-feature-query]').fill('zzzz');
+  await page.locator('[data-feature-none]').waitFor();
+  check((await page.locator('[data-feature-hit]').count()) === 0, 'nonsense finds nothing, and says so');
+  check((await page.locator('[data-feature-hit][data-feature-hit="/admin"]').count()) === 0, 'the Admin page is not in a singer\'s list');
+  await page.locator('[data-feature-query]').fill('');
+
   // ---- A take kept: the clip sheet opens by itself (Settings → Social, on by default) ----
   await page.goto(`${base}studio/sing/${encodeURIComponent(trackId)}?${control}`, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: 'Start singing' }).waitFor({ timeout: 60000 });
@@ -85,7 +114,8 @@ try {
   await page.locator('[data-clip-sheet]').waitFor({ timeout: 20000 });
   check(true, 'the take kept: the clip sheet opens by itself (Settings → Social offers it)');
   const sheet = page.locator('[data-clip-sheet]');
-  check(/No network connected yet/.test(await sheet.locator('[data-clip-networks]').innerText()), 'with no network connected it says where to connect one, and that Download keeps the clip');
+  check(/No network connected yet/.test(await sheet.locator('[data-clip-networks]').innerText()) && (await sheet.locator('[data-clip-connect]').count()) === 1, 'with no network connected the sheet offers the way to connect one');
+  check((await sheet.locator('[data-clip-whole]').count()) === 1, 'a short performance can go out whole');
   const total = Number(await sheet.locator('[data-clip-end]').getAttribute('max'));
   check(total >= 6500 && total <= 20000, `the sliders span the take (${total} ms)`);
   const end = String(Math.min(6000, total - 500));
@@ -112,7 +142,7 @@ try {
   // ---- Settings → Social: X and Facebook & Instagram connected through the networks' pages ----
   await page.goto(`${base}settings?${control}#social`, { waitUntil: 'networkidle' });
   await page.locator('[data-social-networks]').waitFor();
-  check((await page.locator('[data-social-row]').count()) === 4 && /Snapchat lets no web app post/.test(await page.locator('[data-social-row="snapchat"]').innerText()), 'the Social section lists X, Facebook Page, Instagram and Snapchat, with what each can do');
+  check((await page.locator('[data-social-row]').count()) === 3 && (await page.locator('[data-social-row="snapchat"]').count()) === 0 && /personal account cannot be posted to by any app/.test(await page.locator('[data-social-row="instagram"]').innerText()), 'the Social section lists X, Facebook Page and Instagram — nothing that cannot be posted to (no Snapchat)');
   await page.locator('[data-social-connect="x"]').click();
   await page.waitForURL(/\/settings/, { timeout: 30000 });
   await page.locator('[data-social-handle="x"]').waitFor({ timeout: 30000 });

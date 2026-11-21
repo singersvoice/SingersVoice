@@ -80,7 +80,8 @@ export function Settings() {
       .then((r) => (r.ok ? (r.json() as Promise<Version>) : null))
       .then((v) => v && setVersion(v))
       .catch(() => undefined);
-    if (location.hash === '#backgrounds' || location.hash === '#social') setTimeout(() => document.getElementById(location.hash.slice(1))?.scrollIntoView(), 50);
+    // A link to a section of this page (`/settings#tv`, the Home search): scrolled to once the page is up.
+    if (/^#[a-z]+$/.test(location.hash)) setTimeout(() => document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'start' }), 80);
   }, []);
 
   const link = async () => {
@@ -108,7 +109,7 @@ export function Settings() {
   return (
     <Page title="Settings">
       <div class="stack" style="gap:18px">
-        <section class="card stack">
+        <section class="card stack" id="account">
           <h2>Account & Google Drive</h2>
           <div class="row">
             <div class="avatar">{p?.picture ? <img src={p.picture} alt="" referrerpolicy="no-referrer" /> : (p?.name ?? '?').charAt(0)}</div>
@@ -190,7 +191,7 @@ export function Settings() {
         </section>
 
         {isSuperAdmin.value && (
-          <section class="card stack" data-live-services>
+          <section class="card stack" id="services" data-live-services>
             <h2>Live services (SVT DB)</h2>
             <div class="row wrap">
               <span class={`chip ${controlStatus.value === 'online' ? 'ok' : controlStatus.value === 'unconfigured' ? '' : 'warn'}`}>
@@ -213,7 +214,7 @@ export function Settings() {
 
         <SongPrefsCard />
 
-        <section class="card stack">
+        <section class="card stack" id="display">
           <h2>Display</h2>
           <Field label="Lyrics text size">
             <Seg<string>
@@ -232,7 +233,7 @@ export function Settings() {
           <Switch checked={app.showCueDeck} onChange={(v) => updateApp({ showCueDeck: v })} label="Cue deck (my next lines)" />
         </section>
 
-        <section class="card stack">
+        <section class="card stack" id="audio">
           <h2>Audio</h2>
           <Field label="Microphone">
             <select class="input" value={app.audioInputId} onChange={(e) => updateApp({ audioInputId: (e.currentTarget as HTMLSelectElement).value })}>
@@ -290,13 +291,13 @@ export function Settings() {
           </Field>
         </section>
 
-        <section class="card stack">
+        <section class="card stack" id="voice">
           <h2>VoxForge voice</h2>
           <p class="small muted">Saved automatically to {isDrive.value ? 'Drive › SingersVoice › Config › audio_plugin_settings.json' : 'this device'}.</p>
           <FxPanel value={audio} onChange={updateAudio} />
         </section>
 
-        <section class="card stack">
+        <section class="card stack" id="camera">
           <h2>Camera</h2>
           <Switch checked={app.cameraOn && role.value !== 'audio'} onChange={(v) => updateApp({ cameraOn: v })} label={role.value === 'audio' ? 'Camera on stage (your account is audio only — the SingersVoice admin can change that)' : entitlement.value && !entitlement.value.video && role.value !== 'super_admin' ? 'Camera on stage (in live meets your plan gives the voice alone — the Studio keeps the camera; see Plans)' : 'Camera on stage'} disabled={role.value === 'audio'} />
           <Field label="Camera device">
@@ -338,7 +339,7 @@ export function Settings() {
           <BackgroundPicker value={app.backgroundId} onChange={(id) => updateApp({ backgroundId: id })} />
         </section>
 
-        <section class="card stack">
+        <section class="card stack" id="about">
           <h2>About</h2>
           <div class="small muted">
             SingersVoice v2 · {platformName}

@@ -1,18 +1,18 @@
 /**
  * Post a clip: the sheet on a saved performance (Performances, and the review after a take is kept). The
- * singer picks the section — two sliders, from and to, and Play section to hear it — writes the caption,
- * ticks where it goes, and taps Make the clip. The clip then goes out: on a phone, Share… opens the system
- * sheet with the file (Instagram, Snapchat, Facebook, X, WhatsApp — every app installed); Download keeps
- * the file; Post sends it to the networks connected in Settings → Social (X, a Facebook Page, Instagram)
- * through the service, and the links come back. On a computer without a connected network, the clip
- * downloads and the network's composer opens with the caption, the clip to attach by hand.
+ * singer picks the section — two sliders, from and to, and Play section to hear it; or the whole
+ * performance — writes the caption, ticks where it goes, and taps Make the clip. Post then sends it to the
+ * networks connected in Settings → Social (X, a Facebook Page, Instagram), each on the singer's own handle,
+ * through the service, and the links come back. No network connected yet: the sheet leads to Settings →
+ * Social. Beside that, on a phone Share… opens the system sheet with the file (any app installed); Download
+ * keeps the file; on a computer the networks' composers open with the caption, the clip to attach by hand.
  */
 import { CAPTION_MAX, CLIP_LIMITS, CLIP_MAX_SECONDS, clampClip, clipCaption, composerUrl, formatMs, socialTitle, type SocialNetwork, type SocialPost, type SocialStatus } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api, controlConfigured } from '../lib/api.ts';
 import { canShareFile, clipExt, makeClip, shareClip, type Clip, type ClipProgress } from '../lib/clip.ts';
 import { downloadBlob } from '../lib/download.ts';
-import { href, safeHref } from '../lib/nav.ts';
+import { go, safeHref } from '../lib/nav.ts';
 import { errorText, toast } from '../lib/toast.ts';
 import { appSettings } from '../state/settings.ts';
 import { IcDownload, IcPlay, IcShare, IcStop } from './icons.tsx';
@@ -176,6 +176,11 @@ export function ClipSheet(props: { source: ClipSource; onClose: () => void }) {
           <button class="btn sm" onClick={() => set(0, Math.min(total, app.clipSeconds * 1000))} title="The start of the performance">
             First {Math.min(Math.round(total / 1000), app.clipSeconds)} s
           </button>
+          {total <= maxSeconds * 1000 && (
+            <button class="btn sm" onClick={() => set(0, total)} title="All of it" data-clip-whole>
+              Whole performance
+            </button>
+          )}
         </div>
       </div>
       <div class="field" style="margin:0">
@@ -189,8 +194,11 @@ export function ClipSheet(props: { source: ClipSource; onClose: () => void }) {
         <div class="stack" style="gap:6px" data-clip-networks>
           <div class="small muted">Post to</div>
           {connected.length === 0 ? (
-            <div class="small faint">
-              No network connected yet — <a href={href('/settings#social')}>Settings → Social</a> connects X, a Facebook Page and Instagram. {sharable ? 'Share… below hands the clip to any app on this phone meanwhile.' : 'Download below keeps the clip to post from the network itself.'}
+            <div class="row wrap" style="gap:8px;align-items:center">
+              <span class="small faint">No network connected yet.</span>
+              <button class="btn sm primary" onClick={() => go('/settings#social')} data-clip-connect>
+                Connect X, Facebook or Instagram
+              </button>
             </div>
           ) : (
             <div class="row wrap" style="gap:10px">
@@ -250,7 +258,7 @@ export function ClipSheet(props: { source: ClipSource; onClose: () => void }) {
                   Facebook
                 </a>
               )}
-              <span class="muted">and attach the clip (Instagram and Snapchat post from their phone apps).</span>
+              <span class="muted">and attach the clip (Instagram posts from its phone app).</span>
             </div>
           )}
           {results.length > 0 && (

@@ -133,7 +133,7 @@ export function AdminBilling(props: { onChanged?: () => void; tick?: number }) {
   };
 
   return (
-    <section class="card stack pad-sm" data-billing>
+    <section class="card stack pad-sm" id="billing" data-billing>
       <div class="row between wrap">
         <div>
           <h3 style="margin:0">Plans &amp; payments</h3>

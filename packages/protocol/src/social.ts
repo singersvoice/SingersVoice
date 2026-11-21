@@ -3,15 +3,16 @@
  *
  * The singer picks a section of a performance (from–to), the app makes a clip of it (the show picture
  * with its sound, MP4 where the device can), and then:
- *   - on a phone, the system share sheet takes the clip to any app installed — Instagram, Snapchat,
- *     Facebook, X, WhatsApp… (the only way into Snapchat and a personal Instagram account: neither has
- *     an API a web app may post through);
- *   - on a computer, the clip downloads and the network's composer opens with the performance's link;
- *   - connected networks post it directly from here: X (a post with the video), a Facebook Page (a
- *     video post) and the Instagram professional account linked to that Page (a Reel). Connecting
- *     needs the SingersVoice service to hold a developer app for the network (X_CLIENT_ID /
- *     X_CLIENT_SECRET, META_APP_ID / META_APP_SECRET — docs/SOCIAL.md); the singer's tokens live sealed
- *     on the service and never reach the browser; the clip goes browser → service → network.
+ *   - the networks connected in Settings → Social post it straight from here, on the singer's own
+ *     handle: X (a post with the video on the timeline), a Facebook Page (a video post on the Page) and
+ *     the Instagram professional account linked to that Page (a Reel on the profile). Connecting needs
+ *     the SingersVoice service to hold a developer app for the network (X_CLIENT_ID / X_CLIENT_SECRET,
+ *     META_APP_ID / META_APP_SECRET — docs/SOCIAL.md); the singer's tokens live sealed on the service and
+ *     never reach the browser; the clip goes browser → service → network. A personal Facebook profile
+ *     and a personal Instagram account cannot be posted to by any app (the networks' rule), and Snapchat
+ *     has no API a web app may post through — so none of those is offered;
+ *   - beside that, on a phone the system share sheet takes the clip to any app installed, and on a
+ *     computer the clip downloads.
  */
 
 export type SocialNetwork = 'x' | 'facebook' | 'instagram';
@@ -77,11 +78,11 @@ export interface SocialPost {
 /** The limits the networks put on a clip, so the picker keeps within them (seconds, bytes). */
 export const CLIP_LIMITS: Record<SocialNetwork, { maxSeconds: number; maxBytes: number }> = {
   x: { maxSeconds: 140, maxBytes: 512 * 1024 * 1024 },
-  facebook: { maxSeconds: 20 * 60, maxBytes: 1024 * 1024 * 1024 },
-  instagram: { maxSeconds: 180, maxBytes: 300 * 1024 * 1024 },
+  facebook: { maxSeconds: 360, maxBytes: 95 * 1024 * 1024 },
+  instagram: { maxSeconds: 180, maxBytes: 95 * 1024 * 1024 },
 };
-/** A clip is at most this long whatever the network: a phone's share sheet and the networks' own limits. */
-export const CLIP_MAX_SECONDS = 180;
+/** A clip is at most this long whatever the network (a whole song for a Page; the service takes 95 MB). */
+export const CLIP_MAX_SECONDS = 360;
 export const CLIP_MIN_SECONDS = 3;
 /** The caption's size (X's limit is 280 characters; the others take more). */
 export const CAPTION_MAX: Record<SocialNetwork, number> = { x: 280, facebook: 2000, instagram: 2200 };

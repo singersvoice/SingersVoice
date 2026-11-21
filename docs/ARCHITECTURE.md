@@ -549,16 +549,18 @@ admin adds an offer and a fee-void code; a singer's page shows the offer and the
 
 `packages/protocol/src/social.ts`, `apps/web/src/lib/clip.ts`, `apps/web/src/components/ClipSheet.tsx`,
 `apps/web/src/components/SocialSettings.tsx`, `services/control/src/social.ts`, docs/SOCIAL.md. A clip is
-a section (from–to, three seconds to three minutes — less when a stricter network is ticked: X 140 s) of
-the show video of a saved performance, written by the browser itself: the section plays once through a
+a section (from–to, three seconds to six minutes — less when a stricter network is ticked: X 140 s,
+Instagram 180 s; a whole performance when it fits) of the show video of a saved performance, written by
+the browser itself: the section plays once through a
 hidden video element — its frames drawn to a canvas, its sound routed through a MediaElementSource into
 a MediaStreamDestination, so nothing is heard — and a MediaRecorder on the canvas stream plus that audio
 writes the file (MP4 H.264/AAC where the browser can — Chrome on Windows/Mac/Android, Safari —, VP9
 otherwise); a minute of clip takes a minute. The sheet (on every performance, and by itself after a take
 is kept when Settings → Social says so) offers Share… (the Web Share API with the file: the phone's share
-sheet, the only way into Snapchat and a personal Instagram account), Download, the networks' composers on
-a computer (X's intent URL, Facebook's sharer with the performance's link), and Post to the networks
-connected. Connecting is the network's own OAuth: `POST /social/:provider/connect` makes the state (and
+sheet), Download, the networks' composers on a computer (X's intent URL, Facebook's sharer with the
+performance's link), and Post to the networks connected — the main path; with none connected the sheet
+leads to Settings → Social. Only what an app may post to is offered: X, a Facebook Page, an Instagram
+professional account — never a personal profile, a personal Instagram account or Snapchat (no API). Connecting is the network's own OAuth: `POST /social/:provider/connect` makes the state (and
 X's PKCE pair), keeps them in `social_states` and answers the authorize URL; the network sends the
 browser to `GET /social/:provider/callback` on the service (no sign-in of ours — the state is the
 credential, taken once within a quarter hour, and only at its own provider's door), which trades the code
@@ -577,6 +579,18 @@ and Instagram together). Tests: `packages/protocol/test/social.test.ts`, `apps/w
 `services/control/test/app.test.ts` ("social": both sign-ins against fakes of the networks, the chunked
 upload, the renewal, the Page pick, Instagram's processing, the let-go), `tools/ci/social-e2e.mjs` (the
 whole flow in the browser against `tools/ci/fake-social.mjs`).
+
+## Find anything: the Home search
+
+`apps/web/src/lib/features.ts` is every feature of the app as the Home search knows it — the title as
+the screen names it, where it lives ("Settings → TV"), the words people type for it, and its address: a
+screen, a tab (`/tracks#youtube`, `/publishing?tab=destinations`) or a section (`/settings#voice`,
+`/admin#billing`; Settings and Admin scroll to a hash on arrival). `searchFeatures` scores every word
+typed against the title first and the keywords after, needs every word to match, and leaves out what
+the account cannot use (`when`: the Admin page for a singer, the Plans page for a super admin, Publishing
+without the plan). `components/FeatureSearch.tsx` on Home lists the matches as the letters come; a tap, or
+Enter on the one chosen with the arrow keys, goes there (`go`). Tests: `apps/web/test/features.test.ts`,
+the Home-search section of `tools/ci/social-e2e.mjs`.
 
 ## Security
 

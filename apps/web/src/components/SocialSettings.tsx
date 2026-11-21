@@ -1,11 +1,11 @@
 /**
- * Settings → Social: where clips of saved performances can go, and the networks connected for posting them
- * from here (protocol/social.ts). X connects on its own; Facebook and Instagram connect together (one Meta
- * sign-in: a Facebook Page the singer manages and the Instagram professional account linked to it —
- * Instagram's rule, not ours; a personal Instagram account and Snapchat take the clip from the phone's
- * share sheet). The sign-in happens on the network's own page; the service keeps the tokens, never this
- * device. Below: the box that offers a clip after every take kept, the clip's starting length, and the
- * posts made so far.
+ * Settings → Social: the networks connected for posting clips of saved performances from here, each on the
+ * singer's own handle (protocol/social.ts). X connects on its own; Facebook and Instagram connect together
+ * (one Meta sign-in: a Facebook Page the singer manages and the Instagram professional account linked to it
+ * — the networks' rule, not ours: a personal profile or a personal Instagram account cannot be posted to by
+ * any app, and Snapchat has no API at all, so none of those is offered). The sign-in happens on the
+ * network's own page; the service keeps the tokens, never this device. Below: the box that offers a clip
+ * after every take kept, the clip's starting length, and the posts made so far.
  */
 import { safeHref } from '../lib/nav.ts';
 import { socialTitle, type SocialNetwork, type SocialProvider, type SocialStatus } from '@singersvoice/protocol';
@@ -91,7 +91,7 @@ export function SocialSettings() {
     <section class="card stack" id="social" data-social>
       <h2>Social</h2>
       <div class="small muted">
-        Any performance saved to your Drive can go out as a clip: pick the section (from–to), and the clip is made on this device. On a phone, <b>Share…</b> hands it to any app installed — Instagram, Snapchat, Facebook, X, WhatsApp. Networks connected here post straight from SingersVoice as well, with the link back.
+        Connect your networks here and any performance saved to your Drive posts to them from SingersVoice, on your own handle: pick the section (from–to), the clip is made on this device, <b>Post</b> sends it, and the link comes back. On a phone, <b>Share…</b> can also hand a clip to any app installed.
       </div>
       <Switch checked={app.socialOffer} onChange={(v) => updateApp({ socialOffer: v })} label="Offer to post a clip after I keep a take" hint="The clip sheet opens by itself when a take is kept; Post a clip is on every saved performance anyway." />
       <Field label="A clip starts out this long">
@@ -126,7 +126,7 @@ export function SocialSettings() {
               </>
             ) : (
               <span class="small faint" data-social-unconfigured="x">
-                Posting from here is not set up on this service (the admin adds an X developer app — docs/SOCIAL.md). On a phone, Share… hands the clip to the X app; on a computer, Download and attach it.
+                Not available yet: the SingersVoice admin has to connect SingersVoice to X first (docs/SOCIAL.md — a few minutes). Then <b>Connect X</b> appears here.
               </span>
             )}
           </div>
@@ -151,7 +151,7 @@ export function SocialSettings() {
               </>
             ) : (
               <span class="small faint" data-social-unconfigured="meta">
-                Posting from here is not set up on this service (the admin adds a Meta developer app — docs/SOCIAL.md). On a phone, Share… hands the clip to the Facebook app.
+                Not available yet: the SingersVoice admin has to connect SingersVoice to Facebook and Instagram first (docs/SOCIAL.md). Then <b>Connect Facebook &amp; Instagram</b> appears here.
               </span>
             )}
           </div>
@@ -178,14 +178,10 @@ export function SocialSettings() {
                 <span class="small muted">clips post as a Reel (comes with the Facebook Page above)</span>
               </>
             ) : fb ? (
-              <span class="small faint">The Page "{fb.handle}" has no Instagram professional account linked to it. Link one in Instagram → Settings → Account → Sharing to other apps, then connect Facebook again. A personal account: Share… from your phone.</span>
+              <span class="small faint">The Page "{fb.handle}" has no Instagram professional account linked to it. Link one in Instagram → Settings → Account → Sharing to other apps, then connect Facebook again.</span>
             ) : (
-              <span class="small faint">A professional (business or creator) account linked to a Facebook Page posts from here — connect Facebook &amp; Instagram above. A personal account: on your phone, Share… hands the clip to the Instagram app.</span>
+              <span class="small faint">A professional (business or creator) Instagram account linked to a Facebook Page — connect Facebook &amp; Instagram above. A personal account cannot be posted to by any app (Instagram's rule): switch it to professional, free, in Instagram → Settings → Account type.</span>
             )}
-          </div>
-          <div class="row wrap" style="gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line, #ddd)" data-social-row="snapchat">
-            <b style="min-width:9em">Snapchat</b>
-            <span class="small faint">Snapchat lets no web app post for you: on your phone, Share… hands the clip to the Snapchat app, and you post it there.</span>
           </div>
           {status.posts.length > 0 && (
             <div class="stack" style="gap:4px" data-social-posts>

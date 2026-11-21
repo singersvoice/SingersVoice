@@ -80,12 +80,17 @@ cancelling. The Plans page's **Manage subscription** opens it.
 
 ## 6. The secrets on the service
 
-Never in the repo. For the Cloudflare Worker (`services/control`):
+Never in the repo. The easy way: GitHub → the repository → **Settings → Secrets and variables →
+Actions** → *New repository secret* — `STRIPE_SECRET_KEY` (`sk_test_…` first, `sk_live_…` when going
+live) and `STRIPE_WEBHOOK_SECRET` (`whsec_…` of the endpoint above); and a repository **variable**
+`APP_URL` = `https://www.singersvoice.com` (the app also says where it lives on each checkout). The
+*Deploy sv-control* workflow puts them on the Worker on its next run (every push, or Actions → *Deploy
+sv-control* → *Run workflow*). By hand instead, from `services/control`:
 
 ```
-npx wrangler secret put STRIPE_SECRET_KEY        # sk_test_… first, sk_live_… when going live
-npx wrangler secret put STRIPE_WEBHOOK_SECRET    # whsec_… of the endpoint above (test, then live)
-npx wrangler secret put APP_URL                  # https://www.singersvoice.com (the app also says where it lives on each checkout)
+npx wrangler secret put STRIPE_SECRET_KEY
+npx wrangler secret put STRIPE_WEBHOOK_SECRET
+npx wrangler secret put APP_URL
 ```
 
 For Node (`services/control` on a VM or Fly), the same three as environment variables

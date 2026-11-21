@@ -151,7 +151,7 @@ export async function makeClip(source: Blob, fromMs: number, toMs: number, opts:
   }
 }
 
-/** Whether this device can hand a file to another app (the phone's share sheet with Instagram, Snapchat, X…). */
+/** Whether this device can hand a file to another app (the phone's share sheet: every app installed). */
 export function canShareFile(file: File): boolean {
   const n = navigator as Navigator & { canShare?: (d: ShareData) => boolean };
   try {

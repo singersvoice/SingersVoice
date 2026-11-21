@@ -77,6 +77,65 @@
   background: linear-gradient(135deg, rgba(122, 43, 176, 0.55), rgba(27, 10, 46, 0.4)), var(--surface);
   border: 1px solid var(--line);
 }
+/* The Home search: a box, and the matches right under it. */
+.feature-search {
+  position: relative;
+}
+.feature-search-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+}
+.feature-search-box .input {
+  border: 0;
+  background: transparent;
+  padding-left: 0;
+  min-height: 48px;
+  font-size: 1.02em;
+}
+.feature-search-box .input:focus {
+  outline: none;
+  box-shadow: none;
+}
+.feature-search-box:focus-within {
+  border-color: var(--accent);
+}
+.feature-results {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  display: grid;
+  padding: 6px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  max-height: 60dvh;
+  overflow: auto;
+}
+.feature-hit {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.feature-hit.on,
+.feature-hit:hover {
+  background: rgba(122, 43, 176, 0.25);
+}
 .quick {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
