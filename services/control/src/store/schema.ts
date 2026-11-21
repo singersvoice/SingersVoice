@@ -167,6 +167,47 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_session ON orders(session_id);
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS plan_offers (
+  offer_id TEXT PRIMARY KEY,
+  plan TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  interval TEXT NOT NULL DEFAULT 'month',
+  interval_count INTEGER NOT NULL DEFAULT 1,
+  prices TEXT NOT NULL DEFAULT '{}',
+  valid_from TEXT,
+  valid_until TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plan_offers_plan ON plan_offers(plan, sort);
+CREATE TABLE IF NOT EXISTS promo_codes (
+  code TEXT PRIMARY KEY,
+  kind TEXT NOT NULL DEFAULT 'percent',
+  value INTEGER NOT NULL DEFAULT 0,
+  currency TEXT,
+  plans TEXT NOT NULL DEFAULT '[]',
+  duration TEXT NOT NULL DEFAULT 'once',
+  free_periods INTEGER NOT NULL DEFAULT 1,
+  max_uses INTEGER NOT NULL DEFAULT 0,
+  uses INTEGER NOT NULL DEFAULT 0,
+  valid_until TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  note TEXT NOT NULL DEFAULT '',
+  stripe_coupon_id TEXT,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS promo_uses (
+  code TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  order_id TEXT,
+  used_at TEXT NOT NULL,
+  PRIMARY KEY (code, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_promo_uses_order ON promo_uses(order_id);
 CREATE TABLE IF NOT EXISTS club_members (
   owner_user_id TEXT NOT NULL,
   email TEXT NOT NULL,
@@ -262,7 +303,10 @@ CREATE TABLE IF NOT EXISTS live_segments (
  * every payment for a plan (Stripe's, by the webhook, with the ids a refund needs and what Stripe kept
  * of it; a period the admin granted, amount 0); `orders` every Checkout started and what became of it
  * (pending → paid / processing / failed / canceled / expired — the webhook's word, never the browser's);
- * `club_members` the email addresses a club owner named to share the club's video hours; `video_usage`
+ * `plan_offers` the ways to pay for a plan (offers.ts: a period with its prices per currency, on sale between
+ * two dates) and `promo_codes` the codes that cut a payment (a percentage, an amount, or the fee voided) with
+ * `promo_uses` one row per code and account that used it (an order's id while a Checkout is open, so a
+ * Checkout that fails gives the use back); `club_members` the email addresses a club owner named to share the club's video hours; `video_usage`
  * the seconds of video on stage per pool (an account, or the club owner's for the whole club) and
  * calendar month (UTC); `coupons` the gate (coupons.ts): one per email address — the code, the expiry,
  * who issued it — with the code an account entered on `users.coupon_code`, and the requirement itself
@@ -289,6 +333,8 @@ CREATE TABLE IF NOT EXISTS live_segments (
  *   users.google_id            — the Google account's id (the user_id without its `g-`)
  *   users.phone                — a phone number the singer gave (optional)
  *   users.blocked, …           — blocked for good by a super admin (the flag, when, the admins' note)
+ *   orders.offer_id, promo_code, discount_cents — the offer chosen and the code on a Checkout (offers.ts)
+ *   payments.promo_code        — the code on a payment
  * `blocks` is who blocked whom (a singer's own list): nobody blocked by a host gets into that host's meets.
  */
 export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string; after?: string }[] = [
@@ -312,4 +358,8 @@ export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string; af
   { table: 'users', column: 'blocked', ddl: 'ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0' },
   { table: 'users', column: 'blocked_at', ddl: 'ALTER TABLE users ADD COLUMN blocked_at TEXT' },
   { table: 'users', column: 'blocked_note', ddl: "ALTER TABLE users ADD COLUMN blocked_note TEXT NOT NULL DEFAULT ''" },
+  { table: 'orders', column: 'offer_id', ddl: 'ALTER TABLE orders ADD COLUMN offer_id TEXT' },
+  { table: 'orders', column: 'promo_code', ddl: "ALTER TABLE orders ADD COLUMN promo_code TEXT NOT NULL DEFAULT ''" },
+  { table: 'orders', column: 'discount_cents', ddl: 'ALTER TABLE orders ADD COLUMN discount_cents INTEGER NOT NULL DEFAULT 0' },
+  { table: 'payments', column: 'promo_code', ddl: "ALTER TABLE payments ADD COLUMN promo_code TEXT NOT NULL DEFAULT ''" },
 ];

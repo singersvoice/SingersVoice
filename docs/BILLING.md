@@ -41,6 +41,16 @@ cancelling); the account's payments are listed. When Stripe is not configured, o
 sale, the page says to ask the SingersVoice admin, and a plan granted on the Admin page shows there
 the same way.
 
+When the admin made **offers** for a plan (below), the plan's card shows them as its buttons instead
+of the one price — *Choose SVV — A year · $50.00 / year*, *Choose SVV — Launch price · $4.00 / month ·
+until 31 Dec* — in the currency picked. A **Have a code?** box above the plans takes a **promo
+code**: *Apply* checks it with the service and says what it gives (*SAVE20: 20% off your first
+payment — for SVV, SVVPro*); the buttons then show the discounted price (*$4.00 / month (was $5.00,
+first payment)*), and the code goes on the payment. A **fee-void** code turns the button into *Get SVV
+free — Three months*: the plan opens at once, with no Stripe page at all, and the payments list shows
+*free with a code* with the code on it. A code is once per account; a code for other plans, expired,
+used up or already used says so in the box.
+
 ## My club (`/club`)
 
 A club owner names the members (Google email addresses) who share the club's video hours: a plain
@@ -62,6 +72,27 @@ and *Grant again* / *Renew* / *Revoke* in the row; then the **payments** (every 
 the fee Stripe kept, every period granted; a **Refund** button on Stripe's) and the **Checkouts
 without a payment** (processing, failed, expired). On every account's row below, a **Grant** of a
 plan for its own period or for a number of months, *Renew*, *Set dates*, *Revoke*.
+
+Between the plans and the subscribers, two tables of their own:
+
+- **Offers — the ways to pay for a plan.** *Add an offer*: the plan, a title (*Monthly*, *A year*,
+  *Launch price*), the period (so many months or years), the prices in USD and INR, the dates it is
+  **on sale** (*from*, *until* — the end of that day, UTC; either may be empty) and an on/off switch;
+  *Save* / *Remove* on each row, and a chip saying *on sale*, *not now* (outside its dates) or *off*.
+  A plan with offers on sale sells by them on the Plans page; a plan with none sells at the one price
+  above. Singers who paid for an offer keep what they paid for when it is removed.
+- **Promo codes.** *Add a code*: the code (letters and digits; typed with spaces or dashes it still
+  matches), what it gives — **% off**, an **amount off** in USD or INR, or the **fee voided** for so
+  many periods of the offer chosen —, on the **first payment** or **every payment** (for % and
+  amount), the **plans** it is for (none ticked = every plan), the **uses** allowed (0 = no limit; the
+  uses so far are shown), a last day (**until**), a note for you, and an on/off switch. The chip on
+  the row says what the code gives, or *expired* / *used up* / *off*. A % or amount code becomes a
+  Stripe coupon the first time a singer pays with it (made by the service; nothing to do in the
+  Dashboard; changing the code's terms makes a new coupon at the next use). A fee-void code never
+  reaches Stripe: the service grants the plan and records a payment of 0 with the code — so it works
+  before Stripe is set up too. Every code is **once per account**: a Checkout left open holds the
+  use; one that expires or fails gives it back. The *Checkouts without a payment* list shows the
+  code and the discount on each order.
 
 ## How money is collected: Stripe
 

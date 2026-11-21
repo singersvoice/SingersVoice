@@ -10,6 +10,7 @@ export * from './publishing.ts';
 export * from './roles.ts';
 export * from './plans.ts';
 export * from './coupons.ts';
+export * from './offers.ts';
 export * from './registry.ts';
 export * from './prefs.ts';
 export * from './ytTracks.ts';

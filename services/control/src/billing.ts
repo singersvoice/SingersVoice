@@ -57,6 +57,11 @@ export interface CheckoutLine {
   intervalCount: number;
   /** Our order's id: on the session's metadata, and the idempotency key (a retried request opens no second session). */
   orderId: string;
+  /** The offer chosen (offers.ts), for the session's metadata. */
+  offerId?: string | null;
+  /** A Stripe coupon (made by `ensureCoupon` for a promo code) applied to the subscription, and the code itself for the metadata. */
+  couponId?: string | null;
+  promoCode?: string;
 }
 
 /**
@@ -84,13 +89,34 @@ export async function createCheckoutSession(b: BillingConfig, who: { userId: str
     'metadata[orderId]': line.orderId,
     'subscription_data[metadata][userId]': who.userId,
     'subscription_data[metadata][planId]': line.plan,
-    allow_promotion_codes: 'true',
   };
+  if (line.offerId) body['metadata[offerId]'] = line.offerId;
+  if (line.promoCode) body['metadata[promo]'] = line.promoCode;
+  // A coupon of ours on the session, or Stripe's own promotion-code field (Stripe allows one or the other, not both).
+  if (line.couponId) body['discounts[0][coupon]'] = line.couponId;
+  else body.allow_promotion_codes = 'true';
   if (who.customerId) body.customer = who.customerId;
   else body.customer_email = who.email;
   const s = await stripe<{ id?: string; url?: string }>(b, '/checkout/sessions', { body, idempotencyKey: `checkout-${line.orderId}` });
   if (!s.url || !s.id) throw new Error('Stripe gave no checkout page');
   return { url: s.url, sessionId: s.id };
+}
+
+/**
+ * A Stripe coupon for a promo code (offers.ts): a percentage off, or an amount off in one currency, on the first
+ * payment or on every one. Made once per code and kept by its id; the code itself is the idempotency key, so a
+ * retried request makes no second coupon.
+ */
+export async function createCoupon(b: BillingConfig, promo: { code: string; kind: 'percent' | 'amount'; value: number; currency: string | null; duration: 'once' | 'forever' }): Promise<{ id: string }> {
+  const body: Record<string, string> = { name: `SingersVoice ${promo.code}`, duration: promo.duration, 'metadata[code]': promo.code };
+  if (promo.kind === 'percent') body.percent_off = String(Math.min(100, Math.max(1, promo.value)));
+  else {
+    body.amount_off = String(Math.max(1, Math.round(promo.value)));
+    body.currency = (promo.currency ?? 'usd').toLowerCase();
+  }
+  const c = await stripe<{ id?: string }>(b, '/coupons', { body, idempotencyKey: `coupon-${promo.code}-${promo.kind}-${promo.value}-${promo.currency ?? ''}-${promo.duration}` });
+  if (!c.id) throw new Error('Stripe gave no coupon');
+  return { id: c.id };
 }
 
 /** The Customer Portal (change card, cancel, invoices) for an existing Stripe customer. */

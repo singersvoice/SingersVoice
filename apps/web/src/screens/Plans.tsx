@@ -2,13 +2,16 @@
  * The Plans page (/plans; /club-owner is its old name) — self-service: where the account stands (the
  * plan in force, the video hours used and left this month, when they start again), the four plans at
  * the prices the super admin set — in the currency the singer picks when a plan is priced in more
- * than one (a price in INR takes UPI through Stripe) — and one plain button on each: Choose. Stripe's
- * own page takes the payment (nothing of the card or the UPI app touches SingersVoice); back here,
- * the return page waits for Stripe's word. Manage subscription opens Stripe's portal (the card, the
- * invoices, cancelling); the account's payments are listed. When payments are not set up, or a plan
- * is not for sale, the page says to ask the SingersVoice admin.
+ * than one (a price in INR takes UPI through Stripe) — and one plain button on each: Choose — or one
+ * per offer when the admin made offers for the plan (a month, a year, a launch price until a date:
+ * offers.ts). A promo code typed in the box is checked at once and goes on the payment; a fee-void
+ * code opens the plan without Stripe at all. Stripe's own page takes the payment (nothing of the card
+ * or the UPI app touches SingersVoice); back here, the return page waits for Stripe's word. Manage
+ * subscription opens Stripe's portal (the card, the invoices, cancelling); the account's payments are
+ * listed. When payments are not set up, or a plan is not for sale, the page says to ask the
+ * SingersVoice admin.
  */
-import { hoursLabel, moneyLabel, periodLabel, roleTitle, type PlanDef, type PlansResponse, type PaymentRecord } from '@singersvoice/protocol';
+import { discountCents, hoursLabel, moneyLabel, normalizeCode, periodLabel, periodWords, roleTitle, type PlanDef, type PlanOffer, type PlansResponse, type PaymentRecord, type PromoPreview } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { Page } from '../components/Shell.tsx';
 import { Spinner } from '../components/ui.tsx';
@@ -22,12 +25,24 @@ const appUrlHere = (): string => `${location.origin}${import.meta.env.BASE_URL}`
 
 const day = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleDateString() : '');
 
-/** "$5.00 / month", "₹425.00 / month", "$250.00 / year" — a plan's price in a currency. */
-export function priceLabel(p: PlanDef, currency: string): string {
+/** "$5.00 / month", "₹425.00 / month", "$250.00 / year", "$50.00 / 12 months" — a plan's (or an offer's) price in a currency. */
+export function priceLabel(p: Pick<PlanDef, 'prices' | 'interval' | 'intervalCount'>, currency: string): string {
   const cents = p.prices[currency];
   if (!cents) return '';
   const every = p.intervalCount > 1 ? `${p.intervalCount} ${p.interval}s` : p.interval;
   return `${moneyLabel(cents, currency)} / ${every}`;
+}
+
+/** The price with a code on it: "~~$5.00~~ $4.00 / month" as text — "$4.00 / month (was $5.00)". */
+function pricedWith(p: Pick<PlanDef, 'prices' | 'interval' | 'intervalCount'>, currency: string, promo: PromoPreview | null): string {
+  const cents = p.prices[currency];
+  if (!cents) return '';
+  if (!promo) return priceLabel(p, currency);
+  if (promo.kind === 'free') return `no payment (${priceLabel(p, currency)} waived)`;
+  const off = discountCents(promo, cents, currency);
+  if (!off) return priceLabel(p, currency);
+  const every = p.intervalCount > 1 ? `${p.intervalCount} ${p.interval}s` : p.interval;
+  return `${moneyLabel(cents - off, currency)} / ${every} (was ${moneyLabel(cents, currency)}${promo.duration === 'once' ? ', first payment' : ''})`;
 }
 
 /** What a plan gives, in a few lines. */
@@ -47,9 +62,10 @@ export function PaymentLine(props: { p: PaymentRecord; who?: string; action?: pr
     <div class="row wrap small" style="gap:8px;align-items:center" data-payment={p.id} data-payment-source={p.source} data-payment-status={p.status}>
       <span class="muted" style="min-width:6em">{day(p.paidAt)}</span>
       {props.who && <b>{props.who}</b>}
-      <b>{p.source === 'grant' ? 'granted' : moneyLabel(p.amountCents, p.currency)}</b>
+      <b>{p.source === 'grant' ? 'granted' : p.source === 'promo' ? 'free with a code' : moneyLabel(p.amountCents, p.currency)}</b>
       <span class="chip">{p.plan}</span>
-      <span class={`chip ${p.source === 'stripe' ? 'ok' : ''}`}>{p.source === 'stripe' ? 'Stripe' : 'admin'}</span>
+      <span class={`chip ${p.source === 'stripe' ? 'ok' : ''}`}>{p.source === 'stripe' ? 'Stripe' : p.source === 'promo' ? 'promo code' : 'admin'}</span>
+      {p.promoCode && <span class="chip" data-payment-promo>{p.promoCode}</span>}
       {p.status !== 'paid' && <span class="chip warn">{p.status === 'refunded' ? 'refunded' : `refunded ${moneyLabel(p.refundedCents, p.currency)}`}</span>}
       {p.periodStart || p.periodEnd ? (
         <span class="muted">
@@ -67,6 +83,9 @@ export function Plans() {
   const [status, setStatus] = useState<PlansResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [promoText, setPromoText] = useState('');
+  const [promo, setPromo] = useState<PromoPreview | null>(null);
+  const [promoNote, setPromoNote] = useState('');
   const [currency, setCurrency] = useState<string>(() => {
     try {
       return localStorage.getItem('sv.currency') || 'usd';
@@ -100,11 +119,45 @@ export function Plans() {
     }
   };
 
-  const choose = async (p: PlanDef) => {
-    setBusy(p.id);
+  /** The code in the box, looked at by the service: what it gives, or why not. */
+  const applyPromo = async () => {
+    const code = normalizeCode(promoText);
+    if (!code) {
+      setPromo(null);
+      setPromoNote('');
+      return;
+    }
+    setBusy('promo');
     try {
-      const { url } = await api.post('POST /plans/checkout', '/plans/checkout', { planId: p.id, currency, appUrl: appUrlHere() });
-      window.location.assign(url);
+      const r = await api.get('GET /plans/promo/:code', `/plans/promo/${encodeURIComponent(code)}`);
+      setPromo(r.promo);
+      setPromoNote(`${r.promo.code}: ${r.promo.label}${r.promo.plans.length ? ` — for ${r.promo.plans.map((id) => status?.plans.find((p) => p.id === id)?.title ?? id).join(', ')}` : ''}`);
+    } catch (e) {
+      setPromo(null);
+      setPromoNote(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const promoFor = (planId: string): PromoPreview | null => (promo && (!promo.plans.length || promo.plans.includes(planId as PlanDef['id'])) ? promo : null);
+
+  const choose = async (p: PlanDef, offer: PlanOffer | null) => {
+    setBusy(offer?.offerId ?? p.id);
+    const code = promoFor(p.id)?.code ?? '';
+    try {
+      const r = await api.post('POST /plans/checkout', '/plans/checkout', { planId: p.id, currency, appUrl: appUrlHere(), offerId: offer?.offerId ?? null, promo: code || undefined });
+      if (r.granted) {
+        // The fee voided by the code: the plan is open already — nothing to pay.
+        toast(`${p.title} is yours — opened with the code ${code}, nothing to pay`, 'ok', 8000);
+        setPromo(null);
+        setPromoText('');
+        setPromoNote('');
+        await load();
+        await refreshAccount();
+        setBusy(null);
+        return;
+      }
+      window.location.assign(r.url);
     } catch (e) {
       toast(e instanceof ApiError && (e.code === 'billing_unconfigured' || e.code === 'self_service_off') ? `Ask the SingersVoice admin for the ${p.title} plan — payments are not taken here` : errorText(e), 'warn', 7000);
       setBusy(null);
@@ -141,6 +194,7 @@ export function Plans() {
         )}
         {error && <div class="callout warn">{error}</div>}
         {back === 'cancel' && <div class="callout">Checkout was cancelled — nothing was charged.</div>}
+        {back === 'granted' && <div class="callout">Your plan is open — the code took care of the payment.</div>}
 
         {status && ent && (
           <section class="card stack pad-sm" data-standing>
@@ -200,13 +254,34 @@ export function Plans() {
           </div>
         )}
 
+        {status && !superAdmin && (
+          <div class="row wrap" style="gap:8px;align-items:center" data-promo-box>
+            <span class="small muted">Have a code?</span>
+            <input class="input" style="width:11em;text-transform:uppercase" value={promoText} placeholder="PROMO CODE" maxLength={32} aria-label="Promo code" data-promo-input onInput={(e) => setPromoText((e.currentTarget as HTMLInputElement).value)} onKeyDown={(e) => e.key === 'Enter' && void applyPromo()} />
+            <button class="btn sm" disabled={busy !== null} data-promo-apply onClick={() => void applyPromo()}>
+              {busy === 'promo' ? <Spinner /> : null} Apply
+            </button>
+            {promoNote && (
+              <span class={`small ${promo ? 'ok' : 'warn'}`} data-promo-note data-promo-ok={promo ? '1' : '0'}>
+                {promoNote}
+              </span>
+            )}
+          </div>
+        )}
+
         {status && (
           <div class="grid-2 plans">
             {status.plans.map((p) => {
               const mine = current === p.id && ent?.via !== 'super_admin';
-              const price = priceLabel(p, currency);
-              const buyable = p.id !== 'free' && p.selfService && status.checkout && Boolean(p.prices[currency]);
-              const otherCurrency = p.id !== 'free' && p.selfService && status.checkout && !p.prices[currency] && Object.keys(p.prices).length > 0;
+              const code = promoFor(p.id);
+              const offers = status.offers.filter((o) => o.plan === p.id);
+              const price = pricedWith(p, currency, code);
+              const forSale = p.id !== 'free' && p.selfService;
+              // A fee-void code needs no Stripe; everything else does.
+              const payable = status.checkout || code?.kind === 'free';
+              const buyable = forSale && payable && Boolean(p.prices[currency]);
+              const otherCurrency = forSale && payable && !p.prices[currency] && Object.keys(p.prices).length > 0;
+              const chooseWords = (o: PlanOffer | null) => (code?.kind === 'free' ? `Get ${p.title} free${o ? ` — ${o.title || periodWords(o.interval, o.intervalCount)}` : ''}` : `Choose ${p.title}${o ? ` — ${o.title || periodWords(o.interval, o.intervalCount)}` : ''}`);
               return (
                 <section class={`card stack ${p.id === 'club' ? 'accent' : ''}`} key={p.id} data-plan-card={p.id} data-mine={mine ? '1' : '0'}>
                   <div class="row between">
@@ -219,19 +294,38 @@ export function Plans() {
                       <li key={l}>{l}</li>
                     ))}
                   </ul>
-                  <b data-price>{p.id === 'free' ? 'Free' : price || (otherCurrency ? `priced in ${Object.keys(p.prices).map((c) => c.toUpperCase()).join(', ')}` : 'ask the SingersVoice admin')}</b>
+                  {offers.length === 0 && <b data-price>{p.id === 'free' ? 'Free' : price || (otherCurrency ? `priced in ${Object.keys(p.prices).map((c) => c.toUpperCase()).join(', ')}` : 'ask the SingersVoice admin')}</b>}
+                  {offers.length > 0 && !mine && !superAdmin && forSale && (
+                    <div class="stack" style="gap:6px" data-offers={p.id}>
+                      {offers.map((o) => {
+                        const label = pricedWith(o, currency, code);
+                        const ok = payable && Boolean(o.prices[currency]);
+                        return (
+                          <button key={o.offerId} class="btn primary" style="justify-content:space-between;text-align:left" disabled={busy !== null || !ok} data-choose={p.id} data-offer={o.offerId} title={ok ? '' : `priced in ${Object.keys(o.prices).map((c) => c.toUpperCase()).join(', ')}`} onClick={() => void choose(p, o)}>
+                            {busy === o.offerId ? <Spinner /> : null}
+                            <span>{chooseWords(o)}</span>
+                            <span style="opacity:.9">
+                              {label || `priced in ${Object.keys(o.prices).map((c) => c.toUpperCase()).join(', ')}`}
+                              {o.validUntil ? ` · until ${day(o.validUntil)}` : ''}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {offers.length > 0 && (mine || superAdmin || !forSale) && <b data-price>{price || priceLabel(offers[0]!, currency) || 'ask the SingersVoice admin'}</b>}
                   <div class="row wrap" style="gap:8px">
                     {superAdmin ? null : mine && ent?.via === 'own' && status.portal ? (
                       <button class="btn" disabled={busy !== null} data-portal onClick={() => void portal()}>
                         Manage subscription
                       </button>
-                    ) : mine ? null : buyable ? (
-                      <button class="btn primary" disabled={busy !== null} data-choose={p.id} onClick={() => void choose(p)}>
-                        {busy === p.id ? <Spinner /> : null} Choose {p.title}
+                    ) : mine ? null : offers.length > 0 ? null : buyable ? (
+                      <button class="btn primary" disabled={busy !== null} data-choose={p.id} onClick={() => void choose(p, null)}>
+                        {busy === p.id ? <Spinner /> : null} {chooseWords(null)}
                       </button>
                     ) : p.id === 'free' ? null : (
                       <span class="small faint" data-ask-admin={p.id}>
-                        {!p.selfService ? `${p.title} is granted by the SingersVoice admin — ask them.` : !status.checkout ? 'Payments are not set up here yet — ask the SingersVoice admin.' : ''}
+                        {!p.selfService ? `${p.title} is granted by the SingersVoice admin — ask them.` : !status.checkout ? 'Payments are not set up here yet — ask the SingersVoice admin (or use a code).' : ''}
                       </span>
                     )}
                     {p.id === 'club' && mine && (

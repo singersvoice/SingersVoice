@@ -159,6 +159,57 @@ try {
   check((await bob.page.locator('[data-ask-admin]').count()) >= 3 && (await bob.page.locator('[data-choose]').count()) === 0, 'without Stripe on the service there is no Choose button: the page says to ask the SingersVoice admin');
   await bob.page.screenshot({ path: `${out}/plans-bob.png`, fullPage: true });
 
+  // ---- Offers and promo codes: alice adds a way to pay for SVV (three months) and a code that voids the fee; bob's page shows the offer and the code opens the plan with no Stripe ----
+  await alice.page.locator('[data-offer-add]').click();
+  const newOffer = alice.page.locator('[data-offer-row="new"]');
+  await newOffer.locator('[data-offer-plan]').selectOption('svv');
+  await newOffer.locator('[data-offer-title]').fill('Three months');
+  await newOffer.locator('[data-offer-count]').fill('3');
+  await newOffer.locator('[data-offer-interval]').selectOption('month');
+  await newOffer.locator('[data-offer-usd]').fill('12');
+  await newOffer.locator('[data-offer-save]').click();
+  await alice.page.locator('.toast', { hasText: /Offer added/ }).waitFor();
+  await alice.page.locator('[data-offer-row]:not([data-offer-row="new"]) [data-offer-standing="on-sale"]').waitFor();
+  check((await alice.page.locator('[data-offer-row]').count()) === 1 && (await alice.page.locator('[data-offer-row] [data-offer-title]').inputValue()) === 'Three months', 'the admin adds an offer for SVV — three months at $12 — and it is on sale');
+  await alice.page.locator('[data-promo-add]').click();
+  const newPromo = alice.page.locator('[data-promo-row="new"]');
+  await newPromo.locator('[data-promo-code-input]').fill('svfree');
+  await newPromo.locator('[data-promo-kind]').selectOption('free');
+  await newPromo.locator('[data-promo-free]').fill('1');
+  await newPromo.locator('[data-promo-plan="svv"]').click();
+  await newPromo.locator('[data-promo-note]').fill('the e2e');
+  await newPromo.locator('[data-promo-save]').click();
+  await alice.page.locator('.toast', { hasText: /Code added/ }).waitFor();
+  await alice.page.locator('[data-promo-row="SVFREE"]').waitFor();
+  check(/no payment/.test(await alice.page.locator('[data-promo-row="SVFREE"] [data-promo-standing]').innerText()), 'and a code SVFREE that voids the fee for one period of SVV');
+  const offers = (await asUser('bob', 'GET', '/plans')).json?.offers ?? [];
+  check(offers.length === 1 && offers[0].plan === 'svv' && offers[0].intervalCount === 3 && offers[0].prices?.usd === 1200, `the service lists the offer on sale (${JSON.stringify(offers.map((o) => [o.plan, o.title, o.intervalCount, o.interval, o.prices]))})`);
+  await bob.page.goto(`${base}plans?${control}`, { waitUntil: 'networkidle' });
+  await bob.page.locator('[data-offers="svv"] [data-offer]').waitFor();
+  const offerBtn = bob.page.locator('[data-offers="svv"] [data-offer]');
+  check((await offerBtn.count()) === 1 && /Three months/.test(await offerBtn.innerText()) && /12\.00/.test(await offerBtn.innerText()) && (await offerBtn.isDisabled()), `bob's SVV card shows the offer in place of the one price — and no way to pay without Stripe (${(await offerBtn.innerText()).replace(/\s+/g, ' ').trim()})`);
+  await bob.page.locator('[data-promo-input]').fill('sv-free');
+  await bob.page.locator('[data-promo-apply]').click();
+  await bob.page.locator('[data-promo-note][data-promo-ok="1"]').waitFor();
+  check(/SVFREE/.test(await bob.page.locator('[data-promo-note]').innerText()) && /free/.test(await bob.page.locator('[data-promo-note]').innerText()), `the code typed with a dash is found and explained (${(await bob.page.locator('[data-promo-note]').innerText()).trim()})`);
+  await bob.page.locator('[data-offers="svv"] [data-offer]:not([disabled])').waitFor();
+  check(/Get SVV free/.test(await offerBtn.innerText()), `with the code, the offer's button is live and says what happens (${(await offerBtn.innerText()).replace(/\s+/g, ' ').trim()})`);
+  await offerBtn.click();
+  await bob.page.locator('.toast', { hasText: /nothing to pay/ }).waitFor();
+  await bob.page.locator('[data-plans][data-current-plan="svv"][data-via="own"]').waitFor();
+  check(await bob.page.locator('[data-payments] [data-payment-source="promo"] [data-payment-promo]').first().isVisible() && /SVFREE/.test(await bob.page.locator('[data-payments] [data-payment-source="promo"]').first().innerText()), 'SVV opens at once with no Stripe at all; a payment of 0 with the code is on his list');
+  const bobFree = await userRow('alice', 'bob@dev.local');
+  const monthsOn = bobFree?.subscription?.expiresAt ? (Date.parse(bobFree.subscription.expiresAt) - Date.now()) / 86_400_000 : 0;
+  check(bobFree?.subscription?.plan === 'svv' && monthsOn > 85 && monthsOn < 95, `the plan runs the offer's three months (${Math.round(monthsOn)} days)`);
+  await bob.page.locator('[data-promo-input]').fill('SVFREE');
+  await bob.page.locator('[data-promo-apply]').click();
+  await bob.page.locator('[data-promo-note][data-promo-ok="0"]').waitFor();
+  check(/used that code already/.test(await bob.page.locator('[data-promo-note]').innerText()), 'the code is once per account');
+  const promos = (await asUser('alice', 'GET', '/admin/billing')).json?.promos ?? [];
+  check(promos.length === 1 && promos[0].code === 'SVFREE' && promos[0].uses === 1 && promos[0].plans?.[0] === 'svv', `the admin's list counts the use (${JSON.stringify(promos.map((p) => [p.code, p.kind, p.uses, p.plans]))})`);
+  check((await asUser('bob', 'POST', '/admin/promos', { code: 'MINE', kind: 'percent', value: 99 })).status === 403 && (await asUser('bob', 'POST', '/admin/offers', { plan: 'svv', prices: { usd: 1 } })).status === 403, 'the service refuses offers and codes to anyone but a super admin');
+  await bob.page.screenshot({ path: `${out}/plans-bob-code.png`, fullPage: true });
+
   // ---- Audio only: no camera on stage, on the singer's own device and in the room ----
   await bobRowEl.locator('[data-role-select]').selectOption('audio');
   await alice.page.locator('[data-admin-user="bob@dev.local"][data-user-role="audio"]').waitFor();

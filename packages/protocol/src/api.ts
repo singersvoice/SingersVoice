@@ -7,6 +7,7 @@ import type { AdminUserUpdate, AdminUsersResponse, Destination, DestinationKind,
 import type { AdminBillingOverview, BillingSettings, ClubStatus, OrderRecord, PlanId, PlansResponse } from './plans.ts';
 import type { PaymentRecord } from './roles.ts';
 import type { AdminCouponsResponse, Coupon, CouponSettings } from './coupons.ts';
+import type { PlanOffer, PlanOfferInput, PromoCode, PromoCodeInput, PromoPreview } from './offers.ts';
 import type { RegisterTrackRequest, TrackAccessRequest, TrackCopyRequest, TrackHistoryResponse, TrackMetaPatch, TrackRecord, TrackSearchResponse } from './registry.ts';
 import type { Bookmark, BookmarkInput, SongPrefs, StageBookmark } from './prefs.ts';
 import type { YtFetchRequest, YtJob, YtSearchResponse, YtStatus } from './ytTracks.ts';
@@ -181,7 +182,10 @@ export interface Routes {
   'GET /plans': { res: PlansResponse };
   /** Start a Stripe Checkout for a plan in a currency it is priced in: the page to send the browser to, and the order it opened. */
   /** `appUrl`: where this app lives (origin + base path) — Stripe sends the singer back there; the service takes it only from an allowed origin. */
-  'POST /plans/checkout': { req: { planId: PlanId; currency: string; appUrl?: string }; res: { url: string; orderId: string } };
+  /** `offerId`: one of the plan's offers on sale (none = the plan's own price); `promo`: a code on the payment. A fee-void code opens the plan at once: `url` is then the Plans page itself and `granted` true. */
+  'POST /plans/checkout': { req: { planId: PlanId; currency: string; appUrl?: string; offerId?: string | null; promo?: string }; res: { url: string; orderId: string; granted?: boolean } };
+  /** A promo code looked at before paying: what it gives (404 `bad_promo` with the reason when it cannot be used). */
+  'GET /plans/promo/:code': { res: { promo: PromoPreview } };
   /** Back from Checkout: what became of it (paid, still processing — a bank's confirmation on its way —, failed, canceled, expired). */
   'GET /billing/session/:id': { res: { order: OrderRecord } };
   /** Open the Stripe Customer Portal (change card, cancel, invoices). */
@@ -232,6 +236,13 @@ export interface Routes {
   'GET /admin/billing': { res: AdminBillingOverview };
   'PUT /admin/billing/settings': { req: Partial<BillingSettings>; res: { settings: BillingSettings } };
   'POST /admin/payments/:id/refund': { req: { amountCents?: number }; res: { payment: PaymentRecord } };
+  /** The offers (the ways to pay for a plan) and the promo codes, kept by the super admin (offers.ts). */
+  'POST /admin/offers': { req: PlanOfferInput; res: { offer: PlanOffer } };
+  'PATCH /admin/offers/:id': { req: PlanOfferInput; res: { offer: PlanOffer } };
+  'DELETE /admin/offers/:id': { res: { ok: true } };
+  'POST /admin/promos': { req: PromoCodeInput; res: { promo: PromoCode } };
+  'PATCH /admin/promos/:code': { req: PromoCodeInput; res: { promo: PromoCode } };
+  'DELETE /admin/promos/:code': { res: { ok: true } };
   'PATCH /admin/users/:id': { req: AdminUserUpdate; res: { user: UserRecord } };
   /** YouTube song tracks (through the relay, docs/RELAY.md): can the service fetch them; search; fetch one into my Drive; the job as it goes. */
   'GET /yt': { res: YtStatus };

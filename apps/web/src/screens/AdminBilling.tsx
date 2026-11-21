@@ -5,13 +5,15 @@
  * a note for the Plans page, the margins (expiring soon, grace days); every subscriber by standing —
  * expired first, then expiring with the days left, then active — with the plan, the hours used this
  * month, the last payment and Grant / Renew / Revoke in the row; every payment on record (a Refund
- * button on Stripe's); the Checkouts that did not end in a payment.
+ * button on Stripe's); the Checkouts that did not end in a payment. Between the plans and the
+ * subscribers: the offers (the ways to pay for a plan) and the promo codes (AdminOffers.tsx).
  */
 import { hoursLabel, moneyLabel, type AdminBillingOverview, type PlanDef, type PlanId, type SubscriberRow, type SubscriptionStanding } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { Spinner, Switch } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { errorText, toast } from '../lib/toast.ts';
+import { AdminOffers } from './AdminOffers.tsx';
 import { PaymentLine } from './Plans.tsx';
 
 const day = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleDateString() : '—');
@@ -196,6 +198,8 @@ export function AdminBilling(props: { onChanged?: () => void; tick?: number }) {
         </div>
       )}
 
+      {view && <AdminOffers view={view} reload={load} />}
+
       {view && (
         <div class="stack" style="gap:6px" data-subscribers>
           <b>Who has a plan</b>
@@ -286,6 +290,7 @@ export function AdminBilling(props: { onChanged?: () => void; tick?: number }) {
               <b>{who(o.userId)}</b>
               <span class="chip">{o.plan}</span>
               <span>{moneyLabel(o.amountCents, o.currency)}</span>
+              {o.promoCode && <span class="chip">{o.promoCode}{o.discountCents ? ` −${moneyLabel(o.discountCents, o.currency)}` : ''}</span>}
               <span class={`chip ${o.status === 'processing' || o.status === 'pending' ? 'warn' : ''}`}>{o.status}</span>
               {o.note && <span class="faint">{o.note}</span>}
             </div>

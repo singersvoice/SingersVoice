@@ -76,6 +76,16 @@ import {
   normalizeCode,
   type AdminCouponsResponse,
   type CouponSettings,
+  discountCents,
+  freeUntil,
+  moneyLabel,
+  offerOnSale,
+  promoPreview,
+  promoRefusal,
+  type PlanOffer,
+  type PlanOfferInput,
+  type PromoCode,
+  type PromoCodeInput,
   LIVE_STALE_MS,
   RELAY_KINDS,
   YOUTUBE_HLS_INGEST,
@@ -103,7 +113,7 @@ import { normalizeTvCode, TV_SIGNAL_MAX_BYTES, TvScreens, type TvSide } from './
 import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setBackground, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
-import { chargeFacts, createCheckoutSession, createPortalSession, createRefund, retrieveCheckoutSession, retrieveSubscription, stripeConfigured, subscriptionKeepsPlan, unixIso, verifyStripeSignature, type BillingConfig, type StripeCheckoutSession, type StripeSubscription } from './billing.ts';
+import { chargeFacts, createCheckoutSession, createCoupon, createPortalSession, createRefund, retrieveCheckoutSession, retrieveSubscription, stripeConfigured, subscriptionKeepsPlan, unixIso, verifyStripeSignature, type BillingConfig, type StripeCheckoutSession, type StripeSubscription } from './billing.ts';
 import { relayJson, relayNote, relaySegment, relayStart, relayStop, type RelayConfig, type RelayOutcome, type RelayTarget } from './relay.ts';
 import type { SqlStore, StoredParticipant } from './store/sql.ts';
 
@@ -1786,8 +1796,11 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const paymentIntentId = typeof s.payment_intent === 'string' ? s.payment_intent : null;
     if (order) await deps.store.updateOrder(order.orderId, { status: 'paid', sessionId: s.id, paymentIntentId, note: source });
     const facts = stripeConfigured(b) ? await chargeFacts(b, { paymentIntent: paymentIntentId }) : null;
-    await deps.store.recordPayment({ id: `pay-stripe-${s.id}`, userId, plan, amountCents: typeof s.amount_total === 'number' ? s.amount_total : (order?.amountCents ?? 0), currency: String(s.currency ?? order?.currency ?? 'usd'), paidAt: now, source: 'stripe', ref: s.id, periodStart: periodStartAt, periodEnd: periodEndAt, note: `Stripe Checkout (${source})`, paymentIntentId: facts?.paymentIntentId ?? paymentIntentId, chargeId: facts?.chargeId ?? null, feeCents: facts?.feeCents ?? null, netCents: facts?.netCents ?? null });
+    await deps.store.recordPayment({ id: `pay-stripe-${s.id}`, userId, plan, amountCents: typeof s.amount_total === 'number' ? s.amount_total : (order?.amountCents ?? 0), currency: String(s.currency ?? order?.currency ?? 'usd'), paidAt: now, source: 'stripe', ref: s.id, periodStart: periodStartAt, periodEnd: periodEndAt, note: `Stripe Checkout (${source})`, paymentIntentId: facts?.paymentIntentId ?? paymentIntentId, chargeId: facts?.chargeId ?? null, feeCents: facts?.feeCents ?? null, netCents: facts?.netCents ?? null, promoCode: order?.promoCode ?? s.metadata?.promo ?? '' });
   };
+
+  /** The offers on sale right now (offers.ts), lowest `sort` first within a plan. */
+  const offersOnSale = async (deps: AppDeps): Promise<PlanOffer[]> => (await deps.store.listOffers()).filter((o) => offerOnSale(o));
 
   /** The Plans page: the plans on offer, the currencies they are priced in, where this account stands, its payments. */
   app.get('/plans', async (c) => {
@@ -1796,9 +1809,11 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const b = billingOf(deps);
     const settings = await deps.store.getBillingSettings();
     const sub = await deps.store.getSubscription(user.userId);
-    const currencies = [...new Set(settings.plans.flatMap((p) => Object.keys(p.prices)))].sort((x, y) => (x === 'usd' ? -1 : y === 'usd' ? 1 : x.localeCompare(y)));
+    const offers = await offersOnSale(deps);
+    const currencies = [...new Set([...settings.plans.flatMap((p) => Object.keys(p.prices)), ...offers.flatMap((o) => Object.keys(o.prices))])].sort((x, y) => (x === 'usd' ? -1 : y === 'usd' ? 1 : x.localeCompare(y)));
     const res: PlansResponse = {
       plans: settings.plans,
+      offers,
       note: settings.note,
       currencies,
       checkout: stripeConfigured(b),
@@ -1810,28 +1825,85 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json(res);
   });
 
+  /** A promo code looked at before paying: what it gives, or why it cannot be used (404 bad_promo). */
+  app.get('/plans/promo/:code', async (c) => {
+    const deps = c.get('deps');
+    const code = normalizeCode(c.req.param('code'));
+    const promo = code ? await deps.store.getPromo(code) : null;
+    if (promo && (await deps.store.promoUsedBy(promo.code, c.get('user').userId))) return err(c, 404, 'bad_promo', 'You have used that code already');
+    const why = promoRefusal(promo, promo?.plans[0] ?? 'svv');
+    if (!promo || (why && !why.startsWith('That code is for'))) return err(c, 404, 'bad_promo', why ?? 'That code is not valid');
+    return c.json({ promo: promoPreview(promo, moneyLabel) });
+  });
+
   /**
    * A Checkout for a plan: the plan must be on sale, priced in the currency asked for (the price is the admin's, never
-   * the browser's), the account not a super admin (nothing to buy). An order is opened first (pending) and its id goes on
-   * the session and on the idempotency key, so a retried request opens no second session.
+   * the browser's) — the plan's own price, or one of its offers on sale (offers.ts) —, the account not a super admin
+   * (nothing to buy). A promo code on it must be good for the plan, not used by this account, not used up: a percent
+   * or amount code becomes a Stripe coupon on the session (made once per code); a fee-void code opens the plan right
+   * here, with no Stripe at all, and records a payment of 0 with the code. An order is opened first (pending) and its
+   * id goes on the session and on the idempotency key, so a retried request opens no second session.
    */
   app.post('/plans/checkout', async (c) => {
     const deps = c.get('deps');
     const user = c.get('user');
-    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { planId?: string; currency?: string; appUrl?: string };
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { planId?: string; currency?: string; appUrl?: string; offerId?: string | null; promo?: string };
     const b = billingFor(c, deps, body.appUrl);
     const settings = await deps.store.getBillingSettings();
     const plan = settings.plans.find((p) => p.id === body.planId);
     if (!plan || plan.id === 'free') return err(c, 400, 'bad_request', 'Pick a plan to pay for');
     if (!plan.selfService) return err(c, 409, 'self_service_off', `The ${plan.title} plan is granted by the SingersVoice admin — ask them`);
-    if (!stripeConfigured(b)) return err(c, 409, 'billing_unconfigured', 'Payments are not set up on this service yet — ask the SingersVoice admin for the plan');
-    const currency = String(body.currency ?? 'usd').toLowerCase();
-    if (!CURRENCY.test(currency) || !plan.prices[currency]) return err(c, 400, 'bad_currency', `The ${plan.title} plan is not priced in ${currency.toUpperCase()}`);
     if (user.role === 'super_admin') return err(c, 409, 'super_admin', 'A super admin has every plan already — nothing to pay for');
+    const currency = String(body.currency ?? 'usd').toLowerCase();
+    if (!CURRENCY.test(currency)) return err(c, 400, 'bad_currency', 'Pick a currency');
+    // The option: an offer on sale for this plan, or the plan's own price and period.
+    const offerId = body.offerId ? String(body.offerId).slice(0, 80) : null;
+    const offer = offerId ? await deps.store.getOffer(offerId) : null;
+    if (offerId && (!offer || offer.plan !== plan.id || !offerOnSale(offer))) return err(c, 409, 'offer_gone', 'That offer is no longer on sale — pick another');
+    const priced = offer ?? plan;
+    const amountCents = priced.prices[currency];
+    if (!amountCents) return err(c, 400, 'bad_currency', `The ${plan.title} plan is not priced in ${currency.toUpperCase()}${offer ? ` for ${offer.title || 'that offer'}` : ''}`);
+    const interval = priced.interval;
+    const intervalCount = priced.intervalCount;
+    // The code, if one came.
+    const code = normalizeCode(String(body.promo ?? ''));
+    let promo: PromoCode | null = null;
+    if (code) {
+      promo = await deps.store.getPromo(code);
+      if (promo && (await deps.store.promoUsedBy(promo.code, user.userId))) return err(c, 409, 'bad_promo', 'You have used that code already');
+      const why = promoRefusal(promo, plan.id);
+      if (!promo || why) return err(c, 409, 'bad_promo', why ?? 'That code is not valid');
+      if (promo.kind === 'amount' && promo.currency !== currency) return err(c, 409, 'bad_promo', `That code is for payments in ${(promo.currency ?? 'usd').toUpperCase()} — pay in it, or leave the code off`);
+    }
+    if (promo && promo.kind === 'free') {
+      // The fee voided: the plan opens now for the code's periods; no Stripe, a payment of 0 on record with the code.
+      const now = new Date();
+      const current = await deps.store.getSubscription(user.userId);
+      const activeNow = current && current.status === 'active' && current.planUntil && Date.parse(current.planUntil) > now.getTime() && asPlanId(current.plan) === plan.id;
+      const from = activeNow ? new Date(current!.planUntil!) : now;
+      const until = freeUntil(from, interval, intervalCount, promo.freePeriods);
+      const order = await deps.store.createOrder({ orderId: newId('ord-'), userId: user.userId, plan: plan.id, currency, amountCents: 0, offerId, promoCode: promo.code, discountCents: amountCents * promo.freePeriods, status: 'paid', note: `Fee voided by code ${promo.code}` });
+      await deps.store.usePromo(promo.code, user.userId, order.orderId);
+      await deps.store.setSubscription({ userId: user.userId, plan: plan.id, planUntil: until, startedAt: activeNow ? (current!.startedAt ?? now.toISOString()) : now.toISOString(), status: 'active', source: 'grant' });
+      await roleForPlan(deps, user.userId, plan.id);
+      await deps.store.recordPayment({ id: `pay-promo-${order.orderId}`, userId: user.userId, plan: plan.id, amountCents: 0, currency, paidAt: now.toISOString(), source: 'promo', ref: promo.code, periodStart: from.toISOString(), periodEnd: until, note: `${plan.title} with code ${promo.code} — no payment`, promoCode: promo.code });
+      return c.json({ url: `${b.appUrl.replace(/\/$/, '')}/plans?billing=granted`, orderId: order.orderId, granted: true });
+    }
+    if (!stripeConfigured(b)) return err(c, 409, 'billing_unconfigured', 'Payments are not set up on this service yet — ask the SingersVoice admin for the plan');
     const sub = await deps.store.getSubscription(user.userId);
-    const order = await deps.store.createOrder({ orderId: newId('ord-'), userId: user.userId, plan: plan.id, currency, amountCents: plan.prices[currency]! });
+    const discount = promo ? discountCents(promo, amountCents, currency) : 0;
+    const order = await deps.store.createOrder({ orderId: newId('ord-'), userId: user.userId, plan: plan.id, currency, amountCents, offerId, promoCode: promo?.code ?? '', discountCents: discount });
+    if (promo) await deps.store.usePromo(promo.code, user.userId, order.orderId);
     try {
-      const r = await createCheckoutSession(b, { userId: user.userId, email: user.email, customerId: sub?.customerId ?? null }, { plan: plan.id, planTitle: plan.title, currency, amountCents: order.amountCents, interval: plan.interval, intervalCount: plan.intervalCount, orderId: order.orderId });
+      let couponId: string | null = null;
+      if (promo && promo.kind !== 'free') {
+        couponId = await deps.store.promoStripeCoupon(promo.code);
+        if (!couponId) {
+          couponId = (await createCoupon(b, { code: promo.code, kind: promo.kind, value: promo.value, currency: promo.currency, duration: promo.duration })).id;
+          await deps.store.setPromoStripeCoupon(promo.code, couponId);
+        }
+      }
+      const r = await createCheckoutSession(b, { userId: user.userId, email: user.email, customerId: sub?.customerId ?? null }, { plan: plan.id, planTitle: offer?.title ? `${plan.title} — ${offer.title}` : plan.title, currency, amountCents: order.amountCents, interval, intervalCount, orderId: order.orderId, offerId, couponId, promoCode: promo?.code ?? '' });
       await deps.store.updateOrder(order.orderId, { sessionId: r.sessionId });
       return c.json({ url: r.url, orderId: order.orderId });
     } catch (e) {
@@ -2033,8 +2105,66 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         return { user: u, standing, daysLeft: left, lastPayment: latest.get(u.userId) ?? null };
       })
       .sort((a, b) => rank[a.standing] - rank[b.standing] || (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity) || a.user.name.localeCompare(b.user.name));
-    const overview: AdminBillingOverview = { settings, stripe: stripeConfigured(billingOf(deps)), subscribers, payments: await deps.store.listPayments({ limit: 100 }), orders: await deps.store.listOpenOrders(50) };
+    const overview: AdminBillingOverview = { settings, stripe: stripeConfigured(billingOf(deps)), subscribers, payments: await deps.store.listPayments({ limit: 100 }), orders: await deps.store.listOpenOrders(50), offers: await deps.store.listOffers(), promos: await deps.store.listPromos() };
     return c.json(overview);
+  });
+
+  // The offers (the ways to pay for a plan) and the promo codes (offers.ts), the super admin's.
+  app.post('/admin/offers', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const body = ((await c.req.json().catch(() => null)) ?? null) as PlanOfferInput | null;
+    if (!body || typeof body !== 'object') return err(c, 400, 'bad_request', 'The offer goes in the body as JSON');
+    if (asPlanId(body.plan) === 'free') return err(c, 400, 'bad_request', 'An offer is for a paid plan (svv, svvpro, club)');
+    return c.json({ offer: await c.get('deps').store.putOffer(newId('off-'), body) });
+  });
+  app.patch('/admin/offers/:id', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const store = c.get('deps').store;
+    const cur = await store.getOffer(c.req.param('id'));
+    if (!cur) return err(c, 404, 'no_offer', 'No such offer');
+    const body = ((await c.req.json().catch(() => null)) ?? null) as PlanOfferInput | null;
+    if (!body || typeof body !== 'object') return err(c, 400, 'bad_request', 'The changes go in the body as JSON');
+    if (body.plan !== undefined && asPlanId(body.plan) === 'free') return err(c, 400, 'bad_request', 'An offer is for a paid plan (svv, svvpro, club)');
+    return c.json({ offer: await store.putOffer(cur.offerId, body) });
+  });
+  app.delete('/admin/offers/:id', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    await c.get('deps').store.deleteOffer(c.req.param('id'));
+    return c.json({ ok: true as const });
+  });
+  app.post('/admin/promos', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const store = c.get('deps').store;
+    const body = ((await c.req.json().catch(() => null)) ?? null) as PromoCodeInput | null;
+    if (!body || typeof body !== 'object') return err(c, 400, 'bad_request', 'The code goes in the body as JSON');
+    const code = normalizeCode(String(body.code ?? ''));
+    if (code.length < 3) return err(c, 400, 'bad_request', 'A code is at least three letters or digits');
+    if (await store.getPromo(code)) return err(c, 409, 'exists', `The code ${code} exists already — change it below`);
+    const promo = await store.putPromo(code, body, c.get('user').userId);
+    if (!promo) return err(c, 400, 'bad_request', 'That is not a code');
+    return c.json({ promo });
+  });
+  app.patch('/admin/promos/:code', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const store = c.get('deps').store;
+    const cur = await store.getPromo(c.req.param('code'));
+    if (!cur) return err(c, 404, 'no_promo', 'No such code');
+    const body = ((await c.req.json().catch(() => null)) ?? null) as PromoCodeInput | null;
+    if (!body || typeof body !== 'object') return err(c, 400, 'bad_request', 'The changes go in the body as JSON');
+    const { code: _c, ...patch } = body;
+    const promo = await store.putPromo(cur.code, patch, c.get('user').userId);
+    return c.json({ promo: promo! });
+  });
+  app.delete('/admin/promos/:code', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    await c.get('deps').store.deletePromo(c.req.param('code'));
+    return c.json({ ok: true as const });
   });
 
   app.put('/admin/billing/settings', async (c) => {

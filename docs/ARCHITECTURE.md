@@ -519,6 +519,32 @@ webhook's every event, refunds, reconciliation), `tools/ci/roles-e2e.mjs` (the w
 browser: the picture coming and going with the plan and the hours, the Plans page, the club, the
 Admin page), `tools/ci/live-duet.mjs` (two performers with video on SVV).
 
+**Offers and promo codes** (`packages/protocol/src/offers.ts`). Beside each plan's one price, the
+super admin keeps a table of **offers** — the valid ways to pay for a plan: a period (a month, three
+months, a year) with its prices per currency, on sale between two dates (`plan_offers`; Admin →
+Plans & payments → Offers). A plan with offers on sale shows them on the Plans page as its buttons
+instead of its one price; one with none sells at its own price as before. A Checkout carries the
+offer's price and period (`POST /plans/checkout { planId, offerId, currency, promo }`; an offer
+not on sale is `409 offer_gone`). **Promo codes** (`promo_codes`) cut the price: a percentage off
+or an amount off in one currency, on the first payment or on every one — these become a **Stripe
+coupon** made once per code (`POST /coupons`, its id kept on the row, remade when the terms change)
+and applied to the session (`discounts[0][coupon]`; Stripe's own promotion-code box is then off,
+Stripe allows one or the other) — or the **fee voided**: the plan granted for so many periods of the
+offer with no payment at all, which never reaches Stripe (the service sets the subscription itself,
+`source: grant`, and records a payment of 0 with `source: promo` and the code; it works with no
+Stripe configured). A code is good for some plans or all, until a date, for so many uses, and **once
+per account** (`promo_uses`, one row per code and account, with the order's id while a Checkout is
+open — a Checkout that expires or fails gives the use back). The Plans page checks a code before
+paying (`GET /plans/promo/:code`: what it gives, in words; the refusal's reason otherwise) and shows
+the discounted price on the buttons; the order keeps the offer, the code and the discount
+(`orders.offer_id`, `promo_code`, `discount_cents`), the payment the code (`payments.promo_code`).
+The admin's routes: `POST/PATCH/DELETE /admin/offers[/:id]`, `POST/PATCH/DELETE /admin/promos[/:code]`;
+the overview (`GET /admin/billing`) lists every offer and code with its uses. Everything hangs on the
+accounts' master table: the plan and its end on the account's subscription row, the uses by
+`user_id`, the orders and payments by `user_id`. Tests: `packages/protocol/test/offers.test.ts`,
+`services/control/test/app.test.ts` ("offers and promo codes"), `tools/ci/roles-e2e.mjs` (the
+admin adds an offer and a fee-void code; a singer's page shows the offer and the code opens the plan).
+
 ## Coupons: who may use SingersVoice
 
 The super admin's gate (`packages/protocol/src/coupons.ts`, `coupons` and `settings.coupons` rows,

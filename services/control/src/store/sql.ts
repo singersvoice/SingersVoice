@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { accessOf, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type BlockedUser, type Bookmark, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { accessOf, cleanOffer, cleanPromo, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type BlockedUser, type Bookmark, type PlanOffer, type PlanOfferInput, type PromoCode, type PromoCodeInput, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
@@ -92,7 +92,7 @@ export interface StoredDestination extends Destination {
   keyEnc: string;
 }
 
-type PaymentRow = { id: string; user_id: string; amount_cents: number; currency: string; paid_at: string; source: string; ref: string; period_start: string | null; period_end: string | null; note: string; plan?: string | null; payment_intent_id?: string | null; charge_id?: string | null; fee_cents?: number | null; net_cents?: number | null; refunded_cents?: number | null; status?: string | null };
+type PaymentRow = { id: string; user_id: string; amount_cents: number; currency: string; paid_at: string; source: string; ref: string; period_start: string | null; period_end: string | null; note: string; plan?: string | null; payment_intent_id?: string | null; charge_id?: string | null; fee_cents?: number | null; net_cents?: number | null; refunded_cents?: number | null; status?: string | null; promo_code?: string | null };
 const paymentFromRow = (r: PaymentRow): PaymentRecord => ({
   id: r.id,
   userId: r.user_id,
@@ -100,7 +100,7 @@ const paymentFromRow = (r: PaymentRow): PaymentRecord => ({
   amountCents: Number(r.amount_cents),
   currency: r.currency,
   paidAt: r.paid_at,
-  source: r.source === 'stripe' ? 'stripe' : 'grant',
+  source: r.source === 'stripe' ? 'stripe' : r.source === 'promo' ? 'promo' : 'grant',
   ref: r.ref,
   periodStart: r.period_start ?? null,
   periodEnd: r.period_end ?? null,
@@ -111,10 +111,31 @@ const paymentFromRow = (r: PaymentRow): PaymentRecord => ({
   netCents: r.net_cents === null || r.net_cents === undefined ? null : Number(r.net_cents),
   refundedCents: Number(r.refunded_cents ?? 0),
   status: r.status === 'refunded' ? 'refunded' : r.status === 'partly_refunded' ? 'partly_refunded' : 'paid',
+  promoCode: r.promo_code ?? '',
 });
-type OrderRow = { order_id: string; user_id: string; plan: string; currency: string; amount_cents: number; session_id: string | null; payment_intent_id: string | null; status: string; note: string; created_at: string; updated_at: string };
+type OrderRow = { order_id: string; user_id: string; plan: string; currency: string; amount_cents: number; session_id: string | null; payment_intent_id: string | null; status: string; note: string; created_at: string; updated_at: string; offer_id?: string | null; promo_code?: string | null; discount_cents?: number | null };
 const ORDER_STATUSES: OrderStatus[] = ['pending', 'processing', 'paid', 'failed', 'canceled', 'expired'];
-const orderFromRow = (r: OrderRow): OrderRecord => ({ orderId: r.order_id, userId: r.user_id, plan: asPlanId(r.plan), currency: r.currency, amountCents: Number(r.amount_cents), sessionId: r.session_id ?? null, paymentIntentId: r.payment_intent_id ?? null, status: ORDER_STATUSES.includes(r.status as OrderStatus) ? (r.status as OrderStatus) : 'pending', note: r.note, createdAt: r.created_at, updatedAt: r.updated_at });
+const orderFromRow = (r: OrderRow): OrderRecord => ({ orderId: r.order_id, userId: r.user_id, plan: asPlanId(r.plan), currency: r.currency, amountCents: Number(r.amount_cents), sessionId: r.session_id ?? null, paymentIntentId: r.payment_intent_id ?? null, status: ORDER_STATUSES.includes(r.status as OrderStatus) ? (r.status as OrderStatus) : 'pending', note: r.note, offerId: r.offer_id ?? null, promoCode: r.promo_code ?? '', discountCents: Number(r.discount_cents ?? 0), createdAt: r.created_at, updatedAt: r.updated_at });
+type OfferRow = { offer_id: string; plan: string; title: string; interval: string; interval_count: number; prices: string; valid_from: string | null; valid_until: string | null; active: number; sort: number; created_at: string; updated_at: string };
+const offerFromRow = (r: OfferRow): PlanOffer => {
+  let prices: Record<string, number> = {};
+  try {
+    prices = JSON.parse(r.prices || '{}') as Record<string, number>;
+  } catch {
+    prices = {};
+  }
+  return cleanOffer({ offerId: r.offer_id, plan: r.plan as PlanId, title: r.title, interval: r.interval as PlanOffer['interval'], intervalCount: Number(r.interval_count), prices, validFrom: r.valid_from, validUntil: r.valid_until, active: Number(r.active) !== 0, sort: Number(r.sort), createdAt: r.created_at, updatedAt: r.updated_at });
+};
+type PromoRow = { code: string; kind: string; value: number; currency: string | null; plans: string; duration: string; free_periods: number; max_uses: number; uses: number; valid_until: string | null; active: number; note: string; stripe_coupon_id: string | null; created_by: string; created_at: string; updated_at: string };
+const promoFromRow = (r: PromoRow): PromoCode => {
+  let plans: unknown = [];
+  try {
+    plans = JSON.parse(r.plans || '[]');
+  } catch {
+    plans = [];
+  }
+  return cleanPromo({ code: r.code, kind: r.kind as PromoCode['kind'], value: Number(r.value), currency: r.currency, plans: plans as PlanId[], duration: r.duration as PromoCode['duration'], freePeriods: Number(r.free_periods), maxUses: Number(r.max_uses), uses: Number(r.uses), validUntil: r.valid_until, active: Number(r.active) !== 0, note: r.note, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at })!;
+};
 /** The billing settings within bounds: every plan present and clean, a note of a size, days that are days. */
 function cleanBillingSettings(s: Partial<BillingSettings>): BillingSettings {
   const num = (v: unknown, lo: number, hi: number, fallback: number) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : fallback);
@@ -443,9 +464,9 @@ export class SqlStore {
   }
 
   /** A payment for a plan, once per Stripe id (a retried webhook adds nothing); a grant has its own id. */
-  async recordPayment(p: Omit<PaymentRecord, 'id' | 'paymentIntentId' | 'chargeId' | 'feeCents' | 'netCents' | 'refundedCents' | 'status'> & Partial<Pick<PaymentRecord, 'id' | 'paymentIntentId' | 'chargeId' | 'feeCents' | 'netCents'>>): Promise<PaymentRecord> {
+  async recordPayment(p: Omit<PaymentRecord, 'id' | 'paymentIntentId' | 'chargeId' | 'feeCents' | 'netCents' | 'refundedCents' | 'status' | 'promoCode'> & Partial<Pick<PaymentRecord, 'id' | 'paymentIntentId' | 'chargeId' | 'feeCents' | 'netCents' | 'promoCode'>>): Promise<PaymentRecord> {
     const id = p.id ?? `pay-${p.source}-${p.userId}-${Date.parse(p.paidAt) || Date.now()}`;
-    await this.db.run('INSERT OR IGNORE INTO payments (id, user_id, amount_cents, currency, paid_at, source, ref, period_start, period_end, note, plan, payment_intent_id, charge_id, fee_cents, net_cents, refunded_cents, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)', [
+    await this.db.run('INSERT OR IGNORE INTO payments (id, user_id, amount_cents, currency, paid_at, source, ref, period_start, period_end, note, plan, payment_intent_id, charge_id, fee_cents, net_cents, refunded_cents, status, promo_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)', [
       id,
       p.userId,
       Math.max(0, Math.round(p.amountCents)),
@@ -462,6 +483,7 @@ export class SqlStore {
       p.feeCents ?? null,
       p.netCents ?? null,
       'paid',
+      p.promoCode ?? '',
     ]);
     return (await this.getPayment(id))!;
   }
@@ -499,9 +521,9 @@ export class SqlStore {
   }
 
   /** A Checkout started: pending until Stripe says what became of it. */
-  async createOrder(o: Pick<OrderRecord, 'orderId' | 'userId' | 'plan' | 'currency' | 'amountCents'>): Promise<OrderRecord> {
+  async createOrder(o: Pick<OrderRecord, 'orderId' | 'userId' | 'plan' | 'currency' | 'amountCents'> & Partial<Pick<OrderRecord, 'offerId' | 'promoCode' | 'discountCents' | 'status' | 'note'>>): Promise<OrderRecord> {
     const now = new Date().toISOString();
-    await this.db.run('INSERT INTO orders (order_id, user_id, plan, currency, amount_cents, session_id, payment_intent_id, status, note, created_at, updated_at) VALUES (?,?,?,?,?,NULL,NULL,?,?,?,?)', [o.orderId, o.userId, o.plan, o.currency.toLowerCase(), Math.round(o.amountCents), 'pending', '', now, now]);
+    await this.db.run('INSERT INTO orders (order_id, user_id, plan, currency, amount_cents, session_id, payment_intent_id, status, note, created_at, updated_at, offer_id, promo_code, discount_cents) VALUES (?,?,?,?,?,NULL,NULL,?,?,?,?,?,?,?)', [o.orderId, o.userId, o.plan, o.currency.toLowerCase(), Math.round(o.amountCents), o.status ?? 'pending', o.note ?? '', now, now, o.offerId ?? null, normalizeCode(o.promoCode ?? ''), Math.max(0, Math.round(o.discountCents ?? 0))]);
     return (await this.getOrder(o.orderId))!;
   }
 
@@ -520,7 +542,97 @@ export class SqlStore {
     if (!cur) return null;
     const next = { ...cur, ...patch };
     await this.db.run('UPDATE orders SET session_id=?, payment_intent_id=?, status=?, note=?, updated_at=? WHERE order_id=?', [next.sessionId, next.paymentIntentId, next.status, next.note, new Date().toISOString(), orderId]);
+    // A Checkout that came to nothing gives its promo code back to the account.
+    if (cur.promoCode && (next.status === 'failed' || next.status === 'canceled' || next.status === 'expired') && cur.status !== next.status) await this.releasePromoUse(orderId);
     return this.getOrder(orderId);
+  }
+
+  // ---------- offers (the ways to pay for a plan) and promo codes (offers.ts) ----------
+
+  async listOffers(): Promise<PlanOffer[]> {
+    const rows = await this.db.all<OfferRow>('SELECT * FROM plan_offers ORDER BY plan, sort, created_at');
+    return rows.map(offerFromRow);
+  }
+
+  async getOffer(offerId: string): Promise<PlanOffer | null> {
+    const r = await this.db.get<OfferRow>('SELECT * FROM plan_offers WHERE offer_id=?', [offerId]);
+    return r ? offerFromRow(r) : null;
+  }
+
+  /** A new offer, or one changed (the fields given replace; the rest stay). */
+  async putOffer(offerId: string, input: PlanOfferInput): Promise<PlanOffer> {
+    const cur = await this.getOffer(offerId);
+    const now = new Date().toISOString();
+    const o = cleanOffer({ ...(cur ?? {}), ...input, offerId, createdAt: cur?.createdAt ?? now, updatedAt: now });
+    await this.db.run(
+      'INSERT INTO plan_offers (offer_id, plan, title, interval, interval_count, prices, valid_from, valid_until, active, sort, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(offer_id) DO UPDATE SET plan=excluded.plan, title=excluded.title, interval=excluded.interval, interval_count=excluded.interval_count, prices=excluded.prices, valid_from=excluded.valid_from, valid_until=excluded.valid_until, active=excluded.active, sort=excluded.sort, updated_at=excluded.updated_at',
+      [o.offerId, o.plan, o.title, o.interval, o.intervalCount, JSON.stringify(o.prices), o.validFrom, o.validUntil, o.active ? 1 : 0, o.sort, o.createdAt, o.updatedAt],
+    );
+    return (await this.getOffer(offerId))!;
+  }
+
+  async deleteOffer(offerId: string): Promise<void> {
+    await this.db.run('DELETE FROM plan_offers WHERE offer_id=?', [offerId]);
+  }
+
+  async listPromos(): Promise<PromoCode[]> {
+    const rows = await this.db.all<PromoRow>('SELECT * FROM promo_codes ORDER BY created_at DESC');
+    return rows.map(promoFromRow);
+  }
+
+  async getPromo(code: string): Promise<PromoCode | null> {
+    const r = await this.db.get<PromoRow>('SELECT * FROM promo_codes WHERE code=?', [normalizeCode(code)]);
+    return r ? promoFromRow(r) : null;
+  }
+
+  /** A new code, or one changed (its uses and its author stay). Null when the code is not a code. */
+  async putPromo(code: string, input: PromoCodeInput, createdBy: string): Promise<PromoCode | null> {
+    const cur = await this.getPromo(code);
+    const now = new Date().toISOString();
+    const p = cleanPromo({ ...(cur ?? {}), ...input, code: normalizeCode(code), uses: cur?.uses ?? 0, createdBy: cur?.createdBy ?? createdBy, createdAt: cur?.createdAt ?? now, updatedAt: now });
+    if (!p) return null;
+    // A code's terms changed: the Stripe coupon made for the old terms no longer fits; a new one is made at the next use.
+    const termsChanged = cur !== null && (cur.kind !== p.kind || cur.value !== p.value || cur.currency !== p.currency || cur.duration !== p.duration);
+    await this.db.run(
+      'INSERT INTO promo_codes (code, kind, value, currency, plans, duration, free_periods, max_uses, uses, valid_until, active, note, stripe_coupon_id, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?) ON CONFLICT(code) DO UPDATE SET kind=excluded.kind, value=excluded.value, currency=excluded.currency, plans=excluded.plans, duration=excluded.duration, free_periods=excluded.free_periods, max_uses=excluded.max_uses, valid_until=excluded.valid_until, active=excluded.active, note=excluded.note, stripe_coupon_id=CASE WHEN ? THEN NULL ELSE promo_codes.stripe_coupon_id END, updated_at=excluded.updated_at',
+      [p.code, p.kind, p.value, p.currency, JSON.stringify(p.plans), p.duration, p.freePeriods, p.maxUses, p.uses, p.validUntil, p.active ? 1 : 0, p.note, p.createdBy, p.createdAt, p.updatedAt, termsChanged ? 1 : 0],
+    );
+    return this.getPromo(p.code);
+  }
+
+  async deletePromo(code: string): Promise<void> {
+    await this.db.run('DELETE FROM promo_codes WHERE code=?', [normalizeCode(code)]);
+  }
+
+  /** The Stripe coupon made for a code (null until the first Checkout with it). */
+  async promoStripeCoupon(code: string): Promise<string | null> {
+    const r = await this.db.get<{ stripe_coupon_id: string | null }>('SELECT stripe_coupon_id FROM promo_codes WHERE code=?', [normalizeCode(code)]);
+    return r?.stripe_coupon_id ?? null;
+  }
+
+  async setPromoStripeCoupon(code: string, couponId: string): Promise<void> {
+    await this.db.run('UPDATE promo_codes SET stripe_coupon_id=? WHERE code=?', [couponId, normalizeCode(code)]);
+  }
+
+  /** Whether this account used the code (a Checkout open with it counts). */
+  async promoUsedBy(code: string, userId: string): Promise<boolean> {
+    const r = await this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM promo_uses WHERE code=? AND user_id=?', [normalizeCode(code), userId]);
+    return Number(r?.n ?? 0) > 0;
+  }
+
+  /** The account takes the code (on an order, or on a grant made at once): a use counted. */
+  async usePromo(code: string, userId: string, orderId: string | null): Promise<void> {
+    const c = normalizeCode(code);
+    await this.db.run('INSERT OR REPLACE INTO promo_uses (code, user_id, order_id, used_at) VALUES (?,?,?,?)', [c, userId, orderId, new Date().toISOString()]);
+    await this.db.run('UPDATE promo_codes SET uses = (SELECT COUNT(*) FROM promo_uses WHERE promo_uses.code = promo_codes.code) WHERE code=?', [c]);
+  }
+
+  /** A Checkout with a code came to nothing: the use goes back. */
+  async releasePromoUse(orderId: string): Promise<void> {
+    const r = await this.db.get<{ code: string }>('SELECT code FROM promo_uses WHERE order_id=?', [orderId]);
+    if (!r) return;
+    await this.db.run('DELETE FROM promo_uses WHERE order_id=?', [orderId]);
+    await this.db.run('UPDATE promo_codes SET uses = (SELECT COUNT(*) FROM promo_uses WHERE promo_uses.code = promo_codes.code) WHERE code=?', [r.code]);
   }
 
   /** Checkouts that did not end in a payment (or not yet), newest first. */

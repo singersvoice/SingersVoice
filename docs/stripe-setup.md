@@ -47,6 +47,19 @@ whether the plan is for sale on the Plans page.
 Currency notes: INR amounts are whole paise (₹425.00 = 42500); Stripe settles INR to the US bank
 account in USD at Stripe's rate, and adds its conversion fee — see pricing below.
 
+**Offers** (the same Admin section, *Offers — the ways to pay for a plan*): a plan may have several
+ways to pay — monthly, yearly, three months, a launch price until a date — each with its own prices
+in USD and INR and its dates. They show on the Plans page as the plan's buttons; a Checkout carries
+the offer's price and period inline, so again nothing has to exist in Stripe.
+
+**Promo codes** (*Promo codes*, below the offers): a percentage off or an amount off becomes a Stripe
+**coupon** the first time a singer pays with it (the service creates it through the API — nothing to
+make in the Dashboard; it appears under Products → Coupons, named `SingersVoice <CODE>`). A **fee
+voided** code never reaches Stripe: the service opens the plan for the periods you set and records a
+payment of 0 with the code. Every code is once per account; set the plans it is for, a last day and a
+number of uses as you like. Stripe's own "Add promotion code" box on the Checkout page stays for a
+singer who typed no code of ours (Stripe allows one or the other on a session, not both).
+
 ## 4. The webhook
 
 Developers → **Webhooks** → *Add endpoint*:

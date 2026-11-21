@@ -16,6 +16,7 @@
  * else Free; a super admin has everything without limit. Video hours count while a singer is on stage
  * with the picture on, by the calendar month (UTC), and reset on the first.
  */
+import type { PlanOffer, PromoCode } from './offers.ts';
 import type { MediaPermission, UserRole, UserSubscription } from './roles.ts';
 import { subscriptionActive } from './roles.ts';
 
@@ -251,6 +252,8 @@ export interface ClubStatus {
 /** `GET /plans`: the plans on offer and what this account can do about them. */
 export interface PlansResponse {
   plans: PlanDef[];
+  /** The offers on sale right now (offers.ts): a plan's ways to pay; a plan with none sells at its own price. */
+  offers: PlanOffer[];
   note: string;
   /** The currencies a singer may pay in (every currency some plan is priced in). */
   currencies: string[];
@@ -275,6 +278,10 @@ export interface OrderRecord {
   paymentIntentId: string | null;
   status: OrderStatus;
   note: string;
+  /** The offer chosen (null = the plan's own price), the promo code on it ('' = none) and what it took off the first payment. */
+  offerId: string | null;
+  promoCode: string;
+  discountCents: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -295,4 +302,7 @@ export interface AdminBillingOverview {
   payments: import('./roles.ts').PaymentRecord[];
   /** Checkouts started and not paid (pending, processing, failed, expired), newest first. */
   orders: OrderRecord[];
+  /** Every offer (on sale or not) and every promo code, for the admin to edit (offers.ts). */
+  offers: PlanOffer[];
+  promos: PromoCode[];
 }

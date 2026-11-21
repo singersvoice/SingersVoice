@@ -110,7 +110,8 @@ export interface PaymentRecord {
   amountCents: number;
   currency: string;
   paidAt: string;
-  source: 'stripe' | 'grant';
+  /** Stripe took it; the admin granted the period; a fee-void promo code opened it (amount 0, the code on `promoCode`). */
+  source: 'stripe' | 'grant' | 'promo';
   /** Stripe's id (the session, the invoice), or who granted it. */
   ref: string;
   periodStart: string | null;
@@ -123,6 +124,8 @@ export interface PaymentRecord {
   netCents: number | null;
   refundedCents: number;
   status: 'paid' | 'refunded' | 'partly_refunded';
+  /** The promo code on the payment ('' = none). */
+  promoCode: string;
 }
 
 export type SubscriptionStanding = 'active' | 'expiring' | 'expired' | 'revoked' | 'none';

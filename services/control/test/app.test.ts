@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { AdminBillingOverview, AdminCouponsResponse, BillingSettings, BlockedUser, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlansResponse, UserRecord } from '@singersvoice/protocol';
+import type { AdminBillingOverview, AdminCouponsResponse, BillingSettings, BlockedUser, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlanOffer, PlansResponse, PromoCode, PromoPreview, UserRecord } from '@singersvoice/protocol';
 import { LIVE_KEEP } from '@singersvoice/protocol';
 import { createApp, type AppDeps } from '../src/app.ts';
 import { edgeCacheControl, edgeCacheTtl } from '../src/worker.ts';
@@ -1213,6 +1213,160 @@ describe('sv-control API', () => {
     } finally {
       delete deps.billing;
     }
+  });
+
+  it('offers and promo codes: the admin keeps the ways to pay for a plan (a period, prices, on sale between dates) and codes that cut the price — a percentage or an amount through a Stripe coupon made once, or the fee voided with no Stripe at all; a code is good for its plans, until its date, for its uses, once per account, and a Checkout that comes to nothing gives it back', async () => {
+    const asked: { url: string; body: string; headers: Headers }[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      asked.push({ url, body: String(init?.body ?? ''), headers: new Headers(init?.headers) });
+      if (url.endsWith('/checkout/sessions')) return Response.json({ id: `cs_o${asked.filter((a) => a.url.endsWith('/checkout/sessions')).length}`, url: 'https://checkout.stripe.com/c/pay/cs_x' });
+      if (url.endsWith('/coupons')) return Response.json({ id: `coup_${asked.filter((a) => a.url.endsWith('/coupons')).length}` });
+      if (url.includes('/subscriptions/')) return Response.json({ id: 'sub_o', customer: 'cus_o', status: 'active', current_period_start: Math.floor(Date.now() / 1000), current_period_end: Math.floor(Date.now() / 1000) + 365 * 86400 });
+      if (url.includes('/payment_intents/')) return Response.json({ id: 'pi_o', latest_charge: { id: 'ch_o', balance_transaction: { fee: 100, net: 3900 } } });
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    const webhook = async (event: Record<string, unknown>) => {
+      const body = JSON.stringify(event);
+      return app.request('/billing/webhook', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Stripe-Signature': await signStripePayload('whsec_test_secret', body, Math.floor(Date.now() / 1000)) }, body });
+    };
+    const day = 86_400_000;
+    const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+    let yearlyId = '';
+    let goneId = '';
+    try {
+      // (The Stripe test above took SVVPro off the Plans page; it is for sale again here.)
+      await app.request('/admin/billing/settings', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ plans: [{ id: 'svvpro', selfService: true }] }) });
+      // ---- Offers: the admin's table of options per plan, each on sale between two dates ----
+      expect((await app.request('/admin/offers', { method: 'POST', headers: as('lara'), body: JSON.stringify({ plan: 'svv' }) })).status).toBe(403);
+      expect((await json<{ code: string }>(await app.request('/admin/offers', { method: 'POST', headers: as('alice'), body: JSON.stringify({ plan: 'free', prices: { usd: 100 } }) }))).code).toBe('bad_request');
+      const mk = async (o: Record<string, unknown>) => (await json<{ offer: PlanOffer }>(await app.request('/admin/offers', { method: 'POST', headers: as('alice'), body: JSON.stringify(o) }))).offer;
+      const yearly = await mk({ plan: 'svv', title: 'A year', interval: 'year', intervalCount: 1, prices: { usd: 5000, inr: 400000 }, sort: 2 });
+      const launch = await mk({ plan: 'svv', title: 'Launch price', interval: 'month', intervalCount: 1, prices: { usd: 400 }, validUntil: at(day), sort: 1 });
+      const quarterly = await mk({ plan: 'svvpro', title: 'Three months', interval: 'month', intervalCount: 3, prices: { usd: 13500 }, active: false });
+      const soon = await mk({ plan: 'club', title: 'A year', interval: 'year', intervalCount: 1, prices: { usd: 250000 }, validFrom: at(day) });
+      const gone = await mk({ plan: 'svv', title: 'Last summer', interval: 'month', intervalCount: 1, prices: { usd: 300 }, validUntil: at(-day) });
+      yearlyId = yearly.offerId;
+      goneId = gone.offerId;
+      expect(yearly).toMatchObject({ plan: 'svv', title: 'A year', interval: 'year', intervalCount: 1, prices: { usd: 5000, inr: 400000 }, active: true, validFrom: null });
+      expect(launch.validUntil).not.toBeNull();
+      // The Plans page: the offers on sale now, lowest sort first; every currency any of them is priced in.
+      const plans = await json<PlansResponse>(await app.request('/plans', { headers: as('lara') }));
+      expect(plans.offers.map((o) => o.offerId)).toEqual([launch.offerId, yearly.offerId]);
+      expect(plans.currencies).toEqual(['usd', 'inr']);
+      // The admin sees them all.
+      const overview = await json<AdminBillingOverview>(await app.request('/admin/billing', { headers: as('alice') }));
+      expect(overview.offers.map((o) => o.offerId).sort()).toEqual([yearly.offerId, launch.offerId, quarterly.offerId, soon.offerId, gone.offerId].sort());
+      expect(overview.promos).toEqual([]);
+
+      // ---- Promo codes ----
+      const code = async (p: Record<string, unknown>) => json<{ promo: PromoCode } & { code?: string }>(await app.request('/admin/promos', { method: 'POST', headers: as('alice'), body: JSON.stringify(p) }));
+      expect((await code({ code: 'ab', kind: 'percent', value: 10 })).code).toBe('bad_request');
+      const save20 = (await code({ code: 'save-20', kind: 'percent', value: 20, duration: 'once', note: 'the launch' })).promo;
+      expect(save20).toMatchObject({ code: 'SAVE20', kind: 'percent', value: 20, plans: [], duration: 'once', maxUses: 0, uses: 0, active: true, note: 'the launch' });
+      expect((await code({ code: 'SAVE20', kind: 'percent', value: 50 })).code).toBe('exists');
+      const tenoff = (await code({ code: 'TENOFF', kind: 'amount', value: 1000, currency: 'USD', duration: 'forever', plans: ['svv'] })).promo;
+      expect(tenoff).toMatchObject({ kind: 'amount', value: 1000, currency: 'usd', duration: 'forever', plans: ['svv'] });
+      const free3 = (await code({ code: 'FREE3', kind: 'free', freePeriods: 3, plans: ['svv'], maxUses: 1 })).promo;
+      expect(free3).toMatchObject({ kind: 'free', value: 0, freePeriods: 3, maxUses: 1 });
+      await code({ code: 'OLDCODE', kind: 'percent', value: 10, validUntil: at(-day) });
+      await code({ code: 'OFFCODE', kind: 'percent', value: 10, active: false });
+      expect((await app.request('/admin/promos', { method: 'POST', headers: as('lara'), body: JSON.stringify({ code: 'MINE', kind: 'percent', value: 99 }) })).status).toBe(403);
+      // A singer looks at a code before paying: what it gives, or why not.
+      expect((await json<{ promo: PromoPreview }>(await app.request('/plans/promo/save-20', { headers: as('lara') }))).promo).toMatchObject({ code: 'SAVE20', label: '20% off your first payment', plans: [] });
+      expect((await json<{ promo: PromoPreview }>(await app.request('/plans/promo/free3', { headers: as('lara') }))).promo).toMatchObject({ code: 'FREE3', kind: 'free', freePeriods: 3, plans: ['svv'] });
+      expect((await json<{ promo: PromoPreview }>(await app.request('/plans/promo/TENOFF', { headers: as('lara') }))).promo.label).toBe('$10.00 off every payment');
+      const no = async (c: string) => json<{ code: string; error: string }>(await app.request(`/plans/promo/${c}`, { headers: as('lara') }));
+      expect((await no('OLDCODE'))).toMatchObject({ code: 'bad_promo' });
+      expect((await no('OLDCODE')).error).toMatch(/expired on/);
+      expect((await no('OFFCODE')).code).toBe('bad_promo');
+      expect((await no('NOPE')).code).toBe('bad_promo');
+
+      // ---- Checkout with an offer and a percent code: Stripe gets the offer's price and period and a coupon made once ----
+      deps.billing = { secretKey: 'sk_test_x', webhookSecret: 'whsec_test_secret', appUrl: 'https://singersvoice.github.io/SingersVoice/', fetchImpl };
+      const laraId = (await json<{ user: { userId: string } }>(await app.request('/me', { headers: as('lara') }))).user.userId;
+      const co = await json<{ url: string; orderId: string; granted?: boolean }>(await app.request('/plans/checkout', { method: 'POST', headers: as('lara'), body: JSON.stringify({ planId: 'svv', currency: 'usd', offerId: yearly.offerId, promo: 'save 20' }) }));
+      expect(co.url).toContain('checkout.stripe.com');
+      expect(co.granted).toBeUndefined();
+      const coupon = asked.filter((a) => a.url.endsWith('/coupons'));
+      expect(coupon).toHaveLength(1);
+      const cq = new URLSearchParams(coupon[0]!.body);
+      expect(cq.get('percent_off')).toBe('20');
+      expect(cq.get('duration')).toBe('once');
+      expect(cq.get('metadata[code]')).toBe('SAVE20');
+      expect(coupon[0]!.headers.get('idempotency-key')).toBe('coupon-SAVE20-percent-20--once');
+      const sent = asked.find((a) => a.url.endsWith('/checkout/sessions'))!;
+      const q = new URLSearchParams(sent.body);
+      expect(q.get('line_items[0][price_data][unit_amount]')).toBe('5000');
+      expect(q.get('line_items[0][price_data][recurring][interval]')).toBe('year');
+      expect(q.get('line_items[0][price_data][product_data][name]')).toBe('SingersVoice SVV — A year');
+      expect(q.get('discounts[0][coupon]')).toBe('coup_1');
+      expect(q.get('allow_promotion_codes')).toBeNull(); // Stripe allows a coupon or its own code field, not both
+      expect(q.get('metadata[offerId]')).toBe(yearly.offerId);
+      expect(q.get('metadata[promo]')).toBe('SAVE20');
+      const order = (await json<{ order: OrderRecord }>(await app.request('/billing/session/cs_o1', { headers: as('lara') }))).order;
+      expect(order).toMatchObject({ status: 'pending', plan: 'svv', amountCents: 5000, offerId: yearly.offerId, promoCode: 'SAVE20', discountCents: 1000 });
+      // The code is hers while the Checkout is open: not twice.
+      expect((await no('SAVE20')).error).toMatch(/used that code already/);
+      expect((await json<{ code: string }>(await app.request('/plans/checkout', { method: 'POST', headers: as('lara'), body: JSON.stringify({ planId: 'svv', currency: 'usd', promo: 'SAVE20' }) }))).code).toBe('bad_promo');
+      // Another singer with the same code: the coupon is not made again.
+      const co2 = await json<{ orderId: string }>(await app.request('/plans/checkout', { method: 'POST', headers: as('maya'), body: JSON.stringify({ planId: 'svvpro', currency: 'usd', promo: 'SAVE20' }) }));
+      expect(asked.filter((a) => a.url.endsWith('/coupons'))).toHaveLength(1);
+      expect(new URLSearchParams(asked.filter((a) => a.url.endsWith('/checkout/sessions'))[1]!.body).get('discounts[0][coupon]')).toBe('coup_1');
+      expect((await json<AdminBillingOverview>(await app.request('/admin/billing', { headers: as('alice') }))).promos.find((p) => p.code === 'SAVE20')?.uses).toBe(2);
+      // Refusals: an offer not on sale, an offer of another plan, a code for another plan, an amount code in another currency.
+      const refused = async (body: Record<string, unknown>, who = 'noor') => json<{ code: string; error: string }>(await app.request('/plans/checkout', { method: 'POST', headers: as(who), body: JSON.stringify(body) }));
+      expect((await refused({ planId: 'svvpro', currency: 'usd', offerId: quarterly.offerId })).code).toBe('offer_gone');
+      expect((await refused({ planId: 'svv', currency: 'usd', offerId: gone.offerId })).code).toBe('offer_gone');
+      expect((await refused({ planId: 'club', currency: 'usd', offerId: soon.offerId })).code).toBe('offer_gone');
+      expect((await refused({ planId: 'svvpro', currency: 'usd', offerId: yearly.offerId })).code).toBe('offer_gone');
+      expect((await refused({ planId: 'svv', currency: 'inr', offerId: launch.offerId })).code).toBe('bad_currency');
+      expect((await refused({ planId: 'svvpro', currency: 'usd', promo: 'TENOFF' })).error).toMatch(/for SVV/);
+      expect((await refused({ planId: 'svv', currency: 'inr', offerId: yearly.offerId, promo: 'TENOFF' })).error).toMatch(/payments in USD/);
+      expect((await refused({ planId: 'svv', currency: 'usd', promo: 'OLDCODE' })).code).toBe('bad_promo');
+      // Lara's page expires: the order closes and the code is hers to use again; maya pays: the payment carries the code.
+      expect((await webhook({ id: 'evt_o1', type: 'checkout.session.expired', data: { object: { id: 'cs_o1', status: 'expired', payment_status: 'unpaid', metadata: { orderId: co.orderId } } } })).status).toBe(200);
+      expect((await json<{ order: OrderRecord }>(await app.request('/billing/session/cs_o1', { headers: as('lara') }))).order.status).toBe('expired');
+      expect((await json<{ promo: PromoPreview }>(await app.request('/plans/promo/SAVE20', { headers: as('lara') }))).promo.code).toBe('SAVE20');
+      const mayaId = (await json<{ user: { userId: string } }>(await app.request('/me', { headers: as('maya') }))).user.userId;
+      expect((await webhook({ id: 'evt_o2', type: 'checkout.session.completed', data: { object: { id: 'cs_o2', status: 'complete', payment_status: 'paid', client_reference_id: mayaId, customer: 'cus_o', subscription: 'sub_o', payment_intent: 'pi_o', amount_total: 4000, currency: 'usd', metadata: { userId: mayaId, planId: 'svvpro', orderId: co2.orderId, promo: 'SAVE20' } } } })).status).toBe(200);
+      const mayaPlans = await json<PlansResponse>(await app.request('/plans', { headers: as('maya') }));
+      expect(mayaPlans.entitlement).toMatchObject({ plan: 'svvpro', via: 'own' });
+      expect(mayaPlans.payments[0]).toMatchObject({ amountCents: 4000, promoCode: 'SAVE20', source: 'stripe' });
+      expect((await json<AdminBillingOverview>(await app.request('/admin/billing', { headers: as('alice') }))).promos.find((p) => p.code === 'SAVE20')?.uses).toBe(1);
+      expect((await json<{ code: string; error: string }>(await app.request('/plans/promo/SAVE20', { headers: as('maya') }))).error).toMatch(/used that code already/); // once per account
+    } finally {
+      delete deps.billing;
+    }
+    // ---- The fee voided: a code that opens the plan with no Stripe at all (none is configured now) ----
+    const free = await json<{ url: string; orderId: string; granted?: boolean }>(await app.request('/plans/checkout', { method: 'POST', headers: as('noor'), body: JSON.stringify({ planId: 'svv', currency: 'usd', promo: 'free3' }) }));
+    expect(free.granted).toBe(true);
+    expect(free.url).toBe('https://www.singersvoice.com/plans?billing=granted'); // the service's APP_URL (no Stripe, no app address asked)
+    const noor = await json<{ user: UserRecord }>(await app.request('/me', { headers: as('noor') }));
+    expect(noor.user.entitlement).toMatchObject({ plan: 'svv', via: 'own', video: true });
+    expect(noor.user.subscription).toMatchObject({ plan: 'svv', status: 'active', source: 'grant' });
+    const left = (Date.parse(noor.user.subscription!.expiresAt!) - Date.now()) / day;
+    expect(left).toBeGreaterThan(85);
+    expect(left).toBeLessThan(95);
+    const noorPlans = await json<PlansResponse>(await app.request('/plans', { headers: as('noor') }));
+    expect(noorPlans.payments[0]).toMatchObject({ amountCents: 0, source: 'promo', promoCode: 'FREE3', plan: 'svv', ref: 'FREE3' });
+    expect((await json<AdminBillingOverview>(await app.request('/admin/billing', { headers: as('alice') }))).orders.some((o) => o.orderId === free.orderId)).toBe(false); // paid (by the code): not an open order
+    // Used up (1 use), and never twice for her.
+    expect((await json<{ code: string; error: string }>(await app.request('/plans/checkout', { method: 'POST', headers: as('omar'), body: JSON.stringify({ planId: 'svv', currency: 'usd', promo: 'FREE3' }) }))).error).toMatch(/used up/);
+    expect((await json<{ code: string; error: string }>(await app.request('/plans/checkout', { method: 'POST', headers: as('noor'), body: JSON.stringify({ planId: 'svv', currency: 'usd', promo: 'FREE3' }) }))).error).toMatch(/used that code already/);
+    // The admin gives it more uses, and omar is in; without Stripe, a percent code buys nothing.
+    expect((await json<{ promo: PromoCode }>(await app.request('/admin/promos/FREE3', { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ maxUses: 5 }) }))).promo).toMatchObject({ maxUses: 5, uses: 1, freePeriods: 3 });
+    expect((await json<{ granted?: boolean }>(await app.request('/plans/checkout', { method: 'POST', headers: as('omar'), body: JSON.stringify({ planId: 'svv', currency: 'usd', promo: 'FREE3' }) }))).granted).toBe(true);
+    expect((await json<{ code: string }>(await app.request('/plans/checkout', { method: 'POST', headers: as('omar'), body: JSON.stringify({ planId: 'svvpro', currency: 'usd', promo: 'SAVE20' }) }))).code).toBe('billing_unconfigured');
+    // Changing and removing: an offer's words, an offer gone, a code gone.
+    expect((await json<{ offer: PlanOffer }>(await app.request(`/admin/offers/${yearlyId}`, { method: 'PATCH', headers: as('alice'), body: JSON.stringify({ title: 'Twelve months', prices: { usd: 4800 } }) }))).offer).toMatchObject({ title: 'Twelve months', prices: { usd: 4800 }, interval: 'year' });
+    expect((await app.request(`/admin/offers/${goneId}`, { method: 'DELETE', headers: as('alice') })).status).toBe(200);
+    expect((await app.request('/admin/promos/OLDCODE', { method: 'DELETE', headers: as('alice') })).status).toBe(200);
+    const after = await json<AdminBillingOverview>(await app.request('/admin/billing', { headers: as('alice') }));
+    expect(after.offers.some((o) => o.offerId === goneId)).toBe(false);
+    expect(after.promos.map((p) => p.code).sort()).toEqual(['FREE3', 'OFFCODE', 'SAVE20', 'TENOFF']);
+    expect((await app.request('/admin/offers/off-nope', { method: 'PATCH', headers: as('alice'), body: '{}' })).status).toBe(404);
+    expect((await app.request('/admin/promos/NOPE', { method: 'PATCH', headers: as('alice'), body: '{}' })).status).toBe(404);
   });
 
   it('roles: a new account is dual; the super admin sees every account, sets roles and club owner subscriptions; Publishing opens with the subscription and closes by itself at its expiry; the last super admin stays', async () => {
