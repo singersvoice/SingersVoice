@@ -2,10 +2,11 @@ import { applyPreset, VOXFORGE_PRESETS, VOXFORGE_RANGES, type AudioPluginSetting
 import { Switch } from './ui.tsx';
 
 type NumKey = keyof typeof VOXFORGE_RANGES;
-type OnKey = 'pitchOn' | 'eqOn' | 'compOn' | 'pcOn' | 'dsOn' | 'exOn' | 'rdOn' | 'satOn' | 'chOn' | 'dlOn' | 'rvOn';
+type OnKey = 'gtOn' | 'pitchOn' | 'eqOn' | 'compOn' | 'pcOn' | 'dsOn' | 'exOn' | 'rdOn' | 'satOn' | 'chOn' | 'dlOn' | 'rvOn';
 
 const SECTIONS: { title: string; on: OnKey | null; keys: NumKey[] }[] = [
   { title: 'Gain', on: null, keys: ['inGain', 'outGain'] },
+  { title: 'Noise gate (the room between phrases)', on: 'gtOn', keys: ['gtAmt'] },
   { title: 'Pitch & Auto-tune', on: 'pitchOn', keys: ['octave', 'pitchSt', 'pitchCt', 'autoStr', 'autoSpeed'] },
   { title: 'EQ', on: 'eqOn', keys: ['hpfHz', 'eqLow', 'eqLm', 'eqMid', 'presHz', 'eqPres', 'eqHi'] },
   { title: 'Compressor', on: 'compOn', keys: ['cThr', 'cRat', 'cAtk', 'cRel', 'cMk'] },

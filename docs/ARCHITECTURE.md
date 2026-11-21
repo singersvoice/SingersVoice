@@ -894,10 +894,21 @@ vocal₂ ─ rider ─┴─ Vocal offset ───────┘
   AAC encoder overshoots a dense mix by about a dB, which the ceiling leaves room for; a clipped
   encoder is what crackles.
 - **In time**: a singer's own vocal lands in the graph a round trip behind the track they sang to
-  (the track out to their ears, their voice in through the microphone, the chain) — `engine.roundTripMs`,
-  from the context's output latency, the microphone track's own latency figure and the chain — so the
-  recording holds the track back by that much (on top of the lag) and a Studio take carries it as
-  `latencyCompMs`.
+  (the track out to their ears, their voice in through the microphone, the chain) — `engine.roundTripMs`
+  — so the recording holds the track back by that much (on top of the lag) and a Studio take carries it
+  as `latencyCompMs`. The chain's part is known (its stages' lookaheads, and the pitch stage's hold while
+  it works, which the worklet reports: `chainLatencyMs`). The device's part — speakers out, microphone in
+  — is where recordings used to land late: the browser's figures (`outputLatency`, the track's `latency`)
+  miss what Bluetooth adds (100–250 ms) and much of what phones add, so the voice sat behind the beat in
+  every saved performance. It is now **measured** (`audio/sync.ts`): the **sync check** (Settings → Audio)
+  sends four clicks out of the speakers and times them in the microphone's recording — the round trip
+  itself — and after every Studio take the recorded voice is laid against the track at the alignment
+  the figures gave and the two are cross-correlated by their envelopes (what the microphone heard of the
+  track through the speakers, and the singer's phrasing, sung to the beat they heard): a clear lag corrects
+  the take and, when strong, is remembered for the device and microphone (`sv.audio.rtt`,
+  `AudioEngine.measuredDeviceMs`), and every later take and live mix on the device uses it (`deviceLatencyMs`
+  prefers the measurement to the browser's figures). The review says which figure aligned the take and
+  keeps the nudge.
 
 **What the browser's compressor really does** (measured in `tools/ci/audio-lab.mjs`; the Blink/WebKit
 kernel that Chrome, Edge, Safari and Firefox all run): `DynamicsCompressorNode` adds an **automatic
@@ -947,8 +958,14 @@ the track's `ended` closes it and the mic status says so; not on iOS (one captur
 *singing* (a raw peak above −34 dBFS, gained below −18 dBFS, for three readings) lifts the trim 1 dB
 at a time up to +12 dB — room noise between phrases never does, which is what used to drive the gain
 to the ceiling and the noise floor with it; past −6 dBFS it drops 2 dB at once (floor −6 dB) — slow
-up, fast down, no pumping, never clipped. Then: trim → pitch worklet (granular shifter + NSDF
-auto-tune) → HPF → low shelf 120 Hz / peak 1.2 kHz / **presence peak 3.2 kHz** / high shelf 6.5 kHz
+up, fast down, no pumping, never clipped. Then: trim → **noise gate** (`sv-gate`: a downward expander —
+the room's level is tracked as the quietest the input has lately been, the threshold sits 8 dB above
+it, and under it the gain falls 3 dB per dB down to −18 dB, soft-kneed; opens in 3 ms, holds 120 ms,
+closes over 180 ms — so the hiss of a phone's microphone, a fan, the street, which the compressor's
+makeup, the exciter, the air shelf and the rider used to lift into a steady hiss between phrases, is
+turned down while nobody sings and is out of the way the moment somebody does; *Noise gate* in the
+panel, on by default) → pitch worklet (the pitch-synchronous shifter and the NSDF auto-tune, below) →
+HPF → low shelf 120 Hz / peak 1.2 kHz / **presence peak 3.2 kHz** / high shelf 6.5 kHz
 → compressor → **parallel compression** (a crushed copy, 10:1 from −36 dB with +16 dB of its own
 makeup, blended under the dry vocal: soft phrases up, transients kept — punch without
 over-compression; the dry side is delayed to meet it) → **de-esser** (Linkwitz-Riley split where
@@ -964,14 +981,30 @@ the recorder, whatever the preset and the singer do) → out. Every dynamics sta
 `sv-dynamics` worklet (see the mix bus above for why), every parallel path is delay-matched — the
 audio lab checks the chain's impulse response has one arrival and no echo — and the whole chain is
 **10 ms** (the limiter's 2 ms lookahead and three oversampled shapers; 32 ms on the native fallback);
-the pitch stage alone holds one 46 ms grain while it corrects, and keeps its correction through a
-300 ms unvoiced gap (a consonant, a breath) instead of falling back to the untuned pitch on every
-"t". The chain runs live on the captured voice: what is recorded, sent to the publisher and
+the pitch stage alone holds the voice while it works — 3–25 ms, about 14 on average, said to the
+page every quarter second. **The pitch stage** (`worklets/pitch-shifter.js`) is a
+pitch-synchronous delay-line shifter, the time-domain idea behind PSOLA: one read head on a ring
+buffer, reading `ratio` times as fast as the voice is written, its delay drifting; when the delay
+leaves its range the head is spliced back into it — a crossfade one pitch period long to a place a
+whole number of periods away, the same wave for a sung note, so the splice is inaudible, and a few
+milliseconds over a few milliseconds where there is no period (a consonant, a breath). Between
+splices a single head reads the voice: no comb filter, no hollow "down a well" colour, no flutter —
+the coloration of the two-grain shifter it replaces, whose grains sat 23 ms apart in time and
+cancelled and reinforced each other's harmonics all the while (the audio lab now reads the ripple on
+a steady shifted tone: under a decibel). The auto-tune keeps the note (the nearest semitone) while
+the voice stays within 70 cents of it — a vibrato or a slide around the halfway point never flips the
+note back and forth — glides the correction (`autoSpeed`; the vibrato, faster than the glide, comes
+through and only the centre of the note moves), stays wet while it is on (never a flicker between the
+dry voice and the shifted one at a correction of a cent), and keeps its correction through a 300 ms
+unvoiced gap (a consonant, a breath) instead of falling back to the untuned pitch on every "t". The
+chain runs live on the captured voice: what is recorded, sent to the publisher and
 the other singers' recordings, and heard in the monitor is the processed vocal. Parameters and
 presets live in `packages/protocol/src/audio.ts` and round-trip with the plugin's `APVTS` layout;
-**Studio** is the default for a new singer (HPF 95 Hz, presence +2.5 dB, air +2 dB, 3:1
-compression, parallel 0.25, de-ess 0.5, exciter 0.25, rider 0.6, a short room); Natural Tune,
-Punch, Up Front, Radio-Ready and Vibrant are the other finished-vocal presets. A singer's preset
+**Studio** is the default for a new singer (HPF 95 Hz, the body cut 2 dB, presence +3.5 dB at
+3.4 kHz, air +2.5 dB, 3:1 compression, parallel 0.25, de-ess 0.45, exciter 0.3, rider 0.6, and a
+short, low plate behind the voice — 1.3 s, 10 % mix, 30 ms pre-delay — so the voice sits in front
+of the room rather than in it); Natural Tune (the same with a gentle, slow correction: 0.6, speed
+0.25), Punch, Up Front, Radio-Ready and Vibrant are the other finished-vocal presets. A singer's preset
 choice is kept on their device (`audio_plugin_settings`, localStorage, mirrored to
 `SingersVoice/Config/` in Drive) until they change it.
 

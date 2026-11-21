@@ -56,8 +56,14 @@ quiet 8 kHz at unity and ducks a loud one, a voice 10 dB over full scale leaves 
 ceiling, the Studio preset adds no hidden gain, a −30 LUFS track lands at −19, a −5 dBFS and a
 −33 dBFS voice both ride to −17 within ten seconds and the silence after them stays silent, the mix
 at 0 / 0 sits still, and at +30 / +30 the guard brings it back under the target with no sample over
-the ceiling. Worklet and native-fallback paths both. Run it after any change under `apps/web/src/audio`
-or `apps/web/public/worklets`.
+the ceiling; the noise gate turns a −52 dBFS room down by over 10 dB between two sung phrases and
+leaves the phrases themselves alone (the first 30 ms of one included); the pitch stage puts a tone a
+semitone up or down, and an octave up, to within a few cents, with under 2 dB of ripple on the steady
+tone and its level kept, pulls a tone 46 cents sharp onto its note at full strength and 60 % of the
+way at 0.6, and reports the hold it puts on the voice. Worklet and native-fallback paths both. Run it
+after any change under `apps/web/src/audio` or `apps/web/public/worklets`. The sync measurements
+(`audio/sync.ts`: the lag between envelopes, a take laid against its track, the sync check's clicks)
+are unit-tested on synthetic signals in `apps/web/test/sync.test.ts`.
 
 ## Live meet with two performers (`tools/ci/live-duet.mjs`)
 

@@ -23,7 +23,7 @@ export function noteName(midi: number): string {
 }
 
 /** Every AudioWorklet module the engine's context runs (the mix buses load the same files on theirs). */
-export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'mix-out.js', 'dynamics.js', 'leveler.js'] as const;
+export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'mix-out.js', 'dynamics.js', 'leveler.js', 'gate.js'] as const;
 
 /** Every stream in the app runs at 48 kHz (Opus, AAC, the mix): the context asks for it, so nothing is resampled block by block on the way. */
 export const ENGINE_RATE = 48000;
@@ -38,6 +38,35 @@ const LEVEL_MIN_DB = -6;
 const VOICE_SILENT_RMS = 1e-4;
 /** …and this many readings in a row (100 ms each) of it, the processed voice is given up for the raw microphone. */
 const VOICE_SILENT_READINGS = 30;
+
+/** Where the measured device round trip lives on this device. */
+const LATENCY_KEY = 'sv.audio.rtt';
+export interface MeasuredLatency {
+  ms: number;
+  /** The microphone it was measured with (its label), '' when unknown. */
+  input: string;
+  how: 'sync-check' | 'take';
+  at: string;
+}
+export function readMeasuredLatency(): MeasuredLatency | null {
+  try {
+    const raw = localStorage.getItem(LATENCY_KEY);
+    if (!raw) return null;
+    const m = JSON.parse(raw) as Partial<MeasuredLatency>;
+    if (typeof m.ms !== 'number' || !Number.isFinite(m.ms) || m.ms < 0 || m.ms > 1500) return null;
+    return { ms: m.ms, input: typeof m.input === 'string' ? m.input : '', how: m.how === 'take' ? 'take' : 'sync-check', at: typeof m.at === 'string' ? m.at : '' };
+  } catch {
+    return null;
+  }
+}
+export function writeMeasuredLatency(m: MeasuredLatency | null): void {
+  try {
+    if (m) localStorage.setItem(LATENCY_KEY, JSON.stringify(m));
+    else localStorage.removeItem(LATENCY_KEY);
+  } catch {
+    /* no storage: the browser's figures it is */
+  }
+}
 
 export class AudioEngine {
   readonly ctx: AudioContext;
@@ -147,12 +176,40 @@ export class AudioEngine {
   /**
    * The whole round trip a singer sings against (ms): the track reaches their ears `outputLatencyMs`
    * late, their voice reaches the graph `inputLatencyMs` late and leaves the chain `chain latency`
-   * later still — the voice lands this far behind the track in the graph, so a recording holds the
-   * track back by this much to put them together.
+   * later still (and the pitch stage's hold while it corrects) — the voice lands this far behind the
+   * track in the graph, so a recording holds the track back by this much to put them together. The
+   * device's part (speakers out, microphone in) is what the browser reports — unless it has been
+   * measured on this device with this microphone (`measuredDeviceMs`: the sync check in Settings, or a
+   * take whose microphone heard the track), which is the truth: Bluetooth headphones and many phones add
+   * 100 ms and more that no browser reports.
    */
   get roundTripMs(): number {
-    const chain = this.chain ? (this.chain.latencyFrames / this.ctx.sampleRate) * 1000 : 0;
-    return this.outputLatencyMs + this.inputLatencyMs + chain;
+    return this.deviceLatencyMs + this.chainLatencyMs;
+  }
+
+  /** The chain's own hold on the voice (ms): its stages' lookaheads, and the pitch stage's while it works. */
+  get chainLatencyMs(): number {
+    if (!this.chain) return 0;
+    return (this.chain.latencyFrames / this.ctx.sampleRate) * 1000 + this.chain.pitchDelayMs;
+  }
+
+  /** Speakers out and microphone in (ms): measured on this device when it has been, else the browser's figures. */
+  get deviceLatencyMs(): number {
+    const measured = this.measuredDeviceMs;
+    return measured ?? this.outputLatencyMs + this.inputLatencyMs;
+  }
+
+  /** The measured device round trip for the microphone in use (ms), or null when none has been measured for it. */
+  get measuredDeviceMs(): number | null {
+    const m = readMeasuredLatency();
+    if (!m) return null;
+    if (m.input && this.inputLabel.value && m.input !== this.inputLabel.value) return null; // another microphone: another figure
+    return m.ms;
+  }
+
+  /** Remember the device's round trip as measured (ms), for the microphone in use: every later take and mix on this device uses it. */
+  rememberDeviceLatency(ms: number, how: 'sync-check' | 'take'): void {
+    writeMeasuredLatency({ ms: Math.round(ms), input: this.inputLabel.value, how, at: new Date().toISOString() });
   }
 
   /**
@@ -258,6 +315,18 @@ export class AudioEngine {
         this.instrumentError.value = 'The instrument input was unplugged.';
       }
     });
+  }
+
+  /** The raw microphone (after the leveller's trim, before the chain) into `node` — the sync check records it there. */
+  tapRaw(node: AudioNode): void {
+    this.trim.connect(node);
+  }
+  untapRaw(node: AudioNode): void {
+    try {
+      this.trim.disconnect(node);
+    } catch {
+      /* not connected */
+    }
   }
 
   /** The instrument's level (dB, −24…+24), changed on the spot. */

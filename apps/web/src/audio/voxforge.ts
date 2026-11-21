@@ -1,15 +1,16 @@
 /**
  * VoxForge vocal chain on Web Audio (the browser twin of the JUCE plugin):
- * trim → pitch/auto-tune (worklet) → HPF → EQ (low · body · mid · presence · air) → compressor → parallel
- * "punch" compression → de-esser → exciter → saturation → chorus → stereo delay → reverb → rider →
- * safety (limiter + soft clip) → out.
+ * trim → noise gate (worklet: the room turned down between phrases) → pitch/auto-tune (worklet) → HPF → EQ
+ * (low · body · mid · presence · air) → compressor → parallel "punch" compression → de-esser → exciter →
+ * saturation → chorus → stereo delay → reverb → rider → safety (limiter + soft clip) → out.
  *
  * Everything runs on the audio thread in 128-frame blocks. The dynamics stages are our own
  * ('sv-dynamics': an honest makeup gain, no hidden lookahead — see dynamics.ts for what the browser's
  * node does instead), so the chain adds about 7 ms (the safety limiter's 1.5 ms lookahead and the two
  * oversampled shapers); every parallel path (the dry side of the punch compressor, the de-esser's low
  * band, the exciter's and saturation's dry paths) is delayed to meet its processed twin exactly, so
- * nothing comb-filters. Only the pitch stage holds one grain (~46 ms) while it is correcting.
+ * nothing comb-filters. Only the pitch stage holds the voice while it is correcting — by the spacing of
+ * its grains, a few pitch periods (10–25 ms, the worklet says how much: `pitchDelayMs`).
  * The rider is the one stage steered from the main thread — a slow gain that only ever moves a few
  * dB per second, so a late timer costs nothing audible.
  */
@@ -26,6 +27,10 @@ export interface VoxForgeChain {
   readonly riderDb: number;
   /** Frames the chain delays the voice by while the pitch stage is neutral. */
   readonly latencyFrames: number;
+  /** How long the pitch stage holds the voice right now (ms, averaged over the last seconds): 0 while it passes the voice straight through. */
+  readonly pitchDelayMs: number;
+  /** The noise gate as it stands (support / tests): the room it tracks and the gain it applies. */
+  readonly gate: { floorDb: number; gainDb: number };
 }
 
 const dB = (v: number) => Math.pow(10, v / 20);
@@ -91,11 +96,31 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
   const output = ctx.createGain();
 
   let pitchNode: AudioWorkletNode | null = null;
+  let gateNode: AudioWorkletNode | null = null;
+  let pitchDelayMs = 0;
+  const gate = { floorDb: -90, gainDb: 0 };
   if (workletAvailable) {
     try {
       pitchNode = new AudioWorkletNode(ctx, 'sv-pitch-shifter', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      pitchNode.port.addEventListener('message', (e: MessageEvent) => {
+        const m = e.data as { type?: string; delayMs?: number };
+        if (m.type === 'delay' && typeof m.delayMs === 'number') pitchDelayMs = m.delayMs;
+      });
+      pitchNode.port.start(); // (a listener added with addEventListener hears nothing until the port is started)
     } catch {
       pitchNode = null;
+    }
+    try {
+      gateNode = new AudioWorkletNode(ctx, 'sv-gate', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      gateNode.port.onmessage = (e: MessageEvent) => {
+        const m = e.data as { type?: string; floorDb?: number; gainDb?: number };
+        if (m.type === 'gate') {
+          gate.floorDb = m.floorDb ?? gate.floorDb;
+          gate.gainDb = m.gainDb ?? gate.gainDb;
+        }
+      };
+    } catch {
+      gateNode = null;
     }
   }
 
@@ -231,6 +256,10 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
 
   // ---- wiring ----
   let last: AudioNode = input;
+  if (gateNode) {
+    last.connect(gateNode);
+    last = gateNode;
+  }
   if (pitchNode) {
     last.connect(pitchNode);
     last = pitchNode;
@@ -307,6 +336,10 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
       pitchNode.parameters.get('autoStrength')?.setValueAtTime(p.pitchOn ? p.autoStr : 0, t);
       pitchNode.parameters.get('autoSpeed')?.setValueAtTime(p.autoSpeed, t);
     }
+    if (gateNode) {
+      gateNode.parameters.get('enabled')?.setValueAtTime(p.gtOn && p.gtAmt > 0 ? 1 : 0, t);
+      gateNode.parameters.get('range')?.setTargetAtTime(24 * Math.max(0, Math.min(1, p.gtAmt)), t, ramp);
+    }
 
     hpf.frequency.setTargetAtTime(p.eqOn ? p.hpfHz : 20, t, ramp);
     low.gain.setTargetAtTime(p.eqOn ? p.eqLow : 0, t, ramp);
@@ -376,6 +409,7 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
     for (const n of [input, output, hpf, low, lm, mid, pres, hi, makeup, pcIn, pcDryDelay, pcDry, pcWet, pcOut, dsIn, dsBypassDelay, dsBypass, dsLo1, dsLo2, dsHi1, dsHi2, dsLoDelay, dsLoGain, dsHiGain, dsOut, exIn, exDryDelay, exDry, exHp, exShaper, exWet, exOut, riderIn, rider, riderMeter, satIn, satDryDelay, satDry, satWet, shaper, satOut, chDry, chWet, chDelay, chOut, dlDry, dlWet, dlL, dlR, fbL, fbR, panL, panR, dlOut, rvDry, rvWet, preDelay, conv, safety.output]) n.disconnect();
     for (const c of [comp, pcComp, dsComp, safety.limiter]) c.disconnect();
     pitchNode?.disconnect();
+    gateNode?.disconnect();
   }
 
   return {
@@ -388,5 +422,9 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
     get riderDb() {
       return riderDb;
     },
+    get pitchDelayMs() {
+      return pitchNode ? pitchDelayMs : 0;
+    },
+    gate,
   };
 }

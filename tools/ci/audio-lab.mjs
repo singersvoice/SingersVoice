@@ -48,7 +48,7 @@ const results = await page.evaluate(async () => {
   const db = (x) => 20 * Math.log10(Math.max(x, 1e-9));
   async function offline(seconds, channels = 1, worklets = true) {
     const ctx = new OfflineAudioContext(channels, Math.round(seconds * RATE), RATE);
-    if (worklets) for (const m of ['dynamics.js', 'leveler.js', 'pitch-shifter.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+    if (worklets) for (const m of ['dynamics.js', 'leveler.js', 'pitch-shifter.js', 'gate.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
     return ctx;
   }
   function tone(ctx, hz, dbfs, seconds, from = 0, channels = 1) {
@@ -104,12 +104,122 @@ const results = await page.evaluate(async () => {
     return p;
   };
   const out = {};
+  /** White noise at `dbfs` RMS for `seconds`. */
+  function noise(ctx, dbfs, seconds, from = 0) {
+    const buf = ctx.createBuffer(1, Math.round(seconds * RATE), RATE);
+    const d = buf.getChannelData(0);
+    const a = Math.pow(10, dbfs / 20) * Math.sqrt(3); // uniform noise: RMS = peak / √3
+    for (let i = 0; i < d.length; i++) d[i] = a * (Math.random() * 2 - 1);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.start(from);
+    return src;
+  }
+  /** The fundamental of `d` between `from` and `to` (s), by autocorrelation over 50–1300 Hz: Hz, or 0 when nothing periodic. */
+  function f0(d, from, to) {
+    const a = Math.round(from * RATE);
+    const n = Math.round((to - from) * RATE);
+    const minLag = Math.floor(RATE / 1300);
+    const maxLag = Math.ceil(RATE / 50);
+    let best = 0;
+    let bestVal = -1;
+    let energy = 0;
+    for (let i = 0; i < n; i++) energy += d[a + i] * d[a + i];
+    if (energy / n < 1e-8) return 0;
+    const vals = new Float32Array(maxLag + 1);
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      let acf = 0;
+      let m = 0;
+      for (let i = 0; i + lag < n; i++) {
+        acf += d[a + i] * d[a + i + lag];
+        m += d[a + i] * d[a + i] + d[a + i + lag] * d[a + i + lag];
+      }
+      vals[lag] = m > 0 ? (2 * acf) / m : 0;
+    }
+    let globalMax = 0;
+    for (let lag = minLag; lag <= maxLag; lag++) if (vals[lag] > globalMax) globalMax = vals[lag];
+    for (let lag = minLag + 1; lag < maxLag; lag++) {
+      if (vals[lag] > vals[lag - 1] && vals[lag] >= vals[lag + 1] && vals[lag] >= 0.8 * globalMax) {
+        best = lag;
+        bestVal = vals[lag];
+        break;
+      }
+    }
+    if (!best || bestVal < 0.5) return 0;
+    const y0 = vals[best - 1];
+    const y1 = vals[best];
+    const y2 = vals[best + 1];
+    const den = y0 - 2 * y1 + y2;
+    return RATE / (best + (den !== 0 ? (0.5 * (y0 - y2)) / den : 0));
+  }
+  /** The ripple of the level (dB, max − min of 10 ms RMS windows) between `from` and `to`: the flutter a grain shifter leaves on a steady tone. */
+  function ripple(d, from, to) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let t = from; t + 0.01 <= to; t += 0.01) {
+      const v = rmsDb(d, t, t + 0.01);
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    return hi - lo;
+  }
+  const pitchOnly = (extra) => ({ ...L.VOXFORGE_DEFAULTS, gtOn: false, eqOn: false, compOn: false, pcOn: false, dsOn: false, exOn: false, satOn: false, chOn: false, dlOn: false, rvOn: false, rdOn: false, ...extra });
+
+  // 0. The noise gate: the room between phrases turned down, the voice itself untouched and let through at once.
+  {
+    const r = {};
+    for (const gate of [false, true]) {
+      const ctx = await offline(6, 1, true);
+      const chain = L.createVoxForgeChain(ctx, true);
+      chain.apply({ ...L.presetParams('studio'), gtOn: gate, rvOn: false, rdOn: false });
+      noise(ctx, -52, 6).connect(chain.input); // the room: a phone's hiss, all along
+      voice(ctx, -20, 2).connect(chain.input); // a phrase…
+      voice(ctx, -20, 2, 4).connect(chain.input); // …a break of two seconds, a phrase
+      chain.output.connect(ctx.destination);
+      const d = (await ctx.startRendering()).getChannelData(0);
+      r[gate ? 'on' : 'off'] = { room: +rmsDb(d, 2.6, 3.9).toFixed(1), voice: +rmsDb(d, 4.5, 5.9).toFixed(1), onset: +rmsDb(d, 4.0, 4.03).toFixed(1), tail: +rmsDb(d, 2.0, 2.1).toFixed(1) };
+    }
+    out.gate = r;
+  }
+
+  // 0b. The pitch stage: a shift lands on pitch with hardly a ripple (one head, pitch-synchronous splices); auto-tune pulls a flat tone to its note; the delay is told.
+  {
+    const r = {};
+    for (const [name, params, hz] of [
+      ['up1', pitchOnly({ pitchSt: 1 }), 200],
+      ['down1', pitchOnly({ pitchSt: -1 }), 200],
+      ['up12', pitchOnly({ octave: 1 }), 150],
+      ['tune', pitchOnly({ autoStr: 1, autoSpeed: 1 }), 190], // 190 Hz: 46 cents over F#3 (185.0) — the note is F#3
+      ['tuneSoft', pitchOnly({ autoStr: 0.6, autoSpeed: 0.3 }), 190],
+    ]) {
+      const ctx = await offline(3, 1, true);
+      const chain = L.createVoxForgeChain(ctx, true);
+      chain.apply(params);
+      // A harmonic tone (a voice without vibrato: the pitch and the ripple read cleanly).
+      const buf = ctx.createBuffer(1, 3 * RATE, RATE);
+      const d0 = buf.getChannelData(0);
+      for (let i = 0; i < d0.length; i++) {
+        let v = 0;
+        for (let h = 1; h <= 8; h++) v += Math.sin((2 * Math.PI * hz * h * i) / RATE) / h;
+        d0[i] = v * 0.12;
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(chain.input);
+      src.start(0);
+      chain.output.connect(ctx.destination);
+      const d = (await ctx.startRendering()).getChannelData(0);
+      await new Promise((res) => setTimeout(res, 50)); // the worklet's last messages land
+      r[name] = { inHz: hz, outHz: +f0(d, 1.5, 2.9).toFixed(2), rippleDb: +ripple(d, 1.5, 2.9).toFixed(2), levelDb: +rmsDb(d, 1.5, 2.9).toFixed(1), inLevelDb: +rmsDb(d0, 1.5, 2.9).toFixed(1), delayMs: chain.pitchDelayMs };
+    }
+    out.pitch = r;
+  }
 
   // 1. Impulse response of the chain with every parallel stage on: one arrival, no echo.
   for (const worklets of [true, false]) {
     const ctx = await offline(1, 1, worklets);
     const chain = L.createVoxForgeChain(ctx, worklets);
-    chain.apply({ ...L.presetParams('studio'), pcOn: true, pcMx: 1, dsOn: true, dsAmt: 0.6, exOn: true, exAmt: 1, satOn: true, satMx: 1, rvOn: false, dlOn: false, chOn: false, rdOn: false });
+    chain.apply({ ...L.presetParams('studio'), gtOn: false, pcOn: true, pcMx: 1, dsOn: true, dsAmt: 0.6, exOn: true, exAmt: 1, satOn: true, satMx: 1, rvOn: false, dlOn: false, chOn: false, rdOn: false });
     const buf = ctx.createBuffer(1, RATE, RATE);
     buf.getChannelData(0)[Math.round(0.5 * RATE)] = 0.02; // −34 dBFS: every compressor below threshold
     const src = ctx.createBufferSource();
@@ -198,7 +308,7 @@ const results = await page.evaluate(async () => {
     bus.output.connect(ctx.destination);
     const r = await ctx.startRendering();
     const d = r.getChannelData(0);
-    out[`mix_${push}`] = { at1s: +rmsDb(d, 0.5, 1).toFixed(1), at10s: +rmsDb(d, 9, 10).toFixed(1), peakDb: +db(peakOf(d)).toFixed(2), target: L.MIX_TARGETS.mixDb, ceiling: -1.5 };
+    out[`mix_${push}`] = { at1s: +rmsDb(d, 0.5, 1).toFixed(1), at5s: +rmsDb(d, 4.5, 5.5).toFixed(1), at10s: +rmsDb(d, 9, 10).toFixed(1), peakDb: +db(peakOf(d)).toFixed(2), target: L.MIX_TARGETS.mixDb, ceiling: -1.5 };
   }
   return out;
 });
@@ -211,6 +321,22 @@ const check = (ok, what) => {
   if (!ok) failed = true;
 };
 console.log(JSON.stringify(results, null, 1));
+{
+  const g = results.gate;
+  check(g.off.room - g.on.room >= 10, `noise gate: the room between phrases ${g.off.room} → ${g.on.room} dBFS (${(g.off.room - g.on.room).toFixed(1)} dB down)`);
+  check(Math.abs(g.on.voice - g.off.voice) < 0.5, `noise gate: the sung phrase untouched (${g.on.voice} vs ${g.off.voice} dBFS)`);
+  check(Math.abs(g.on.onset - g.off.onset) < 3, `noise gate: the phrase's first 30 ms through at once (${g.on.onset} vs ${g.off.onset} dBFS)`);
+  const P = results.pitch;
+  const cents = (a, b) => 1200 * Math.log2(a / b);
+  check(Math.abs(cents(P.up1.outHz, P.up1.inHz * Math.pow(2, 1 / 12))) < 8, `pitch +1 st: ${P.up1.inHz} → ${P.up1.outHz} Hz (${cents(P.up1.outHz, P.up1.inHz * Math.pow(2, 1 / 12)).toFixed(1)} cents off)`);
+  check(Math.abs(cents(P.down1.outHz, P.down1.inHz * Math.pow(2, -1 / 12))) < 8, `pitch −1 st: ${P.down1.inHz} → ${P.down1.outHz} Hz`);
+  check(Math.abs(cents(P.up12.outHz, P.up12.inHz * 2)) < 15, `pitch +12 st: ${P.up12.inHz} → ${P.up12.outHz} Hz`);
+  check(P.up1.rippleDb < 2 && P.down1.rippleDb < 2, `pitch ±1 st: a steady tone comes out steady (ripple ${P.up1.rippleDb} / ${P.down1.rippleDb} dB)`);
+  check(Math.abs(P.up1.levelDb - P.up1.inLevelDb) < 1.5, `pitch +1 st: the level kept (${P.up1.levelDb} vs ${P.up1.inLevelDb} dBFS)`);
+  check(Math.abs(cents(P.tune.outHz, 184.997)) < 8, `auto-tune (full, fast): 190 Hz pulled to F#3 — ${P.tune.outHz} Hz (${cents(P.tune.outHz, 184.997).toFixed(1)} cents off the note)`);
+  check(Math.abs(cents(P.tuneSoft.outHz, 190 * Math.pow(184.997 / 190, 0.6))) < 8, `auto-tune (0.6, slow): 190 Hz pulled 60 % of the way — ${P.tuneSoft.outHz} Hz`);
+  check(P.tune.delayMs > 6 && P.tune.delayMs < 22 && P.up1.delayMs > 6 && P.up1.delayMs < 22, `pitch stage: holds the voice ${P.up1.delayMs} / ${P.tune.delayMs} ms and says so`);
+}
 for (const k of ['ir_worklet', 'ir_native']) {
   const r = results[k];
   check(r.echoDb < -18, `${k}: parallel paths aligned (secondary arrival ${r.echoDb} dB under the main one)`);
@@ -231,7 +357,7 @@ for (const k of ['vocal_rider_-5', 'vocal_rider_-33']) {
   check(Math.abs(r.at10s - reachable) < 2, `${k}: a ${r.inDb} dBFS voice rides to ${r.at10s} dBFS by 10 s (target ${r.target}, reachable ${reachable}; 2 s ${r.at2s}, 4 s ${r.at4s})`);
   check(r.tailPeakDb < -60, `${k}: silence after the singing stays silent (${r.tailPeakDb} dBFS)`);
 }
-check(Math.abs(results.mix_0.at10s - results.mix_0.at1s) < 1.5 && results.mix_0.at10s < -11 && results.mix_0.at10s > -19, `mix at 0/0: steady at ${results.mix_0.at10s} dBFS (guard idle; ${results.mix_0.at1s} at 1 s)`);
+check(Math.abs(results.mix_0.at10s - results.mix_0.at5s) < 1.5 && results.mix_0.at10s < -11 && results.mix_0.at10s > -19, `mix at 0/0: steady at ${results.mix_0.at10s} dBFS once the vocal rider has settled (guard idle; ${results.mix_0.at1s} at 1 s, ${results.mix_0.at5s} at 5 s)`);
 check(results.mix_30.at10s < results.mix_30.target + 2, `mix at +30/+30: guard brings it to ${results.mix_30.at10s} dBFS by 10 s (target ${results.mix_30.target})`);
 check(results.mix_30.peakDb <= -1.3, `mix at +30/+30: peak ${results.mix_30.peakDb} dBFS never over the ceiling`);
 check(results.mix_0.peakDb <= -1.3, `mix at 0/0: peak ${results.mix_0.peakDb} dBFS`);

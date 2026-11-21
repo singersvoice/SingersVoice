@@ -2,10 +2,11 @@
  * VoxForge parameter set. Mirrors the JUCE plugin layout (VoxForge-VST3-AU-JUCE/Source/PluginProcessor.cpp)
  * so presets round-trip between the web chain, the native plugin and the session mixer.
  *
- * Chain: input trim → pitch (octave/semitone/cents + chromatic auto-tune) → HPF → EQ (120 Hz shelf ·
- *        300 Hz low-mid peak · 1.2 kHz peak · presence peak at a chosen 2–5 kHz · 8 kHz air shelf) →
- *        compressor → parallel "punch" compression → de-esser (its band from a chosen 4–9 kHz) →
- *        exciter (air) → saturation → chorus/doubler → stereo delay → reverb → vocal rider → output gain.
+ * Chain: input trim → noise gate (the room turned down between phrases) → pitch (octave/semitone/cents +
+ *        chromatic auto-tune) → HPF → EQ (120 Hz shelf · 300 Hz low-mid peak · 1.2 kHz peak · presence
+ *        peak at a chosen 2–5 kHz · 8 kHz air shelf) → compressor → parallel "punch" compression →
+ *        de-esser (its band from a chosen 4–9 kHz) → exciter (air) → saturation → chorus/doubler →
+ *        stereo delay → reverb → vocal rider → output gain.
  *
  * The stages after the compressor are what turns a clean capture into a finished vocal: the parallel
  * compressor lifts every soft phrase without squashing the loud ones (punch without over-compression),
@@ -15,6 +16,8 @@
 export interface VoxForgeParams {
   inGain: number; // dB -24..24
   outGain: number; // dB -24..24
+  gtOn: boolean; // noise gate: the room (hiss, a fan) turned down while nobody sings, out of the way the moment somebody does
+  gtAmt: number; // 0..1 how far the room is turned down (1 = 24 dB)
   pitchOn: boolean;
   octave: number; // -2..2 (×12 st)
   pitchSt: number; // -12..12 semitones
@@ -73,6 +76,7 @@ export interface ParamRange {
 export const VOXFORGE_RANGES: Record<Exclude<keyof VoxForgeParams, `${string}On`>, ParamRange> = {
   inGain: { min: -24, max: 24, step: 0.5, unit: 'dB', label: 'Input trim' },
   outGain: { min: -24, max: 24, step: 0.5, unit: 'dB', label: 'Output gain' },
+  gtAmt: { min: 0, max: 1, step: 0.01, unit: '', label: 'Room turned down' },
   octave: { min: -2, max: 2, step: 1, unit: 'oct', label: 'Octave' },
   pitchSt: { min: -12, max: 12, step: 1, unit: 'st', label: 'Pitch' },
   pitchCt: { min: -100, max: 100, step: 1, unit: 'ct', label: 'Sharp' },
@@ -112,6 +116,8 @@ export const VOXFORGE_RANGES: Record<Exclude<keyof VoxForgeParams, `${string}On`
 export const VOXFORGE_DEFAULTS: VoxForgeParams = {
   inGain: 0,
   outGain: 0,
+  gtOn: true,
+  gtAmt: 0.75,
   pitchOn: true,
   octave: 0,
   pitchSt: 0,
@@ -153,10 +159,10 @@ export const VOXFORGE_DEFAULTS: VoxForgeParams = {
   dlFb: 0.25,
   dlMx: 0.25,
   rvOn: true,
-  rvSz: 0.4,
-  rvDc: 2.4,
-  rvPd: 0.02,
-  rvMx: 0.22,
+  rvSz: 0.3,
+  rvDc: 1.6,
+  rvPd: 0.025,
+  rvMx: 0.14,
 };
 
 export interface VoxForgePreset {
@@ -176,14 +182,14 @@ export const VOXFORGE_PRESETS: VoxForgePreset[] = [
   {
     id: 'studio',
     name: 'Studio',
-    blurb: 'Studio quality: clean low end, no mud, sharp presence, de-essed, air on top, held at one level.',
-    params: { hpfHz: 95, eqLow: -1, eqLm: -2, eqMid: 1, presHz: 3400, eqPres: 3.5, eqHi: 3, cThr: -20, cRat: 3, cMk: 5, pcOn: true, pcMx: 0.25, dsOn: true, dsAmt: 0.45, dsHz: 6000, exOn: true, exAmt: 0.35, rdOn: true, rdAmt: 0.6, rvSz: 0.35, rvDc: 1.8, rvMx: 0.16, rvPd: 0.025 },
+    blurb: 'Studio quality, up front: clean low end, no mud, sharp presence, de-essed, air on top, held at one level, a short plate behind.',
+    params: { hpfHz: 95, eqLow: -1, eqLm: -2, eqMid: 1, presHz: 3400, eqPres: 3.5, eqHi: 2.5, cThr: -20, cRat: 3, cMk: 5, pcOn: true, pcMx: 0.25, dsOn: true, dsAmt: 0.45, dsHz: 6000, exOn: true, exAmt: 0.3, rdOn: true, rdAmt: 0.6, rvSz: 0.28, rvDc: 1.3, rvMx: 0.1, rvPd: 0.03 },
   },
   {
     id: 'tune',
     name: 'Natural Tune',
-    blurb: 'Studio chain plus natural pitch correction: gentle, slow, keeps the vibrato.',
-    params: { autoStr: 0.75, autoSpeed: 0.35, hpfHz: 95, eqLow: -1, eqMid: 1, eqPres: 2.5, eqHi: 2, cThr: -20, cRat: 3, cMk: 5, pcOn: true, pcMx: 0.25, dsOn: true, dsAmt: 0.5, exOn: true, exAmt: 0.25, rdOn: true, rdAmt: 0.6, rvSz: 0.35, rvDc: 1.8, rvMx: 0.16, rvPd: 0.025 },
+    blurb: 'Studio chain plus natural pitch correction: gentle, slow, keeps the vibrato and the slides between notes.',
+    params: { autoStr: 0.6, autoSpeed: 0.25, hpfHz: 95, eqLow: -1, eqLm: -2, eqMid: 1, presHz: 3400, eqPres: 3, eqHi: 2.5, cThr: -20, cRat: 3, cMk: 5, pcOn: true, pcMx: 0.25, dsOn: true, dsAmt: 0.5, exOn: true, exAmt: 0.25, rdOn: true, rdAmt: 0.6, rvSz: 0.28, rvDc: 1.3, rvMx: 0.1, rvPd: 0.03 },
   },
   {
     id: 'punch',
@@ -213,7 +219,7 @@ export const VOXFORGE_PRESETS: VoxForgePreset[] = [
     id: 'popstar',
     name: 'Pop Star',
     blurb: 'Bright, tight, modern tune.',
-    params: { autoStr: 0.6, autoSpeed: 0.6, eqHi: 3, eqPres: 2, eqLow: -1.5, cThr: -22, cRat: 4, cMk: 5, dsOn: true, dsAmt: 0.5, exOn: true, exAmt: 0.25, rdOn: true, rdAmt: 0.5, rvMx: 0.18, dlOn: true, dlTm: 0.25, dlMx: 0.14 },
+    params: { autoStr: 0.7, autoSpeed: 0.55, eqHi: 3, eqPres: 2, eqLow: -1.5, cThr: -22, cRat: 4, cMk: 5, dsOn: true, dsAmt: 0.5, exOn: true, exAmt: 0.25, rdOn: true, rdAmt: 0.5, rvMx: 0.18, dlOn: true, dlTm: 0.25, dlMx: 0.14 },
   },
   {
     id: 'warm',

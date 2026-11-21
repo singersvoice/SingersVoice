@@ -2,6 +2,7 @@ import { createTrack, formatMs, nextSlot, planParts, singersLine, songTimeMs, SL
 import { effect, useSignal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
+import { bleedOffset, lagIsStrong, monoOf } from '../../audio/sync.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
@@ -161,6 +162,8 @@ export function Sing(props: { id?: string; joinId?: string }) {
   const [take, setTake] = useState<TakeResult | null>(null);
   const [headphones, setHeadphones] = useState<boolean | null>(null);
   const engineRef = useRef<AudioEngine | null>(null);
+  /** What the microphone heard of the track on the last take: the lag found beyond the device's figures (ms), or null. */
+  const [heardShift, setHeardShift] = useState<number | null>(null);
   const camera = useMemo(() => new Camera(), []);
   const feed = useMemo(() => new LocalFeed(), []);
   useEffect(() => {
@@ -464,11 +467,13 @@ export function Sing(props: { id?: string; joinId?: string }) {
       let vocal: Blob;
       let vocalOffsetMs = 0;
       let sampleRate = engine.ctx.sampleRate;
+      let pcm: Float32Array | null = null;
       if (engine.recorder?.recording) {
         const rec = await engine.recorder.stop();
         vocal = rec.wav;
         sampleRate = rec.sampleRate;
         vocalOffsetMs = (rec.startCtxTime - origin) * 1000;
+        pcm = rec.pcm;
       } else {
         vocal = new Blob([], { type: 'audio/wav' });
       }
@@ -482,7 +487,19 @@ export function Sing(props: { id?: string; joinId?: string }) {
       layers?.sync(0, 0, false);
       engine.closeMic();
       await keepAwake(false);
-      const latencyCompMs = Math.round(engine.roundTripMs);
+      let latencyCompMs = Math.round(engine.roundTripMs);
+      // What the microphone heard of the track (speakers), and the singer's own phrasing, laid against the track: a clear
+      // lag beyond the figures corrects this take and is remembered for this device and microphone (audio/sync.ts).
+      let heard: number | null = null;
+      if (pcm && player.buffer && !join && audio.tempo === 1 && audio.keyShift === 0) {
+        const found = bleedOffset(pcm, sampleRate, monoOf(player.buffer, 50), player.buffer.sampleRate, vocalOffsetMs - latencyCompMs);
+        if (found) {
+          heard = found.shiftMs;
+          latencyCompMs += found.shiftMs;
+          if (lagIsStrong(found.result)) engine.rememberDeviceLatency(Math.max(0, latencyCompMs - engine.chainLatencyMs), 'take');
+        }
+      }
+      setHeardShift(heard);
       setTake({ vocal, video, cutout, durationMs, vocalOffsetMs: Math.round(vocalOffsetMs), videoOffsetMs: videoOffsetMs === null ? null : Math.round(videoOffsetMs), cutoutOffsetMs, latencyCompMs, sampleRate, startedAtEpochMs: startedEpoch.current });
       setPhase('review');
     } catch (e) {
@@ -561,6 +578,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
         loaded={loaded}
         slot={stageSlot}
         join={join?.invite ?? null}
+        heardShift={heardShift}
         onAgain={() => {
           setTake(null);
           tMs.value = 0;
@@ -743,8 +761,11 @@ export function Review(props: {
   join?: JoinInvite | null;
   onSaved?: (summary: { performanceId: string; link?: string; videoLink?: string; state: 'temp' | 'kept' }) => void;
   againLabel?: string;
+  /** What the microphone heard of the track: the lag found beyond the device's figures (ms), when it was (audio/sync.ts). */
+  heardShift?: number | null;
 }) {
   const { take, loaded } = props;
+  const heardShift = props.heardShift ?? null;
   const [nudge, setNudge] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [saving, setSaving] = useState<{ label: string; fraction: number } | null>(null);
@@ -902,7 +923,10 @@ export function Review(props: {
               <input type="range" min={-300} max={300} step={10} value={nudge} onInput={(e) => setNudge(Number((e.currentTarget as HTMLInputElement).value))} />
             </div>
           </div>
-          <div class="small faint">Auto-aligned by the audio clock (offset {take.vocalOffsetMs} ms, latency comp {take.latencyCompMs} ms). Nudge if your voice lands early/late.</div>
+          <div class="small faint">
+            {heardShift !== null ? `Aligned by what the microphone heard of the track (${heardShift >= 0 ? '+' : ''}${heardShift} ms beyond the device's figures; remembered for this device). ` : 'Auto-aligned by the audio clock. '}
+            (offset {take.vocalOffsetMs} ms, latency comp {take.latencyCompMs} ms). Nudge if your voice still lands early or late.
+          </div>
         </div>
         <div class="grid-2">
           <button class="btn accent lg" disabled={saving !== null || savedState === 'kept'} onClick={() => void saveTake('kept')}>

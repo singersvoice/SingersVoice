@@ -7,7 +7,9 @@ import { dbLabel, INSTRUMENT_LEVELS } from '../components/MicStatus.tsx';
 import { PictureChoices } from '../components/PictureChoices.tsx';
 import { Page } from '../components/Shell.tsx';
 import { SongPrefsCard } from '../components/SongPrefs.tsx';
-import { Field, Seg, Switch } from '../components/ui.tsx';
+import { Field, Seg, Spinner, Switch } from '../components/ui.tsx';
+import { getEngine, readMeasuredLatency, writeMeasuredLatency } from '../audio/engine.ts';
+import { runSyncCheck } from '../audio/syncCheck.ts';
 import { DriveScopeMissingError, googleConfigured, loadGis } from '../lib/google.ts';
 import { idb, STORES } from '../lib/idb.ts';
 import { asset, go, href } from '../lib/nav.ts';
@@ -33,6 +35,31 @@ export function Settings() {
   const [quota, setQuota] = useState<{ used: number; total: number } | null>(null);
   const [links, setLinks] = useState(provider.value.links());
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+  const [measured, setMeasured] = useState(() => readMeasuredLatency());
+  /** The sync check: the microphone opened with the saved settings, the clicks, the figure — then the microphone closed again. */
+  const syncCheck = async () => {
+    setSyncBusy(true);
+    setSyncNote(null);
+    const engine = getEngine();
+    try {
+      await engine.resume();
+      const wasOpen = engine.micOpen.value;
+      if (!wasOpen) await engine.openMic({ deviceId: appSettings.peek().audioInputId || undefined, echoCancellation: false });
+      const r = await runSyncCheck(engine);
+      if (!wasOpen) engine.closeMic();
+      if (r.roundTripMs === null) setSyncNote('No clicks heard. On headphones? Then the delay is small and the browser’s figure is kept. On speakers: turn them up a little, keep the room quiet, and try again.');
+      else {
+        setMeasured(readMeasuredLatency());
+        setSyncNote(`Measured: ${r.roundTripMs} ms from the speakers to the microphone (clicks at ${r.lags.join(', ')} ms). Saved for this device — every recording and live mix uses it.`);
+      }
+    } catch (e) {
+      setSyncNote(`The check could not run: ${errorText(e)}`);
+    } finally {
+      setSyncBusy(false);
+    }
+  };
   const [cams, setCams] = useState<MediaDeviceInfo[]>([]);
   const [version, setVersion] = useState<Version | null>(null);
 
@@ -235,6 +262,21 @@ export function Settings() {
             </Field>
           )}
           <Switch checked={audio.monitor} onChange={(v) => updateAudio({ monitor: v })} label="Hear myself while singing" hint="Headphones only." />
+          <Field label="Sync: your voice on the beat" hint="Your speakers and microphone add a delay the browser cannot see — Bluetooth adds a lot. Turn the speakers up a little, keep quiet, and tap: four clicks go out and the microphone times them; the figure puts your voice on the beat in every recording and live mix on this device. With headphones on nothing is heard, and the browser's own figure is kept (it is good for wired headphones). Each take also measures it from what the microphone heard of the track.">
+            <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+              <button class="btn" disabled={syncBusy} data-sync-check onClick={() => void syncCheck()}>
+                {syncBusy ? <Spinner /> : null} {syncBusy ? 'Listening…' : 'Check the sync'}
+              </button>
+              <span class="small muted" data-sync-result>
+                {syncNote ?? (measured ? `Measured: ${measured.ms} ms (${measured.how === 'take' ? 'from a take' : 'the sync check'}${measured.input ? `, ${measured.input}` : ''}).` : 'Not measured yet — the browser’s figure is used.')}
+              </span>
+              {measured && (
+                <button class="btn sm" onClick={() => (writeMeasuredLatency(null), setMeasured(null), setSyncNote('Forgotten — the browser’s figure is used.'))}>
+                  Forget
+                </button>
+              )}
+            </div>
+          </Field>
           <Field label={`Backing level in your ears ${Math.round(audio.backingGain * 100)}%`} hint="Only what you hear while singing. The show, the recording and the audience get the track at its own balance (Track / Vocal volume on the stage).">
             <input type="range" min={0} max={1} step={0.01} value={audio.backingGain} onInput={(e) => updateAudio({ backingGain: Number((e.currentTarget as HTMLInputElement).value) })} />
           </Field>
