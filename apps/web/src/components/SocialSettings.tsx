@@ -126,7 +126,7 @@ export function SocialSettings() {
               </>
             ) : (
               <span class="small faint" data-social-unconfigured="x">
-                Not available yet: the SingersVoice admin has to connect SingersVoice to X first (docs/SOCIAL.md — a few minutes). Then <b>Connect X</b> appears here.
+                Not switched on yet — the SingersVoice admin does that on the Admin page (<i>Social posting</i>). <b>Connect X</b> appears here the moment it is.
               </span>
             )}
           </div>
@@ -151,7 +151,7 @@ export function SocialSettings() {
               </>
             ) : (
               <span class="small faint" data-social-unconfigured="meta">
-                Not available yet: the SingersVoice admin has to connect SingersVoice to Facebook and Instagram first (docs/SOCIAL.md). Then <b>Connect Facebook &amp; Instagram</b> appears here.
+                Not switched on yet — the SingersVoice admin does that on the Admin page (<i>Social posting</i>). <b>Connect Facebook &amp; Instagram</b> appears here the moment it is.
               </span>
             )}
           </div>

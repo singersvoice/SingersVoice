@@ -46,7 +46,7 @@ describe('the feature search', () => {
   });
   it('every feature has a path into the app, a place, and words', () => {
     for (const f of FEATURES) {
-      expect(f.path).toMatch(/^\/[a-z/-]*(#[a-z]+|\?tab=[a-z]+)?$/);
+      expect(f.path).toMatch(/^\/[a-z/-]*(#[a-z-]+|\?tab=[a-z]+)?$/);
       expect(f.where.length).toBeGreaterThan(0);
       expect(f.keywords.length).toBeGreaterThan(0);
       expect(JSON.stringify(f).toLowerCase()).not.toContain('karaoke');

@@ -55,6 +55,7 @@ export const FEATURES: Feature[] = [
   // ---- Admin ----
   { title: 'Admin', where: 'Admin', keywords: ['admin', 'accounts', 'users', 'roles', 'super admin', 'grant a plan', 'revoke', 'block for good'], path: '/admin', when: () => isSuperAdmin.value },
   { title: 'Plans & payments (admin)', where: 'Admin → Plans & payments', keywords: ['prices', 'offers', 'promo codes', 'coupons', 'payments', 'refund', 'subscribers', 'stripe', 'billing'], path: '/admin#billing', when: () => isSuperAdmin.value },
+  { title: 'Social posting (admin)', where: 'Admin → Social posting', keywords: ['x', 'facebook', 'instagram', 'meta', 'developer app', 'client id', 'app secret', 'switch on posting', 'register'], path: '/admin#social-apps', when: () => isSuperAdmin.value },
   { title: 'Coupons (the gate)', where: 'Admin → Coupons', keywords: ['coupon', 'gate', 'who may use', 'invite', 'access'], path: '/admin/coupons', when: () => isSuperAdmin.value },
   // ---- the rest ----
   { title: 'Home', where: 'Home', keywords: ['home', 'start', 'main'], path: '/home' },

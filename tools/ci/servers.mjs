@@ -60,7 +60,8 @@ export async function startServers({ base = '/SingersVoice/', logDir = process.e
       COUPONS_REQUIRED: process.env.COUPONS_REQUIRED ?? '0', // the coupon gate is tried in its own e2e; every other e2e signs its singers in without one
       // YouTube stands in for itself: the control server's own fake ingestion endpoint keeps the segments in a directory.
       ...(fakeYoutubeDir ? { SV_FAKE_YOUTUBE_DIR: fakeYoutubeDir, YOUTUBE_HLS_BASE: `http://localhost:${controlPort}/fake/youtube/http_upload_hls` } : {}),
-      ...(social ? { SV_SOCIAL_FAKE: social.url, X_CLIENT_ID: 'fake-x-id', X_CLIENT_SECRET: 'fake-x-secret', META_APP_ID: 'fake-meta-id', META_APP_SECRET: 'fake-meta-secret', SERVICE_URL: `http://localhost:${controlPort}` } : {}),
+      // The networks' endpoints only: the ids and secrets are pasted on the Admin page by the e2e (as the operator does).
+      ...(social ? { SV_SOCIAL_FAKE: social.url, SERVICE_URL: `http://localhost:${controlPort}` } : {}),
     },
   });
   run('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], { name: 'web', cwd: path.resolve('apps/web'), env: { ...process.env, BASE_PATH: base } });

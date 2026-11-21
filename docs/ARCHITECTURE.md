@@ -560,7 +560,11 @@ is kept when Settings → Social says so) offers Share… (the Web Share API wit
 sheet), Download, the networks' composers on a computer (X's intent URL, Facebook's sharer with the
 performance's link), and Post to the networks connected — the main path; with none connected the sheet
 leads to Settings → Social. Only what an app may post to is offered: X, a Facebook Page, an Instagram
-professional account — never a personal profile, a personal Instagram account or Snapchat (no API). Connecting is the network's own OAuth: `POST /social/:provider/connect` makes the state (and
+professional account — never a personal profile, a personal Instagram account or Snapchat (no API).
+How SingersVoice itself is registered with the networks is the super admin's Admin → Social posting:
+the id and the secret each network gave, pasted into two boxes (`PUT /admin/social`; `settings` key
+`social`, the secret sealed; the Admin page shows the callbacks to copy), which wins over the
+environment's `X_CLIENT_ID`… and switches Connect on for every singer at once. Connecting is the network's own OAuth: `POST /social/:provider/connect` makes the state (and
 X's PKCE pair), keeps them in `social_states` and answers the authorize URL; the network sends the
 browser to `GET /social/:provider/callback` on the service (no sign-in of ours — the state is the
 credential, taken once within a quarter hour, and only at its own provider's door), which trades the code

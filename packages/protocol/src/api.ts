@@ -8,7 +8,7 @@ import type { AdminBillingOverview, BillingSettings, ClubStatus, OrderRecord, Pl
 import type { PaymentRecord } from './roles.ts';
 import type { AdminCouponsResponse, Coupon, CouponSettings } from './coupons.ts';
 import type { PlanOffer, PlanOfferInput, PromoCode, PromoCodeInput, PromoPreview } from './offers.ts';
-import type { SocialNetwork, SocialPost, SocialStatus } from './social.ts';
+import type { AdminSocialStatus, AdminSocialUpdate, SocialNetwork, SocialPost, SocialStatus } from './social.ts';
 import type { RegisterTrackRequest, TrackAccessRequest, TrackCopyRequest, TrackHistoryResponse, TrackMetaPatch, TrackRecord, TrackSearchResponse } from './registry.ts';
 import type { Bookmark, BookmarkInput, SongPrefs, StageBookmark } from './prefs.ts';
 import type { YtFetchRequest, YtJob, YtSearchResponse, YtStatus } from './ytTracks.ts';
@@ -246,6 +246,9 @@ export interface Routes {
   'POST /social/posts': { req: { network: SocialNetwork; text: string; title: string; performanceId?: string; clipMs: number }; res: { post: SocialPost } };
   'GET /social/posts/:id': { res: { post: SocialPost } };
   'GET /social/posts': { res: { posts: SocialPost[] } };
+  /** How SingersVoice is registered with X and Meta (social.ts): the ids and secrets the super admin pastes on the Admin page; the callbacks to give the networks. */
+  'GET /admin/social': { res: AdminSocialStatus };
+  'PUT /admin/social': { req: AdminSocialUpdate; res: AdminSocialStatus };
   /** The offers (the ways to pay for a plan) and the promo codes, kept by the super admin (offers.ts). */
   'POST /admin/offers': { req: PlanOfferInput; res: { offer: PlanOffer } };
   'PATCH /admin/offers/:id': { req: PlanOfferInput; res: { offer: PlanOffer } };

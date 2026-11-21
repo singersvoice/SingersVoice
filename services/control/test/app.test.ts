@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { AdminBillingOverview, AdminCouponsResponse, BillingSettings, BlockedUser, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlanOffer, PlansResponse, PromoCode, PromoPreview, SocialPost, SocialStatus, UserRecord } from '@singersvoice/protocol';
+import type { AdminBillingOverview, AdminCouponsResponse, AdminSocialStatus, BillingSettings, BlockedUser, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlanOffer, PlansResponse, PromoCode, PromoPreview, SocialPost, SocialStatus, UserRecord } from '@singersvoice/protocol';
 import { LIVE_KEEP } from '@singersvoice/protocol';
 import { createApp, type AppDeps } from '../src/app.ts';
 import { edgeCacheControl, edgeCacheTtl } from '../src/worker.ts';
@@ -1367,6 +1367,49 @@ describe('sv-control API', () => {
     expect(after.promos.map((p) => p.code).sort()).toEqual(['FREE3', 'OFFCODE', 'SAVE20', 'TENOFF']);
     expect((await app.request('/admin/offers/off-nope', { method: 'PATCH', headers: as('alice'), body: '{}' })).status).toBe(404);
     expect((await app.request('/admin/promos/NOPE', { method: 'PATCH', headers: as('alice'), body: '{}' })).status).toBe(404);
+  });
+
+  it("social (admin): the super admin pastes the networks' ids and secrets on the Admin page — posting switches on for every singer at once, the secret is sealed and never answered, the callbacks are the service's own", async () => {
+    const asked: { url: string; headers: Headers }[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      asked.push({ url, headers: new Headers(init?.headers) });
+      if (url.startsWith('https://x.fake/2/oauth2/token')) return Response.json({ access_token: 'xat', refresh_token: 'xrt', expires_in: 7200 });
+      if (url.startsWith('https://x.fake/2/users/me')) return Response.json({ data: { id: 'x-9', username: 'pasted', name: 'Pasted' } });
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    deps.social = { serviceUrl: 'https://svc.test', fetchImpl, xApi: 'https://x.fake', xAuthorize: 'https://x.fake/authorize' };
+    try {
+      expect((await app.request('/admin/social', { headers: as('bob') })).status).toBe(403);
+      const off = await json<AdminSocialStatus>(await app.request('/admin/social', { headers: as('alice') }));
+      expect(off).toMatchObject({ x: { clientId: '', secretSet: false, fromEnv: false }, meta: { appId: '', secretSet: false, fromEnv: false }, callbacks: { x: 'https://svc.test/social/x/callback', meta: 'https://svc.test/social/meta/callback' } });
+      expect((await json<SocialStatus>(await app.request('/social', { headers: as('lara') }))).configured).toEqual({ x: false, meta: false });
+      expect((await json<{ code: string }>(await app.request('/social/x/connect', { method: 'POST', headers: as('lara'), body: '{}' }))).code).toBe('social_unconfigured');
+      // An id without its secret is refused; the pair switches X on.
+      expect((await app.request('/admin/social', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ xClientId: 'pasted-id' }) })).status).toBe(400);
+      const on = await json<AdminSocialStatus>(await app.request('/admin/social', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ xClientId: ' pasted-id ', xClientSecret: 'pasted-secret' }) }));
+      expect(on.x).toEqual({ clientId: 'pasted-id', secretSet: true, fromEnv: false });
+      expect(JSON.stringify(on)).not.toContain('pasted-secret');
+      expect((await json<SocialStatus>(await app.request('/social', { headers: as('lara') }))).configured).toEqual({ x: true, meta: false });
+      // The sign-in uses what was pasted: the id on the authorize page, the secret on the token request.
+      const start = await json<{ url: string }>(await app.request('/social/x/connect', { method: 'POST', headers: as('lara'), body: JSON.stringify({ appUrl: 'https://singersvoice.github.io/SingersVoice/' }) }));
+      const su = new URL(start.url);
+      expect(su.searchParams.get('client_id')).toBe('pasted-id');
+      expect(su.searchParams.get('redirect_uri')).toBe('https://svc.test/social/x/callback');
+      const cb = await app.request(`/social/x/callback?code=abc&state=${su.searchParams.get('state')}`);
+      expect(cb.status).toBe(302);
+      expect(asked.find((a) => a.url.startsWith('https://x.fake/2/oauth2/token'))!.headers.get('authorization')).toBe(`Basic ${btoa('pasted-id:pasted-secret')}`);
+      expect((await json<SocialStatus>(await app.request('/social', { headers: as('lara') }))).connections.map((c) => c.handle)).toEqual(['@pasted']);
+      // What the deploy's environment set shows as such, and what is pasted wins over it; an empty id switches a provider off.
+      deps.social = { ...deps.social, metaAppId: 'env-meta', metaAppSecret: 'env-secret' };
+      expect((await json<AdminSocialStatus>(await app.request('/admin/social', { headers: as('alice') }))).meta).toEqual({ appId: 'env-meta', secretSet: true, fromEnv: true });
+      const cleared = await json<AdminSocialStatus>(await app.request('/admin/social', { method: 'PUT', headers: as('alice'), body: JSON.stringify({ xClientId: '' }) }));
+      expect(cleared.x).toEqual({ clientId: '', secretSet: false, fromEnv: false });
+      expect((await json<SocialStatus>(await app.request('/social', { headers: as('lara') }))).configured).toEqual({ x: false, meta: true });
+      await app.request('/social/x', { method: 'DELETE', headers: as('lara') });
+    } finally {
+      delete deps.social;
+    }
   });
 
   it('social: a singer connects X and a Facebook Page (with its Instagram account) by the networks\' own sign-in — the state once, the secret and the tokens on the service only — and posts a clip from here: X in chunks then a post, the Page in one upload, Instagram into a container that is published when processed; the tokens are renewed and dropped', async () => {

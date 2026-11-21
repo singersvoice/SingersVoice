@@ -113,3 +113,20 @@ export function clampClip(fromMs: number, toMs: number, durationMs: number, maxS
   if (b - a > maxMs) b = a + maxMs;
   return { fromMs: a, toMs: b };
 }
+
+/** `GET /admin/social`: how SingersVoice is registered with the networks (the super admin's page); secrets are never answered, only whether one is set. */
+export interface AdminSocialStatus {
+  x: { clientId: string; secretSet: boolean; fromEnv: boolean };
+  meta: { appId: string; secretSet: boolean; fromEnv: boolean };
+  /** The addresses to paste into the networks' developer pages as the way back. */
+  callbacks: { x: string; meta: string };
+  updatedAt: string | null;
+}
+
+/** `PUT /admin/social`: an id and its secret for a provider (both given); an empty id takes the provider's pair away. */
+export interface AdminSocialUpdate {
+  xClientId?: string;
+  xClientSecret?: string;
+  metaAppId?: string;
+  metaAppSecret?: string;
+}

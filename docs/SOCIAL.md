@@ -34,14 +34,13 @@ goes into the repository.
 
 ## Setting it up (once, by the operator)
 
-Everything here ends in **GitHub → your repository → Settings → Secrets and variables → Actions → New
-repository secret**. The *Deploy sv-control* workflow (it runs on every push, or from the Actions tab →
-*Deploy sv-control* → *Run workflow*) puts every secret it finds on the service. `SERVICE_URL` — the
-address the networks send the browser back to — is set by the deploy to the service's own URL; nothing
-to do unless the service lives at a custom domain (then a repo **variable** `SERVICE_URL` with it).
-
-You need the service's address for both forms below: open the app → Settings; a super admin sees it
-under *Live services (SVT DB)* as the Service URL (it looks like `https://sv-control.<name>.workers.dev`).
+Everything ends on the app's **Admin page → Social posting**: two boxes per network (the id and the
+secret the network gives you), **Save**, and every singer finds **Connect** in Settings → Social at
+once — no deploy, nothing in the repo (the secret is sealed on the service and never shown again). The
+Admin page also shows, with a **Copy** button, the exact address each network asks for as "the way
+back" (the callback), so nothing has to be typed. (The GitHub way still works too: repository secrets
+`X_CLIENT_ID`, `X_CLIENT_SECRET`, `META_APP_ID`, `META_APP_SECRET`, which the *Deploy sv-control*
+workflow puts on the service; what is pasted on the Admin page wins over them.)
 
 ### X (10 minutes)
 
@@ -51,15 +50,13 @@ under *Live services (SVT DB)* as the Service URL (it looks like `https://sv-con
 2. In the app's **Settings** tab, find **User authentication settings** → **Set up**:
    - App permissions: **Read and write**.
    - Type of App: **Web App, Automated App or Bot**.
-   - Callback URI: `https://<the service's address>/social/x/callback` — exactly that, with the service's
-     own address.
+   - Callback URI: the address under **The way back** on Admin → Social posting → X (Copy, paste).
    - Website URL: `https://www.singersvoice.com`.
    - Save.
 3. In the app's **Keys and tokens** tab, under **OAuth 2.0 Client ID and Client Secret**, copy the two
    values (regenerate the secret if it is not shown).
-4. In GitHub, add two repository secrets: `X_CLIENT_ID` and `X_CLIENT_SECRET`.
-5. Run *Deploy sv-control* (Actions → Deploy sv-control → Run workflow) — or just push. Open Settings →
-   Social: **Connect X** is there. Tap it, approve on X's page, and your handle shows.
+4. Admin → Social posting → X: paste them into the two boxes → **Save**. The chip says *on*.
+5. Settings → Social: **Connect X** is there. Tap it, approve on X's page, and your handle shows.
 
 ### Meta — Facebook Pages and Instagram (30 minutes, then Meta's review)
 
@@ -67,12 +64,12 @@ under *Live services (SVT DB)* as the Service URL (it looks like `https://sv-con
    integration → **My Apps** → **Create App**. Use case: **Other** → type **Business** → a name (say
    "SingersVoice") → create.
 2. In the app's dashboard, **Add product** → **Facebook Login for Business** → Set up. Under its
-   **Settings**: *Valid OAuth Redirect URIs*: `https://<the service's address>/social/meta/callback`
-   (exactly that). Save.
+   **Settings**: *Valid OAuth Redirect URIs*: the address under **The way back** on Admin → Social
+   posting → Facebook & Instagram (Copy, paste). Save.
 3. **App settings → Basic**: copy the **App ID** and the **App Secret** (Show). Add the **Privacy Policy
    URL** `https://www.singersvoice.com/privacy.html` and the **Terms of Service URL**
    `https://www.singersvoice.com/terms.html` (Meta needs both before the app can go live).
-4. In GitHub, add two repository secrets: `META_APP_ID` and `META_APP_SECRET`. Run *Deploy sv-control*.
+4. Admin → Social posting → Facebook & Instagram: paste the two values → **Save**.
 5. **Try it at once**: while the app is in *Development* mode, it works for the app's own admins,
    developers and testers — add yourself and any tester under **App roles**. Settings → Social →
    **Connect Facebook & Instagram** → approve → pick the Page if you manage several. A Page you manage
@@ -89,8 +86,8 @@ under *Live services (SVT DB)* as the Service URL (it looks like `https://sv-con
 
 ### Checking
 
-- Settings → Social shows **Connect X** / **Connect Facebook & Instagram** once the secrets are on the
-  service; without them it says the admin has to connect SingersVoice to the network first.
+- Settings → Social shows **Connect X** / **Connect Facebook & Instagram** the moment the Admin page has
+  the pair; without it the row says the admin has not switched posting on yet.
 - The whole flow runs in CI against stand-ins for both networks (`tools/ci/social-e2e.mjs`,
   `tools/ci/fake-social.mjs`); the service side with fakes of the networks' answers
   (`services/control/test/app.test.ts`, "social").

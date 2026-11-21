@@ -139,10 +139,34 @@ try {
   await page.screenshot({ path: `${out}/clip-ready.png` });
   await sheet.getByRole('button', { name: 'Close' }).click();
 
-  // ---- Settings → Social: X and Facebook & Instagram connected through the networks' pages ----
+  // ---- Settings → Social before the admin switched posting on: the rows say so, no Connect ----
   await page.goto(`${base}settings?${control}#social`, { waitUntil: 'networkidle' });
   await page.locator('[data-social-networks]').waitFor();
   check((await page.locator('[data-social-row]').count()) === 3 && (await page.locator('[data-social-row="snapchat"]').count()) === 0 && /personal account cannot be posted to by any app/.test(await page.locator('[data-social-row="instagram"]').innerText()), 'the Social section lists X, Facebook Page and Instagram — nothing that cannot be posted to (no Snapchat)');
+  check((await page.locator('[data-social-unconfigured="x"]').count()) === 1 && (await page.locator('[data-social-connect="x"]').count()) === 0 && /Admin page/.test(await page.locator('[data-social-unconfigured="x"]').innerText()), 'before the admin switches posting on, the row says so and points at the Admin page');
+
+  // ---- Admin → Social posting: the operator pastes what X and Meta gave (the fakes' ids); the callbacks are shown to copy ----
+  await page.goto(`${base}admin?${control}#social-apps`, { waitUntil: 'networkidle' });
+  await page.locator('[data-social-app="x"]').waitFor({ timeout: 30000 });
+  check((await page.locator('[data-social-app-state="off"]').count()) === 2, 'the Admin page shows both networks off');
+  check((await page.locator('[data-social-app-callback="x"]').innerText()).trim() === `${servers.controlUrl}/social/x/callback` && (await page.locator('[data-social-app-callback="meta"]').innerText()).trim() === `${servers.controlUrl}/social/meta/callback`, "the way back for each network is the service's own callback, shown to copy");
+  await page.locator('[data-social-app-id="x"]').fill('fake-x-id');
+  check(await page.locator('[data-social-app-save="x"]').isDisabled(), 'Save waits for the secret too');
+  await page.locator('[data-social-app-secret="x"]').fill('fake-x-secret');
+  await page.locator('[data-social-app-save="x"]').click();
+  await page.locator('[data-social-app="x"] [data-social-app-state="on"]').waitFor({ timeout: 15000 });
+  await page.locator('[data-social-app-id="meta"]').fill('fake-meta-id');
+  await page.locator('[data-social-app-secret="meta"]').fill('fake-meta-secret');
+  await page.locator('[data-social-app-save="meta"]').click();
+  await page.locator('[data-social-app="meta"] [data-social-app-state="on"]').waitFor({ timeout: 15000 });
+  check((await page.locator('[data-social-app-secret="x"]').inputValue()) === '' && !/fake-x-secret|fake-meta-secret/.test(await page.content()), 'saved: both on; the secrets are gone from the page and never come back');
+  check(!/fake-x-secret/.test(JSON.stringify(await page.evaluate(async (url) => (await fetch(`${url}/admin/social`, { headers: { 'X-Dev-User': 'alice', 'X-Dev-Name': 'alice' } })).json(), servers.controlUrl))), 'the service answers whether a secret is set, never the secret');
+  await page.screenshot({ path: `${out}/admin-social.png`, fullPage: true });
+
+  // ---- Settings → Social: Connect is there now; X and Facebook & Instagram connected through the networks' pages ----
+  await page.goto(`${base}settings?${control}#social`, { waitUntil: 'networkidle' });
+  await page.locator('[data-social-connect="x"]').waitFor({ timeout: 20000 });
+  check(true, 'the moment the admin saved, singers find Connect X and Connect Facebook & Instagram');
   await page.locator('[data-social-connect="x"]').click();
   await page.waitForURL(/\/settings/, { timeout: 30000 });
   await page.locator('[data-social-handle="x"]').waitFor({ timeout: 30000 });

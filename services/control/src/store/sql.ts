@@ -136,6 +136,14 @@ const promoFromRow = (r: PromoRow): PromoCode => {
   }
   return cleanPromo({ code: r.code, kind: r.kind as PromoCode['kind'], value: Number(r.value), currency: r.currency, plans: plans as PlanId[], duration: r.duration as PromoCode['duration'], freePeriods: Number(r.free_periods), maxUses: Number(r.max_uses), uses: Number(r.uses), validUntil: r.valid_until, active: Number(r.active) !== 0, note: r.note, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at })!;
 };
+/** The networks' developer-app ids and secrets as the Admin page keeps them (`settings` key `social`; the secrets sealed). */
+export interface SocialApps {
+  xClientId: string;
+  xClientSecretSealed: string;
+  metaAppId: string;
+  metaAppSecretSealed: string;
+  updatedAt: string | null;
+}
 /** A connected network as kept: the tokens sealed (SecretBox), opened only to post. */
 export interface SocialAccountRow {
   userId: string;
@@ -659,6 +667,21 @@ export class SqlStore {
   }
 
   // ---------- social (social.ts): connected networks (tokens sealed), sign-ins under way, posts ----------
+
+  /** How SingersVoice is registered with the networks, as the super admin pasted it (the secrets sealed); empty when the env alone says. */
+  async getSocialApps(): Promise<SocialApps> {
+    const r = await this.db.get<{ value: string; updated_at: string }>("SELECT value, updated_at FROM settings WHERE key='social'", []);
+    const v = r ? (JSON.parse(r.value) as Partial<SocialApps>) : {};
+    return { xClientId: String(v.xClientId ?? ''), xClientSecretSealed: String(v.xClientSecretSealed ?? ''), metaAppId: String(v.metaAppId ?? ''), metaAppSecretSealed: String(v.metaAppSecretSealed ?? ''), updatedAt: r?.updated_at ?? null };
+  }
+
+  async setSocialApps(patch: Partial<Omit<SocialApps, 'updatedAt'>>): Promise<SocialApps> {
+    const cur = await this.getSocialApps();
+    const next = { xClientId: patch.xClientId ?? cur.xClientId, xClientSecretSealed: patch.xClientSecretSealed ?? cur.xClientSecretSealed, metaAppId: patch.metaAppId ?? cur.metaAppId, metaAppSecretSealed: patch.metaAppSecretSealed ?? cur.metaAppSecretSealed };
+    const now = new Date().toISOString();
+    await this.db.run("INSERT INTO settings (key, value, updated_at) VALUES ('social', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", [JSON.stringify(next), now]);
+    return { ...next, updatedAt: now };
+  }
 
   async listSocialAccounts(userId: string): Promise<SocialAccountRow[]> {
     const rows = await this.db.all<SocialAccountDb>('SELECT * FROM social_accounts WHERE user_id=? ORDER BY network', [userId]);

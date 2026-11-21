@@ -90,6 +90,8 @@ import {
   type PromoCodeInput,
   CAPTION_MAX,
   SOCIAL_NETWORKS,
+  type AdminSocialStatus,
+  type AdminSocialUpdate,
   type SocialNetwork,
   type SocialPage,
   type SocialPost,
@@ -124,7 +126,7 @@ import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.
 import { fetchPublicDriveFile } from './driveFiles.ts';
 import { chargeFacts, createCheckoutSession, createCoupon, createPortalSession, createRefund, retrieveCheckoutSession, retrieveSubscription, stripeConfigured, subscriptionKeepsPlan, unixIso, verifyStripeSignature, type BillingConfig, type StripeCheckoutSession, type StripeSubscription } from './billing.ts';
 import { relayJson, relayNote, relaySegment, relayStart, relayStop, type RelayConfig, type RelayOutcome, type RelayTarget } from './relay.ts';
-import type { SqlStore, StoredParticipant } from './store/sql.ts';
+import type { SocialApps, SqlStore, StoredParticipant } from './store/sql.ts';
 
 export const DEFAULT_ICE_SERVERS: IceServer[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 
@@ -2053,9 +2055,25 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 
   // ---------- Social (social.ts): the networks a singer posts clips to ----------
 
-  const socialOf = (deps: AppDeps): SocialConfig => deps.social ?? {};
+  /**
+   * How SingersVoice is registered with the networks: what the super admin pasted on the Admin page (`settings` key
+   * `social`, the secrets sealed) over what the environment says (X_CLIENT_ID… — the deploy's secrets); the endpoints
+   * and the service's address are the environment's.
+   */
+  const socialOf = async (deps: AppDeps): Promise<SocialConfig> => {
+    const env = deps.social ?? {};
+    const apps = await deps.store.getSocialApps();
+    const open = async (sealed: string) => (sealed ? await deps.secrets.open(sealed).catch(() => '') : '');
+    return {
+      ...env,
+      xClientId: apps.xClientId || env.xClientId,
+      xClientSecret: apps.xClientId ? await open(apps.xClientSecretSealed) : env.xClientSecret,
+      metaAppId: apps.metaAppId || env.metaAppId,
+      metaAppSecret: apps.metaAppId ? await open(apps.metaAppSecretSealed) : env.metaAppSecret,
+    };
+  };
   /** Where the networks send the browser back: the service's own address (SERVICE_URL, else this request's origin) and the provider's callback. */
-  const socialRedirect = (c: Context<Env>, deps: AppDeps, provider: 'x' | 'meta'): string => `${(socialOf(deps).serviceUrl ?? new URL(c.req.url).origin).replace(/\/$/, '')}/social/${provider}/callback`;
+  const socialRedirect = (c: Context<Env>, deps: AppDeps, provider: 'x' | 'meta'): string => `${(deps.social?.serviceUrl ?? new URL(c.req.url).origin).replace(/\/$/, '')}/social/${provider}/callback`;
   const socialStatus = async (deps: AppDeps, userId: string): Promise<SocialStatus> => {
     const accounts = await deps.store.listSocialAccounts(userId);
     let pagesToPick: SocialPage[] = [];
@@ -2067,8 +2085,9 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         pagesToPick = [];
       }
     }
+    const cfg = await socialOf(deps);
     return {
-      configured: { x: xConfigured(deps.social), meta: metaConfigured(deps.social) },
+      configured: { x: xConfigured(cfg), meta: metaConfigured(cfg) },
       // X renews its tokens itself (the refresh token): no expiry to show; a Page's token does not expire.
       connections: accounts.map((a) => ({ network: a.network, handle: a.handle, targetId: a.targetId, connectedAt: a.connectedAt, expiresAt: a.network === 'x' ? null : a.expiresAt })),
       pagesToPick,
@@ -2091,8 +2110,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const user = c.get('user');
     const provider = c.req.param('provider');
     if (provider !== 'x' && provider !== 'meta') return err(c, 404, 'no_provider', 'Connect X, or Facebook and Instagram (meta)');
-    const cfg = socialOf(deps);
-    if (provider === 'x' ? !xConfigured(cfg) : !metaConfigured(cfg)) return err(c, 409, 'social_unconfigured', `${provider === 'x' ? 'X' : 'Facebook and Instagram'} posting is not set up on this service — on your phone, Share takes the clip to the app instead`);
+    const cfg = await socialOf(deps);
+    if (provider === 'x' ? !xConfigured(cfg) : !metaConfigured(cfg)) return err(c, 409, 'social_unconfigured', `Posting to ${provider === 'x' ? 'X' : 'Facebook and Instagram'} is not switched on yet — the SingersVoice admin does that on the Admin page (Social posting)`);
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { appUrl?: string };
     const appUrl = billingFor(c, deps, body.appUrl).appUrl;
     const redirectUri = socialRedirect(c, deps, provider);
@@ -2121,7 +2140,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const denied = c.req.query('error') ?? '';
     const code = c.req.query('code') ?? '';
     if (denied || !code) return back(false, c.req.query('error_description') ?? denied ?? 'no code');
-    const cfg = socialOf(deps);
+    const cfg = await socialOf(deps);
     try {
       if (provider === 'x') {
         const t = await xExchange(cfg, { code, redirectUri: st.redirectUri, verifier: st.verifier });
@@ -2171,7 +2190,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const network = c.req.param('network') as SocialNetwork;
     if (!SOCIAL_NETWORKS.includes(network)) return err(c, 404, 'no_network', 'No such network');
     const a = await deps.store.getSocialAccount(user.userId, network);
-    if (a && network === 'x') await deps.secrets.open(a.sealedToken).then((t) => xRevoke(socialOf(deps), t)).catch(() => undefined);
+    if (a && network === 'x') await deps.secrets.open(a.sealedToken).then(async (t) => xRevoke(await socialOf(deps), t)).catch(() => undefined);
     await deps.store.deleteSocialAccount(user.userId, network);
     if (network === 'facebook') await deps.store.deleteSocialAccount(user.userId, 'instagram');
     if (network === 'instagram') await deps.store.deleteSocialAccount(user.userId, 'facebook');
@@ -2183,7 +2202,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   const xToken = async (deps: AppDeps, a: { userId: string; sealedToken: string; sealedRefresh: string | null; expiresAt: string | null }): Promise<string> => {
     const token = await deps.secrets.open(a.sealedToken);
     if (!a.expiresAt || Date.parse(a.expiresAt) - Date.now() > 120_000 || !a.sealedRefresh) return token;
-    const t = await xRefresh(socialOf(deps), await deps.secrets.open(a.sealedRefresh));
+    const t = await xRefresh(await socialOf(deps), await deps.secrets.open(a.sealedRefresh));
     await deps.store.setSocialTokens(a.userId, 'x', { sealedToken: await deps.secrets.seal(t.accessToken), sealedRefresh: t.refreshToken ? await deps.secrets.seal(t.refreshToken) : a.sealedRefresh, expiresAt: t.expiresAt });
     return t.accessToken;
   };
@@ -2194,9 +2213,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (!a) return (await deps.store.updateSocialPost(post.postId, { status: 'failed', note: 'Instagram is no longer connected' }))!;
     try {
       const token = await deps.secrets.open(a.sealedToken);
-      const st = await igContainerStatus(socialOf(deps), token, post.externalId);
+      const cfg = await socialOf(deps);
+      const st = await igContainerStatus(cfg, token, post.externalId);
       if (st.status === 'FINISHED') {
-        const r = await igPublish(socialOf(deps), token, a.targetId, post.externalId);
+        const r = await igPublish(cfg, token, a.targetId, post.externalId);
         return (await deps.store.updateSocialPost(post.postId, { status: 'posted', externalId: r.id, url: r.url ?? `https://www.instagram.com/${encodeURIComponent(a.handle)}/`, note: '' }))!;
       }
       if (st.status === 'ERROR' || st.status === 'EXPIRED') return (await deps.store.updateSocialPost(post.postId, { status: 'failed', note: `Instagram could not take the video${st.note ? ` (${st.note})` : ''}` }))!;
@@ -2235,7 +2255,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const mime = /^video\/(mp4|webm|quicktime)$/.test(clip.type) ? clip.type : 'video/mp4';
     const bytes = new Uint8Array(await clip.arrayBuffer());
     let post = await deps.store.createSocialPost({ postId: newId('post-'), userId: user.userId, network, text, performanceId, title, clipMs });
-    const cfg = socialOf(deps);
+    const cfg = await socialOf(deps);
     try {
       if (network === 'x') {
         const token = await xToken(deps, a);
@@ -2269,6 +2289,48 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   });
 
   app.get('/social/posts', async (c) => c.json({ posts: await c.get('deps').store.listSocialPosts(c.get('user').userId, 50) }));
+
+  /** The super admin's page: how SingersVoice is registered with X and Meta — the ids, whether a secret is set, the callbacks to give the networks. */
+  const adminSocial = async (c: Context<Env>, deps: AppDeps): Promise<AdminSocialStatus> => {
+    const apps = await deps.store.getSocialApps();
+    const env = deps.social ?? {};
+    return {
+      x: { clientId: apps.xClientId || env.xClientId || '', secretSet: Boolean(apps.xClientId ? apps.xClientSecretSealed : env.xClientSecret), fromEnv: !apps.xClientId && Boolean(env.xClientId) },
+      meta: { appId: apps.metaAppId || env.metaAppId || '', secretSet: Boolean(apps.metaAppId ? apps.metaAppSecretSealed : env.metaAppSecret), fromEnv: !apps.metaAppId && Boolean(env.metaAppId) },
+      callbacks: { x: socialRedirect(c, deps, 'x'), meta: socialRedirect(c, deps, 'meta') },
+      updatedAt: apps.updatedAt,
+    };
+  };
+  app.get('/admin/social', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    return c.json(await adminSocial(c, c.get('deps')));
+  });
+  /** An id and its secret pasted for a provider (both at once; an empty id takes the pair away). The secret is sealed and never answered. */
+  app.put('/admin/social', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const deps = c.get('deps');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as AdminSocialUpdate;
+    const clean = (v: unknown) => String(v ?? '').trim().slice(0, 200);
+    const patch: Partial<SocialApps> = {};
+    if (body.xClientId !== undefined) {
+      const id = clean(body.xClientId);
+      const secret = clean(body.xClientSecret);
+      if (id && !secret) return err(c, 400, 'bad_request', 'X needs its Client Secret with the Client ID');
+      patch.xClientId = id;
+      patch.xClientSecretSealed = id ? await deps.secrets.seal(secret) : '';
+    }
+    if (body.metaAppId !== undefined) {
+      const id = clean(body.metaAppId);
+      const secret = clean(body.metaAppSecret);
+      if (id && !secret) return err(c, 400, 'bad_request', 'Meta needs its App Secret with the App ID');
+      patch.metaAppId = id;
+      patch.metaAppSecretSealed = id ? await deps.secrets.seal(secret) : '';
+    }
+    await deps.store.setSocialApps(patch);
+    return c.json(await adminSocial(c, deps));
+  });
 
   // ---------- Clubs: a club owner names the members who share the club's video hours ----------
 
