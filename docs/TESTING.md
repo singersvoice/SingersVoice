@@ -76,6 +76,20 @@ sung lit and moving on; she disconnects (the TV shows its code again); the QR's 
 the phone) claims the TV by itself and lands on Home; a TV page closed is forgotten on the phone.
 Screenshots: `tv-code.png`, `tv-linked.png`, `tv-singing.png`.
 
+## Social: a clip posted (`tools/ci/social-e2e.mjs`)
+
+`BASE_PATH=/SingersVoice/ node tools/ci/social-e2e.mjs <outDir>` (after the build): a Studio singer keeps
+a take and the clip sheet opens by itself (Settings → Social, on by default); she moves the from/to
+sliders (held to at least three seconds, inside the take), makes the clip in the browser
+(`lib/clip.ts`: MediaRecorder; MP4 where the browser writes it) and downloads it; in Settings → Social
+she connects X and Facebook & Instagram through the networks' sign-in pages — stood in for by
+`tools/ci/fake-social.mjs`, which approves at once and takes what the service sends it (sv-control is
+pointed at it with `SV_SOCIAL_FAKE`) — picks one of two Pages, and no token reaches the browser; from
+Performances she posts a clip of the take to all three and the links come back (the fake got the words
+and the clip's bytes, X's token was asked once); the posts are listed in Settings; X disconnected tells X
+to drop the token. Screenshots: `clip-sheet.png`, `clip-ready.png`, `settings-social.png`,
+`clip-posted.png`.
+
 ## Live meet with two performers (`tools/ci/live-duet.mjs`)
 
 Two Chromium contexts with a synthetic-person clip as the fake camera (`tools/ci/fake-person.mjs`,

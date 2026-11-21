@@ -190,7 +190,8 @@ async function person(name) {
     localStorage.setItem('sv.profile', JSON.stringify({ sub: n, name: n, email: `${n}@dev.local`, picture: '', mode: 'drive' }));
     localStorage.setItem('sv.mode', 'drive');
     localStorage.setItem('sv.google.token', JSON.stringify({ accessToken: `tok-${n}`, expiresAt: Date.now() + 3600_000, scope: 'https://www.googleapis.com/auth/drive.file' }));
-    localStorage.setItem('sv.settings.app', JSON.stringify({ onboarded: true, countIn: false, cameraOn: true }));
+    // socialOffer off: the clip sheet (its own e2e) would sit over the review's Invite button.
+    localStorage.setItem('sv.settings.app', JSON.stringify({ onboarded: true, countIn: false, cameraOn: true, socialOffer: false }));
     localStorage.setItem('sv.googleApiBase', g);
   }, [name, googleBase]);
   await page.goto(base + 'home?' + control, { waitUntil: 'networkidle' });

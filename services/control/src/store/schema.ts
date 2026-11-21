@@ -208,6 +208,48 @@ CREATE TABLE IF NOT EXISTS promo_uses (
   PRIMARY KEY (code, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_promo_uses_order ON promo_uses(order_id);
+CREATE TABLE IF NOT EXISTS social_accounts (
+  user_id TEXT NOT NULL,
+  network TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  handle TEXT NOT NULL DEFAULT '',
+  sealed_token TEXT NOT NULL,
+  sealed_refresh TEXT,
+  expires_at TEXT,
+  connected_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, network)
+);
+CREATE TABLE IF NOT EXISTS social_states (
+  state TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  verifier TEXT NOT NULL DEFAULT '',
+  app_url TEXT NOT NULL DEFAULT '',
+  redirect_uri TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS social_pending (
+  user_id TEXT PRIMARY KEY,
+  sealed TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS social_posts (
+  post_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  network TEXT NOT NULL,
+  status TEXT NOT NULL,
+  external_id TEXT,
+  url TEXT,
+  text TEXT NOT NULL DEFAULT '',
+  performance_id TEXT,
+  title TEXT NOT NULL DEFAULT '',
+  clip_ms INTEGER NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_social_posts_user ON social_posts(user_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS club_members (
   owner_user_id TEXT NOT NULL,
   email TEXT NOT NULL,
@@ -306,7 +348,12 @@ CREATE TABLE IF NOT EXISTS live_segments (
  * `plan_offers` the ways to pay for a plan (offers.ts: a period with its prices per currency, on sale between
  * two dates) and `promo_codes` the codes that cut a payment (a percentage, an amount, or the fee voided) with
  * `promo_uses` one row per code and account that used it (an order's id while a Checkout is open, so a
- * Checkout that fails gives the use back); `club_members` the email addresses a club owner named to share the club's video hours; `video_usage`
+ * Checkout that fails gives the use back); `social_accounts` the networks an account connected for
+ * posting clips (social.ts: the target — an X user, a Facebook Page, an Instagram account —, its handle,
+ * the tokens sealed with the service's secret, never in the clear), `social_states` a sign-in under way
+ * (the state, the PKCE verifier, where to send the browser back; taken once, gone in a quarter hour),
+ * `social_pending` the Pages a Meta sign-in found when there were several to pick from (sealed), and
+ * `social_posts` every clip posted from here and what became of it; `club_members` the email addresses a club owner named to share the club's video hours; `video_usage`
  * the seconds of video on stage per pool (an account, or the club owner's for the whole club) and
  * calendar month (UTC); `coupons` the gate (coupons.ts): one per email address — the code, the expiry,
  * who issued it — with the code an account entered on `users.coupon_code`, and the requirement itself

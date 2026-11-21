@@ -108,6 +108,11 @@ jobs:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/tv-e2e.mjs screenshots
 
+      - name: Social (a take kept opens the clip sheet; a section picked and the clip made in the browser and downloaded; X and Facebook & Instagram connected through stand-in sign-in pages, the Page picked; a clip posted to all three with the links back; X let go)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/social-e2e.mjs screenshots
+
       - name: Live meet with two performers on one stage (cut-outs, WebRTC relay, cued pause/resume, the film in chapters, nothing mirrored, the sound measured)
         env:
           BASE_PATH: /SingersVoice/

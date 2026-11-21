@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { accessOf, cleanOffer, cleanPromo, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type BlockedUser, type Bookmark, type PlanOffer, type PlanOfferInput, type PromoCode, type PromoCodeInput, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { accessOf, cleanOffer, cleanPromo, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type BlockedUser, type Bookmark, type PlanOffer, type PlanOfferInput, type PromoCode, type PromoCodeInput, type SocialNetwork, type SocialPost, type SocialPostStatus, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
 
@@ -136,6 +136,23 @@ const promoFromRow = (r: PromoRow): PromoCode => {
   }
   return cleanPromo({ code: r.code, kind: r.kind as PromoCode['kind'], value: Number(r.value), currency: r.currency, plans: plans as PlanId[], duration: r.duration as PromoCode['duration'], freePeriods: Number(r.free_periods), maxUses: Number(r.max_uses), uses: Number(r.uses), validUntil: r.valid_until, active: Number(r.active) !== 0, note: r.note, createdBy: r.created_by, createdAt: r.created_at, updatedAt: r.updated_at })!;
 };
+/** A connected network as kept: the tokens sealed (SecretBox), opened only to post. */
+export interface SocialAccountRow {
+  userId: string;
+  network: SocialNetwork;
+  targetId: string;
+  handle: string;
+  sealedToken: string;
+  sealedRefresh: string | null;
+  expiresAt: string | null;
+  connectedAt: string;
+  updatedAt: string;
+}
+type SocialAccountDb = { user_id: string; network: string; target_id: string; handle: string; sealed_token: string; sealed_refresh: string | null; expires_at: string | null; connected_at: string; updated_at: string };
+const socialAccountFromRow = (r: SocialAccountDb): SocialAccountRow => ({ userId: r.user_id, network: r.network as SocialNetwork, targetId: r.target_id, handle: r.handle, sealedToken: r.sealed_token, sealedRefresh: r.sealed_refresh ?? null, expiresAt: r.expires_at ?? null, connectedAt: r.connected_at, updatedAt: r.updated_at });
+type SocialPostDb = { post_id: string; user_id: string; network: string; status: string; external_id: string | null; url: string | null; text: string; performance_id: string | null; title: string; clip_ms: number; note: string; created_at: string; updated_at: string };
+const SOCIAL_POST_STATUSES: SocialPostStatus[] = ['uploading', 'processing', 'posted', 'failed'];
+const socialPostFromRow = (r: SocialPostDb): SocialPost => ({ postId: r.post_id, userId: r.user_id, network: r.network as SocialNetwork, status: SOCIAL_POST_STATUSES.includes(r.status as SocialPostStatus) ? (r.status as SocialPostStatus) : 'failed', externalId: r.external_id ?? null, url: r.url ?? null, text: r.text, performanceId: r.performance_id ?? null, title: r.title, clipMs: Number(r.clip_ms), note: r.note, createdAt: r.created_at, updatedAt: r.updated_at });
 /** The billing settings within bounds: every plan present and clean, a note of a size, days that are days. */
 function cleanBillingSettings(s: Partial<BillingSettings>): BillingSettings {
   const num = (v: unknown, lo: number, hi: number, fallback: number) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : fallback);
@@ -639,6 +656,100 @@ export class SqlStore {
   async listOpenOrders(limit = 50): Promise<OrderRecord[]> {
     const rows = await this.db.all<OrderRow>("SELECT * FROM orders WHERE status <> 'paid' ORDER BY created_at DESC LIMIT ?", [limit]);
     return rows.map(orderFromRow);
+  }
+
+  // ---------- social (social.ts): connected networks (tokens sealed), sign-ins under way, posts ----------
+
+  async listSocialAccounts(userId: string): Promise<SocialAccountRow[]> {
+    const rows = await this.db.all<SocialAccountDb>('SELECT * FROM social_accounts WHERE user_id=? ORDER BY network', [userId]);
+    return rows.map(socialAccountFromRow);
+  }
+
+  async getSocialAccount(userId: string, network: SocialNetwork): Promise<SocialAccountRow | null> {
+    const r = await this.db.get<SocialAccountDb>('SELECT * FROM social_accounts WHERE user_id=? AND network=?', [userId, network]);
+    return r ? socialAccountFromRow(r) : null;
+  }
+
+  /** A network connected (or connected again): the target, the handle, the sealed tokens. */
+  async putSocialAccount(a: Omit<SocialAccountRow, 'connectedAt' | 'updatedAt'>): Promise<void> {
+    const now = new Date().toISOString();
+    await this.db.run(
+      'INSERT INTO social_accounts (user_id, network, target_id, handle, sealed_token, sealed_refresh, expires_at, connected_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id, network) DO UPDATE SET target_id=excluded.target_id, handle=excluded.handle, sealed_token=excluded.sealed_token, sealed_refresh=excluded.sealed_refresh, expires_at=excluded.expires_at, updated_at=excluded.updated_at',
+      [a.userId, a.network, a.targetId, a.handle, a.sealedToken, a.sealedRefresh, a.expiresAt, now, now],
+    );
+  }
+
+  /** The tokens renewed (X's run out after two hours; the refresh token brings new ones). */
+  async setSocialTokens(userId: string, network: SocialNetwork, t: { sealedToken: string; sealedRefresh: string | null; expiresAt: string | null }): Promise<void> {
+    await this.db.run('UPDATE social_accounts SET sealed_token=?, sealed_refresh=?, expires_at=?, updated_at=? WHERE user_id=? AND network=?', [t.sealedToken, t.sealedRefresh, t.expiresAt, new Date().toISOString(), userId, network]);
+  }
+
+  async deleteSocialAccount(userId: string, network: SocialNetwork): Promise<void> {
+    await this.db.run('DELETE FROM social_accounts WHERE user_id=? AND network=?', [userId, network]);
+  }
+
+  /** A sign-in started: the state the network will send back, and what goes with it. Old ones are swept. */
+  async putSocialState(s: { state: string; userId: string; provider: string; verifier: string; appUrl: string; redirectUri: string }): Promise<void> {
+    const now = Date.now();
+    await this.db.run('DELETE FROM social_states WHERE created_at < ?', [new Date(now - 15 * 60_000).toISOString()]);
+    await this.db.run('INSERT INTO social_states (state, user_id, provider, verifier, app_url, redirect_uri, created_at) VALUES (?,?,?,?,?,?,?)', [s.state, s.userId, s.provider, s.verifier, s.appUrl, s.redirectUri, new Date(now).toISOString()]);
+  }
+
+  /** The sign-in the network came back from: taken once (a second visit with the same state finds nothing); none after a quarter hour. */
+  async takeSocialState(state: string, provider: string): Promise<{ userId: string; provider: string; verifier: string; appUrl: string; redirectUri: string } | null> {
+    const r = await this.db.get<{ user_id: string; provider: string; verifier: string; app_url: string; redirect_uri: string; created_at: string }>('SELECT * FROM social_states WHERE state=? AND provider=?', [state, provider]);
+    if (!r) return null;
+    await this.db.run('DELETE FROM social_states WHERE state=?', [state]);
+    if (Date.now() - Date.parse(r.created_at) > 15 * 60_000) return null;
+    return { userId: r.user_id, provider: r.provider, verifier: r.verifier, appUrl: r.app_url, redirectUri: r.redirect_uri };
+  }
+
+  async putSocialPending(userId: string, sealed: string): Promise<void> {
+    await this.db.run('INSERT INTO social_pending (user_id, sealed, created_at) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET sealed=excluded.sealed, created_at=excluded.created_at', [userId, sealed, new Date().toISOString()]);
+  }
+
+  async getSocialPending(userId: string): Promise<string | null> {
+    const r = await this.db.get<{ sealed: string; created_at: string }>('SELECT sealed, created_at FROM social_pending WHERE user_id=?', [userId]);
+    if (!r) return null;
+    if (Date.now() - Date.parse(r.created_at) > 60 * 60_000) {
+      await this.deleteSocialPending(userId);
+      return null;
+    }
+    return r.sealed;
+  }
+
+  async deleteSocialPending(userId: string): Promise<void> {
+    await this.db.run('DELETE FROM social_pending WHERE user_id=?', [userId]);
+  }
+
+  async createSocialPost(p: Pick<SocialPost, 'postId' | 'userId' | 'network' | 'text' | 'performanceId' | 'title' | 'clipMs'>): Promise<SocialPost> {
+    const now = new Date().toISOString();
+    await this.db.run('INSERT INTO social_posts (post_id, user_id, network, status, external_id, url, text, performance_id, title, clip_ms, note, created_at, updated_at) VALUES (?,?,?,?,NULL,NULL,?,?,?,?,?,?,?)', [p.postId, p.userId, p.network, 'uploading', p.text, p.performanceId, p.title, Math.round(p.clipMs), '', now, now]);
+    return (await this.getSocialPost(p.postId))!;
+  }
+
+  async getSocialPost(postId: string): Promise<SocialPost | null> {
+    const r = await this.db.get<SocialPostDb>('SELECT * FROM social_posts WHERE post_id=?', [postId]);
+    return r ? socialPostFromRow(r) : null;
+  }
+
+  async updateSocialPost(postId: string, patch: Partial<Pick<SocialPost, 'status' | 'externalId' | 'url' | 'note'>>): Promise<SocialPost | null> {
+    const cur = await this.getSocialPost(postId);
+    if (!cur) return null;
+    const next = { ...cur, ...patch };
+    await this.db.run('UPDATE social_posts SET status=?, external_id=?, url=?, note=?, updated_at=? WHERE post_id=?', [next.status, next.externalId, next.url, next.note, new Date().toISOString(), postId]);
+    return this.getSocialPost(postId);
+  }
+
+  async listSocialPosts(userId: string, limit = 20): Promise<SocialPost[]> {
+    const rows = await this.db.all<SocialPostDb>('SELECT * FROM social_posts WHERE user_id=? ORDER BY created_at DESC LIMIT ?', [userId, limit]);
+    return rows.map(socialPostFromRow);
+  }
+
+  /** Posts started by this account in the last hour (the limit on posting). */
+  async countSocialPostsRecent(userId: string, sinceMs: number): Promise<number> {
+    const r = await this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM social_posts WHERE user_id=? AND created_at > ?', [userId, new Date(Date.now() - sinceMs).toISOString()]);
+    return Number(r?.n ?? 0);
   }
 
   // ---------- clubs: the members a club owner named, and the video hours ----------

@@ -74,15 +74,16 @@ export interface RawBody {
   contentType: string;
 }
 
-async function request<T>(method: string, path: string, body?: unknown, raw?: RawBody): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, raw?: RawBody, form?: FormData): Promise<T> {
   const base = controlUrl.value;
   if (!base) throw new ApiError(0, 'unconfigured', 'Live services are not configured for this build (VITE_CONTROL_URL)');
   let r: Response;
   try {
+    // A form (a file with its fields) goes as multipart; the browser writes the boundary into the Content-Type itself.
     r = await fetch(`${base}${path}`, {
       method,
-      headers: { ...authHeaders(), ...(raw ? { 'Content-Type': raw.contentType } : body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-      body: raw ? (raw.bytes as unknown as BodyInit) : body !== undefined ? JSON.stringify(body) : undefined,
+      headers: { ...authHeaders(), ...(form ? {} : raw ? { 'Content-Type': raw.contentType } : body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+      body: form ?? (raw ? (raw.bytes as unknown as BodyInit) : body !== undefined ? JSON.stringify(body) : undefined),
     });
   } catch {
     controlStatus.value = 'offline';
@@ -172,6 +173,8 @@ export const api = {
   /** PUT raw bytes (a media segment) and read the JSON answer. */
   putBytes: <K extends keyof Routes>(_key: K, path: string, raw: RawBody) => request<Res<K>>('PUT', path, undefined, raw),
   del: <K extends keyof Routes>(_key: K, path: string) => request<Res<K>>('DELETE', path),
+  /** POST a form (a file and its fields, multipart) and read the JSON answer. */
+  postForm: <K extends keyof Routes>(_key: K, path: string, form: FormData) => request<Res<K>>('POST', path, undefined, undefined, form),
 };
 
 /** An absolute URL on the service for things the browser fetches itself (an HLS playlist). */

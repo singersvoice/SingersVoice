@@ -31,10 +31,12 @@ async function waitFor(url, ms = 20000) {
   throw new Error(`${url} did not come up`);
 }
 
-export async function startServers({ base = '/SingersVoice/', logDir = process.env.SV_SERVER_LOGS, fakeYoutubeDir = process.env.SV_FAKE_YOUTUBE_DIR } = {}) {
+export async function startServers({ base = '/SingersVoice/', logDir = process.env.SV_SERVER_LOGS, fakeYoutubeDir = process.env.SV_FAKE_YOUTUBE_DIR, fakeSocial = false } = {}) {
   const controlPort = await freePort();
   const port = await freePort();
   const procs = [];
+  // The networks clips are posted to, stood in for (tools/ci/fake-social.mjs): the service gets developer-app ids and their endpoints.
+  const social = fakeSocial ? await (await import('./fake-social.mjs')).startFakeSocial() : null;
   const run = (cmd, args, opts) => {
     // SV_SERVER_LOGS=<dir> keeps each server's output (control.log, web.log) for a failing run.
     const stdio = logDir ? ['ignore', openSync(path.join(logDir, `${opts.name}.log`), 'a'), openSync(path.join(logDir, `${opts.name}.log`), 'a')] : 'ignore';
@@ -56,10 +58,12 @@ export async function startServers({ base = '/SingersVoice/', logDir = process.e
       COUPONS_REQUIRED: process.env.COUPONS_REQUIRED ?? '0', // the coupon gate is tried in its own e2e; every other e2e signs its singers in without one
       // YouTube stands in for itself: the control server's own fake ingestion endpoint keeps the segments in a directory.
       ...(fakeYoutubeDir ? { SV_FAKE_YOUTUBE_DIR: fakeYoutubeDir, YOUTUBE_HLS_BASE: `http://localhost:${controlPort}/fake/youtube/http_upload_hls` } : {}),
+      ...(social ? { SV_SOCIAL_FAKE: social.url, X_CLIENT_ID: 'fake-x-id', X_CLIENT_SECRET: 'fake-x-secret', META_APP_ID: 'fake-meta-id', META_APP_SECRET: 'fake-meta-secret', SERVICE_URL: `http://localhost:${controlPort}` } : {}),
     },
   });
   run('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], { name: 'web', cwd: path.resolve('apps/web'), env: { ...process.env, BASE_PATH: base } });
   const stop = () => {
+    social?.stop();
     for (const p of procs) {
       try {
         if (p.pid && process.platform !== 'win32') process.kill(-p.pid, 'SIGTERM');
@@ -71,5 +75,5 @@ export async function startServers({ base = '/SingersVoice/', logDir = process.e
   };
   process.on('exit', stop);
   await Promise.all([waitFor(`http://localhost:${controlPort}/health`), waitFor(`http://localhost:${port}${base}`)]);
-  return { port, controlPort, base, appUrl: `http://localhost:${port}${base}`, controlUrl: `http://localhost:${controlPort}`, fakeYoutubeDir, stop };
+  return { port, controlPort, base, appUrl: `http://localhost:${port}${base}`, controlUrl: `http://localhost:${controlPort}`, fakeYoutubeDir, social, stop };
 }

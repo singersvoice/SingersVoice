@@ -8,6 +8,7 @@ import type { AdminBillingOverview, BillingSettings, ClubStatus, OrderRecord, Pl
 import type { PaymentRecord } from './roles.ts';
 import type { AdminCouponsResponse, Coupon, CouponSettings } from './coupons.ts';
 import type { PlanOffer, PlanOfferInput, PromoCode, PromoCodeInput, PromoPreview } from './offers.ts';
+import type { SocialNetwork, SocialPost, SocialStatus } from './social.ts';
 import type { RegisterTrackRequest, TrackAccessRequest, TrackCopyRequest, TrackHistoryResponse, TrackMetaPatch, TrackRecord, TrackSearchResponse } from './registry.ts';
 import type { Bookmark, BookmarkInput, SongPrefs, StageBookmark } from './prefs.ts';
 import type { YtFetchRequest, YtJob, YtSearchResponse, YtStatus } from './ytTracks.ts';
@@ -236,6 +237,15 @@ export interface Routes {
   'GET /admin/billing': { res: AdminBillingOverview };
   'PUT /admin/billing/settings': { req: Partial<BillingSettings>; res: { settings: BillingSettings } };
   'POST /admin/payments/:id/refund': { req: { amountCents?: number }; res: { payment: PaymentRecord } };
+  /** Social (social.ts): what can be connected and what is; a sign-in started (the network's page to send the browser to); a Page picked after a Meta sign-in; a network disconnected. */
+  'GET /social': { res: SocialStatus };
+  'POST /social/:provider/connect': { req: { appUrl?: string }; res: { url: string } };
+  'POST /social/meta/page': { req: { pageId: string }; res: SocialStatus };
+  'DELETE /social/:network': { res: SocialStatus };
+  /** A clip posted to a connected network: a multipart form — the file as `clip`, and these fields; the post as it stands (posted, or processing: poll it). */
+  'POST /social/posts': { req: { network: SocialNetwork; text: string; title: string; performanceId?: string; clipMs: number }; res: { post: SocialPost } };
+  'GET /social/posts/:id': { res: { post: SocialPost } };
+  'GET /social/posts': { res: { posts: SocialPost[] } };
   /** The offers (the ways to pay for a plan) and the promo codes, kept by the super admin (offers.ts). */
   'POST /admin/offers': { req: PlanOfferInput; res: { offer: PlanOffer } };
   'PATCH /admin/offers/:id': { req: PlanOfferInput; res: { offer: PlanOffer } };

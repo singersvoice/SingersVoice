@@ -48,6 +48,10 @@ export interface AppSettings {
   youtubePrivacy: 'public' | 'unlisted';
   /** What the TV in the room shows beside my stage (lib/tv.ts): the words and the stage, the stage alone, the words alone. */
   tvLook: TvLook;
+  /** After a take is kept: offer to post a clip of it (components/ClipSheet.tsx) — the box in Settings → Social. */
+  socialOffer: boolean;
+  /** The length a clip starts out with (seconds; the picker moves it). */
+  clipSeconds: number;
 }
 
 export const APP_DEFAULTS: AppSettings = {
@@ -77,6 +81,8 @@ export const APP_DEFAULTS: AppSettings = {
   recordMeet: true,
   youtubePrivacy: 'unlisted',
   tvLook: 'both',
+  socialOffer: true,
+  clipSeconds: 60,
 };
 
 const APP_KEY = 'sv.settings.app';
@@ -109,6 +115,8 @@ function migrateApp(v: AppSettings): AppSettings {
   if (!PICTURES.includes(v.picture)) v = { ...v, picture: v.cutout === false ? 'camera' : 'cutout' };
   if (!FRAMINGS.includes(v.framing)) v = { ...v, framing: 'still' };
   if (!TV_LOOKS.includes(v.tvLook)) v = { ...v, tvLook: 'both' };
+  if (typeof v.socialOffer !== 'boolean') v = { ...v, socialOffer: true };
+  if (!Number.isFinite(v.clipSeconds) || v.clipSeconds < 15 || v.clipSeconds > 180) v = { ...v, clipSeconds: 60 };
   return v;
 }
 

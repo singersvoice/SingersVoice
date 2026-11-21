@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { bleedOffset, lagIsStrong, monoOf } from '../../audio/sync.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
+import { ClipSheet } from '../../components/ClipSheet.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
 import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcTv, IcZoom } from '../../components/icons.tsx';
@@ -800,6 +801,9 @@ export function Review(props: {
   const [savedState, setSavedState] = useState<'temp' | 'kept' | null>(null);
   const [inviting, setInviting] = useState<{ label: string; fraction: number } | null>(null);
   const [joinLink, setJoinLink] = useState<string | null>(null);
+  /** Post a clip (components/ClipSheet.tsx): opened by the button, or by itself once the take is kept when Settings → Social says so. */
+  const [clipping, setClipping] = useState(false);
+  const [savedLink, setSavedLink] = useState<string | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const nodes = useRef<AudioBufferSourceNode[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -882,10 +886,17 @@ export function Review(props: {
         });
         const s = await persistTake(manifest, take, (pr) => setSaving(pr));
         setSavedId(s.performanceId);
+        setSavedLink(s.videoLink ?? s.link ?? null);
         props.onSaved?.({ performanceId: s.performanceId, link: s.link, videoLink: s.videoLink, state });
       }
       setSavedState(state);
-      if (state === 'kept') toast(`Kept in ${isDrive.value ? `Drive › SingersVoice › Performances › ${props.mode === 'live' ? 'Live' : 'Offline'}` : 'Performances'}`, 'ok', 5000);
+      if (state === 'kept') {
+        toast(`Kept in ${isDrive.value ? `Drive › SingersVoice › Performances › ${props.mode === 'live' ? 'Live' : 'Offline'}` : 'Performances'}`, 'ok', 5000);
+        if (appSettings.peek().socialOffer && take.video && take.video.size > 0) {
+          stop();
+          setClipping(true);
+        }
+      }
     } catch (e) {
       toast(`Could not save the take: ${errorText(e)}`, 'error', 10000, { label: 'Retry', onClick: () => void saveTake(state) });
     } finally {
@@ -963,6 +974,14 @@ export function Review(props: {
             Discard
           </button>
         </div>
+        {take.video && take.video.size > 0 && (
+          <button class="btn" disabled={saving !== null} onClick={() => (stop(), setClipping(true))} data-post-clip>
+            <IcShare /> Post a clip
+          </button>
+        )}
+        <Sheet open={clipping} onClose={() => setClipping(false)} title={`Post a clip — ${loaded.track.title}`}>
+          {clipping && take.video && <ClipSheet source={{ video: take.video, durationMs: take.durationMs, title: loaded.track.title, performanceId: savedId, singers: props.join ? [...props.join.layers.map((l) => l.displayName), profile.value?.name || 'You'] : [profile.value?.name || 'You'], link: savedLink }} onClose={() => setClipping(false)} />}
+        </Sheet>
         {take.video && take.video.size > 0 && isDrive.value && (props.mode ?? 'offline') === 'offline' && (
           <section class="card stack pad-sm" data-invite>
             <h3 style="margin:0">Sing it with others</h3>

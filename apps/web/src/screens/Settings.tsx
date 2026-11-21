@@ -5,6 +5,7 @@ import { FxPanel } from '../components/FxPanel.tsx';
 import { IcDrive } from '../components/icons.tsx';
 import { dbLabel, INSTRUMENT_LEVELS } from '../components/MicStatus.tsx';
 import { PictureChoices } from '../components/PictureChoices.tsx';
+import { SocialSettings } from '../components/SocialSettings.tsx';
 import { Page } from '../components/Shell.tsx';
 import { SongPrefsCard } from '../components/SongPrefs.tsx';
 import { Field, Seg, Spinner, Switch } from '../components/ui.tsx';
@@ -79,7 +80,7 @@ export function Settings() {
       .then((r) => (r.ok ? (r.json() as Promise<Version>) : null))
       .then((v) => v && setVersion(v))
       .catch(() => undefined);
-    if (location.hash === '#backgrounds') document.getElementById('backgrounds')?.scrollIntoView();
+    if (location.hash === '#backgrounds' || location.hash === '#social') setTimeout(() => document.getElementById(location.hash.slice(1))?.scrollIntoView(), 50);
   }, []);
 
   const link = async () => {
@@ -329,6 +330,8 @@ export function Settings() {
             </div>
           )}
         </section>
+
+        <SocialSettings />
 
         <section class="card stack" id="backgrounds">
           <h2>Stage & publishing backgrounds</h2>

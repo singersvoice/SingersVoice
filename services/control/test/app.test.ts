@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { AdminBillingOverview, AdminCouponsResponse, BillingSettings, BlockedUser, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlanOffer, PlansResponse, PromoCode, PromoPreview, UserRecord } from '@singersvoice/protocol';
+import type { AdminBillingOverview, AdminCouponsResponse, BillingSettings, BlockedUser, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlanOffer, PlansResponse, PromoCode, PromoPreview, SocialPost, SocialStatus, UserRecord } from '@singersvoice/protocol';
 import { LIVE_KEEP } from '@singersvoice/protocol';
 import { createApp, type AppDeps } from '../src/app.ts';
 import { edgeCacheControl, edgeCacheTtl } from '../src/worker.ts';
@@ -1367,6 +1367,175 @@ describe('sv-control API', () => {
     expect(after.promos.map((p) => p.code).sort()).toEqual(['FREE3', 'OFFCODE', 'SAVE20', 'TENOFF']);
     expect((await app.request('/admin/offers/off-nope', { method: 'PATCH', headers: as('alice'), body: '{}' })).status).toBe(404);
     expect((await app.request('/admin/promos/NOPE', { method: 'PATCH', headers: as('alice'), body: '{}' })).status).toBe(404);
+  });
+
+  it('social: a singer connects X and a Facebook Page (with its Instagram account) by the networks\' own sign-in — the state once, the secret and the tokens on the service only — and posts a clip from here: X in chunks then a post, the Page in one upload, Instagram into a container that is published when processed; the tokens are renewed and dropped', async () => {
+    const asked: { url: string; method: string; headers: Headers; body: unknown }[] = [];
+    let xTokenCalls = 0;
+    let igStatus = 'IN_PROGRESS';
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      let body: unknown = init?.body ?? null;
+      if (body instanceof FormData) {
+        const o: Record<string, string> = {};
+        body.forEach((v, k) => (o[k] = v instanceof Blob ? `<blob ${v.size} ${v.type}>` : String(v)));
+        body = o;
+      }
+      else if (body instanceof Uint8Array) body = `<bytes ${body.byteLength}>`;
+      asked.push({ url, method, headers: new Headers(init?.headers), body });
+      const u = new URL(url);
+      // ---- X ----
+      if (url.startsWith('https://x.fake/2/oauth2/token')) {
+        xTokenCalls++;
+        return Response.json({ access_token: `xat_${xTokenCalls}`, refresh_token: `xrt_${xTokenCalls}`, expires_in: 60, scope: 'tweet.read tweet.write users.read media.write offline.access' });
+      }
+      if (url.startsWith('https://x.fake/2/oauth2/revoke')) return Response.json({ revoked: true });
+      if (url.startsWith('https://x.fake/2/users/me')) return Response.json({ data: { id: 'x-77', username: 'lara_sings', name: 'Lara' } });
+      if (url === 'https://x.fake/2/media/upload/initialize') return Response.json({ data: { id: 'm1', media_key: '13_m1', expires_after_secs: 86400 } });
+      if (url === 'https://x.fake/2/media/upload/m1/append') return new Response(null, { status: 204 });
+      if (url === 'https://x.fake/2/media/upload/m1/finalize') return Response.json({ data: { id: 'm1', processing_info: { state: 'pending', check_after_secs: 0 } } });
+      if (url.startsWith('https://x.fake/2/media/upload?command=STATUS')) return Response.json({ data: { id: 'm1', processing_info: { state: 'succeeded' } } });
+      if (url === 'https://x.fake/2/tweets') return Response.json({ data: { id: '1111', text: 'x' } });
+      // ---- Meta ----
+      if (url.startsWith('https://meta.fake/graph/oauth/access_token')) return Response.json(u.searchParams.get('grant_type') === 'fb_exchange_token' ? { access_token: 'mlong', expires_in: 5_184_000 } : { access_token: 'mshort', expires_in: 3600 });
+      if (url.startsWith('https://meta.fake/graph/me/accounts')) return Response.json({ data: [{ id: 'p1', name: 'Choir Page', access_token: 'ptok1' }, { id: 'p2', name: 'Lara Sings Page', access_token: 'ptok2', instagram_business_account: { id: 'ig9', username: 'lara.sings' } }] });
+      if (url === 'https://meta.fake/video/p2/videos') return Response.json({ id: 'fbv1' });
+      if (url === 'https://meta.fake/graph/ig9/media') return Response.json({ id: 'c1', uri: 'https://meta.fake/upload/c1' });
+      if (url === 'https://meta.fake/upload/c1') return Response.json({ success: true });
+      if (url.startsWith('https://meta.fake/graph/c1?')) return Response.json({ status_code: igStatus, status: igStatus === 'IN_PROGRESS' ? 'Processing' : 'Finished' });
+      if (url === 'https://meta.fake/graph/ig9/media_publish') return Response.json({ id: 'igm1' });
+      if (url.startsWith('https://meta.fake/graph/igm1?')) return Response.json({ permalink: 'https://www.instagram.com/reel/abc/' });
+      return new Response('{"error":{"message":"nothing here"}}', { status: 404 });
+    }) as typeof fetch;
+    const status = async (who: string) => json<SocialStatus>(await app.request('/social', { headers: as(who) }));
+    const appUrl = 'https://singersvoice.github.io/SingersVoice/';
+    // Nothing configured: the page says so; Connect is refused with the reason.
+    expect((await status('lara'))).toMatchObject({ configured: { x: false, meta: false }, connections: [], pagesToPick: [], posts: [] });
+    expect((await json<{ code: string }>(await app.request('/social/x/connect', { method: 'POST', headers: as('lara'), body: JSON.stringify({ appUrl }) }))).code).toBe('social_unconfigured');
+    deps.social = { xClientId: 'xid', xClientSecret: 'xsecret', metaAppId: 'mid', metaAppSecret: 'msecret', serviceUrl: 'https://svc.test', fetchImpl, pollMs: 5, xApi: 'https://x.fake', xAuthorize: 'https://x.fake/authorize', metaGraph: 'https://meta.fake/graph', metaVideo: 'https://meta.fake/video', metaUpload: 'https://meta.fake/upload', metaAuthorize: 'https://meta.fake/authorize' };
+    try {
+      expect((await status('lara')).configured).toEqual({ x: true, meta: true });
+      // ---- X: the sign-in page, with our state and a PKCE challenge; the way back is the service's own callback ----
+      const start = await json<{ url: string }>(await app.request('/social/x/connect', { method: 'POST', headers: as('lara'), body: JSON.stringify({ appUrl }) }));
+      const su = new URL(start.url);
+      expect(su.origin + su.pathname).toBe('https://x.fake/authorize');
+      expect(su.searchParams.get('client_id')).toBe('xid');
+      expect(su.searchParams.get('redirect_uri')).toBe('https://svc.test/social/x/callback');
+      expect(su.searchParams.get('code_challenge_method')).toBe('S256');
+      expect(su.searchParams.get('scope')).toBe('tweet.read tweet.write users.read media.write offline.access');
+      const state = su.searchParams.get('state')!;
+      expect(state.length).toBeGreaterThanOrEqual(16);
+      // Somebody else's state, a made-up state: nothing happens.
+      expect((await app.request('/social/x/callback?code=abc&state=nope-nope-nope-nope')).status).toBe(400);
+      // The network comes back (no sign-in of ours on this request): the code is traded for tokens with the secret, the account is connected, the browser goes to Settings.
+      const cb = await app.request(`/social/x/callback?code=abc&state=${state}`);
+      expect(cb.status).toBe(302);
+      expect(cb.headers.get('location')).toBe('https://singersvoice.github.io/SingersVoice/settings?social=x&ok=1#social');
+      const tok = asked.find((a) => a.url.startsWith('https://x.fake/2/oauth2/token'))!;
+      expect(tok.headers.get('authorization')).toBe(`Basic ${btoa('xid:xsecret')}`);
+      const tq = new URLSearchParams(String(tok.body));
+      expect(tq.get('grant_type')).toBe('authorization_code');
+      expect(tq.get('code')).toBe('abc');
+      expect(tq.get('redirect_uri')).toBe('https://svc.test/social/x/callback');
+      expect(tq.get('code_verifier')!.length).toBeGreaterThan(40);
+      expect((await status('lara')).connections).toEqual([expect.objectContaining({ network: 'x', handle: '@lara_sings', targetId: 'x-77', expiresAt: null })]);
+      // The same state again: used.
+      expect((await app.request(`/social/x/callback?code=abc&state=${state}`)).status).toBe(400);
+      // The singer said no on the network's page: back with the reason, nothing connected for bob.
+      const s2 = new URL((await json<{ url: string }>(await app.request('/social/x/connect', { method: 'POST', headers: as('bob'), body: JSON.stringify({ appUrl }) }))).url).searchParams.get('state')!;
+      const denied = await app.request(`/social/x/callback?error=access_denied&error_description=The+user+said+no&state=${s2}`);
+      expect(denied.headers.get('location')).toBe('https://singersvoice.github.io/SingersVoice/settings?social=x&ok=0&why=The%20user%20said%20no#social');
+      expect((await status('bob')).connections).toEqual([]);
+      // ---- A clip posted to X: the token renewed first (it was about to run out), the video in chunks, finalized, waited for, then the post ----
+      const post = async (who: string, network: string, bytes = 3000, text = 'My song — sung on SingersVoice') => {
+        const form = new FormData();
+        form.set('clip', new Blob([new Uint8Array(bytes)], { type: 'video/mp4' }), 'clip.mp4');
+        form.set('network', network);
+        form.set('text', text);
+        form.set('title', 'My song');
+        form.set('performanceId', 'perf-1');
+        form.set('clipMs', '30000');
+        const { 'Content-Type': _ct, ...h } = as(who);
+        return json<{ post: SocialPost; code?: string; error?: string }>(await app.request('/social/posts', { method: 'POST', headers: h, body: form }));
+      };
+      expect((await post('bob', 'x')).code).toBe('not_connected');
+      expect((await post('lara', 'tiktok')).code).toBe('bad_request');
+      const n0 = asked.length;
+      const p1 = (await post('lara', 'x')).post;
+      expect(p1).toMatchObject({ network: 'x', status: 'posted', externalId: '1111', url: 'https://x.com/lara_sings/status/1111', text: 'My song — sung on SingersVoice', title: 'My song', performanceId: 'perf-1', clipMs: 30000 });
+      const xs = asked.slice(n0);
+      expect(new URLSearchParams(String(xs[0]!.body)).get('grant_type')).toBe('refresh_token'); // renewed: the token had a minute left
+      expect(new URLSearchParams(String(xs[0]!.body)).get('refresh_token')).toBe('xrt_1');
+      expect(xs.map((a) => a.url.replace('https://x.fake', ''))).toEqual(['/2/oauth2/token', '/2/media/upload/initialize', '/2/media/upload/m1/append', '/2/media/upload/m1/finalize', '/2/media/upload?command=STATUS&media_id=m1', '/2/tweets']);
+      expect(xs[1]!.headers.get('authorization')).toBe('Bearer xat_2');
+      expect(JSON.parse(String(xs[1]!.body))).toEqual({ media_type: 'video/mp4', total_bytes: 3000, media_category: 'tweet_video' });
+      expect(xs[2]!.body).toEqual({ segment_index: '0', media: '<blob 3000 video/mp4>' });
+      expect(JSON.parse(String(xs[5]!.body))).toEqual({ text: 'My song — sung on SingersVoice', media: { media_ids: ['m1'] } });
+      expect((await status('lara')).posts[0]).toMatchObject({ postId: p1.postId, status: 'posted' });
+      // The renewed token is the one kept: a second post renews nothing more (a minute again, so it renews once more — the fake gives short tokens) — at least it never asks X for the sign-in again.
+      expect(asked.filter((a) => a.url.startsWith('https://x.fake/2/oauth2/token')).every((a) => new URLSearchParams(String(a.body)).get('grant_type') !== 'authorization_code' || a === tok)).toBe(true);
+      // ---- Meta: one sign-in for Facebook and Instagram; two Pages to pick from; the pick connects the Page and its Instagram account ----
+      const ms = await json<{ url: string }>(await app.request('/social/meta/connect', { method: 'POST', headers: as('lara'), body: JSON.stringify({ appUrl }) }));
+      const mu = new URL(ms.url);
+      expect(mu.origin + mu.pathname).toBe('https://meta.fake/authorize');
+      expect(mu.searchParams.get('scope')).toBe('pages_show_list,pages_manage_posts,pages_read_engagement,instagram_basic,instagram_content_publish');
+      expect(mu.searchParams.get('redirect_uri')).toBe('https://svc.test/social/meta/callback');
+      const mstate = mu.searchParams.get('state')!;
+      expect((await app.request(`/social/x/callback?code=abc&state=${mstate}`)).status).toBe(400); // a Meta state on X's door
+      const mcb = await app.request(`/social/meta/callback?code=mcode&state=${mstate}`);
+      expect(mcb.headers.get('location')).toBe('https://singersvoice.github.io/SingersVoice/settings?social=meta&ok=1&why=pick#social');
+      const ex = asked.filter((a) => a.url.startsWith('https://meta.fake/graph/oauth/access_token'));
+      expect(ex).toHaveLength(2);
+      expect(new URL(ex[0]!.url).searchParams.get('client_secret')).toBe('msecret');
+      expect(new URL(ex[1]!.url).searchParams.get('fb_exchange_token')).toBe('mshort');
+      expect(new URL(asked.find((a) => a.url.startsWith('https://meta.fake/graph/me/accounts'))!.url).searchParams.get('access_token')).toBe('mlong');
+      const picking = await status('lara');
+      expect(picking.pagesToPick).toEqual([
+        { pageId: 'p1', name: 'Choir Page', instagram: null },
+        { pageId: 'p2', name: 'Lara Sings Page', instagram: { id: 'ig9', username: 'lara.sings' } },
+      ]);
+      expect(JSON.stringify(picking)).not.toContain('ptok'); // the Pages' tokens never reach the browser
+      expect((await json<{ code: string }>(await app.request('/social/meta/page', { method: 'POST', headers: as('lara'), body: JSON.stringify({ pageId: 'p9' }) }))).code).toBe('no_page');
+      const picked = await json<SocialStatus>(await app.request('/social/meta/page', { method: 'POST', headers: as('lara'), body: JSON.stringify({ pageId: 'p2' }) }));
+      expect(picked.pagesToPick).toEqual([]);
+      expect(picked.connections.map((c) => [c.network, c.handle, c.targetId])).toEqual([
+        ['facebook', 'Lara Sings Page', 'p2'],
+        ['instagram', 'lara.sings', 'ig9'],
+        ['x', '@lara_sings', 'x-77'],
+      ]);
+      // ---- The Page: one upload with the Page's token; Instagram: a container, the bytes, processing, then published ----
+      const fb = (await post('lara', 'facebook', 5000, 'On the Page')).post;
+      expect(fb).toMatchObject({ status: 'posted', externalId: 'fbv1', url: 'https://www.facebook.com/watch/?v=fbv1' });
+      const fbAsk = asked.find((a) => a.url === 'https://meta.fake/video/p2/videos')!;
+      expect(fbAsk.body).toEqual({ description: 'On the Page', access_token: 'ptok2', source: '<blob 5000 video/mp4>' });
+      const ig = (await post('lara', 'instagram', 7000, 'A reel')).post;
+      expect(ig).toMatchObject({ status: 'processing', externalId: 'c1' });
+      const create = asked.find((a) => a.url === 'https://meta.fake/graph/ig9/media')!;
+      expect(new URLSearchParams(String(create.body)).get('media_type')).toBe('REELS');
+      expect(new URLSearchParams(String(create.body)).get('upload_type')).toBe('resumable');
+      expect(new URLSearchParams(String(create.body)).get('caption')).toBe('A reel');
+      const up = asked.find((a) => a.url === 'https://meta.fake/upload/c1')!;
+      expect(up.headers.get('authorization')).toBe('OAuth ptok2');
+      expect(up.headers.get('offset')).toBe('0');
+      expect(up.headers.get('file_size')).toBe('7000');
+      expect(up.body).toBe('<bytes 7000>');
+      // Still processing on the next look; then finished: published, with the permalink.
+      expect((await json<{ post: SocialPost }>(await app.request(`/social/posts/${ig.postId}`, { headers: as('lara') }))).post.status).toBe('processing');
+      igStatus = 'FINISHED';
+      const done = (await json<{ post: SocialPost }>(await app.request(`/social/posts/${ig.postId}`, { headers: as('lara') }))).post;
+      expect(done).toMatchObject({ status: 'posted', externalId: 'igm1', url: 'https://www.instagram.com/reel/abc/' });
+      expect(new URLSearchParams(String(asked.find((a) => a.url === 'https://meta.fake/graph/ig9/media_publish')!.body)).get('creation_id')).toBe('c1');
+      expect((await app.request(`/social/posts/${ig.postId}`, { headers: as('bob') })).status).toBe(404); // not bob's
+      expect((await json<{ posts: SocialPost[] }>(await app.request('/social/posts', { headers: as('lara') }))).posts.map((p) => p.network)).toEqual(['instagram', 'facebook', 'x']);
+      // ---- Let go: X is told, the row is gone; Facebook and Instagram go together ----
+      expect((await json<SocialStatus>(await app.request('/social/x', { method: 'DELETE', headers: as('lara') }))).connections.map((c) => c.network)).toEqual(['facebook', 'instagram']);
+      expect(asked.some((a) => a.url.startsWith('https://x.fake/2/oauth2/revoke'))).toBe(true);
+      expect((await json<SocialStatus>(await app.request('/social/instagram', { method: 'DELETE', headers: as('lara') }))).connections).toEqual([]);
+      expect((await post('lara', 'facebook')).code).toBe('not_connected');
+    } finally {
+      delete deps.social;
+    }
   });
 
   it('roles: a new account is dual; the super admin sees every account, sets roles and club owner subscriptions; Publishing opens with the subscription and closes by itself at its expiry; the last super admin stays', async () => {

@@ -545,6 +545,39 @@ accounts' master table: the plan and its end on the account's subscription row, 
 `services/control/test/app.test.ts` ("offers and promo codes"), `tools/ci/roles-e2e.mjs` (the
 admin adds an offer and a fee-void code; a singer's page shows the offer and the code opens the plan).
 
+## Social: clips of saved performances posted
+
+`packages/protocol/src/social.ts`, `apps/web/src/lib/clip.ts`, `apps/web/src/components/ClipSheet.tsx`,
+`apps/web/src/components/SocialSettings.tsx`, `services/control/src/social.ts`, docs/SOCIAL.md. A clip is
+a section (from–to, three seconds to three minutes — less when a stricter network is ticked: X 140 s) of
+the show video of a saved performance, written by the browser itself: the section plays once through a
+hidden video element — its frames drawn to a canvas, its sound routed through a MediaElementSource into
+a MediaStreamDestination, so nothing is heard — and a MediaRecorder on the canvas stream plus that audio
+writes the file (MP4 H.264/AAC where the browser can — Chrome on Windows/Mac/Android, Safari —, VP9
+otherwise); a minute of clip takes a minute. The sheet (on every performance, and by itself after a take
+is kept when Settings → Social says so) offers Share… (the Web Share API with the file: the phone's share
+sheet, the only way into Snapchat and a personal Instagram account), Download, the networks' composers on
+a computer (X's intent URL, Facebook's sharer with the performance's link), and Post to the networks
+connected. Connecting is the network's own OAuth: `POST /social/:provider/connect` makes the state (and
+X's PKCE pair), keeps them in `social_states` and answers the authorize URL; the network sends the
+browser to `GET /social/:provider/callback` on the service (no sign-in of ours — the state is the
+credential, taken once within a quarter hour, and only at its own provider's door), which trades the code
+for tokens with the client secret, seals them (SecretBox) into `social_accounts`, and redirects to the
+app's Settings page. X: tokens for two hours, renewed with the refresh token before a post. Meta: one
+Facebook Login gives a long-lived user token, `me/accounts` the Pages with their own tokens (no expiry) and
+the Instagram professional account linked to each; one Page is connected at once, several are kept
+sealed in `social_pending` for the singer to pick. Posting (`POST /social/posts`, a multipart form with
+the clip, ≤ 95 MB, twelve an hour per account): X by `/2/media/upload` initialize → append (4 MB chunks)
+→ finalize → STATUS until processed → `POST /2/tweets`; a Page by `POST /{page}/videos`; Instagram by a
+REELS container with a resumable upload, then `status_code` until FINISHED and `media_publish` — the post
+stays `processing` meanwhile and the app polls `GET /social/posts/:id`. Every post is a `social_posts`
+row with its link or its failure note; `GET /social` lists connections (handles only, never tokens), the
+Pages to pick and the recent posts; `DELETE /social/:network` drops the row (X's token revoked; Facebook
+and Instagram together). Tests: `packages/protocol/test/social.test.ts`, `apps/web/test/clip.test.ts`,
+`services/control/test/app.test.ts` ("social": both sign-ins against fakes of the networks, the chunked
+upload, the renewal, the Page pick, Instagram's processing, the let-go), `tools/ci/social-e2e.mjs` (the
+whole flow in the browser against `tools/ci/fake-social.mjs`).
+
 ## Coupons: who may use SingersVoice
 
 The super admin's gate (`packages/protocol/src/coupons.ts`, `coupons` and `settings.coupons` rows,

@@ -5,7 +5,8 @@
  * Bindings (wrangler.jsonc): SVT_DB (Durable Object namespace, class SvtDb)
  * Vars/secrets: GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, DEV_AUTH, ICE_SERVERS, YOUTUBE_HLS_BASE, GOOGLE_API_KEY (optional),
  * STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_URL (the plans through Stripe — docs/BILLING.md),
- * RELAY_URL, RELAY_SECRET (the RTMP relay for low-latency YouTube, Facebook, Instagram, Twitch — docs/RELAY.md)
+ * RELAY_URL, RELAY_SECRET (the RTMP relay for low-latency YouTube, Facebook, Instagram, Twitch — docs/RELAY.md),
+ * X_CLIENT_ID, X_CLIENT_SECRET, META_APP_ID, META_APP_SECRET, SERVICE_URL (posting clips — docs/SOCIAL.md)
  */
 import { createApp, parseIceServers, sweepMeets, type AppDeps } from './app.ts';
 import { createAuthenticator } from './auth.ts';
@@ -28,6 +29,12 @@ interface Env {
   APP_URL?: string;
   RELAY_URL?: string;
   RELAY_SECRET?: string;
+  /** Posting clips to the networks (docs/SOCIAL.md): the developer apps' ids and secrets, and this service's own public URL for their redirect. */
+  X_CLIENT_ID?: string;
+  X_CLIENT_SECRET?: string;
+  META_APP_ID?: string;
+  META_APP_SECRET?: string;
+  SERVICE_URL?: string;
   /** The coupon gate's default (coupons.ts): on unless '0'; the Admin page decides from then on. */
   COUPONS_REQUIRED?: string;
 }
@@ -58,6 +65,7 @@ export class SvtDb {
       googleApiKey: env.GOOGLE_API_KEY || undefined,
       billing: { secretKey: env.STRIPE_SECRET_KEY || undefined, webhookSecret: env.STRIPE_WEBHOOK_SECRET || undefined, appUrl: env.APP_URL || 'https://www.singersvoice.com' },
       relay: env.RELAY_URL && env.RELAY_SECRET ? { url: env.RELAY_URL, secret: env.RELAY_SECRET } : undefined,
+      social: { xClientId: env.X_CLIENT_ID || undefined, xClientSecret: env.X_CLIENT_SECRET || undefined, metaAppId: env.META_APP_ID || undefined, metaAppSecret: env.META_APP_SECRET || undefined, serviceUrl: env.SERVICE_URL || undefined },
       // Work after the answer (YouTube's PUTs): the object stays up while it has work; waitUntil where the runtime offers it.
       background: (p) => (state as unknown as { waitUntil?: (p: Promise<unknown>) => void }).waitUntil?.(p) ?? void p,
     };

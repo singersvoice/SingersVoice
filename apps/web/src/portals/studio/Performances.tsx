@@ -14,6 +14,7 @@
  */
 import { formatMs, joinPath, singersLine, type JoinInvite, type MeetPerformance } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { ClipSheet } from '../../components/ClipSheet.tsx';
 import { IcDownload, IcPlay, IcShare, IcStop, IcTrash, IcUsers } from '../../components/icons.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
 import { Page } from '../../components/Shell.tsx';
@@ -382,6 +383,7 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
   const [playing, setPlaying] = useState(false);
   const [busy, setBusy] = useState(false);
   const [shared, setShared] = useState<{ link: string; videoLink: string | null } | null>(props.summary.shared && props.summary.link ? { link: props.summary.link, videoLink: props.summary.videoLink ?? null } : null);
+  const [clipping, setClipping] = useState(false);
   const ctxRef = useRef<AudioContext | null>(null);
   const nodes = useRef<AudioBufferSourceNode[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -570,6 +572,11 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
         <button class="btn" disabled={!loaded} onClick={download}>
           <IcDownload /> Download
         </button>
+        {loaded?.video && (
+          <button class="btn accent" onClick={() => (stop(), setClipping(true))} data-post-clip>
+            <IcShare /> Post a clip
+          </button>
+        )}
         {s.link && isDrive.value && (
           <a class="btn ghost" href={s.videoLink ?? s.link} target="_blank" rel="noopener">
             Open in Drive
@@ -579,6 +586,9 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
           <IcTrash /> Delete
         </button>
       </div>
+      <Sheet open={clipping} onClose={() => setClipping(false)} title={`Post a clip — ${s.trackTitle}`}>
+        {clipping && loaded?.video && <ClipSheet source={{ video: loaded.video, durationMs: s.durationMs, title: s.trackTitle, performanceId: s.performanceId, singers: m?.singers?.map((x) => x.displayName), link: shared?.videoLink ?? shared?.link ?? s.videoLink ?? s.link ?? null }} onClose={() => setClipping(false)} />}
+      </Sheet>
     </div>
   );
 }

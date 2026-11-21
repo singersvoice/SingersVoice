@@ -86,6 +86,12 @@ import {
   type PlanOfferInput,
   type PromoCode,
   type PromoCodeInput,
+  CAPTION_MAX,
+  SOCIAL_NETWORKS,
+  type SocialNetwork,
+  type SocialPage,
+  type SocialPost,
+  type SocialStatus,
   LIVE_STALE_MS,
   RELAY_KINDS,
   YOUTUBE_HLS_INGEST,
@@ -110,6 +116,7 @@ import type { Authenticator } from './auth.ts';
 import type { SecretBox } from './crypto.ts';
 import { MeetEvents } from './events.ts';
 import { normalizeTvCode, TV_SIGNAL_MAX_BYTES, TvScreens, type TvSide } from './tv.ts';
+import { fbPostVideo, fbVideoUrl, igContainerStatus, igCreateReel, igPublish, metaAuthorizeUrl, metaConfigured, metaExchange, metaPages, pkce, randomToken, xAuthorizeUrl, xConfigured, xCreatePost, xExchange, xMe, xPostUrl, xRefresh, xRevoke, xUploadVideo, type MetaPage, type SocialConfig } from './social.ts';
 import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setBackground, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
@@ -158,6 +165,8 @@ export interface AppDeps {
   background?: (p: Promise<unknown>) => void;
   /** The coupon gate's default (COUPONS_REQUIRED env, on unless '0'): what a service that never set it on the Admin page does. */
   couponsRequired?: boolean;
+  /** The networks clips are posted to (X_CLIENT_ID/SECRET, META_APP_ID/SECRET, SERVICE_URL — docs/SOCIAL.md); without them the Settings page offers the share sheet alone. */
+  social?: SocialConfig;
 }
 
 type Vars = { deps: AppDeps; user: UserRecord };
@@ -185,7 +194,7 @@ const originAllowed = (origin: string, extra: readonly string[] = []): boolean =
 /** An account whose meets are a club's: the club owner role with its plan in force (seats to name members). */
 const clubOwnerOf = (u: UserRecord): boolean => u.role === 'club_owner' && u.entitlement.plan === 'club';
 
-function err(c: Context<Env>, status: 400 | 401 | 403 | 404 | 409 | 410, code: string, message: string) {
+function err(c: Context<Env>, status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 429, code: string, message: string) {
   return c.json({ error: message, code }, status);
 }
 
@@ -203,6 +212,10 @@ const EVENTS_PATH = /^\/meets\/[^/]+\/events$/;
 const TV_PATH = /^\/tv\/screens(\/[A-Za-z0-9]+\/(events|signal|bye))?$/;
 /** New screens an address may register a minute (a TV page reloading is a few; a flood is not). */
 const TV_CREATE_PER_MIN = 20;
+const SOCIAL_CALLBACK = /^\/social\/(x|meta)\/callback$/;
+/** Posts an account may start in an hour, and the clip's size (a Worker takes 100 MB in a request). */
+const SOCIAL_POSTS_PER_HOUR = 12;
+const SOCIAL_CLIP_MAX_BYTES = 95 * 1024 * 1024;
 
 export function createApp(getDeps: (env: Record<string, unknown>) => Promise<AppDeps> | AppDeps): Hono<Env> {
   const app = new Hono<Env>();
@@ -326,6 +339,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   app.use('*', async (c, next) => {
     const path = c.req.path;
     if (path === '/health' || path === '/time' || path === '/billing/webhook' || path.startsWith('/watch/') || path.startsWith('/fake/') || c.req.method === 'OPTIONS') return next();
+    if (c.req.method === 'GET' && SOCIAL_CALLBACK.test(path)) return next(); // a network sends the browser back here: by the state it carries (below)
     if (c.req.method === 'GET' && EVENTS_PATH.test(path)) return next(); // the stream: by resume token (below)
     if (TV_PATH.test(path) && ((c.req.method === 'POST' && path === '/tv/screens') || (c.req.method === 'GET' && path.endsWith('/events')) || c.req.query('tv'))) return next(); // a TV (by its token), a screen's stream (by either side's token): below
     const deps = c.get('deps');
@@ -2020,6 +2034,225 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     }
     return c.json({ ok: true as const });
   });
+
+  // ---------- Social (social.ts): the networks a singer posts clips to ----------
+
+  const socialOf = (deps: AppDeps): SocialConfig => deps.social ?? {};
+  /** Where the networks send the browser back: the service's own address (SERVICE_URL, else this request's origin) and the provider's callback. */
+  const socialRedirect = (c: Context<Env>, deps: AppDeps, provider: 'x' | 'meta'): string => `${(socialOf(deps).serviceUrl ?? new URL(c.req.url).origin).replace(/\/$/, '')}/social/${provider}/callback`;
+  const socialStatus = async (deps: AppDeps, userId: string): Promise<SocialStatus> => {
+    const accounts = await deps.store.listSocialAccounts(userId);
+    let pagesToPick: SocialPage[] = [];
+    const pending = await deps.store.getSocialPending(userId);
+    if (pending) {
+      try {
+        pagesToPick = (JSON.parse(await deps.secrets.open(pending)) as MetaPage[]).map(({ accessToken: _t, ...p }) => p);
+      } catch {
+        pagesToPick = [];
+      }
+    }
+    return {
+      configured: { x: xConfigured(deps.social), meta: metaConfigured(deps.social) },
+      // X renews its tokens itself (the refresh token): no expiry to show; a Page's token does not expire.
+      connections: accounts.map((a) => ({ network: a.network, handle: a.handle, targetId: a.targetId, connectedAt: a.connectedAt, expiresAt: a.network === 'x' ? null : a.expiresAt })),
+      pagesToPick,
+      posts: await deps.store.listSocialPosts(userId, 20),
+    };
+  };
+  /** A Facebook Page connected — and the Instagram professional account linked to it, when there is one — on the Page's token. */
+  const connectMetaPage = async (deps: AppDeps, userId: string, page: MetaPage) => {
+    const sealed = await deps.secrets.seal(page.accessToken);
+    await deps.store.putSocialAccount({ userId, network: 'facebook', targetId: page.pageId, handle: page.name, sealedToken: sealed, sealedRefresh: null, expiresAt: null });
+    if (page.instagram) await deps.store.putSocialAccount({ userId, network: 'instagram', targetId: page.instagram.id, handle: page.instagram.username, sealedToken: sealed, sealedRefresh: null, expiresAt: null });
+    else await deps.store.deleteSocialAccount(userId, 'instagram');
+  };
+
+  app.get('/social', async (c) => c.json(await socialStatus(c.get('deps'), c.get('user').userId)));
+
+  /** A sign-in with the network started: the page to send the browser to (the state and, for X, the PKCE pair kept here). */
+  app.post('/social/:provider/connect', async (c) => {
+    const deps = c.get('deps');
+    const user = c.get('user');
+    const provider = c.req.param('provider');
+    if (provider !== 'x' && provider !== 'meta') return err(c, 404, 'no_provider', 'Connect X, or Facebook and Instagram (meta)');
+    const cfg = socialOf(deps);
+    if (provider === 'x' ? !xConfigured(cfg) : !metaConfigured(cfg)) return err(c, 409, 'social_unconfigured', `${provider === 'x' ? 'X' : 'Facebook and Instagram'} posting is not set up on this service — on your phone, Share takes the clip to the app instead`);
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { appUrl?: string };
+    const appUrl = billingFor(c, deps, body.appUrl).appUrl;
+    const redirectUri = socialRedirect(c, deps, provider);
+    const state = randomToken(24);
+    if (provider === 'x') {
+      const { verifier, challenge } = await pkce();
+      await deps.store.putSocialState({ state, userId: user.userId, provider, verifier, appUrl, redirectUri });
+      return c.json({ url: xAuthorizeUrl(cfg, { redirectUri, state, challenge }) });
+    }
+    await deps.store.putSocialState({ state, userId: user.userId, provider, verifier: '', appUrl, redirectUri });
+    return c.json({ url: metaAuthorizeUrl(cfg, { redirectUri, state }) });
+  });
+
+  /**
+   * The network sends the browser back with a code and our state: the state names the sign-in (once, within a quarter
+   * hour), the code is traded for tokens here (the client secret never leaves the service), the tokens are sealed into the
+   * account's row, and the browser goes on to the app's Settings page. No sign-in of ours: the state is the credential.
+   */
+  app.get('/social/:provider/callback', async (c) => {
+    const deps = c.get('deps');
+    const provider = c.req.param('provider') as 'x' | 'meta';
+    const state = c.req.query('state') ?? '';
+    const st = state && /^[A-Za-z0-9_-]{16,64}$/.test(state) && (provider === 'x' || provider === 'meta') ? await deps.store.takeSocialState(state, provider) : null;
+    if (!st) return c.text('This sign-in link is not one we are waiting for (it was used, or it is older than a quarter hour). Go back to SingersVoice → Settings → Social and tap Connect again.', 400);
+    const back = (ok: boolean, why = '') => c.redirect(`${st.appUrl}/settings?social=${provider}&ok=${ok ? '1' : '0'}${why ? `&why=${encodeURIComponent(why.slice(0, 160))}` : ''}#social`, 302);
+    const denied = c.req.query('error') ?? '';
+    const code = c.req.query('code') ?? '';
+    if (denied || !code) return back(false, c.req.query('error_description') ?? denied ?? 'no code');
+    const cfg = socialOf(deps);
+    try {
+      if (provider === 'x') {
+        const t = await xExchange(cfg, { code, redirectUri: st.redirectUri, verifier: st.verifier });
+        const me = await xMe(cfg, t.accessToken);
+        await deps.store.putSocialAccount({ userId: st.userId, network: 'x', targetId: me.id, handle: `@${me.username}`, sealedToken: await deps.secrets.seal(t.accessToken), sealedRefresh: t.refreshToken ? await deps.secrets.seal(t.refreshToken) : null, expiresAt: t.expiresAt });
+        return back(true);
+      }
+      const t = await metaExchange(cfg, { code, redirectUri: st.redirectUri });
+      const pages = await metaPages(cfg, t.accessToken);
+      if (!pages.length) return back(false, 'no_page');
+      if (pages.length === 1) {
+        await connectMetaPage(deps, st.userId, pages[0]!);
+        await deps.store.deleteSocialPending(st.userId);
+        return back(true);
+      }
+      await deps.store.putSocialPending(st.userId, await deps.secrets.seal(JSON.stringify(pages)));
+      return back(true, 'pick');
+    } catch (e) {
+      return back(false, e instanceof Error ? e.message : 'the network did not answer');
+    }
+  });
+
+  /** After a Meta sign-in that found several Pages: the one picked is connected (with its Instagram account). */
+  app.post('/social/meta/page', async (c) => {
+    const deps = c.get('deps');
+    const user = c.get('user');
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { pageId?: string };
+    const pending = await deps.store.getSocialPending(user.userId);
+    if (!pending) return err(c, 404, 'no_pages', 'No Pages to pick from — connect Facebook again');
+    let pages: MetaPage[] = [];
+    try {
+      pages = JSON.parse(await deps.secrets.open(pending)) as MetaPage[];
+    } catch {
+      pages = [];
+    }
+    const page = pages.find((p) => p.pageId === String(body.pageId ?? ''));
+    if (!page) return err(c, 404, 'no_page', 'That is not one of your Pages');
+    await connectMetaPage(deps, user.userId, page);
+    await deps.store.deleteSocialPending(user.userId);
+    return c.json(await socialStatus(deps, user.userId));
+  });
+
+  /** A network let go: its tokens are dropped here (and told to X); Facebook and Instagram go together (one token). */
+  app.delete('/social/:network', async (c) => {
+    const deps = c.get('deps');
+    const user = c.get('user');
+    const network = c.req.param('network') as SocialNetwork;
+    if (!SOCIAL_NETWORKS.includes(network)) return err(c, 404, 'no_network', 'No such network');
+    const a = await deps.store.getSocialAccount(user.userId, network);
+    if (a && network === 'x') await deps.secrets.open(a.sealedToken).then((t) => xRevoke(socialOf(deps), t)).catch(() => undefined);
+    await deps.store.deleteSocialAccount(user.userId, network);
+    if (network === 'facebook') await deps.store.deleteSocialAccount(user.userId, 'instagram');
+    if (network === 'instagram') await deps.store.deleteSocialAccount(user.userId, 'facebook');
+    await deps.store.deleteSocialPending(user.userId);
+    return c.json(await socialStatus(deps, user.userId));
+  });
+
+  /** X's token, fresh: renewed through the refresh token when it is about to run out (two-hour tokens). */
+  const xToken = async (deps: AppDeps, a: { userId: string; sealedToken: string; sealedRefresh: string | null; expiresAt: string | null }): Promise<string> => {
+    const token = await deps.secrets.open(a.sealedToken);
+    if (!a.expiresAt || Date.parse(a.expiresAt) - Date.now() > 120_000 || !a.sealedRefresh) return token;
+    const t = await xRefresh(socialOf(deps), await deps.secrets.open(a.sealedRefresh));
+    await deps.store.setSocialTokens(a.userId, 'x', { sealedToken: await deps.secrets.seal(t.accessToken), sealedRefresh: t.refreshToken ? await deps.secrets.seal(t.refreshToken) : a.sealedRefresh, expiresAt: t.expiresAt });
+    return t.accessToken;
+  };
+  /** An Instagram container still processing: looked at again, published when Instagram is done. */
+  const continueInstagram = async (deps: AppDeps, post: SocialPost): Promise<SocialPost> => {
+    if (post.network !== 'instagram' || post.status !== 'processing' || !post.externalId) return post;
+    const a = await deps.store.getSocialAccount(post.userId, 'instagram');
+    if (!a) return (await deps.store.updateSocialPost(post.postId, { status: 'failed', note: 'Instagram is no longer connected' }))!;
+    try {
+      const token = await deps.secrets.open(a.sealedToken);
+      const st = await igContainerStatus(socialOf(deps), token, post.externalId);
+      if (st.status === 'FINISHED') {
+        const r = await igPublish(socialOf(deps), token, a.targetId, post.externalId);
+        return (await deps.store.updateSocialPost(post.postId, { status: 'posted', externalId: r.id, url: r.url ?? `https://www.instagram.com/${encodeURIComponent(a.handle)}/`, note: '' }))!;
+      }
+      if (st.status === 'ERROR' || st.status === 'EXPIRED') return (await deps.store.updateSocialPost(post.postId, { status: 'failed', note: `Instagram could not take the video${st.note ? ` (${st.note})` : ''}` }))!;
+      if (Date.now() - Date.parse(post.createdAt) > 20 * 60_000) return (await deps.store.updateSocialPost(post.postId, { status: 'failed', note: 'Instagram did not finish processing the video' }))!;
+      return post;
+    } catch (e) {
+      return (await deps.store.updateSocialPost(post.postId, { status: 'failed', note: e instanceof Error ? e.message : 'Instagram did not answer' }))!;
+    }
+  };
+
+  /**
+   * A clip posted: the file and its words come as a form; the network must be connected; the service pushes the clip to
+   * it. X and a Facebook Page answer within the request; Instagram processes the video on its side, so the post may come
+   * back `processing` — the app polls it (`GET /social/posts/:id`) until it is posted. A failure is on the post (`failed`,
+   * the note), never a secret of the network's.
+   */
+  app.post('/social/posts', async (c) => {
+    const deps = c.get('deps');
+    const user = c.get('user');
+    const length = Number(c.req.header('content-length') ?? 0);
+    if (length > SOCIAL_CLIP_MAX_BYTES + 64 * 1024) return err(c, 413, 'too_big', 'The clip is too big to post from here (95 MB at most) — make it shorter');
+    if ((await deps.store.countSocialPostsRecent(user.userId, 3600_000)) >= SOCIAL_POSTS_PER_HOUR) return err(c, 429, 'rate_limited', `${SOCIAL_POSTS_PER_HOUR} posts an hour at most — wait a little`);
+    const form = await c.req.parseBody().catch(() => null);
+    if (!form) return err(c, 400, 'bad_request', 'The clip and its words go in a form');
+    const network = String(form.network ?? '') as SocialNetwork;
+    if (!SOCIAL_NETWORKS.includes(network)) return err(c, 400, 'bad_request', 'network must be x, facebook or instagram');
+    const clip = form.clip;
+    if (!(clip instanceof File) || clip.size === 0) return err(c, 400, 'bad_request', 'No clip came');
+    if (clip.size > SOCIAL_CLIP_MAX_BYTES) return err(c, 413, 'too_big', 'The clip is too big to post from here (95 MB at most) — make it shorter');
+    const a = await deps.store.getSocialAccount(user.userId, network);
+    if (!a) return err(c, 409, 'not_connected', `${network === 'x' ? 'X' : network === 'facebook' ? 'Facebook' : 'Instagram'} is not connected — Settings → Social`);
+    const text = String(form.text ?? '').slice(0, CAPTION_MAX[network]);
+    const title = String(form.title ?? '').slice(0, 200);
+    const performanceId = typeof form.performanceId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(form.performanceId) ? form.performanceId : null;
+    const clipMs = Math.max(0, Math.round(Number(form.clipMs ?? 0))) || 0;
+    const mime = /^video\/(mp4|webm|quicktime)$/.test(clip.type) ? clip.type : 'video/mp4';
+    const bytes = new Uint8Array(await clip.arrayBuffer());
+    let post = await deps.store.createSocialPost({ postId: newId('post-'), userId: user.userId, network, text, performanceId, title, clipMs });
+    const cfg = socialOf(deps);
+    try {
+      if (network === 'x') {
+        const token = await xToken(deps, a);
+        const mediaId = await xUploadVideo(cfg, token, bytes, mime, (ms) => new Promise((r) => setTimeout(r, cfg.pollMs ? Math.min(ms, cfg.pollMs) : ms)));
+        const r = await xCreatePost(cfg, token, text, mediaId);
+        post = (await deps.store.updateSocialPost(post.postId, { status: 'posted', externalId: r.id, url: xPostUrl(a.handle.replace(/^@/, ''), r.id) }))!;
+      } else if (network === 'facebook') {
+        const r = await fbPostVideo(cfg, await deps.secrets.open(a.sealedToken), a.targetId, bytes, mime, text);
+        post = (await deps.store.updateSocialPost(post.postId, { status: 'posted', externalId: r.id, url: fbVideoUrl(r.id) }))!;
+      } else {
+        const token = await deps.secrets.open(a.sealedToken);
+        const r = await igCreateReel(cfg, token, a.targetId, bytes, text);
+        post = (await deps.store.updateSocialPost(post.postId, { status: 'processing', externalId: r.containerId, note: 'Instagram is processing the video' }))!;
+        // A few looks right away: a short clip is often through within seconds.
+        for (let i = 0; i < 4 && post.status === 'processing'; i++) {
+          await new Promise((r) => setTimeout(r, cfg.pollMs ?? 3000));
+          post = await continueInstagram(deps, post);
+        }
+      }
+    } catch (e) {
+      post = (await deps.store.updateSocialPost(post.postId, { status: 'failed', note: e instanceof Error ? e.message : 'the network did not answer' }))!;
+    }
+    return c.json({ post });
+  });
+
+  app.get('/social/posts/:id', async (c) => {
+    const deps = c.get('deps');
+    const post = await deps.store.getSocialPost(c.req.param('id'));
+    if (!post || post.userId !== c.get('user').userId) return err(c, 404, 'no_post', 'No such post');
+    return c.json({ post: await continueInstagram(deps, post) });
+  });
+
+  app.get('/social/posts', async (c) => c.json({ posts: await c.get('deps').store.listSocialPosts(c.get('user').userId, 50) }));
 
   // ---------- Clubs: a club owner names the members who share the club's video hours ----------
 

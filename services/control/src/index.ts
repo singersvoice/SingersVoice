@@ -12,6 +12,7 @@
  *   YOUTUBE_HLS_BASE=…        YouTube's HLS ingestion endpoint (default https://a.upload.youtube.com/http_upload_hls)
  *   GOOGLE_API_KEY=…          optional: published tracks are then read through the Drive API instead of Drive's public download page
  *   RELAY_URL, RELAY_SECRET   optional: the RTMP relay (services/relay) — low-latency YouTube, Facebook, Instagram, Twitch (docs/RELAY.md)
+ *   X_CLIENT_ID, X_CLIENT_SECRET, META_APP_ID, META_APP_SECRET, SERVICE_URL — posting clips to X, Facebook Pages and Instagram (docs/SOCIAL.md)
  *   SV_FAKE_YOUTUBE_DIR=…     dev/CI: serve a stand-in for YouTube at /fake/youtube/http_upload_hls that writes the files here
  */
 import { serve } from '@hono/node-server';
@@ -44,6 +45,15 @@ const deps: AppDeps = {
   googleApiKey: process.env.GOOGLE_API_KEY || undefined,
   billing: { secretKey: process.env.STRIPE_SECRET_KEY || undefined, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined, appUrl: process.env.APP_URL || 'https://www.singersvoice.com' },
   relay: process.env.RELAY_URL && process.env.RELAY_SECRET ? { url: process.env.RELAY_URL, secret: process.env.RELAY_SECRET } : undefined,
+  social: {
+    xClientId: process.env.X_CLIENT_ID || undefined,
+    xClientSecret: process.env.X_CLIENT_SECRET || undefined,
+    metaAppId: process.env.META_APP_ID || undefined,
+    metaAppSecret: process.env.META_APP_SECRET || undefined,
+    serviceUrl: process.env.SERVICE_URL || undefined,
+    // Tests and local runs: the networks' endpoints pointed at a fake (tools/ci/servers.mjs).
+    ...(process.env.SV_SOCIAL_FAKE ? { xApi: `${process.env.SV_SOCIAL_FAKE}/x`, xAuthorize: `${process.env.SV_SOCIAL_FAKE}/x/authorize`, metaGraph: `${process.env.SV_SOCIAL_FAKE}/meta`, metaVideo: `${process.env.SV_SOCIAL_FAKE}/meta-video`, metaUpload: `${process.env.SV_SOCIAL_FAKE}/meta-upload`, metaAuthorize: `${process.env.SV_SOCIAL_FAKE}/meta/authorize` } : {}),
+  },
   fakeYoutubeDir: process.env.SV_FAKE_YOUTUBE_DIR || undefined,
   fetchImpl: fakeGoogle,
 };
