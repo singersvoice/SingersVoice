@@ -861,6 +861,11 @@
   color: var(--danger);
   border-color: var(--danger);
 }
+/* The block button sits left of "out", never over it. */
+.slot-card .slot-kick.block {
+  right: 44px;
+  padding: 1px 5px;
+}
 .audience-chip {
   display: inline-flex;
   align-items: center;
