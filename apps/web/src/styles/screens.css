@@ -1664,3 +1664,93 @@
 .warn-text {
   color: var(--warn, #ffb86b);
 }
+
+/* The stage's notices in one control (components/NoticeCenter.tsx): a bell with the count, the worst line beside it, the rest in a popup. */
+.notices {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  pointer-events: auto;
+}
+.notices-bell {
+  position: relative;
+  gap: 4px;
+  padding-inline: 8px;
+}
+.notices-bell.warn {
+  border-color: var(--warn, #e0a030);
+}
+.notices-bell.critical {
+  border-color: var(--danger, #e05050);
+  color: var(--danger, #e05050);
+}
+.notices-count {
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 1.2em;
+  text-align: center;
+}
+.notices-worst {
+  max-width: min(60vw, 480px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notices-worst.critical {
+  border-color: var(--danger, #e05050);
+}
+.notices-pop {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(60vh, 420px);
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(10px);
+  display: grid;
+  gap: 8px;
+  text-align: left;
+  font-size: 14px;
+}
+.notices.below .notices-pop {
+  top: calc(100% + 6px);
+}
+.notices.above .notices-pop {
+  bottom: calc(100% + 6px);
+}
+.notice {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+.notice-mark {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 12px;
+  background: var(--surface-2);
+}
+.notice.warn .notice-mark {
+  background: var(--warn, #e0a030);
+  color: #000;
+}
+.notice.critical .notice-mark {
+  background: var(--danger, #e05050);
+  color: #fff;
+}
+.notice-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

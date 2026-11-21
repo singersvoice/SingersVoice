@@ -43,6 +43,8 @@ import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
 import { filmSound, type MeetRecorder } from '../../video/meetRecorder.ts';
 import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
+import { NoticeCenter } from '../../components/NoticeCenter.tsx';
+import { useStageNotices } from './stageNotices.ts';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { marksLine } from '../../video/chapters.ts';
 import { MeetSession } from './meetSession.ts';
@@ -195,9 +197,10 @@ export function MeetRoom(props: { id: string }) {
       const m = session.snapshot.peek()?.meet;
       const wasInSong = Boolean(m?.stage.find((s) => s.participantId === session.you.peek()?.participantId)?.ready);
       await session.setReady(true);
-      // A new singer in a song well under way (not one coming back after Leave): the song restarts from the top for
-      // everyone, divided again among one more singer — every line in its singer's colour (planParts).
-      if (!wasInSong && m?.state === 'live' && (playbackPositionMs(m, serverNow()) ?? 0) > LATE_JOIN_RESTART_MS) {
+      // A new singer in a song well under way (not one coming back after Leave, and never a device that merely took its
+      // time getting ready at the start: only a singer's own tap restarts the song for the stage): the song restarts from
+      // the top for everyone, divided again among one more singer — every line in its singer's colour (planParts).
+      if (!quiet && !wasInSong && m?.state === 'live' && (playbackPositionMs(m, serverNow()) ?? 0) > LATE_JOIN_RESTART_MS) {
         const n = m.stage.filter((s) => s.participantId && s.ready).length + 1;
         await session.restart(3000, 0).catch(() => undefined);
         toast(`You joined — the song restarts from the top, divided for ${n} singers`, 'ok', 6000);
@@ -863,11 +866,13 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean; ses
   const { stage, meet } = props;
   const app = appSettings.value;
   const n = meet.stage.filter((s) => s.participantId).length;
-  // The plan's video hours, as the service counts them (every heartbeat): the chip says what is left, or — the hours used up, an
+  // The plan's video hours, as the service counts them (every heartbeat): a notice says what is left, or — the hours used up, an
   // audio-only account — why there is no picture. A free account simply sings (the camera button is off; the Plans page tells the rest).
   const video = props.session.yourVideo.value;
   const planOnly = !stage.videoAllowed && (video?.reason ?? 'plan') === 'plan';
   const videoNote = planOnly ? '' : video?.note || '';
+  // Everything the stage has to say goes through the one notice control (stageNotices.ts): the bar keeps the count and the camera's buttons.
+  useStageNotices(stage, meet, props.session, props.onStage, null);
   return (
     <div class="stagestrip" data-blend={stage.blend} data-mask={stage.feed.segmenter.maskMode} data-performers={n} data-linked={stage.linked} data-onstage={props.onStage ? '1' : '0'} data-video-allowed={stage.videoAllowed ? '1' : '0'} data-video-why={stage.videoAllowed ? undefined : video?.reason || 'plan'}>
       <div class="showpic">
@@ -881,34 +886,33 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean; ses
         )}
       </div>
       <div class="stagebar">
-        <span class="chip">
+        <span class="chip" data-stage-count>
           <IcUsers size={14} /> {n} on stage{props.onStage && stage.others ? ` · ${stage.linked}/${stage.others} video linked` : ''}
         </span>
-        {props.onStage && stage.camOn && stage.blend === 'loading' && <span class="chip">blending you into the stage…</span>}
+        {/* The facts the e2e and support read, out of sight: what the notices say in words. */}
         {props.onStage && !stage.videoAllowed && !planOnly && (
-          <span class="chip" title={videoNote} data-audio-only data-video-note={video?.reason || 'plan'}>
+          <span hidden data-audio-only data-video-note={video?.reason || 'plan'}>
             audio only · no camera
           </span>
         )}
         {props.onStage && !stage.videoAllowed && !planOnly && videoNote && (
-          <a class="chip warn" href={href('/plans')} style="pointer-events:auto" data-video-reason>
-            {videoNote.length > 90 ? `${videoNote.slice(0, 88)}…` : videoNote}
-          </a>
+          <span hidden data-video-reason>
+            {videoNote}
+          </span>
         )}
         {props.onStage && stage.videoAllowed && video && video.leftSeconds !== null && (
-          <span class={`chip ${video.leftSeconds < 1800 ? 'warn' : ''}`} title="Video hours left this month under your plan (the clock runs while you are on stage with the picture on)" data-video-left={video.leftSeconds}>
+          <span hidden data-video-left={video.leftSeconds}>
             video · {hoursLabel(video.leftSeconds)} left this month
           </span>
         )}
+        {props.onStage && stage.camOn && stage.camHealth !== 'ok' && <span hidden data-cam-health={stage.camHealth} />}
+        {props.onStage && stage.camOn && stage.cameraLine && <span hidden data-camera-line={stage.cameraLine} />}
+        {props.onStage && stage.mixLine && <span hidden data-mix-line={stage.mixLine} />}
+        {props.onStage && stage.distance && <span hidden data-distance={stage.distance} />}
+        {props.onStage && stage.still.map((id) => <span key={id} hidden data-still={id} />)}
         {props.onStage && !stage.camOn && app.cameraOn && stage.videoAllowed && (
           <button class="btn sm accent" style="pointer-events:auto" onClick={() => void stage.openCamera()}>
             <IcCamera size={16} /> Turn the camera on
-          </button>
-        )}
-        {props.onStage && stage.camError && <span class="chip warn">camera: {stage.camError}</span>}
-        {props.onStage && stage.camOn && stage.camHealth !== 'ok' && (
-          <button class="btn sm accent" style="pointer-events:auto" data-cam-health={stage.camHealth} onClick={() => void stage.restartCamera()}>
-            <IcCamera size={16} /> {stage.camHealth === 'frozen' ? 'Your camera froze — restart it' : stage.camHealth === 'muted' ? 'Your camera was muted — restart it' : 'Your camera stopped — restart it'}
           </button>
         )}
         {props.onStage && (
@@ -916,38 +920,12 @@ function StageStrip(props: { stage: RoomStage; meet: Meet; onStage: boolean; ses
             {app.cameraOn ? <IcCameraOff size={16} /> : <IcCamera size={16} />}
           </button>
         )}
-        {props.onStage && stage.camOn && stage.camHealth === 'ok' && (
+        {props.onStage && stage.camOn && (
           <button class="btn sm" style="pointer-events:auto" data-cam-restart="1" title="Open the camera again from scratch — the plain cure for a picture that stands still" onClick={() => void stage.restartCamera()}>
             <IcCamera size={16} /> Restart camera
           </button>
         )}
-        {props.onStage && stage.camOn && stage.cameraLine && (
-          <span class="chip faint" style="pointer-events:none" data-camera-line={stage.cameraLine}>
-            {stage.cameraLine}
-          </span>
-        )}
-        {props.onStage && stage.mixLine && (
-          <span class="chip faint" style="pointer-events:none" data-mix-line={stage.mixLine} title="What each source brings to this device's mix right now — what the audience and the film get from here">
-            {stage.mixLine}
-          </span>
-        )}
-        {props.onStage && stage.distance && (
-          <span class="chip warn" style="pointer-events:none" data-distance={stage.distance}>
-            {stage.distance === 'close' ? 'Sit back a little — the stage shows what your camera sees' : 'Come a little closer to the camera'}
-          </span>
-        )}
-        {props.onStage &&
-          stage.still.map((id) => {
-            const name = meet.stage.find((s) => s.participantId === id)?.displayName.split(' ')[0] || 'A singer';
-            return (
-              <span key={id} class="chip warn" style="pointer-events:auto" data-still={id} title="Their picture arrives but nothing in it moves: their camera froze on their device. It restarts there by itself, or they tap Restart on their stage strip; Reconnect makes the video link again from here.">
-                {name}'s picture is not moving — their camera froze on their device
-                <button class="btn sm" style="margin-left:6px" onClick={() => stage.reconnect(id)}>
-                  Reconnect
-                </button>
-              </span>
-            );
-          })}
+        {props.onStage && <NoticeCenter open="below" />}
       </div>
     </div>
   );
@@ -1114,14 +1092,22 @@ function LiveStage(props: {
       void finishRef.current(true); // the track is over: the song is over for the stage (the first device to get there says so)
     };
     cancelAnimationFrame(raf.current);
+    // The count-in shown is the service's deadline read on the shared clock (kickstart − server now): the same number on
+    // every device at every instant, and never a bigger one than the last within this cue — a main thread that stalled
+    // (the camera pipeline on a phone) catches up, it never counts twice. The audio clock schedules the sound (above);
+    // it does not drive the display, because a context that was suspended for a moment makes its clock jump.
+    let shown = Infinity;
     const tick = () => {
-      const nowCtx = engine.ctx.currentTime;
-      if (nowCtx < t0) setCountdown(Math.ceil(t0 - nowCtx));
-      else {
+      const leftMs = localStart - Date.now();
+      if (leftMs > 0) {
+        const n = Math.min(shown, Math.max(1, Math.ceil(leftMs / 1000)));
+        shown = n;
+        setCountdown(n);
+      } else {
         setCountdown(null);
         tMs.value = Math.max(0, player.positionMs() - engine.outputLatencyMs);
       }
-      (window as unknown as { __svPos?: unknown }).__svPos = { posMs: Math.round(player.positionMs()), epoch: pb.epoch, state: pb.state, offsetMs: pb.offsetMs, ks: meet.kickstartEpochMs, playing: player.playing }; // support / e2e
+      (window as unknown as { __svPos?: unknown }).__svPos = { posMs: Math.round(player.positionMs()), epoch: pb.epoch, state: pb.state, offsetMs: pb.offsetMs, ks: meet.kickstartEpochMs, playing: player.playing, countdown: leftMs > 0 ? shown : null }; // support / e2e
       raf.current = requestAnimationFrame(tick);
     };
     raf.current = requestAnimationFrame(tick);
@@ -1240,6 +1226,8 @@ function LiveStage(props: {
   const connected = others.filter((s) => peerStates[s.participantId!] === 'connected').length;
   const paused = pb.state === 'paused';
   const micOpenNow = engine.micOpen.value;
+  // Everything the stage has to say goes through the one notice control (stageNotices.ts); the bar keeps the count and the save state.
+  useStageNotices(stage, meet, session, true, { paused, pauseCued: pauseAt !== null, seekTarget, talkback: micOpenNow && stage.show.hearingOthers, requests: host ? meet.requests.length : 0, softFocus: camOn && blend === 'oval' && app.cutout });
   // The TV's clock: where the song is, several times a second (the TV runs it on between).
   const tvPlaying = started && !paused && countdown === null;
   useEffect(() => effect(() => tvLink.clock(tMs.value, tvPlaying, countdown)), [tvPlaying, countdown]);
@@ -1250,38 +1238,18 @@ function LiveStage(props: {
         <StageBackground id={meet.backgroundId} />
         <VirtualStage compositor={compositor} />
         <section class="stagebar" data-blend={blend} data-mask={feed.segmenter.maskMode} data-performers={compositor.tiles.length}>
-          <span class="chip">
+          <span class="chip" data-stage-count>
             <IcUsers size={14} /> {stagePerformers.length} on stage{others.length ? ` · ${connected}/${others.length} video linked` : ''}
           </span>
-          {camOn && blend === 'loading' && <span class="chip">blending you into the stage…</span>}
-          {camOn && blend === 'oval' && app.cutout && <span class="chip warn">soft-focus mode</span>}
-          {paused && <span class="chip warn">paused</span>}
-          {paused && micOpenNow && stage.show.hearingOthers && (
-            <span class="chip ok" data-talkback-live="1" title="While the song is paused the singers on stage hear each other; from the resume to the end of the song nobody on stage hears anyone else">
-              talk-back on until Resume
-            </span>
-          )}
-          {!paused && pauseAt !== null && <span class="chip warn">pausing…</span>}
-          {seekTarget !== null && !paused && <span class="chip warn">jumping to {formatMs(seekTarget)}…</span>}
-          {host && meet.requests.length > 0 && <span class="chip">wait list · {meet.requests.length} — seated when the song is over</span>}
-          {stage.mixLine && (
-            <span class="chip faint" data-mix-line={stage.mixLine} title="What each source brings to this device's mix right now — what the audience and the film get from here">
-              {stage.mixLine}
-            </span>
-          )}
-          {stage.alignLine && (
-            <span class="chip faint" data-align-line={stage.alignLine} title="The timing of this device's mix for the song: each other singer's voice and picture held back by what they are early by, so every voice lands on the beat it was sung to; the lag is what this device's own voice and picture wait">
-              timed · {stage.alignLine}
-            </span>
-          )}
+          {/* The facts the e2e and support read, out of sight: what the notices say in words. */}
+          {paused && micOpenNow && stage.show.hearingOthers && <span hidden data-talkback-live="1" />}
+          {stage.mixLine && <span hidden data-mix-line={stage.mixLine} />}
+          {stage.alignLine && <span hidden data-align-line={stage.alignLine} />}
           {stage.still.map((id) => (
-            <span key={id} class="chip warn" data-still={id}>
-              {meet.stage.find((s) => s.participantId === id)?.displayName.split(' ')[0] || 'A singer'}'s picture is not moving — their camera froze on their device
-              <button class="btn sm" style="margin-left:6px" onClick={() => stage.reconnect(id)}>
-                Reconnect
-              </button>
-            </span>
+            <span key={id} hidden data-still={id} />
           ))}
+          {paused && <span class="chip warn">paused</span>}
+          <NoticeCenter open="below" />
           <SaveStatus compact />
         </section>
         {track.video ? (

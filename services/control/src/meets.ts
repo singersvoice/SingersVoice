@@ -439,6 +439,9 @@ export function resume(m: Meet, leadMs: number, now = Date.now(), fromMs?: numbe
   if (m.state !== 'live' && m.state !== 'countdown') return { ok: false, reason: 'not_live' };
   const pb = ensurePlayback(m);
   if (pb.state === 'idle') return { ok: false, reason: 'not_started' };
+  // A restart (or a resume) asked while the count-in still runs changes nothing: the song has not started, the one
+  // deadline stands — so a count-in never jumps because a second device asked for the top of the song.
+  if (m.state === 'countdown' && m.kickstartEpochMs !== null && m.kickstartEpochMs > now && pb.state === 'playing' && pb.pauseAtEpochMs === null) return { ok: true };
   const position = fromMs !== undefined ? Math.max(0, fromMs) : pb.pausedAtMs;
   if (pb.state === 'playing' && pb.pauseAtEpochMs === null && fromMs === undefined) return { ok: false, reason: 'already_playing' };
   m.kickstartEpochMs = now + Math.max(1500, Math.min(30000, leadMs));
@@ -462,6 +465,7 @@ export function seek(m: Meet, leadMs: number, toMs: number, now = Date.now()): {
   if (m.state !== 'live' && m.state !== 'countdown') return { ok: false, reason: 'not_live' };
   const pb = ensurePlayback(m);
   if (pb.state === 'idle') return { ok: false, reason: 'not_started' };
+  if (m.state === 'countdown' && m.kickstartEpochMs !== null && m.kickstartEpochMs > now && pb.state === 'playing') return { ok: false, reason: 'counting_in' };
   const to = Math.max(0, Math.round(toMs));
   if (pb.state === 'paused') {
     pb.pausedAtMs = to;

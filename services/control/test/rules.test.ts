@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_LIVE_TAKE_MS, MAX_PERFORMERS, MEET_IDLE_EXPIRY_MS, playbackPositionMs, type Participant } from '@singersvoice/protocol';
-import { addSong, choicePending, chooseSong, claimSlot, decideRequest, ensureMeet, ensurePlayback, isBanned, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setStagePolicy, SNAPSHOT_AUDIENCE_NAMES, songAction, start, stop, tick, TOUCH_COALESCE_MS, touch, touchForHeartbeat, visibleParticipants, withdrawRequest } from '../src/meets.ts';
+import { addSong, choicePending, chooseSong, claimSlot, decideRequest, ensureMeet, ensurePlayback, isBanned, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, seek, setStagePolicy, SNAPSHOT_AUDIENCE_NAMES, songAction, start, stop, tick, TOUCH_COALESCE_MS, touch, touchForHeartbeat, visibleParticipants, withdrawRequest } from '../src/meets.ts';
 
 const T0 = Date.parse('2026-11-11T10:00:00Z');
 const person = (id: string, userId = `u-${id}`): Participant => ({
@@ -111,6 +111,12 @@ describe('meet rules', () => {
     expect(start(m, 5000, T0 + 1000)).toEqual({ ok: true }); // a second singer's tap during the count-in: nothing moves
     expect(m.kickstartEpochMs).toBe(cued);
     expect(m.playback.epoch).toBe(1);
+    // Nor a restart from the top, nor a resume, asked while the count-in runs: one deadline, the count never jumps.
+    expect(resume(m, 3000, T0 + 2000, 0)).toEqual({ ok: true });
+    expect(resume(m, 3000, T0 + 2000)).toEqual({ ok: true });
+    expect(m.kickstartEpochMs).toBe(cued);
+    expect(m.playback.epoch).toBe(1);
+    expect(seek(m, 3000, 10_000, T0 + 2000)).toEqual({ ok: false, reason: 'counting_in' });
     expect(m.state).toBe('countdown');
     expect(m.kickstartEpochMs).toBe(T0 + 5000);
     expect(claimSlot(m, person('p2'), 2)).toEqual({ ok: false, reason: 'song_in_progress' }); // the count-in has started: the stage is the singers' own

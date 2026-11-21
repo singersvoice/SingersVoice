@@ -1660,7 +1660,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
             : action === 'seek'
               ? seek(meet, Number(body.leadMs ?? 3000), Number(body.toMs ?? 0))
               : resume(meet, Number(body.leadMs ?? 3000), Date.now(), Math.max(0, Number(body.fromMs ?? 0)));
-      if (!r.ok) return err(c, 409, r.reason ?? action, r.reason === 'not_started' ? 'Start the song first' : r.reason === 'already_playing' ? 'The song is already playing' : r.reason === 'pausing' ? 'A pause is on its way — seek once it landed' : 'The song is not playing');
+      if (!r.ok) return err(c, 409, r.reason ?? action, r.reason === 'not_started' ? 'Start the song first' : r.reason === 'already_playing' ? 'The song is already playing' : r.reason === 'pausing' ? 'A pause is on its way — seek once it landed' : r.reason === 'counting_in' ? 'The count-in is running — the song can be moved once it plays' : 'The song is not playing');
       await store.saveMeet(meet);
       events.changed(meet.meetId);
     return c.json((await snapshot(c, meet.meetId, p))!);

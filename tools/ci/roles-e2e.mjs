@@ -113,7 +113,7 @@ try {
   const bobId0 = (await userRow('alice', 'bob@dev.local'))?.userId;
   const svv = await asUser('alice', 'PATCH', `/admin/users/${bobId0}`, { subscription: { action: 'grant', plan: 'svv' } });
   check(svv.status === 200 && svv.json?.user?.entitlement?.plan === 'svv' && svv.json?.user?.media === 'dual' && svv.json?.user?.entitlement?.videoLeftSeconds === 36000, `SVV granted through the service: the picture, ten hours (${svv.json?.user?.entitlement?.plan}, ${svv.json?.user?.media}, ${svv.json?.user?.entitlement?.videoLeftSeconds} s)`);
-  await bob.page.locator('[data-video-left]').waitFor({ timeout: 20000 });
+  await bob.page.locator('[data-video-left]').waitFor({ state: 'attached', timeout: 20000 });
   const leftChip = (await bob.page.locator('[data-video-left]').innerText()).trim();
   check(/video · (10 h 0 m|9 h 5\d m) left this month/.test(leftChip), `his seat gets the picture on the next heartbeat, the chip the hours left (${leftChip})`);
   await bob.page.locator('.stagestrip[data-onstage="1"] .showpic video, .stagestrip[data-onstage="1"] canvas').first().waitFor({ timeout: 20000 }).catch(() => undefined);
@@ -125,13 +125,13 @@ try {
   }
   check(usedOnStage >= 2 && usedOnStage < 120, `the service counts his time on stage with the picture on (${usedOnStage} s so far)`);
   check((await asUser('alice', 'PUT', `/admin/users/${bobId0}/video-usage`, { seconds: 36000 })).status === 200, "the admin sets his month's hours to the limit (what the stage clock would reach)");
-  await bob.page.locator('[data-audio-only][data-video-note="hours"]').waitFor({ timeout: 20000 });
+  await bob.page.locator('[data-audio-only][data-video-note="hours"]').waitFor({ state: 'attached', timeout: 20000 });
   check(/used up/.test(await bob.page.locator('[data-video-reason]').innerText()) && (await bob.page.locator('[data-video-left]').count()) === 0, `the hours used up: the picture goes on the next heartbeat, the chip says why (${(await bob.page.locator('[data-video-reason]').innerText()).trim().slice(0, 80)})`);
   const bobSeat2 = (await asUser('alice', 'GET', `/meets/${meetId}`)).json?.participants?.find((p) => p.displayName === 'bob');
   check(bobSeat2?.media === 'audio', 'the room carries "audio" for him again — nobody draws his picture');
   await bob.page.screenshot({ path: `${out}/plans-bob-hours-used-up.png` });
   await asUser('alice', 'PUT', `/admin/users/${bobId0}/video-usage`, { seconds: 0 });
-  await bob.page.locator('[data-video-left]').waitFor({ timeout: 20000 });
+  await bob.page.locator('[data-video-left]').waitFor({ state: 'attached', timeout: 20000 });
   check(true, 'hours back (a new month): the picture returns');
   await asUser('alice', 'PATCH', `/admin/users/${bobId0}`, { subscription: { action: 'revoke' } });
   await bob.page.locator('.stagestrip[data-onstage="1"][data-video-allowed="0"][data-video-why="plan"]').waitFor({ timeout: 20000 });
@@ -233,8 +233,15 @@ try {
   await bob.page.goto(meetUrl + (meetUrl.includes('?') ? '&' : '?') + control, { waitUntil: 'networkidle' });
   await bob.page.getByRole('button', { name: 'Take a stage slot' }).click();
   await bob.page.locator('.stagestrip[data-onstage="1"]').waitFor();
-  await bob.page.locator('[data-audio-only]').waitFor();
-  check(/audio only · no camera/.test(await bob.page.locator('[data-audio-only]').innerText()), 'on stage, an audio-only singer sees "audio only · no camera"');
+  await bob.page.locator('[data-audio-only]').waitFor({ state: 'attached' });
+  await bob.page.locator('[data-notices-worst="video-plan"]').waitFor({ timeout: 10000 });
+  check(/audio only · no camera/.test(await bob.page.locator('[data-audio-only]').innerText()) && (await bob.page.locator('[data-notices-bell]').count()) === 1 && /Audio only — no camera on this stage/.test(await bob.page.locator('[data-notices-worst]').innerText()), 'on stage, an audio-only singer is told so — the one worst line beside the notice bell, not a chip over the stage');
+  // The bell opens the list: every notice with its severity, and the camera's line among them is a singer's to take down.
+  await bob.page.locator('[data-notices-bell]').click();
+  await bob.page.locator('[data-notices-pop]').waitFor();
+  check((await bob.page.locator('[data-notice="video-plan"][data-notice-severity="warn"]').count()) === 1, 'the popup lists the notice with its severity');
+  await bob.page.keyboard.press('Escape').catch(() => undefined);
+  await bob.page.locator('[data-notices-pop] button[aria-label="Close the notices"]').click().catch(() => undefined);
   const snap = (await asUser('alice', 'GET', `/meets/${meetId}`)).json;
   const bobInRoom = snap?.participants?.find((p) => p.displayName === 'bob');
   check(bobInRoom?.media === 'audio' && bobInRoom?.slot !== null, `the room carries his permission to every device — audio only, on slot ${bobInRoom?.slot} (so nobody draws his picture, whatever his device sends)`);
