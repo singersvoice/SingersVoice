@@ -7,6 +7,7 @@
  * If the model cannot load (old device, blocked network before first cache) the segmenter falls
  * back to an oval vignette so the singer still appears blended into the stage, never as a box.
  */
+import type { Picture } from './framing.ts';
 import { alphaFromMaskPixels, drawCover, fillSoftCenterMask, MASK_H, MASK_W, MODEL_RETRY_MS, SEND_TIMEOUT_MS, TARGET_FPS, withTimeout } from './segmentCore.ts';
 
 export { alphaFromMaskPixels, coverRect, drawCover, MODEL_RETRY_MS, SEND_TIMEOUT_MS, smoothStep } from './segmentCore.ts';
@@ -123,6 +124,11 @@ export class PersonSegmenter {
   /** Diagnostics (shown in the stage bar when something looks off). */
   maskMode: 'adaptive-alpha' | 'adaptive-luma' | 'soft-center' | 'none' = 'none';
   maskCoverage = 0;
+  /**
+   * The singer cut out of their room ('cutout'), or their camera picture as it is ('camera': the canvas
+   * opaque; the mask canvas still says where the person is, for the stage frame's measurement alone).
+   */
+  picture: Picture = 'cutout';
 
   constructor(
     readonly width = 480,
@@ -265,9 +271,11 @@ export class PersonSegmenter {
     c.save();
     c.clearRect(0, 0, width, height);
     drawCover(c, r.image, width, height); // the camera picture centre-cropped to the cut-out's 3:4 — never stretched
-    c.globalCompositeOperation = 'destination-in';
-    c.filter = 'blur(1.2px)'; // the mask's staircase (it is a fraction of the picture's size) becomes a soft edge
-    c.drawImage(mask, 0, 0, width, height);
+    if (this.picture === 'cutout') {
+      c.globalCompositeOperation = 'destination-in';
+      c.filter = 'blur(1.2px)'; // the mask's staircase (it is a fraction of the picture's size) becomes a soft edge
+      c.drawImage(mask, 0, 0, width, height);
+    }
     c.restore();
     this.updateMaskFromAlpha(mask);
     this.bump();
@@ -310,8 +318,10 @@ export class PersonSegmenter {
     c.save();
     c.clearRect(0, 0, width, height);
     drawCover(c, video, width, height);
-    c.globalCompositeOperation = 'destination-in';
-    c.drawImage(mask, 0, 0, width, height);
+    if (this.picture === 'cutout') {
+      c.globalCompositeOperation = 'destination-in';
+      c.drawImage(mask, 0, 0, width, height);
+    }
     c.restore();
     this.updateMaskFromAlpha(mask);
     this.bump();

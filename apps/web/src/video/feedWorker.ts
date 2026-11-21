@@ -6,6 +6,7 @@
  * packed frames never touch this thread.
  */
 import type { FeedIn, FeedInit, FeedMeta, FeedMode, FeedOut } from './feed.worker.ts';
+import type { Framing, Picture } from './framing.ts';
 
 export type { FeedMeta, FeedMode } from './feed.worker.ts';
 
@@ -93,6 +94,16 @@ export class FeedWorkerLink {
 
   pack(on: boolean): void {
     this.send({ type: 'pack', on });
+  }
+
+  /** The singer's picture and framing choices (framing.ts), while running. */
+  look(picture: Picture, framing: Framing): void {
+    this.send({ type: 'look', picture, framing });
+  }
+
+  /** How loud the singer is now (0..1 of the meter): the voice's push-in. */
+  voice(level: number): void {
+    this.send({ type: 'voice', level });
   }
 
   private peeks: ((r: { person: ImageBitmap; mask: ImageBitmap; framed: ImageBitmap; framedMask: ImageBitmap; about: Record<string, unknown> }) => void)[] = [];

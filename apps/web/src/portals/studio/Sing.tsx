@@ -1,5 +1,5 @@
 import { createTrack, formatMs, nextSlot, planParts, singersLine, songTimeMs, SLOT_COLORS, type CatalogTrack, type JoinInvite, type SingerSlot, type TrackPackageV2 } from '@singersvoice/protocol';
-import { useSignal } from '@preact/signals';
+import { effect, useSignal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
@@ -11,6 +11,7 @@ import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
+import { PictureChoices } from '../../components/PictureChoices.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { catalogAvailable, isSameTrack, myCatalogUserId, pullCatalogTrack, searchCatalog } from '../../lib/catalog.ts';
@@ -162,6 +163,9 @@ export function Sing(props: { id?: string; joinId?: string }) {
   const engineRef = useRef<AudioEngine | null>(null);
   const camera = useMemo(() => new Camera(), []);
   const feed = useMemo(() => new LocalFeed(), []);
+  useEffect(() => {
+    (window as unknown as { __svFeed?: LocalFeed }).__svFeed = feed; // support / e2e hooks
+  }, [feed]);
   const compositor = useMemo(() => new StageCompositor('show'), []); // the singers fill their strip under the lyrics
   /** The take's video is the show: my cut-out on the stage background, as Publisher mode would show it, with the mix. */
   const show = useMemo(() => new ShowRecorder(), []);
@@ -267,6 +271,13 @@ export function Sing(props: { id?: string; joinId?: string }) {
     feed.onMode = (m) => setBlend(m);
     feed.attach(camOn ? camStream : null, true);
   }, [camStream, camOn]);
+  // My picture and framing choices reach the feed live; the voice's push-in follows my meter once the take runs.
+  useEffect(() => feed.setLook(app.picture, app.framing), [app.picture, app.framing]);
+  useEffect(() => {
+    const level = engineRef.current?.recorder?.level;
+    if (app.framing !== 'voice' || !level || !(phase === 'playing' || phase === 'countdown' || phase === 'paused')) return;
+    return effect(() => feed.voice(level.value));
+  }, [app.framing, phase]);
   // The Track / Vocal volume of the recorded mix (the same controls as the live stage; kept on the device).
   useEffect(() => show.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
   const facing = camera.facing.value;
@@ -601,7 +612,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
             <button class="btn icon" aria-label="Sound" title="Sound: the voice preset and its tweaks, the microphone, the track and vocal volumes" onClick={() => setFxOpen(true)}>
               <IcSliders />
             </button>
-            <button class="btn icon" aria-label="Stage setup" onClick={() => setSetupOpen(true)} disabled={live}>
+            <button class="btn icon" aria-label="Stage setup" title="Stage setup: my part, my picture and framing, the count-in" onClick={() => setSetupOpen(true)} disabled={live}>
               <IcZoom />
             </button>
             <button class="btn icon" aria-label="Stage background" title="Stage background" onClick={() => setBgOpen(true)}>
@@ -698,6 +709,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
               </button>
             </div>
           </Field>
+          <PictureChoices compact />
           <Switch checked={app.countIn} onChange={(v) => updateApp({ countIn: v })} label="3-2-1 count-in" />
           <Switch checked={app.showCueDeck} onChange={(v) => updateApp({ showCueDeck: v })} label="Cue deck (my next lines)" />
           <Field label="Stage background">

@@ -328,6 +328,26 @@ export const SEAT = {
 
 export type SeatState = 'settling' | 'gliding' | 'held';
 
+/**
+ * How a singer's frame behaves once set — their choice (Settings → Camera, the stage's Picture sheet):
+ * 'still' (the default): framed once and left alone — it follows only a singer who has plainly moved
+ * somewhere else and stayed there; 'follow': re-framed with a glide when they have shifted in their
+ * chair; 'voice': still, and pushed in on the singer while they sing — the louder, the closer — and
+ * eased back out in the breaks (a director's push-in on the soloist).
+ */
+export type Framing = 'still' | 'follow' | 'voice';
+export const FRAMINGS: readonly Framing[] = ['still', 'follow', 'voice'];
+
+/** What a singer's picture is: them cut out of their room and placed on the stage, or their camera picture as it is, room and all. */
+export type Picture = 'cutout' | 'camera';
+export const PICTURES: readonly Picture[] = ['cutout', 'camera'];
+
+/** 'still': the margins a singer has to leave, and for how long, before the frame follows them at all. */
+export const STILL = { reseatAfterMs: 6000, driftX: 0.3, driftUp: 0.16, driftDown: 0.34, sizeMin: 0.5, sizeMax: 2 } as const;
+
+/** The push-in on the voice: up to this much closer, in this long, out again in this long; the frame zooms about the face. */
+export const VOICE_ZOOM = { max: 1.32, inMs: 350, outMs: 1400, about: 0.19 } as const;
+
 interface HeadSample {
   cx: number;
   top: number;
@@ -359,11 +379,17 @@ const smooth = (t: number): number => t * t * (3 - 2 * t);
 export class Seat {
   /** The frame held, or being glided to — null while the seat is settling (the whole camera frame is drawn). */
   target: FrameRect | null = null;
+  /** How the frame behaves once set (`Framing`); changed at any time. */
+  framing: Framing = 'still';
   /** Where `target` has the head (set from the median head the seat was set from). */
   private basis: HeadPlace | null = null;
   private from: FrameRect | null = null;
   private glideStart = 0;
   private samples: HeadSample[] = [];
+  /** The voice's push-in: the level last told (0..1), the zoom now (1 = the held frame) and when it was last stepped. */
+  private voiceLevel = 0;
+  private zoom = 1;
+  private zoomAt = 0;
 
   constructor(
     private readonly srcW: number,
@@ -376,6 +402,30 @@ export class Seat {
     return this.from && now - this.glideStart < this.opts.glideMs ? 'gliding' : 'held';
   }
 
+  /** Whether the crop is changing from frame to frame right now (a glide, or the voice's push-in on its way): the picture has to be redrawn. */
+  moving(now: number): boolean {
+    if (this.state(now) === 'gliding') return true;
+    if (this.framing !== 'voice') return this.zoom !== 1;
+    return Math.abs(this.zoomTarget() - this.zoom) > 0.002;
+  }
+
+  /** How loud the singer is now (0..1 of the meter) — the push-in follows it while the framing is 'voice'. */
+  voice(level: number): void {
+    this.voiceLevel = Math.max(0, Math.min(1, level));
+  }
+
+  /** The zoom the voice asks for: nothing under the quiet of a room, the whole push-in from a full voice. */
+  private zoomTarget(): number {
+    if (this.framing !== 'voice' || !this.target) return 1;
+    const sing = Math.max(0, Math.min(1, (this.voiceLevel - 0.45) / 0.4));
+    return 1 + (VOICE_ZOOM.max - 1) * sing;
+  }
+
+  /** The margins and the hold for the framing chosen: 'follow' takes the seat's own, 'still' and 'voice' the wide ones. */
+  private margins(): { reseatAfterMs: number; driftX: number; driftUp: number; driftDown: number; sizeMin: number; sizeMax: number } {
+    return this.framing === 'follow' ? this.opts : STILL;
+  }
+
   /**
    * A head measured now, as fractions of the camera frame (null: nobody found — nothing to learn; the
    * seat holds). Only a plausible measurement of a real cut-out belongs here, never a stand-in silhouette.
@@ -384,7 +434,7 @@ export class Seat {
     if (!head) return;
     const o = this.opts;
     this.samples.push({ cx: head.x + head.w / 2, top: head.y, w: head.w, h: head.h, at: now });
-    const window = this.target ? o.reseatAfterMs : o.settleMs;
+    const window = this.target ? this.margins().reseatAfterMs : o.settleMs;
     this.samples = this.samples.filter((s) => now - s.at <= window / o.sustained); // a move that lasted `window` is `sustained` of what is kept
     if (this.samples.length < o.minSamples || now - this.samples[0]!.at < window) return;
     if (this.target && this.state(now) !== 'held') return;
@@ -424,7 +474,7 @@ export class Seat {
 
   /** Whether a measured head sits beyond the margins of where the frame has it. */
   private beyond(s: HeadSample): boolean {
-    const o = this.opts;
+    const o = this.margins();
     const b = this.basis!;
     const p = this.place(s, this.target!);
     if (Math.abs(p.hx - b.hx) > o.driftX) return true;
@@ -433,19 +483,38 @@ export class Seat {
     return k < o.sizeMin || k > o.sizeMax;
   }
 
-  /** The crop to draw now: the whole camera frame until the seat is set, the glide while it moves, the held frame. */
+  /**
+   * The crop to draw now: the whole camera frame until the seat is set, the glide while it moves, the held
+   * frame — pushed in on the face by the voice when the framing is 'voice' (eased in and out, never a jump).
+   */
   crop(now: number): FrameRect {
     const t = this.target;
     if (!t) return frameRect(this.srcW, this.srcH, 1);
     const f = this.from;
-    if (!f) return t;
-    const k = (now - this.glideStart) / this.opts.glideMs;
-    if (k >= 1) {
-      this.from = null;
-      return t;
+    let r = t;
+    if (f) {
+      const k = (now - this.glideStart) / this.opts.glideMs;
+      if (k >= 1) this.from = null;
+      else {
+        const e = smooth(Math.max(0, k));
+        r = { ...t, sx: f.sx + (t.sx - f.sx) * e, sy: f.sy + (t.sy - f.sy) * e, sw: f.sw + (t.sw - f.sw) * e, sh: f.sh + (t.sh - f.sh) * e };
+      }
     }
-    const e = smooth(Math.max(0, k));
-    return { ...t, sx: f.sx + (t.sx - f.sx) * e, sy: f.sy + (t.sy - f.sy) * e, sw: f.sw + (t.sw - f.sw) * e, sh: f.sh + (t.sh - f.sh) * e };
+    return this.pushIn(r, now);
+  }
+
+  /** The voice's push-in applied to a crop: the zoom stepped toward its target (fast in, slow out), the crop shrunk about the face. */
+  private pushIn(r: FrameRect, now: number): FrameRect {
+    const target = this.zoomTarget();
+    const dt = this.zoomAt ? Math.min(200, Math.max(0, now - this.zoomAt)) : 0;
+    this.zoomAt = now;
+    const tau = target > this.zoom ? VOICE_ZOOM.inMs : VOICE_ZOOM.outMs;
+    this.zoom += (target - this.zoom) * (1 - Math.exp(-dt / tau));
+    if (Math.abs(this.zoom - 1) < 0.001) this.zoom = 1;
+    if (this.zoom === 1) return r;
+    const sw = r.sw / this.zoom;
+    const sh = r.sh / this.zoom;
+    return { ...r, sx: r.sx + (r.sw - sw) / 2, sy: r.sy + (r.sh - sh) * VOICE_ZOOM.about, sw, sh };
   }
 }
 

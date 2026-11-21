@@ -25,9 +25,19 @@ export interface FakeCtx {
 }
 
 export function fakeContext(size = 24 * 24 * 4): FakeCtx & Record<string, unknown> {
-  const ctx: FakeCtx & Record<string, unknown> = { calls: [], pixels: new Uint8ClampedArray(size), fillStyle: '', globalCompositeOperation: 'source-over', filter: 'none' };
+  const ctx: FakeCtx & Record<string, unknown> = { calls: [], pixels: new Uint8ClampedArray(size), fillStyle: '', filter: 'none' };
   for (const m of ['clearRect', 'fillRect', 'drawImage', 'save', 'restore', 'putImageData', 'setTransform', 'beginPath', 'closePath', 'rect', 'clip', 'translate', 'scale', 'moveTo', 'lineTo', 'arc', 'arcTo', 'fill', 'stroke', 'fillText'])
     ctx[m] = (...a: unknown[]) => void ctx.calls.push(`${m}(${a.length})`);
+  // The composite operation is recorded as it is set (`op:destination-in`), so a test can see what a drawImage was drawn with.
+  let op = 'source-over';
+  Object.defineProperty(ctx, 'globalCompositeOperation', {
+    get: () => op,
+    set: (v: string) => {
+      op = v;
+      ctx.calls.push(`op:${v}`);
+    },
+    enumerable: true,
+  });
   ctx.getImageData = () => ({ data: ctx.pixels });
   ctx.createImageData = (w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4), width: w, height: h });
   ctx.createLinearGradient = () => ({ addColorStop: () => undefined });

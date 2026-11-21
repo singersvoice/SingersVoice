@@ -18,7 +18,7 @@
  *        and what was measured) · error (a model attempt failed) · fail (the page takes the pipeline back) · peek
  */
 import { EXPOSURE_EVERY_MS, Exposure, personLuma } from './enhance.ts';
-import { cropFactor, distanceNote, measureMask, plausibleHead, Seat, visiblePart, type PersonMeasure } from './framing.ts';
+import { cropFactor, distanceNote, measureMask, plausibleHead, Seat, visiblePart, type Framing, type PersonMeasure, type Picture } from './framing.ts';
 import { alphaFromMaskPixels, drawCover, fillSoftCenterMask, MASK_H, MASK_W, MODEL_RETRY_MS, SEND_TIMEOUT_MS, TARGET_FPS, withTimeout } from './segmentCore.ts';
 
 export type FeedMode = 'loading' | 'model' | 'oval' | 'off';
@@ -38,6 +38,9 @@ export interface FeedInit {
   modelSelection: 0 | 1;
   /** Cut out with the model (true) or the soft silhouette only. */
   useModel: boolean;
+  /** The singer's picture and framing choices (framing.ts) — changed while running with a `look` message. */
+  picture?: Picture;
+  framing?: Framing;
 }
 export interface FeedMeta {
   frame: number;
@@ -60,7 +63,18 @@ export type FeedOut =
   /** The worker cannot run the model here (no WebGL in a worker, a runtime that will not load): the page runs the pipeline itself. */
   | { type: 'fail'; why: string }
   | { type: 'peek'; person: ImageBitmap; mask: ImageBitmap; framed: ImageBitmap; framedMask: ImageBitmap; about: Record<string, unknown> };
-export type FeedIn = FeedInit | { type: 'stream'; readable: ReadableStream<VideoFrame> } | { type: 'frame'; bitmap: ImageBitmap } | { type: 'sink'; writable: WritableStream<VideoFrame> | null } | { type: 'pack'; on: boolean } | { type: 'stop' } | { type: 'peek' };
+export type FeedIn =
+  | FeedInit
+  | { type: 'stream'; readable: ReadableStream<VideoFrame> }
+  | { type: 'frame'; bitmap: ImageBitmap }
+  | { type: 'sink'; writable: WritableStream<VideoFrame> | null }
+  | { type: 'pack'; on: boolean }
+  /** The singer's choices (framing.ts), changed while running. */
+  | { type: 'look'; picture: Picture; framing: Framing }
+  /** How loud the singer is (0..1 of the meter), for the voice's push-in. */
+  | { type: 'voice'; level: number }
+  | { type: 'stop' }
+  | { type: 'peek' };
 
 /** The feather of a close-up's bottom edge (`localFeed.ts` had these; the frame is framed here now). */
 const FEATHER_BELOW = 0.62;
@@ -180,6 +194,8 @@ class FeedPipeline {
   private measureKey: string | null = null;
   private note: 'close' | 'far' | null = null;
   readonly seat: Seat;
+  /** The singer cut out ('cutout') or their camera picture as it is ('camera'): the mask still finds them, for the frame alone. */
+  picture: Picture = 'cutout';
   readonly exposure = new Exposure();
   private readonly canFilter: boolean;
   private packing = false;
@@ -204,6 +220,7 @@ class FeedPipeline {
     this.probe = mk(PROBE_W, PROBE_H, false, true)[1];
     this.luma = mk(LUMA_W, LUMA_H, true, true)[1];
     this.seat = new Seat(o.width, o.height);
+    this.setLook(o.picture ?? 'cutout', o.framing ?? 'still');
     this.canFilter = typeof (this.framedCtx as { filter?: unknown }).filter === 'string';
     this.maskCtx.fillStyle = '#000';
     this.maskCtx.fillRect(0, 0, o.width, o.height);
@@ -361,9 +378,11 @@ class FeedPipeline {
     c.save();
     c.clearRect(0, 0, width, height);
     drawCover(c, this.sent ?? r.image, width, height);
-    c.globalCompositeOperation = 'destination-in';
-    if (this.canFilter) c.filter = 'blur(1.2px)';
-    c.drawImage(mask, 0, 0, width, height);
+    if (this.picture === 'cutout') {
+      c.globalCompositeOperation = 'destination-in';
+      if (this.canFilter) c.filter = 'blur(1.2px)';
+      c.drawImage(mask, 0, 0, width, height);
+    }
     c.restore();
     this.updateMaskFromAlpha(mask);
     r.image.close?.();
@@ -405,8 +424,10 @@ class FeedPipeline {
     c.save();
     c.clearRect(0, 0, width, height);
     drawCover(c, bmp, width, height);
-    c.globalCompositeOperation = 'destination-in';
-    c.drawImage(mask, 0, 0, width, height);
+    if (this.picture === 'cutout') {
+      c.globalCompositeOperation = 'destination-in';
+      c.drawImage(mask, 0, 0, width, height);
+    }
     c.restore();
     this.updateMaskFromAlpha(mask);
     this.bump();
@@ -477,12 +498,18 @@ class FeedPipeline {
       if (this.canFilter) c.filter = this.exposure.filter();
       c.drawImage(this.person, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
       if (this.canFilter) c.filter = 'none';
-      m.drawImage(this.maskGrey, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
-      const bottom = r.dy + r.dh;
-      if (bottom < H * FEATHER_BELOW) {
-        const from = bottom - r.dh * FEATHER;
-        feather(c, r.dx, r.dw, from, bottom, 'destination-out');
-        feather(m, r.dx, r.dw, from, bottom, 'multiply');
+      if (this.picture === 'camera') {
+        // The camera picture as it is: opaque wherever the camera saw (the mask is the frame's measurement, not the picture's).
+        m.fillStyle = '#fff';
+        m.fillRect(r.dx, r.dy, r.dw, r.dh);
+      } else {
+        m.drawImage(this.maskGrey, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+        const bottom = r.dy + r.dh;
+        if (bottom < H * FEATHER_BELOW) {
+          const from = bottom - r.dh * FEATHER;
+          feather(c, r.dx, r.dw, from, bottom, 'destination-out');
+          feather(m, r.dx, r.dw, from, bottom, 'multiply');
+        }
       }
     }
     let packedBitmap: ImageBitmap | null = null;
@@ -534,6 +561,12 @@ class FeedPipeline {
 
   setPacking(on: boolean): void {
     this.packing = on;
+  }
+
+  /** The singer's picture and framing choices, changed while running (the model keeps going). */
+  setLook(picture: Picture, framing: Framing): void {
+    this.picture = picture;
+    this.seat.framing = framing;
   }
 
   stop(): void {
@@ -589,6 +622,12 @@ self.onmessage = (e: MessageEvent<FeedIn>) => {
         break;
       case 'pack':
         pipeline?.setPacking(m.on);
+        break;
+      case 'look':
+        pipeline?.setLook(m.picture, m.framing);
+        break;
+      case 'voice':
+        pipeline?.seat.voice(m.level);
         break;
       case 'peek':
         // Support / tests: the pipeline's canvases as they stand (what the model gave, the grey mask, the framed cut-out and its mask).

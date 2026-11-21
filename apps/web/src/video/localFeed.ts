@@ -15,7 +15,7 @@
 import { AlphaPacker } from './alphaPack.ts';
 import { EXPOSURE_EVERY_MS, Exposure, isComputer, PACK_HEIGHT, PACK_WIDTH, personLuma } from './enhance.ts';
 import { FeedWorkerLink, feedWorkerSupported, type FeedMeta } from './feedWorker.ts';
-import { cropFactor, distanceNote, measureMask, plausibleHead, Seat, visiblePart, type PersonMeasure, type SeatState } from './framing.ts';
+import { cropFactor, distanceNote, measureMask, plausibleHead, Seat, visiblePart, type Framing, type PersonMeasure, type Picture, type SeatState } from './framing.ts';
 import { PersonSegmenter, type SegmenterMode } from './segmenter.ts';
 import type { PerformerSource } from './stage.ts';
 
@@ -147,6 +147,8 @@ export class LocalFeed {
   private framesAtSample = 0;
   /** The stage frame, set from the measured head and held (`framing.ts`). */
   readonly seat = new Seat(W, H);
+  /** The singer's picture: cut out of their room, or the camera picture as it is (framing.ts). */
+  picture: Picture = 'cutout';
   private probe: CanvasRenderingContext2D | null = null;
   private lastProbe = 0;
   private lastProbedSeg = -1;
@@ -242,6 +244,7 @@ export class LocalFeed {
     const init = { base: import.meta.env.BASE_URL, width: W, height: H, packWidth: PACK_WIDTH, packHeight: PACK_HEIGHT, modelSelection: (COMPUTER ? 0 : 1) as 0 | 1, useModel };
     const initKey = JSON.stringify(init);
     const keep = link.running && this.workerInit === initKey;
+    const look = { picture: this.picture, framing: this.seat.framing };
     if (!keep) {
       this.facade.mode = useModel ? 'loading' : 'oval';
       this.setMode(this.facade.mode);
@@ -278,7 +281,7 @@ export class LocalFeed {
       link.pack(false);
       link.sink(null);
     } else {
-      link.start(init);
+      link.start({ ...init, ...look });
       this.workerInit = initKey;
     }
     if (this.link !== link) return; // failed on the spot: the page has taken over
@@ -291,6 +294,22 @@ export class LocalFeed {
 
   /** The worker's outgoing track ended (the page took over): whoever holds the packed stream asks for it again. */
   onPackedLost: (() => void) | null = null;
+
+  /** The singer's choices (Settings → Camera, the stage's Picture sheet): their picture and how the frame behaves — live, whichever pipeline runs. */
+  setLook(picture: Picture, framing: Framing): void {
+    this.picture = picture;
+    this.own.picture = picture;
+    this.seat.framing = framing;
+    this.link?.look(picture, framing);
+    this.lastSeg = -1; // the next tick redraws, choice or no new frame
+  }
+
+  /** How loud the singer is now (0..1 of the meter) — the frame's push-in while the framing is 'voice' (framing.ts). */
+  voice(level: number): void {
+    if (this.seat.framing !== 'voice') return;
+    this.seat.voice(level);
+    this.link?.voice(level);
+  }
 
   /** One camera frame to the worker, as a bitmap (where the camera cannot be read as a stream). */
   private feedWorkerFrame(): void {
@@ -504,7 +523,8 @@ export class LocalFeed {
 
   /** What the camera is doing, in words for the stage strip: its frame rate (or that the browser tells no frames), the cut-out, the lift of the picture, and how long it has stood still. */
   get cameraLine(): string {
-    const cut = `${this.segmenter.mode === 'model' ? 'cut-out model' : this.segmenter.mode === 'oval' ? 'cut-out silhouette' : this.segmenter.mode === 'loading' ? 'cut-out loading' : 'cut-out off'}${this.workerOn ? ' (worker)' : ''}`;
+    const model = this.segmenter.mode === 'model' ? 'model' : this.segmenter.mode === 'oval' ? 'silhouette' : this.segmenter.mode === 'loading' ? 'loading' : 'off';
+    const cut = `${this.picture === 'camera' ? `camera picture (${model})` : `cut-out ${model}`}${this.workerOn ? ' (worker)' : ''} · frame ${this.seat.framing === 'follow' ? 'follows' : this.seat.framing === 'voice' ? 'on the voice' : 'still'}`;
     const frames = this.framesSeen > 0 ? `camera ${this.cameraFps} fps` : 'camera (frames not told)';
     const lift = this.exposure.lift >= 3 ? ` · lifted +${this.exposure.lift}%` : '';
     const still = this.stillSince ? ` · picture still ${Math.round((performance.now() - this.stillSince) / 1000)} s` : '';
@@ -539,7 +559,7 @@ export class LocalFeed {
     this.measure(now);
     this.measureLuma(now);
     const gain = this.exposure.step();
-    if (this.own.frame === this.lastSeg && this.seat.state(now) !== 'gliding' && gain === this.lastGain) return; // nothing new to draw
+    if (this.own.frame === this.lastSeg && !this.seat.moving(now) && gain === this.lastGain) return; // nothing new to draw
     this.lastSeg = this.own.frame;
     this.lastGain = gain;
     const r = visiblePart(this.seat.crop(now), W, H); // the crop may reach past the camera picture: that part stays transparent
@@ -553,14 +573,20 @@ export class LocalFeed {
       if (this.canFilter) c.filter = this.exposure.filter();
       c.drawImage(this.own.canvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
       if (this.canFilter) c.filter = 'none';
-      m.drawImage(this.own.maskCanvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
-      // A camera that sees little of the singer (close up) ends above the stage's riser: its bottom edge is
-      // feathered, so the figure fades out instead of ending in a straight cut across the chest.
-      const bottom = r.dy + r.dh;
-      if (bottom < H * FEATHER_BELOW) {
-        const from = bottom - r.dh * FEATHER;
-        feather(c, r.dx, r.dw, from, bottom, 'destination-out');
-        feather(m, r.dx, r.dw, from, bottom, 'multiply');
+      if (this.picture === 'camera') {
+        // The camera picture as it is: opaque wherever the camera saw (the mask is the frame's measurement, not the picture's).
+        m.fillStyle = '#fff';
+        m.fillRect(r.dx, r.dy, r.dw, r.dh);
+      } else {
+        m.drawImage(this.own.maskCanvas, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+        // A camera that sees little of the singer (close up) ends above the stage's riser: its bottom edge is
+        // feathered, so the figure fades out instead of ending in a straight cut across the chest.
+        const bottom = r.dy + r.dh;
+        if (bottom < H * FEATHER_BELOW) {
+          const from = bottom - r.dh * FEATHER;
+          feather(c, r.dx, r.dw, from, bottom, 'destination-out');
+          feather(m, r.dx, r.dw, from, bottom, 'multiply');
+        }
       }
     }
     this.frame++;

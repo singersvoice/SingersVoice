@@ -5,6 +5,7 @@
  */
 import { effect, signal } from '@preact/signals';
 import { applyPreset, AUDIO_SETTINGS_DEFAULTS, CONFIG_FILES, clampParams, VOXFORGE_PRESETS, type AudioPluginSettings } from '@singersvoice/protocol';
+import { FRAMINGS, PICTURES, type Framing, type Picture } from '../video/framing.ts';
 import { provider } from './session.ts';
 
 export interface AppSettings {
@@ -14,8 +15,12 @@ export interface AppSettings {
   cameraOn: boolean;
   cameraFacing: 'user' | 'environment';
   cameraDeviceId: string;
-  /** Kept for older saves; the stage always blends the singer (the model is the only mode). */
+  /** Kept for older saves (`picture` says it now). */
   cutout: boolean;
+  /** My picture on every stage: me cut out of my room ('cutout'), or my camera picture as it is, room and all ('camera'). video/framing.ts. */
+  picture: Picture;
+  /** How my frame behaves: still (the default), following me when I move, or pushed in on me by my voice. video/framing.ts. */
+  framing: Framing;
   /** One-time migration markers for the virtual-stage defaults. */
   stageV3: boolean;
   stageV4: boolean;
@@ -51,6 +56,8 @@ export const APP_DEFAULTS: AppSettings = {
   cameraFacing: 'user',
   cameraDeviceId: '',
   cutout: true,
+  picture: 'cutout',
+  framing: 'still',
   stageV3: true,
   stageV4: true,
   singerSlot: 1,
@@ -95,6 +102,9 @@ function migrateApp(v: AppSettings): AppSettings {
   // The framing presets (chest / wide / mid / close, Auto) are gone: every singer is framed the same way (the stage frame).
   delete (v as Partial<Record<'zoomPreset' | 'autoZoom', unknown>>).zoomPreset;
   delete (v as Partial<Record<'zoomPreset' | 'autoZoom', unknown>>).autoZoom;
+  // The picture and framing choices: a save from before them keeps what its cut-out switch said; anything odd is the default.
+  if (!PICTURES.includes(v.picture)) v = { ...v, picture: v.cutout === false ? 'camera' : 'cutout' };
+  if (!FRAMINGS.includes(v.framing)) v = { ...v, framing: 'still' };
   return v;
 }
 
@@ -158,7 +168,7 @@ export async function pullSettings(): Promise<void> {
     const remoteAudio = await p.getConfig<AudioPluginSettings>(CONFIG_FILES.audioPlugin);
     if (remoteAudio && (remoteAudio.updatedAt ?? '') > (audioSettings.peek().updatedAt ?? '')) audioSettings.value = sanitizeAudio(remoteAudio);
     const remoteApp = await p.getConfig<AppSettings>(CONFIG_FILES.app);
-    if (remoteApp) appSettings.value = { ...APP_DEFAULTS, ...remoteApp, onboarded: appSettings.peek().onboarded || remoteApp.onboarded };
+    if (remoteApp) appSettings.value = migrateApp({ ...APP_DEFAULTS, ...remoteApp, onboarded: appSettings.peek().onboarded || remoteApp.onboarded });
   } catch {
     /* offline or not linked yet */
   }

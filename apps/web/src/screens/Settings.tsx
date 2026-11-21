@@ -4,6 +4,7 @@ import { BackgroundPicker } from '../components/BackgroundPicker.tsx';
 import { FxPanel } from '../components/FxPanel.tsx';
 import { IcDrive } from '../components/icons.tsx';
 import { dbLabel, INSTRUMENT_LEVELS } from '../components/MicStatus.tsx';
+import { PictureChoices } from '../components/PictureChoices.tsx';
 import { Page } from '../components/Shell.tsx';
 import { SongPrefsCard } from '../components/SongPrefs.tsx';
 import { Field, Seg, Switch } from '../components/ui.tsx';
@@ -259,7 +260,7 @@ export function Settings() {
             </select>
           </Field>
           <div class="muted small">On every stage you are framed the same way as every other singer — head the same size, at the same place — however near or far you sit from the camera; the stage tells you when to sit back or come closer.</div>
-          <Switch checked={app.cutout} onChange={(v) => updateApp({ cutout: v })} label="Person cut-out" hint="Segmentation model, loaded on demand." />
+          <PictureChoices />
         </section>
 
         <section class="card stack" id="backgrounds">

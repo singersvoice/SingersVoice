@@ -18,12 +18,13 @@ import { MixPlayer, mixPlaySupported } from '../../audio/mixPlayer.ts';
 import { StageBackground, StageBackgroundChoice } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcUsers, IcX } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, IcMusic, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcUsers, IcX, IcZoom } from '../../components/icons.tsx';
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { audienceLine } from './audience.ts';
+import { PictureChoices } from '../../components/PictureChoices.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Seg, Sheet, Spinner, Switch } from '../../components/ui.tsx';
 import { clock, controlConfigured, refreshAccount, serverNow } from '../../lib/api.ts';
@@ -973,6 +974,7 @@ function LiveStage(props: {
     }
   };
   const [fxOpen, setFxOpen] = useState(false);
+  const [pictureOpen, setPictureOpen] = useState(false);
   /** A seek on its way: where the song is about to jump (cleared when the cue lands). */
   const [seekTarget, setSeekTarget] = useState<number | null>(null);
   const raf = useRef(0);
@@ -1246,6 +1248,17 @@ function LiveStage(props: {
           </div>
         )}
         {app.showCueDeck && (track.singerCount > 1 || plan.singers.length > 1) && started && countdown === null && <CueDeck lines={track.lyrics} tMs={tMs} mySlot={mySlot} plan={plan} />}
+        {pictureOpen && (
+          <div class="drawer" role="dialog" aria-label="My picture">
+            <div class="row between">
+              <b>My picture — on every stage and in the show</b>
+              <button class="btn icon sm" aria-label="Close my picture" onClick={() => setPictureOpen(false)}>
+                <IcX size={16} />
+              </button>
+            </div>
+            <PictureChoices compact />
+          </div>
+        )}
         {fxOpen && (
           <div class="drawer sound" role="dialog" aria-label="Sound">
             <div class="row between">
@@ -1268,6 +1281,9 @@ function LiveStage(props: {
           <div class="main">
             <button class={`btn icon ${app.cameraOn && stage.videoAllowed ? 'on' : ''}`} aria-label="Camera" disabled={!stage.videoAllowed} title={stage.videoAllowed || session.yourVideo.value?.reason === 'plan' ? 'Camera' : session.yourVideo.value?.note || 'Camera'} onClick={() => updateApp({ cameraOn: !app.cameraOn })}>
               {app.cameraOn && stage.videoAllowed ? <IcCamera /> : <IcCameraOff />}
+            </button>
+            <button class={`btn icon ${pictureOpen ? 'on' : ''}`} aria-label="My picture" title="My picture: me on the stage or my camera as it is; still, following me, or zooming with my voice" aria-pressed={pictureOpen} disabled={!stage.videoAllowed} onClick={() => setPictureOpen((o) => !o)}>
+              <IcZoom />
             </button>
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" title="Hear myself (use headphones)" onClick={() => updateAudio({ monitor: !audio.monitor })}>
               <IcHeadphones />

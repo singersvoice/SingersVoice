@@ -74,6 +74,37 @@ describe('PersonSegmenter', () => {
     }
   });
 
+  it("the picture choice: 'cutout' draws the camera through the mask (destination-in); 'camera' draws it as it is — opaque — and still keeps the mask for the stage frame's measurement", async () => {
+    vi.useFakeTimers();
+    try {
+      fakeModel();
+      const seg = new PersonSegmenter(480, 640);
+      void seg.start(dom.current.video as unknown as HTMLVideoElement, true);
+      await flush();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(seg.mode).toBe('model');
+      const person = (seg.canvas as unknown as { getContext: () => { calls: string[] } }).getContext();
+      const mask = (seg.maskCanvas as unknown as { getContext: () => { calls: string[] } }).getContext();
+      const since = (calls: string[], n: number) => calls.slice(n).join(' ');
+      let p0 = person.calls.length;
+      let m0 = mask.calls.length;
+      await vi.advanceTimersByTimeAsync(200);
+      expect(since(person.calls, p0)).toMatch(/drawImage\(9\) op:destination-in drawImage\(5\)/); // the camera (centre-cropped), then the mask over it
+      expect(since(mask.calls, m0)).toContain('drawImage(5)'); // the grey mask drawn
+      seg.picture = 'camera';
+      p0 = person.calls.length;
+      m0 = mask.calls.length;
+      await vi.advanceTimersByTimeAsync(200);
+      const drawn = since(person.calls, p0);
+      expect(drawn).toContain('drawImage(9)');
+      expect(drawn).not.toContain('op:destination-in'); // opaque: nothing cut away
+      expect(since(mask.calls, m0)).toContain('drawImage(5)'); // the mask still finds the person
+      seg.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('asks a silent model again after MODEL_RETRY_MS', async () => {
     vi.useFakeTimers();
     try {

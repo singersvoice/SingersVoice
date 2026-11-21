@@ -14,6 +14,7 @@
  * song (nothing is recorded per song on any device).
  */
 import { meetIsOpen, participantMedia, SLOT_COLORS, type Meet, type Participant, type PerformanceChapter, type PerformanceSinger, type SingerSlot } from '@singersvoice/protocol';
+import { effect } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
@@ -152,6 +153,14 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       if (sending) mesh?.setLocalStream(feed.packedStream());
     };
   }, [camStream, camOn, onStage]);
+  // My picture and framing choices (Settings → Camera, the Picture sheet) reach the feed live; the voice's push-in follows my meter.
+  useEffect(() => feed.setLook(app.picture, app.framing), [app.picture, app.framing]);
+  const micForVoice = opts.engine?.micOpen.value ?? false;
+  useEffect(() => {
+    const level = opts.engine?.recorder?.level;
+    if (app.framing !== 'voice' || !level) return;
+    return effect(() => feed.voice(level.value));
+  }, [app.framing, opts.engine, micForVoice]);
   // The stage frame's word on my distance to the camera (sit back / come closer), for the stage strip.
   const [distance, setDistance] = useState<'close' | 'far' | null>(null);
   useEffect(() => {

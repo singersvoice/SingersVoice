@@ -386,6 +386,18 @@ try {
   await bob.page.getByRole('button', { name: 'Stage setup' }).click();
   await bob.page.locator('.sheet').waitFor();
   check(/Singer 2/.test(await bob.page.locator('.sheet .btn.accent').first().innerText()), "bob sings the song's second part by default — the one alice did not");
+  // The picture choices, right in the sheet: 'My camera as it is' makes the whole camera picture go out (the mask white to its corners —
+  // nothing cut away); 'Me on the stage' cuts bob out again (the corner, where nobody is, dark). The framing choice sits beside it.
+  const maskCorner = () => bob.page.evaluate(() => { const f = window.__svFeed; if (!f) return -1; const d = f.maskCanvas.getContext('2d').getImageData(4, 4, 1, 1).data; return d[0]; });
+  const maskAfter = async (want) => { for (let i = 0; i < 40; i++) { const v = await maskCorner(); if (want(v)) return v; await wait(250); } return maskCorner(); };
+  check((await bob.page.locator('.sheet [role=radiogroup][aria-label="My picture"] button').allInnerTexts()).join('|') === 'Me on the stage|My camera as it is' && (await bob.page.locator('.sheet [role=radiogroup][aria-label="Framing"] button').allInnerTexts()).join('|') === 'Still|Follow me|Zoom with my voice', 'the sheet offers the picture (me on the stage / my camera as it is) and the framing (still / follow me / zoom with my voice)');
+  check((await bob.page.locator('.sheet [role=radiogroup][aria-label="Framing"] button.on').innerText()) === 'Still', "the framing is 'Still' by default: nothing zooms");
+  await bob.page.locator('.sheet').getByRole('radio', { name: 'My camera as it is' }).click();
+  const cornerCamera = await maskAfter((v) => v > 200);
+  check(cornerCamera > 200, `'My camera as it is': the picture goes out whole, room and all (mask corner ${cornerCamera})`);
+  await bob.page.locator('.sheet').getByRole('radio', { name: 'Me on the stage' }).click();
+  const cornerCutout = await maskAfter((v) => v >= 0 && v < 40);
+  check(cornerCutout >= 0 && cornerCutout < 40, `'Me on the stage': cut out again (mask corner ${cornerCutout})`);
   await bob.page.locator('.sheet').getByRole('button', { name: 'Close' }).click(); // (Escape reaches the window only once the page has the focus; the X always does)
   await bob.page.locator('.sheet').waitFor({ state: 'detached', timeout: 10000 });
   check((await bob.page.locator('.lyrics').count()) === 1, 'the lyrics are there: the song came from the track database');
