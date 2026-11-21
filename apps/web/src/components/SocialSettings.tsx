@@ -91,10 +91,16 @@ export function SocialSettings() {
     <section class="card stack" id="social" data-social>
       <h2>Social</h2>
       <div class="small muted">
-        Connect your networks here and any performance saved to your Drive posts to them from SingersVoice, on your own handle: pick the section (from–to), the clip is made on this device, <b>Post</b> sends it, and the link comes back. On a phone, <b>Share…</b> can also hand a clip to any app installed.
+        Any performance saved to your Drive can go to your own social accounts as a clip — two ways, both as yourself:
+      </div>
+      <div class="small muted" style="padding-left:12px">
+        <b>From your own apps</b> — on a phone, <b>Post from your apps</b> opens Facebook, Instagram, X, Snapchat, WhatsApp… whichever you have, signed in already. Nothing to set up; the only way to a personal Facebook wall or a personal Instagram account (no app may post to those for you).
+      </div>
+      <div class="small muted" style="padding-left:12px">
+        <b>Without leaving SingersVoice</b> — connect your X, a Facebook Page you manage and the Instagram professional account linked to it below: you sign in on the network's own page, and from then on <b>Post</b> sends the clip straight there, on your handle, with the link back.
       </div>
       <div class="small faint" data-social-privacy>
-        You sign in on the network's own page — SingersVoice never sees your password there. The network hands SingersVoice a key, which is sealed on the SingersVoice service (never on this device, never in your Drive), used only when you post, and deleted by Disconnect.
+        SingersVoice never sees your password on any of those pages. A connected network hands SingersVoice a key, sealed on the SingersVoice service (never on this device, never in your Drive), used only when you post, and deleted by Disconnect.
       </div>
       <Switch checked={app.socialOffer} onChange={(v) => updateApp({ socialOffer: v })} label="Offer to post a clip after I keep a take" hint="The clip sheet opens by itself when a take is kept; Post a clip is on every saved performance anyway." />
       <Field label="A clip starts out this long">
@@ -129,7 +135,7 @@ export function SocialSettings() {
               </>
             ) : (
               <span class="small faint" data-social-unconfigured="x">
-                Not switched on yet — the SingersVoice admin does that on the Admin page (<i>Social posting</i>). <b>Connect X</b> appears here the moment it is.
+                Connecting here is not open yet: X first has to know SingersVoice (the site owner registers it with X once — Admin → Social posting; not your account, nothing of yours). <b>Connect X</b> appears here the moment that is done. Meanwhile, <b>Post from your apps</b> posts to your X from the X app.
               </span>
             )}
           </div>
@@ -154,7 +160,7 @@ export function SocialSettings() {
               </>
             ) : (
               <span class="small faint" data-social-unconfigured="meta">
-                Not switched on yet — the SingersVoice admin does that on the Admin page (<i>Social posting</i>). <b>Connect Facebook &amp; Instagram</b> appears here the moment it is.
+                Connecting here is not open yet: Facebook first has to know SingersVoice (the site owner registers it with Meta once — Admin → Social posting; not your account, nothing of yours). <b>Connect Facebook &amp; Instagram</b> appears here the moment that is done. Meanwhile, <b>Post from your apps</b> posts from the Facebook and Instagram apps — to your personal wall too.
               </span>
             )}
           </div>

@@ -1,11 +1,14 @@
 /**
  * Post a clip: the sheet on a saved performance (Performances, and the review after a take is kept). The
  * singer picks the section — two sliders, from and to, and Play section to hear it; or the whole
- * performance — writes the caption, ticks where it goes, and taps Make the clip. Post then sends it to the
- * networks connected in Settings → Social (X, a Facebook Page, Instagram), each on the singer's own handle,
- * through the service, and the links come back. No network connected yet: the sheet leads to Settings →
- * Social. Beside that, on a phone Share… opens the system sheet with the file (any app installed); Download
- * keeps the file; on a computer the networks' composers open with the caption, the clip to attach by hand.
+ * performance — writes the caption, and taps Make the clip. Two ways out, both on the singer's own accounts:
+ *   - "Post from your apps": the phone's share sheet with the file — Facebook, Instagram, X, Snapchat,
+ *     WhatsApp, whatever is installed, where the singer is signed in already. Nothing to set up, and the
+ *     only road to a personal Facebook wall or a personal Instagram account (no app may post to those).
+ *   - "Post to …" without leaving SingersVoice: the networks connected in Settings → Social (X, a Facebook
+ *     Page, the Instagram professional account linked to it), each on the singer's own handle, through the
+ *     service, the links back.
+ * On a computer: Download, then the networks' composers open with the caption, the clip to attach by hand.
  */
 import { CAPTION_MAX, CLIP_LIMITS, CLIP_MAX_SECONDS, clampClip, clipCaption, composerUrl, formatMs, socialTitle, type SocialNetwork, type SocialPost, type SocialStatus } from '@singersvoice/protocol';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -194,11 +197,16 @@ export function ClipSheet(props: { source: ClipSource; onClose: () => void }) {
         <div class="stack" style="gap:6px" data-clip-networks>
           <div class="small muted">Post to</div>
           {connected.length === 0 ? (
-            <div class="row wrap" style="gap:8px;align-items:center">
-              <span class="small faint">No network connected yet.</span>
-              <button class="btn sm primary" onClick={() => go('/settings#social')} data-clip-connect>
-                Connect X, Facebook or Instagram
-              </button>
+            <div class="stack" style="gap:6px">
+              <span class="small faint" data-clip-own-apps>
+                {sharable ? 'Make the clip, then Post from your apps: Facebook, Instagram, X, Snapchat, WhatsApp — your own accounts, signed in on this phone already; nothing to set up.' : 'Make the clip, then Download it and post it on facebook.com, x.com or instagram.com, signed in as yourself.'}
+              </span>
+              <div class="row wrap" style="gap:8px;align-items:center">
+                <span class="small faint">To post without leaving SingersVoice (your X, a Facebook Page, Instagram):</span>
+                <button class="btn sm" onClick={() => go('/settings#social')} data-clip-connect>
+                  Connect your accounts
+                </button>
+              </div>
             </div>
           ) : (
             <div class="row wrap" style="gap:10px">
@@ -231,8 +239,8 @@ export function ClipSheet(props: { source: ClipSource; onClose: () => void }) {
           </div>
           <div class="row wrap" style="gap:8px">
             {sharable && canShareFile(fileOf(clip)) && (
-              <button class="btn primary" onClick={() => void share()} data-clip-share>
-                <IcShare /> Share…
+              <button class="btn primary" onClick={() => void share()} data-clip-share title="Facebook, Instagram, X, Snapchat, WhatsApp — whatever is on this phone, your own accounts">
+                <IcShare /> Post from your apps…
               </button>
             )}
             <button class="btn" onClick={download} data-clip-download>
@@ -249,7 +257,7 @@ export function ClipSheet(props: { source: ClipSource; onClose: () => void }) {
           </div>
           {!sharable && (
             <div class="row wrap small" style="gap:8px;align-items:center" data-clip-composers>
-              <span class="muted">On this computer: Download, then open</span>
+              <span class="muted">On this computer: Download, then post it as yourself on</span>
               <a class="btn sm" href={composerUrl('x', caption, source.link ?? null) ?? '#'} target="_blank" rel="noopener">
                 X
               </a>
@@ -258,7 +266,7 @@ export function ClipSheet(props: { source: ClipSource; onClose: () => void }) {
                   Facebook
                 </a>
               )}
-              <span class="muted">and attach the clip (Instagram posts from its phone app).</span>
+              <span class="muted">(attach the clip there; Instagram and Snapchat post from their phone apps).</span>
             </div>
           )}
           {results.length > 0 && (

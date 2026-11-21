@@ -8,6 +8,20 @@ app. For that to be offered, SingersVoice itself has to be registered once with 
 go into GitHub and the deploy puts them on the service by itself. Nothing is pasted into chat, nothing
 goes into the repository.
 
+## Two ways, both as the singer
+
+1. **From their own apps** (nothing to set up): *Post from your apps* on a phone opens the share sheet
+   with the clip — Facebook, Instagram, X, Snapchat, WhatsApp, whatever is installed, where the singer is
+   signed in already. This is the **only** road to a personal Facebook wall and a personal Instagram
+   account: no app may post to those on anyone's behalf (the networks' rule). On a computer: Download,
+   then post on facebook.com / x.com / instagram.com as oneself.
+2. **Without leaving SingersVoice**: the singer connects their X, a Facebook Page they manage and the
+   Instagram professional account linked to it (Settings → Social → Connect; the sign-in is on the
+   network's own page, as themselves), and *Post* sends the clip straight there with the link back. For
+   this, the networks must know SingersVoice: the site owner registers it with X and with Meta **once**
+   (below) — that is a registration of the app, never anyone's account; singers always sign into their
+   own.
+
 ## What singers get
 
 - **Post a clip** on every saved performance (Performances → the performance → *Post a clip*), and the

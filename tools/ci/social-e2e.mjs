@@ -114,7 +114,7 @@ try {
   await page.locator('[data-clip-sheet]').waitFor({ timeout: 20000 });
   check(true, 'the take kept: the clip sheet opens by itself (Settings → Social offers it)');
   const sheet = page.locator('[data-clip-sheet]');
-  check(/No network connected yet/.test(await sheet.locator('[data-clip-networks]').innerText()) && (await sheet.locator('[data-clip-connect]').count()) === 1, 'with no network connected the sheet offers the way to connect one');
+  check(/Download it and post it on facebook\.com/.test(await sheet.locator('[data-clip-own-apps]').innerText()) && (await sheet.locator('[data-clip-connect]').count()) === 1, "with no network connected the sheet says how to post from the singer's own accounts (a computer: Download, then the sites), and offers Connect for posting from inside the app");
   check((await sheet.locator('[data-clip-whole]').count()) === 1, 'a short performance can go out whole');
   const total = Number(await sheet.locator('[data-clip-end]').getAttribute('max'));
   check(total >= 6500 && total <= 20000, `the sliders span the take (${total} ms)`);
@@ -143,7 +143,7 @@ try {
   await page.goto(`${base}settings?${control}#social`, { waitUntil: 'networkidle' });
   await page.locator('[data-social-networks]').waitFor();
   check((await page.locator('[data-social-row]').count()) === 3 && (await page.locator('[data-social-row="snapchat"]').count()) === 0 && /personal account cannot be posted to by any app/.test(await page.locator('[data-social-row="instagram"]').innerText()), 'the Social section lists X, Facebook Page and Instagram — nothing that cannot be posted to (no Snapchat)');
-  check((await page.locator('[data-social-unconfigured="x"]').count()) === 1 && (await page.locator('[data-social-connect="x"]').count()) === 0 && /Admin page/.test(await page.locator('[data-social-unconfigured="x"]').innerText()), 'before the admin switches posting on, the row says so and points at the Admin page');
+  check((await page.locator('[data-social-unconfigured="x"]').count()) === 1 && (await page.locator('[data-social-connect="x"]').count()) === 0 && /Post from your apps/.test(await page.locator('[data-social-unconfigured="x"]').innerText()) && /Social posting/.test(await page.locator('[data-social-unconfigured="x"]').innerText()), 'before the site owner registers SingersVoice with X, the row says so — and that the singer posts from the X app meanwhile');
 
   // ---- Admin → Social posting: the operator pastes what X and Meta gave (the fakes' ids); the callbacks are shown to copy ----
   await page.goto(`${base}admin?${control}#social-apps`, { waitUntil: 'networkidle' });
