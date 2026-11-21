@@ -12,7 +12,7 @@
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
     "GOOGLE_CLIENT_ID": "",
-    "ALLOWED_ORIGINS": "https://singersvoice.github.io"
+    "ALLOWED_ORIGINS": ""
   },
   "durable_objects": {
     "bindings": [{ "name": "SVT_DB", "class_name": "SvtDb" }]

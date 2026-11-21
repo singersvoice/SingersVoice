@@ -1,4 +1,14 @@
-name: Deploy web (GitHub Pages)
+name: Deploy web
+
+# The app is built once per host and published to both, on every push to main:
+#   · Cloudflare Pages — the site at https://www.singersvoice.com (served from /; docs/HOSTING.md).
+#     Runs when the repo variable CF_PAGES_PROJECT names the Pages project (e.g. singersvoice → singersvoice.pages.dev).
+#   · GitHub Pages — https://singersvoice.github.io/SingersVoice/ (served from /SingersVoice/), kept while the move is on.
+#     Set the repo variable GH_PAGES to `off` to stop publishing there.
+# Repo → Settings → Secrets and variables → Actions: variables VITE_GOOGLE_CLIENT_ID, VITE_GOOGLE_API_KEY, VITE_CONTROL_URL
+# (optional — else discovered from Cloudflare), CF_PAGES_PROJECT, GH_PAGES, VITE_CANONICAL_ORIGIN (optional: once the domain
+# works, `https://www.singersvoice.com` sends the GitHub page's visitors there); secrets CLOUDFLARE_API_TOKEN (Workers Scripts
+# + Cloudflare Pages: Edit), CLOUDFLARE_ACCOUNT_ID.
 
 on:
   push:
@@ -20,7 +30,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  cloudflare:
+    if: vars.CF_PAGES_PROJECT != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: cloudflare-pages
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: |
+          npm i -g npm@12
+          npm ci --no-audit --no-fund
+      - name: Find the sv-control (SVT DB) URL
+        id: control
+        env:
+          INPUT_URL: ${{ inputs.control_url }}
+          VAR_URL: ${{ vars.VITE_CONTROL_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node tools/cf/control-url.mjs
+      - name: Build for www.singersvoice.com
+        env:
+          BASE_PATH: /
+          SV_HOST: cloudflare
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
+          VITE_GOOGLE_API_KEY: ${{ vars.VITE_GOOGLE_API_KEY }}
+          VITE_CONTROL_URL: ${{ steps.control.outputs.url }}
+          VITE_APP_VERSION: ${{ github.sha }}
+        run: npm run build
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_PAGES_PROJECT: ${{ vars.CF_PAGES_PROJECT }}
+        run: node tools/cf/pages-deploy.mjs
+
   build:
+    if: vars.GH_PAGES != 'off'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -40,14 +92,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: node tools/cf/control-url.mjs
-      - name: Build
+      - name: Build for GitHub Pages
         env:
           BASE_PATH: /SingersVoice/
-          # Repo → Settings → Secrets and variables → Actions → Variables
+          SV_HOST: github
           VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
           VITE_GOOGLE_API_KEY: ${{ vars.VITE_GOOGLE_API_KEY }}
           VITE_CONTROL_URL: ${{ steps.control.outputs.url }}
           VITE_APP_VERSION: ${{ github.sha }}
+          VITE_CANONICAL_ORIGIN: ${{ vars.VITE_CANONICAL_ORIGIN }}
         run: npm run build
       - uses: actions/configure-pages@v5
         with:
@@ -57,6 +110,7 @@ jobs:
           path: apps/web/dist
 
   deploy:
+    if: vars.GH_PAGES != 'off'
     needs: build
     runs-on: ubuntu-latest
     environment:

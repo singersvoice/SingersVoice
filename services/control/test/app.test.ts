@@ -1063,6 +1063,19 @@ describe('sv-control API', () => {
       const end3 = Math.floor(Date.now() / 1000) + 400 * 86400;
       expect((await webhook({ id: 'evt_10', type: 'customer.subscription.updated', data: { object: { id: 'sub_club', customer: 'cus_1', status: 'active', current_period_end: end3, metadata: { userId: kimId, planId: 'club' } } } })).status).toBe(200);
       expect((await json<{ user: UserRecord }>(await app.request('/me', { headers: as('kim') }))).user.subscription?.expiresAt).toBe(new Date(end3 * 1000).toISOString());
+      // The app says where it lives (the site at www.singersvoice.com; the GitHub page until the move is over): Stripe sends the
+      // singer back there — when it is one of our origins and the page asking really is that origin. A stranger's address, an
+      // address with a query, a page claiming another of our origins: the service's APP_URL.
+      const back = async (appUrl: string, origin?: string) => {
+        const n = asked.length;
+        expect((await app.request('/billing/portal', { method: 'POST', headers: { ...as('kim'), ...(origin ? { Origin: origin } : {}) }, body: JSON.stringify({ appUrl }) })).status).toBe(200);
+        return new URLSearchParams(asked.slice(n).find((a) => a.url.endsWith('/billing_portal/sessions'))!.body).get('return_url');
+      };
+      expect(await back('https://www.singersvoice.com/', 'https://www.singersvoice.com')).toBe('https://www.singersvoice.com/plans');
+      expect(await back('https://singersvoice.github.io/SingersVoice/')).toBe('https://singersvoice.github.io/SingersVoice/plans');
+      expect(await back('https://evil.example/SingersVoice/')).toBe('https://singersvoice.github.io/SingersVoice/plans');
+      expect(await back('https://www.singersvoice.com/?x=1')).toBe('https://singersvoice.github.io/SingersVoice/plans');
+      expect(await back('https://www.singersvoice.com/', 'https://singersvoice.github.io')).toBe('https://singersvoice.github.io/SingersVoice/plans');
     } finally {
       delete deps.billing;
     }

@@ -9,6 +9,13 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/screens.css';
 
+// The app has moved (a build at the old address knows the new one): the same page there, query and all. `?stay` keeps you here.
+const canonical = (import.meta.env.VITE_CANONICAL_ORIGIN ?? '').replace(/\/$/, '');
+if (canonical && /^https:\/\/[a-z0-9.-]+$/i.test(canonical) && canonical !== location.origin && !new URLSearchParams(location.search).has('stay')) {
+  const rest = location.pathname.startsWith(import.meta.env.BASE_URL) ? location.pathname.slice(import.meta.env.BASE_URL.length) : location.pathname.replace(/^\//, '');
+  location.replace(`${canonical}/${rest}${location.search}${location.hash}`);
+}
+
 const root = document.getElementById('app')!;
 root.innerHTML = '';
 render(<App />, root);

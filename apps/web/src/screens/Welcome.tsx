@@ -61,7 +61,7 @@ export function Welcome() {
           Singers<span style="color:var(--accent)">Voice</span>
         </h1>
         <p class="muted tagline" data-tagline>
-          <b>“One Virtual Stage. Endless Musical Possibilities.”</b> — Sing solo, harmonize globally, or perform with musicians anywhere, play instruments, and collaborate live from anywhere.
+          <b>For everyone who lives and breathes music.</b> Find your songs. Feel every lyric. Sing together and save to your Drive.
         </p>
       </div>
       <div class="actions">

@@ -295,7 +295,7 @@ function SourceStep(props: {
         >
           <IcMusic size={30} />
           <b>{props.audio ? 'Audio loaded — tap to replace' : 'Pick the backing track (mp3, m4a, wav)'}</b>
-          <span class="small muted">{props.audio ? `${formatMsPrecise(t.durationMs)} · ${(props.audio.size / 1048576).toFixed(1)} MB` : 'Up to 15 minutes. Karaoke/instrumental versions work best.'}</span>
+          <span class="small muted">{props.audio ? `${formatMsPrecise(t.durationMs)} · ${(props.audio.size / 1048576).toFixed(1)} MB` : 'Up to 15 minutes. Instrumental / backing-track versions (the song without its lead vocal) work best.'}</span>
           <input ref={fileRef} type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.webm" class="hidden" onChange={(e) => {
             const f = (e.currentTarget as HTMLInputElement).files?.[0];
             if (f) void props.onAudio(f);

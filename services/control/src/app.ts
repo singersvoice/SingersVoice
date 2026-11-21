@@ -166,7 +166,10 @@ function chapterOf(c: unknown): PerformanceChapter | null {
   return { eventId, eventTitle: String(x.eventTitle ?? '').slice(0, 60), index: Math.max(0, Math.min(100_000, Math.round(Number(x.index) || 0))), kind, trackId: String(x.trackId ?? '').slice(0, 120), trackTitle: String(x.trackTitle ?? '').slice(0, 120), songEpoch: Math.max(0, Math.round(Number(x.songEpoch) || 0)), startedAt, startMs: Math.max(0, Math.round(Number(x.startMs) || 0)), ...(typeof x.songMs === 'number' && Number.isFinite(x.songMs) ? { songMs: Math.max(0, Math.round(x.songMs)) } : {}) };
 }
 
-const DEFAULT_ORIGINS = ['https://singersvoice.github.io', 'http://localhost:5173', 'http://localhost:4173', 'http://127.0.0.1:5173', 'http://127.0.0.1:4173'];
+const DEFAULT_ORIGINS = ['https://www.singersvoice.com', 'https://singersvoice.com', 'https://singersvoice.github.io', 'https://singersvoice.pages.dev', 'http://localhost:5173', 'http://localhost:4173', 'http://127.0.0.1:5173', 'http://127.0.0.1:4173'];
+/** A Cloudflare Pages preview of the site (a branch, a commit) is one of ours too. */
+const PREVIEW_ORIGIN = /^https:\/\/[a-z0-9-]+\.singersvoice\.pages\.dev$/;
+const originAllowed = (origin: string, extra: readonly string[] = []): boolean => DEFAULT_ORIGINS.includes(origin) || extra.includes(origin) || PREVIEW_ORIGIN.test(origin);
 
 function err(c: Context<Env>, status: 400 | 401 | 403 | 404 | 409 | 410, code: string, message: string) {
   return c.json({ error: message, code }, status);
@@ -205,8 +208,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         // The public watch portal is read-only and carries no sign-in: any origin, so the Worker can
         // cache its answers at the edge for every viewer alike (see worker.ts).
         if (c.req.path.startsWith('/watch/')) return '*';
-        const allowed = [...DEFAULT_ORIGINS, ...(c.get('deps')?.allowedOrigins ?? [])];
-        return allowed.includes(origin) ? origin : allowed[0]!;
+        return originAllowed(origin, c.get('deps')?.allowedOrigins ?? []) ? origin : DEFAULT_ORIGINS[0]!;
       },
       allowHeaders: ['Authorization', 'Content-Type', 'X-Dev-User', 'X-Dev-Name'],
       allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -1474,7 +1476,24 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 
   // ---------- Billing: the plans, through Stripe (docs/BILLING.md, docs/global-payments-architecture.md) ----------
 
-  const billingOf = (deps: AppDeps): BillingConfig => deps.billing ?? { appUrl: 'https://singersvoice.github.io/SingersVoice' };
+  const billingOf = (deps: AppDeps): BillingConfig => deps.billing ?? { appUrl: 'https://www.singersvoice.com' };
+  /**
+   * Where Stripe sends the singer back: the app's own address when it says one (origin + base path) and the origin is one of
+   * ours — the site lives at www.singersvoice.com and, until the move is over, at singersvoice.github.io/SingersVoice/ — else
+   * the service's APP_URL. Never an address from anywhere else (an open door to somebody's page).
+   */
+  const billingFor = (c: Context<Env>, deps: AppDeps, appUrl: unknown): BillingConfig => {
+    const b = billingOf(deps);
+    if (typeof appUrl !== 'string' || appUrl.length > 200) return b;
+    try {
+      const u = new URL(appUrl);
+      if (!originAllowed(u.origin, deps.allowedOrigins ?? []) || u.search || u.hash || !/^\/[A-Za-z0-9_-]*\/?$/.test(u.pathname)) return b;
+      if (c.req.header('origin') && c.req.header('origin') !== u.origin) return b;
+      return { ...b, appUrl: `${u.origin}${u.pathname.replace(/\/$/, '')}` };
+    } catch {
+      return b;
+    }
+  };
   const CURRENCY = /^[a-z]{3}$/;
 
   /** A period the admin gave (a grant, a renewal, dates set by hand) on the payments record: amount 0, the granter named. */
@@ -1552,8 +1571,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   app.post('/plans/checkout', async (c) => {
     const deps = c.get('deps');
     const user = c.get('user');
-    const b = billingOf(deps);
-    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { planId?: string; currency?: string };
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { planId?: string; currency?: string; appUrl?: string };
+    const b = billingFor(c, deps, body.appUrl);
     const settings = await deps.store.getBillingSettings();
     const plan = settings.plans.find((p) => p.id === body.planId);
     if (!plan || plan.id === 'free') return err(c, 400, 'bad_request', 'Pick a plan to pay for');
@@ -1600,7 +1619,8 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 
   app.post('/billing/portal', async (c) => {
     const deps = c.get('deps');
-    const b = billingOf(deps);
+    const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { appUrl?: string };
+    const b = billingFor(c, deps, body.appUrl);
     const sub = await deps.store.getSubscription(c.get('user').userId);
     if (!stripeConfigured(b) || !sub?.customerId) return err(c, 404, 'no_customer', 'No subscription to manage on this account');
     try {

@@ -1,6 +1,6 @@
 # Testing SingersVoice on iOS, Android and the web
 
-Live build: **https://singersvoice.github.io/SingersVoice/**
+Live build: **https://www.singersvoice.com/** (and, while the move is on, https://singersvoice.github.io/SingersVoice/)
 
 ## Install as an app
 

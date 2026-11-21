@@ -25,7 +25,7 @@ that the code depends on.
 4. **No session can fail silently.** Takes are secured in Temp as soon as they end; uploads resume; token expiry
    surfaces as a one-tap *Reconnect*; the stage keeps the screen awake and warns before leaving mid-take.
 5. **Lightweight.** First load ≈ 58 KB gzipped (Preact + signals + the app). Backgrounds, the cut-out model and
-   Google scripts load on demand. The same `dist/` runs on GitHub Pages, Cloudflare or any static host.
+   Google scripts load on demand. The same code builds for Cloudflare Pages (www.singersvoice.com, from `/`) and GitHub Pages (from `/SingersVoice/`) — docs/HOSTING.md.
 
 ## Portals (loosely coupled)
 

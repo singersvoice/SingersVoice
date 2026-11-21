@@ -21,7 +21,7 @@ export default defineConfig({
       manifest: {
         name: 'SingersVoice',
         short_name: 'SingersVoice',
-        description: 'One Virtual Stage. Endless Musical Possibilities. Sing solo, harmonize globally, or perform with musicians anywhere, play instruments, and collaborate live from anywhere.',
+        description: 'For everyone who lives and breathes music. Find your songs, feel every lyric, sing together and save to your Drive.',
         id: base,
         start_url: base,
         scope: base,

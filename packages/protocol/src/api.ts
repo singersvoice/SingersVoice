@@ -158,11 +158,12 @@ export interface Routes {
   /** The Plans page: the plans on offer, the currencies, where this account stands, its payments. */
   'GET /plans': { res: PlansResponse };
   /** Start a Stripe Checkout for a plan in a currency it is priced in: the page to send the browser to, and the order it opened. */
-  'POST /plans/checkout': { req: { planId: PlanId; currency: string }; res: { url: string; orderId: string } };
+  /** `appUrl`: where this app lives (origin + base path) — Stripe sends the singer back there; the service takes it only from an allowed origin. */
+  'POST /plans/checkout': { req: { planId: PlanId; currency: string; appUrl?: string }; res: { url: string; orderId: string } };
   /** Back from Checkout: what became of it (paid, still processing — a bank's confirmation on its way —, failed, canceled, expired). */
   'GET /billing/session/:id': { res: { order: OrderRecord } };
   /** Open the Stripe Customer Portal (change card, cancel, invoices). */
-  'POST /billing/portal': { req: Record<string, never>; res: { url: string } };
+  'POST /billing/portal': { req: { appUrl?: string }; res: { url: string } };
   /** A club owner's club: the members named (email addresses) who share the club's video hours; add one; remove one. */
   'GET /club': { res: ClubStatus };
   'POST /club/members': { req: { email: string }; res: ClubStatus };

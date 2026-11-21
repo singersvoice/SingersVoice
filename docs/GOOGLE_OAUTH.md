@@ -22,9 +22,9 @@ SingersVoice signs people in with Google and keeps their files in **their** Driv
 4. **Credentials → Create credentials → OAuth client ID** → *Web application*:
    - Name: `SingersVoice Web`
    - **Authorized JavaScript origins**:
-     - `https://singersvoice.github.io`
+     - `https://www.singersvoice.com` (the site — docs/HOSTING.md)
+     - `https://singersvoice.github.io` (the GitHub page, while it is still published)
      - `http://localhost:5173` and `http://localhost:4173` (local dev/preview)
-     - your Cloudflare domain later (e.g. `https://app.singersvoice.com`)
    - No redirect URIs are needed for the token flow.
 5. Copy the client ID (`…apps.googleusercontent.com`).
 

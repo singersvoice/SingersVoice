@@ -269,7 +269,7 @@ export function TracksPortal() {
             <div class="muted small">
               {sel.artist || 'Unknown artist'} · {formatMs(sel.durationMs)} · updated {new Date(sel.updatedAt).toLocaleDateString()}
             </div>
-            {sel.video && <div class="callout small">A YouTube song track: the karaoke video stands in for the lyrics on stage; its sound is the backing track. The video file in Tracks/YT is shared — anyone with its link can play it.</div>}
+            {sel.video && <div class="callout small">A YouTube song track: the song's video stands in for the lyrics on stage; its sound is the backing track. The video file in Tracks/YT is shared — anyone with its link can play it.</div>}
             <a class="btn primary block" href={href(`/studio/sing/${encodeURIComponent(sel.trackId)}`)}>
               Sing this track
             </a>

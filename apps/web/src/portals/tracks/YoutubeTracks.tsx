@@ -72,7 +72,7 @@ export function YoutubeTracks(props: { tracks: TrackSummary[]; onAdded: () => vo
 
   return (
     <div class="stack" data-yt-section>
-      <p class="muted small">Find a karaoke video on YouTube and bring it into your Drive as a song track. The video goes to <span class="kbd">SingersVoice/Tracks/YT</span> with a link anyone can play; its sound becomes the backing track, and the video stands in for the lyrics on stage — here and in a meet, for every singer.</p>
+      <p class="muted small">Find a backing-track video on YouTube — the song without its lead vocal — and bring it into your Drive as a song track. The video goes to <span class="kbd">SingersVoice/Tracks/YT</span> with a link anyone can play; its sound becomes the backing track, and the video stands in for the lyrics on stage — here and in a meet, for every singer.</p>
       {status && !status.available && (
         <div class="callout warn" data-yt-unavailable>
           <b>Not available yet.</b> {status.note || 'The relay that fetches YouTube videos is not deployed.'} Deploying it is one GitHub secret away (docs/RELAY.md).
@@ -92,7 +92,7 @@ export function YoutubeTracks(props: { tracks: TrackSummary[]; onAdded: () => vo
       </form>
       {q.trim() && youtubeSearchQuery(q) !== q.trim() && (
         <div class="small muted" data-yt-asked>
-          YouTube is asked for “{youtubeSearchQuery(q)}” — a karaoke track, always.
+          YouTube is searched for a backing track of “{q}” — the song without its lead vocal, always.
         </div>
       )}
       {items && !items.length && <Empty title="Nothing found" body="Try the song's name another way, or paste the video's link." />}

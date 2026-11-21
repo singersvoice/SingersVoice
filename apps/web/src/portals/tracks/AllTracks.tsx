@@ -319,7 +319,7 @@ export function AllTracks(props: { tracks: TrackSummary[]; onChanged: () => void
           {ytOnly === null && status?.available !== false && <div class="muted small">Press Search for YouTube results{ytSearching ? '…' : ''}</div>}
           {ytOnly !== null && youtubeSearchQuery(q) !== q.trim() && (
             <div class="muted small" data-yt-asked>
-              YouTube was asked for “{youtubeSearchQuery(q)}” — a karaoke track, always.
+              YouTube was searched for a backing track of “{q}” — the song without its lead vocal, always.
             </div>
           )}
           {ytOnly && !ytOnly.length && <div class="muted small">{yt?.items.length ? 'The YouTube results are all in the SingersVoice track database already (above).' : 'Nothing found on YouTube.'}</div>}

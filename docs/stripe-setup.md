@@ -13,7 +13,7 @@ assumed from these notes. Official docs: <https://docs.stripe.com/payments/check
    representative, and a **US business bank account** for payouts. Until it is activated, only test
    mode works (which is fine for everything below).
 2. **Settings → Business → Public details**: the business name, support email and phone, the
-   website (`https://singersvoice.github.io/SingersVoice`), and the **statement descriptor** (what
+   website (`https://www.singersvoice.com`), and the **statement descriptor** (what
    singers see on their statement, e.g. `SINGERSVOICE`).
 3. **Settings → Payments → Disputes**, **Radar** (fraud rules — the defaults are sensible), and the
    **payout schedule** (Settings → Payouts).
@@ -25,7 +25,7 @@ Settings → Payments → **Payment methods**. Turn on:
 - **Cards** (Visa, Mastercard, American Express, Discover and the other networks the account offers).
 - **Link**, **Apple Pay**, **Google Pay** — wallets show in Checkout where the device and the domain
   allow: register the app's domain under Settings → Payments → Payment method domains
-  (`singersvoice.github.io`).
+  (`www.singersvoice.com`; `singersvoice.github.io` too while the GitHub page is published).
 - **UPI** — listed under the India section *if Stripe offers it to this account* **(verify)**: a US
   account has to be eligible and the method enabled by Stripe for it; the business category matters.
   If UPI is not listed, ask Stripe support whether the account can have it. Until then singers in
@@ -72,7 +72,7 @@ Never in the repo. For the Cloudflare Worker (`services/control`):
 ```
 npx wrangler secret put STRIPE_SECRET_KEY        # sk_test_… first, sk_live_… when going live
 npx wrangler secret put STRIPE_WEBHOOK_SECRET    # whsec_… of the endpoint above (test, then live)
-npx wrangler secret put APP_URL                  # https://singersvoice.github.io/SingersVoice
+npx wrangler secret put APP_URL                  # https://www.singersvoice.com (the app also says where it lives on each checkout)
 ```
 
 For Node (`services/control` on a VM or Fly), the same three as environment variables

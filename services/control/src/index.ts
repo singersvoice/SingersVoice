@@ -42,7 +42,7 @@ const deps: AppDeps = {
   version: '2.1.0',
   youtubeHlsBase: process.env.YOUTUBE_HLS_BASE || undefined,
   googleApiKey: process.env.GOOGLE_API_KEY || undefined,
-  billing: { secretKey: process.env.STRIPE_SECRET_KEY || undefined, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined, appUrl: process.env.APP_URL || 'https://singersvoice.github.io/SingersVoice' },
+  billing: { secretKey: process.env.STRIPE_SECRET_KEY || undefined, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || undefined, appUrl: process.env.APP_URL || 'https://www.singersvoice.com' },
   relay: process.env.RELAY_URL && process.env.RELAY_SECRET ? { url: process.env.RELAY_URL, secret: process.env.RELAY_SECRET } : undefined,
   fakeYoutubeDir: process.env.SV_FAKE_YOUTUBE_DIR || undefined,
   fetchImpl: fakeGoogle,

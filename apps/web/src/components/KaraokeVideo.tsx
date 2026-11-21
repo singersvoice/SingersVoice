@@ -57,10 +57,10 @@ export function KaraokeVideo(props: { track: Pick<TrackPackageV2, 'trackId' | 'v
 
   return (
     <section class="lyrics karaoke" aria-live="off" data-karaoke={url ? 'ready' : error ? 'error' : 'loading'}>
-      {url && <video ref={ref} src={url} muted playsInline preload="auto" disablePictureInPicture controls={false} aria-label={`Karaoke video: ${props.track.title}`} />}
+      {url && <video ref={ref} src={url} muted playsInline preload="auto" disablePictureInPicture controls={false} aria-label={`Song video: ${props.track.title}`} />}
       {!url && !error && (
         <div class="muted small row" style="justify-content:center">
-          <Spinner /> loading the karaoke video…
+          <Spinner /> loading the song's video…
         </div>
       )}
       {error && (

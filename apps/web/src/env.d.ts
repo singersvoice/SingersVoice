@@ -9,6 +9,11 @@ interface ImportMetaEnv {
   /** Optional sv-control base URL (wss://…) for live meets. */
   readonly VITE_CONTROL_URL?: string;
   readonly VITE_APP_VERSION?: string;
+  /**
+   * Where the app now lives (`https://www.singersvoice.com`), set on a build published at an old address: a visitor of that
+   * address is sent to the same page there. Empty → no redirect. docs/HOSTING.md.
+   */
+  readonly VITE_CANONICAL_ORIGIN?: string;
 }
 
 interface ImportMeta {

@@ -63,7 +63,8 @@ jobs:
           PUBLISH_KEY_SECRET: ${{ secrets.PUBLISH_KEY_SECRET }}
           GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
           PRIVILEGED_EMAILS: ${{ vars.PRIVILEGED_EMAILS }}
-          ALLOWED_ORIGINS: https://singersvoice.github.io,https://${{ github.repository_owner }}.github.io
+          # The site's own origins (www.singersvoice.com, the pages.dev, the GitHub page) are built in; these are the extras.
+          ALLOWED_ORIGINS: https://singersvoice.github.io,https://${{ github.repository_owner }}.github.io${{ vars.CF_PAGES_PROJECT != '' && format(',https://{0}.pages.dev', vars.CF_PAGES_PROJECT) || '' }}
         run: node tools/cf/deploy.mjs
       - name: Point the web app at the service and redeploy it
         if: steps.check.outputs.ready == 'true' && steps.deploy.outputs.url != ''

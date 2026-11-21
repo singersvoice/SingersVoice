@@ -17,6 +17,9 @@ import { href } from '../lib/nav.ts';
 import { errorText, toast } from '../lib/toast.ts';
 import { isSuperAdmin } from '../state/session.ts';
 
+/** Where this app lives — origin + base path (https://www.singersvoice.com/ or https://singersvoice.github.io/SingersVoice/): Stripe sends the singer back here. */
+const appUrlHere = (): string => `${location.origin}${import.meta.env.BASE_URL}`;
+
 const day = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleDateString() : '');
 
 /** "$5.00 / month", "₹425.00 / month", "$250.00 / year" — a plan's price in a currency. */
@@ -100,7 +103,7 @@ export function Plans() {
   const choose = async (p: PlanDef) => {
     setBusy(p.id);
     try {
-      const { url } = await api.post('POST /plans/checkout', '/plans/checkout', { planId: p.id, currency });
+      const { url } = await api.post('POST /plans/checkout', '/plans/checkout', { planId: p.id, currency, appUrl: appUrlHere() });
       window.location.assign(url);
     } catch (e) {
       toast(e instanceof ApiError && (e.code === 'billing_unconfigured' || e.code === 'self_service_off') ? `Ask the SingersVoice admin for the ${p.title} plan — payments are not taken here` : errorText(e), 'warn', 7000);
@@ -110,7 +113,7 @@ export function Plans() {
   const portal = async () => {
     setBusy('portal');
     try {
-      const { url } = await api.post('POST /billing/portal', '/billing/portal', {});
+      const { url } = await api.post('POST /billing/portal', '/billing/portal', { appUrl: appUrlHere() });
       window.location.assign(url);
     } catch (e) {
       toast(errorText(e), 'warn');

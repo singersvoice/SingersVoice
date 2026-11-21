@@ -63,7 +63,7 @@ async function fetchVideo(fileId: string, mime: string, catalogTrackId: string, 
     const b = registryId ? await api.getBlob('GET /tracks/:id/file/:which', `/tracks/${encodeURIComponent(registryId)}/file/video`).catch(() => api.getBlob('GET /catalog/tracks/:id/file/:which', `/catalog/tracks/${encodeURIComponent(catalogTrackId)}/file/video`)) : await api.getBlob('GET /catalog/tracks/:id/file/:which', `/catalog/tracks/${encodeURIComponent(catalogTrackId)}/file/video`);
     return b.type ? b : new Blob([b], { type });
   } catch (e) {
-    throw new Error(`The karaoke video could not be fetched (${e instanceof Error ? e.message : String(e)}) — the song still plays, without its picture`);
+    throw new Error(`The song's video could not be fetched (${e instanceof Error ? e.message : String(e)}) — the song still plays, without its picture`);
   }
 }
 
