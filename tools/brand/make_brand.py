@@ -10,7 +10,7 @@ Output: apps/web/public/brand/
           icon-maskable-192.png / -512.png       maskable (safe-zone padded)
           apple-touch-icon.png   180x180
           favicon-32.png, favicon-16.png
-          og-image.png           1200x630 social preview
+          og-music.png           1200x630 social preview (a new name whenever its words change: link previews are cached by address)
           poster.jpg             welcome hero poster (from SV.mp4 first frame if given)
 
 Usage:
@@ -117,13 +117,45 @@ def og_image(mark: Image.Image) -> Image.Image:
     except OSError:
         font = ImageFont.load_default()
         small = font
-    d.text((620, 220), "Singers", font=font, fill=(244, 233, 255))
-    d.text((620, 310), "Voice", font=font, fill=(255, 180, 84))
-    d.text((620, 420), "Lyrics-first karaoke.\nSing together. Keep it in your Drive.", font=small, fill=(220, 205, 235))
+    d.text((620, 200), "Singers", font=font, fill=(244, 233, 255))
+    d.text((620, 290), "Voice", font=font, fill=(255, 180, 84))
+    # The tagline, as the Welcome screen says it (never the word karaoke anywhere on screen): the
+    # first line in bold, the rest in the plain face; the size shrinks until every line fits the right half.
+    lines = TAGLINE
+    size = 30
+    while size > 16:
+        try:
+            bold = ImageFont.truetype("DejaVuSans-Bold.ttf", size)
+            plain = ImageFont.truetype("DejaVuSans.ttf", size)
+        except OSError:
+            bold = plain = ImageFont.load_default()
+            break
+        widest = max(d.textlength(t, font=bold if i == 0 else plain) for i, t in enumerate(lines))
+        if widest <= W - 620 - 24:
+            break
+        size -= 1
+    y = 400
+    for i, t in enumerate(lines):
+        d.text((620, y), t, font=bold if i == 0 else plain, fill=(244, 233, 255) if i == 0 else (220, 205, 235))
+        y += int(size * 1.5)
     return bg
 
 
+TAGLINE = ("For everyone who lives and breathes music.", "Find your songs. Feel every lyric.", "Sing together and save to your Drive.")
+
+
+def og_image_from_mark(mark_png: Path) -> Image.Image:
+    """The social preview alone, from the cut-out mark already in the kit (no logo render needed)."""
+    return og_image(Image.open(mark_png).convert("RGBA"))
+
+
 def main() -> None:
+    # `--og <outdir>`: only the social preview, from the kit's own sv-mark@2x.png (the wording changed, the logo did not).
+    if len(sys.argv) > 2 and sys.argv[1] == "--og":
+        out = Path(sys.argv[2])
+        og_image_from_mark(out / "sv-mark@2x.png").convert("RGB").save(out / "og-music.png", optimize=True)
+        print("og-music.png written to", out)
+        return
     src = Path(sys.argv[1])
     out = Path(sys.argv[2])
     poster = Path(sys.argv[3]) if len(sys.argv) > 3 else None
@@ -140,7 +172,7 @@ def main() -> None:
     make_icon(mark, 180, 0.08, rounded=False).save(out / "apple-touch-icon.png", optimize=True)
     make_icon(mark, 64, 0.06, rounded=True).resize((32, 32), Image.LANCZOS).save(out / "favicon-32.png", optimize=True)
     make_icon(mark, 64, 0.06, rounded=True).resize((16, 16), Image.LANCZOS).save(out / "favicon-16.png", optimize=True)
-    og_image(mark).convert("RGB").save(out / "og-image.png", optimize=True)
+    og_image(mark).convert("RGB").save(out / "og-music.png", optimize=True)
 
     if poster and poster.exists():
         Image.open(poster).convert("RGB").resize((960, 540), Image.LANCZOS).save(out / "poster.jpg", quality=82, optimize=True)
