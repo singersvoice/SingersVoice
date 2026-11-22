@@ -66,6 +66,11 @@ timed out`; a broadcast is `requested → starting → live → stopped | failed
 - **In the browser**: the mesh, the camera, the audio engine, the recorder, the timers and the stream are owned by
   the room and closed when it unmounts (Leave, another meet, sign-out) or when the meet is over; the stage's notices
   are cleared with it.
+- **Watched from outside the room**: every device sends what its links carry with its heartbeat (numbers only, kept
+  in memory — never a row); the host's slot cards say when a singer's device is short of links or of sound, and
+  **Admin → Live now** (`GET /admin/live`, the super admin's) lists every open meet, everyone in it, each device's
+  report, the broadcasts on the air and the storage counters, refreshed every ten seconds — the operator's view of a
+  meet in trouble without being in the room.
 
 ## 4 · The write budget (Durable Objects)
 
@@ -103,24 +108,27 @@ Preview tile). The decoding side is N−1 decoders and unpackers. The cut-out mo
 What each link now carries: a singer's link, the picture at 320 px wide (213 on a stage of more than six), 15 fps,
 300–400 kbps; the vocal 96 kbps. A publisher's link used to carry the whole frame (720×960, 24 fps, 4.5 Mbps)
 whatever the stage drew; it now carries **the width the show draws a slot at** (`stage.ts wantedSingerWidth`): on a
-1080p show a stage of seven draws each singer 258 px wide, so the link carries 320 px at 0.9 Mbps instead of
-720 px at 4.5 Mbps. The host's device filming the meet asks for the same. A singer's uplink on a stage of seven
-with a show view and the host filming: 5 × 0.4 + 0.4 + 0.9 ≈ **3.3 Mbps** (it was ≈ 7 Mbps), seven small
-encoders instead of six small and one large. The vocal is marked high priority on the way out, the picture low.
+1080p show a stage of seven draws each singer 258 px wide, so the link carries 336 px at 1.5 Mbps (the floor,
+so the encoder never trades resolution for bitrate) instead of 720 px at 4.5 Mbps; a stage of four gets 576 px at
+2.9 Mbps; one or two singers the whole frame as before. The host's device filming the meet asks for the same. A
+singer's uplink on a stage of seven with a show view and the host filming: 5 × 0.4 + 0.4 + 1.5 ≈ **3.9 Mbps** (it
+was ≈ 7 Mbps), seven small encoders instead of six small and one large. The vocal is marked high priority on the
+way out, the picture low.
 
 Measured in the load test (`tools/ci/load-e2e.mjs`, headless Chromium with a synthetic camera and voice, the real
 cut-out model, on a **2-core** test machine — the numbers are that machine's, phones differ):
 
-| Singers | Links up | Sound and a picture on every link | Per-device uplink | Browser CPU per device-second | Rows written (30 s) |
+| Singers | Links up | Sound and a picture on every link | Per-device uplink | Browser CPU | Rows written |
 | --- | --- | --- | --- | --- | --- |
-| 3 | 6 in 4–5 s | yes | 55–67 kbps (small synthetic pictures) | 0.69 s (both cores saturated already by three pages) | 2–3 |
-| 7 | see below | see below | see below | see below | see below |
+| 3 | all 6 in 4–5 s | yes, on every link | 55–67 kbps (small synthetic pictures) | 0.69 CPU-s per device-second — both cores saturated already by three pages | 2–3 in 30 s; ~20 for the whole meet |
+| 7 | the seventh singer seated after 74 s; not all 42 links up after 143 s | no: four of seven devices sent nothing yet, two links marked silent/blind, one link `limited: bandwidth` | 0–39 kbps | the two cores saturated the whole time | 18 in 30 s, 141 since the start — seats timing out and re-taken under the starvation |
 
-The 2-core machine cannot run seven cut-out models and 42 encoders: the seven-singer run is the demonstration of
-what a short device does under a mesh of seven — links take long to come up, media stalls, the links say
-`limited: cpu`. A phone is in the same position with seven: this is the ceiling of the mesh, and no setting
-raises it. The notices now say when a device is straining ("This device is straining — your picture goes out
-smaller for now") and what to do (Settings → Camera → "My camera as it is", which skips the cut-out model).
+The 2-core machine cannot run seven cut-out models and 42 encoders, and the seven-singer run is what a short
+device does under a mesh of seven: links take minutes to come up, media stalls, the signal queue fills (600
+signals in flight — it holds 3,000 now and ages them at two minutes), presence times out and seats churn. A
+phone is in the same position with seven on stage: this is the ceiling of a full mesh, and no setting raises
+it. The notices now say when a device is straining ("This device is straining — your picture goes out smaller
+for now") and what to do (Settings → Camera → "My camera as it is", which skips the cut-out model).
 
 **The right architecture for seven to ten singers with video is an SFU** (each device sends once, a server
 forwards): Cloudflare Realtime SFU (the account is on Cloudflare already; 1 TB a month free egress; an app id and
@@ -173,7 +181,7 @@ later). Both are a one-line change each, best tried with the device in hand.
 ## 9 · The countdown
 
 One deadline — the service's `kickstartEpochMs` — read on every device against server time (the clock is synced
-on join and with every heartbeat). The number shown is `ceil((kickstart − serverNow) / 1000)`, clamped so it
+against the service on join and again whenever the last sync is a minute old). The number shown is `ceil((kickstart − serverNow) / 1000)`, clamped so it
 **never grows** within a cue (a stalled main thread catches up, never counts twice); the audio clock schedules
 the sound and no longer drives the display. A restart or resume asked while the count-in runs **changes
 nothing** (the song has not started; the one deadline stands) — the 8, 7, 6, 5, 3, 2, 4, 3, 2, 1 was a second
@@ -191,13 +199,15 @@ Nothing covers the stage.
 
 ## 11 · Tests run for this work
 
-- Unit: protocol 83, web 158, control 53 (+ `lifecycle.test.ts`, `ice.test.ts`, `budget.test.ts`), relay 5.
-- E2E on the built app against the real service: join, roles, tracks, tv, social, coupons, yt-track, signin; the
-  25-minute live duet (two performers, a publisher, an audience, a TV — sound checks included); **the new load and
-  chaos e2e** (`node tools/ci/load-e2e.mjs <out> [N]`): N singers on one stage, every link's media verified from its
-  counters, the service's rows counted, the service killed for 20 s and restarted on its file, a tab closed
-  without a word, End meet twice.
-- Build budget: 228 KB gzipped first load of 400.
+- Unit: protocol 83, web 158, control 55 (`lifecycle.test.ts`, `ice.test.ts`, `budget.test.ts` among them), relay 5 —
+  all green.
+- E2E on the built app against the real service, all green: join (57), roles (100), tracks (83), tv (16), social
+  (38), coupons (30), yt-track (17), signin (8); the 25-minute live duet (179 — two performers, a publisher, an
+  audience, a TV, the sound measured on the way to the audience and the broadcast); **the new load and chaos e2e**
+  (`node tools/ci/load-e2e.mjs <out> [N]`, 21 with three singers): N singers on one stage, every link's media verified
+  from its counters, the service's rows counted, the service killed for 20 s and restarted on its file, a tab closed
+  without a word, End meet twice. The seven-singer run on the 2-core machine is reported in §6 as what it is.
+- Build budget: 230 KB gzipped first load of 400.
 
 ## 12 · What is not verified, and what the operator has to do
 

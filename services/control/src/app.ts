@@ -91,6 +91,7 @@ import {
   type PromoCodeInput,
   CAPTION_MAX,
   SOCIAL_NETWORKS,
+  type AdminLiveResponse,
   type AdminSocialStatus,
   type AdminSocialUpdate,
   type SocialNetwork,
@@ -2556,6 +2557,34 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const refused = superAdminOnly(c);
     if (refused) return refused;
     return c.json(await adminSocial(c, c.get('deps')));
+  });
+  /** What runs right now: every open meet with everyone in it and what each device's links carry (from memory — no row read for it). */
+  app.get('/admin/live', async (c) => {
+    const refused = superAdminOnly(c);
+    if (refused) return refused;
+    const { store } = c.get('deps');
+    const now = Date.now();
+    const meets: AdminLiveResponse['meets'] = [];
+    for (const m of await store.listOpenMeets()) {
+      ensureMeet(m);
+      const stored = await store.listParticipants(m.meetId);
+      const { active } = reconcile(m, stored, now);
+      const jobs = (await store.liveJobsForMeet(m.meetId)).map((j) => ({ jobId: j.jobId, state: j.state, destinations: j.destinations, lastSegmentAt: j.live?.lastSegmentAt ?? null }));
+      meets.push({
+        meetId: m.meetId,
+        title: m.title,
+        hostName: m.hostName,
+        state: m.state,
+        startedAt: m.createdAt,
+        expiresAt: m.expiresAt,
+        onStage: m.stage.filter((s) => s.participantId).length,
+        audience: m.audienceCount,
+        participants: active.map((p) => ({ participantId: p.participantId, displayName: p.displayName, role: p.role, slot: p.slot, media: p.media, lastSeenAt: p.lastSeenAt, ...(p.links ? { links: p.links } : {}) })),
+        jobs,
+      });
+    }
+    const h = store.health(now);
+    return c.json({ meets, storage: { rowsRead: h.rowsRead, rowsWritten: h.rowsWritten, writes: h.writes, since: h.since }, serverEpochMs: now });
   });
   /** An id and its secret pasted for a provider (both at once; an empty id takes the pair away). The secret is sealed and never answered. */
   app.put('/admin/social', async (c) => {

@@ -23,9 +23,11 @@ the review of the whole site found, and what was changed for it. Read it with do
   public watch portal (`/watch/*`: a meet's public face — the host shares that link on purpose), the
   Stripe webhook (its HMAC signature, five-minute tolerance, event ids deduplicated), a meet's event
   stream (its resume token in the query — the browser's EventSource sends no header; a 192-bit random
-  token, never the Google token), a TV screen's routes (the TV's own token), and the social sign-in
-  callbacks (the state the service made, taken once within a quarter hour, only at its own provider's
-  door). `/fake/*` exists on Node only when a test asks for it.
+  token, never the Google token), a device's word on the way out (`POST /meets/:id/away?rt=…` — a
+  `sendBeacon` on `pagehide` carries no header either; the same token, and the only thing it can do is
+  shorten a grace from a minute to ten seconds), a TV screen's routes (the TV's own token), and the
+  social sign-in callbacks (the state the service made, taken once within a quarter hour, only at its
+  own provider's door). `/fake/*` exists on Node only when a test asks for it.
 - **Who may do what** is decided on the service from the account's row on every request: the role
   (audio only / dual / club owner / super admin), the plan in force (`entitlementOf`), blocked for
   good, the coupon gate; a meet's host alone ends it, removes anyone, blocks anyone, registers its film;

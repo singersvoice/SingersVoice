@@ -19,6 +19,7 @@ import { href } from '../lib/nav.ts';
 import { errorText, toast } from '../lib/toast.ts';
 import { accountUserId, isSuperAdmin } from '../state/session.ts';
 import { AdminBilling } from './AdminBilling.tsx';
+import { AdminLive } from './AdminLive.tsx';
 import { AdminSocial } from './AdminSocial.tsx';
 
 const day = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleDateString() : '—');
@@ -113,6 +114,7 @@ export function Admin() {
   return (
     <Page title="Admin">
       <div class="stack" data-admin>
+        <AdminLive />
         <AdminSocial />
         <section class="card stack pad-sm" id="coupons" data-coupons-link>
           <div class="row between wrap">

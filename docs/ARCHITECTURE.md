@@ -492,7 +492,11 @@ allows, none by default — so a period runs out by itself with nobody touching 
 through Stripe on the Plans page (`/plans`: Checkout at the admin's price, the webhook's word opens
 the plan; docs/global-payments-architecture.md) or granted on the Admin page (`/admin`, super admins
 only: a plan for its period or for months, *Renew*, *Set dates*, *Revoke*; `GET /admin/users`,
-`PATCH /admin/users/:id`, the last super admin cannot be demoted). What an account may do is the
+`PATCH /admin/users/:id`, the last super admin cannot be demoted). The Admin page opens with **Live
+now** (`GET /admin/live`, `screens/AdminLive.tsx`): every open meet on the service, everyone in it,
+what each device reported of its links with its last heartbeat (up/of, sound, pictures, by relay,
+straining), the broadcasts on the air and the storage counters, refreshed every ten seconds — read
+from the service's memory, no row for it (docs/LIVE_MEET_RELIABILITY.md §3). What an account may do is the
 **entitlement** computed on the service on every request (`entitlementOf`): the plan in force is the
 account's own active subscription, else the club it belongs to by email (`club_members`) while that
 club's plan is active, else Free; a super admin has everything without limit. `media` — the picture

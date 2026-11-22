@@ -11,6 +11,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { JoinMeetResponse, Meet, MeetSnapshot, PublishJob } from '@singersvoice/protocol';
 import { createApp, endJob, JOB_STALE_MS, JOB_UNSTARTED_MS, sweepJobs, sweepMeets, type AppDeps } from '../src/app.ts';
+import { LiveRooms, SIGNAL_TTL_MS, SIGNALS_KEEP } from '../src/store/live.ts';
 import { createAuthenticator } from '../src/auth.ts';
 import { SecretBox } from '../src/crypto.ts';
 import { nodeSqliteDriver } from '../src/store/driver.ts';
@@ -65,6 +66,24 @@ async function jobNow(jobId: string, user: string): Promise<PublishJob> {
   const { jobs } = await json<{ jobs: PublishJob[] }>(await app.request('/publishing/jobs', { headers: as(user) }));
   return jobs.find((j) => j.jobId === jobId)!;
 }
+
+describe('the signals of a meet in memory', () => {
+  it('a mesh of ten forming fits; the aged and the oldest go first, the newest always stays', () => {
+    const rooms = new LiveRooms();
+    const t0 = Date.parse('2026-11-21T20:00:00Z');
+    rooms.admit({ meetId: 'm', state: 'lobby', expiresAt: new Date(t0 + 300_000).toISOString(), stage: [] } as never, [], 0, t0, false);
+    const sig = (i: number, at: number) => ({ meetId: 'm', from: `p${i % 10}`, to: `p${(i + 1) % 10}`, type: 'ice' as const, data: '{}', sentAt: new Date(at).toISOString() });
+    for (let i = 0; i < 1400; i++) rooms.addSignal('m', sig(i, t0 + i * 10), t0 + i * 10);
+    expect(rooms.meets.get('m')!.signals.length).toBe(1400); // ninety links' worth, all kept
+    for (let i = 1400; i < SIGNALS_KEEP + 500; i++) rooms.addSignal('m', sig(i, t0 + i * 10), t0 + i * 10);
+    expect(rooms.meets.get('m')!.signals.length).toBe(SIGNALS_KEEP); // beyond the cap the oldest go
+    // Two minutes later a new signal arrives: everything older than the TTL goes, the new one stays.
+    const late = t0 + SIGNALS_KEEP * 10 + SIGNAL_TTL_MS + 60_000;
+    const kept = rooms.addSignal('m', sig(1, late), late)!;
+    expect(rooms.meets.get('m')!.signals.map((s) => s.seq)).toEqual([kept.seq]);
+    expect(rooms.signalsFor('m', 'p2', 0, 10).map((s) => s.seq)).toEqual([kept.seq]);
+  });
+});
 
 describe('the life of a meet and its broadcasts', () => {
   it('a broadcast ends with its meet: stopped with the reason, its segments gone, the relay told — and ending it again changes nothing', async () => {
@@ -127,6 +146,26 @@ describe('the life of a meet and its broadcasts', () => {
     await sweepMeets(deps.store, deps);
     vi.useRealTimers();
     expect((await jobNow(again.jobId, 'alice')).state).toBe('stopped');
+  });
+
+  it('Admin → Live now: every open meet, who is in it, what each device reported of its links; the super admin alone', async () => {
+    const meet = await newMeet('alice', 'Live view');
+    const host = await join(meet.meetId, 'alice', 'performer');
+    const bob = await join(meet.meetId, 'bob', 'performer');
+    await app.request(`/meets/${meet.meetId}/heartbeat`, { method: 'POST', headers: as('bob'), body: JSON.stringify({ resumeToken: bob.resumeToken, chatSince: 0, links: { up: 1, of: 1, sound: 0, pictures: 1, relay: 1, strained: false } }) });
+    expect((await app.request('/admin/live', { headers: as('bob') })).status).toBe(403);
+    const r = await app.request('/admin/live', { headers: as('alice') });
+    expect(r.status).toBe(200);
+    const live = (await r.json()) as { meets: { meetId: string; title: string; onStage: number; participants: { displayName: string; links?: { up: number; sound: number; relay: number } }[]; jobs: unknown[] }[]; storage: { writes: string; rowsWritten: number } };
+    const m = live.meets.find((x) => x.meetId === meet.meetId)!;
+    expect(m.title).toBe('Live view');
+    expect(m.onStage).toBe(2);
+    expect(m.participants.find((p) => p.displayName === 'bob')?.links).toMatchObject({ up: 1, sound: 0, relay: 1 });
+    expect(m.participants.find((p) => p.displayName === 'alice')?.links).toBeUndefined(); // no report yet
+    expect(live.storage.writes).toBe('ok');
+    await app.request(`/meets/${meet.meetId}/stop`, { method: 'POST', headers: as('alice'), body: JSON.stringify({ resumeToken: host.resumeToken }) });
+    const after = (await (await app.request('/admin/live', { headers: as('alice') })).json()) as { meets: { meetId: string }[] };
+    expect(after.meets.some((x) => x.meetId === meet.meetId)).toBe(false); // ended: gone from the live view
   });
 
   it('away: a reload keeps its slot; a tab that closed is taken off the stage in seconds, and the room is told', async () => {

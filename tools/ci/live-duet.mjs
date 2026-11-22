@@ -389,7 +389,7 @@ try {
   console.log('timing of the mix — alice:', JSON.stringify(alignA), 'bob:', JSON.stringify(alignB));
   const timed = (al) => al && al.plan && al.plan.lagMs >= 250 && al.arrivals.length >= 1 && al.arrivals.every((a) => a.arrivalMs !== null && a.arrivalMs >= 0) && Object.values(al.plan.delays).every((d) => d >= 0 && d <= 4000) && al.plan.trackDelayMs === al.plan.lagMs + Math.round(al.plan.trackDelayMs - al.plan.lagMs);
   check(timed(alignA) && timed(alignB), `each device timed its mix at the count-in: the other's arrival known (alice: ${alignA?.line}; bob: ${alignB?.line})`);
-  check(/timed · /.test(await alice.page.locator('.sing .stagebar').innerText()) && (await alice.page.locator('[data-align-line]').count()) === 1, 'the stage bar says how the mix is timed');
+  check(/lag \d+ ms/.test((await alice.page.locator('.sing [data-align-line]').getAttribute('data-align-line').catch(() => '')) ?? '') && /align/.test((await alice.page.locator('.sing .notices').getAttribute('data-notice-ids').catch(() => '')) ?? ''), 'the stage says how the mix is timed (the timing notice, and the line for support)');
   const bobPid = (await (await fetch(`${servers.controlUrl}/meets/${meetId}`, { headers: { 'X-Dev-User': 'alice', 'X-Dev-Name': 'alice' } })).json()).meet?.stage?.find((s) => s.displayName === 'bob')?.participantId ?? '';
   const holdOnBob = await alice.page.evaluate((id) => window.__svMesh?.playoutDelay(id) ?? null, bobPid);
   check(bobPid !== '' && holdOnBob !== null && holdOnBob === (alignA?.plan.delays[bobPid] ?? -1), `the hold the plan gives bob's voice is what the host's link applies (${holdOnBob} ms)`);
@@ -444,7 +444,9 @@ try {
   console.log('audience mix:', { mixSeq, mixText });
   check(mixSeq > 0 && /Hearing the stage/.test(mixText), `the audience hears the stage mix relayed from the host's device (batch ${mixSeq}, ${mixText})`);
   // (dave has no copy of the song here — local storage, nothing shared through Drive — so the lyrics note tells him why; the sound still plays)
-  check(/Hearing the stage/.test(mixText) && Number(mixSeq) >= 3, 'the mix keeps arriving a second at a time (the audience is a few seconds behind the stage)');
+  // The mix comes as a stream, a batch a second: a few seconds in, a few batches have landed.
+  const mixLater = await until(async () => { const n = Number(await dave.page.locator('[data-mix-hearing]').getAttribute('data-mix-seq')); return n >= 3 ? n : null; }, 10000);
+  check(/Hearing the stage/.test(mixText) && mixLater !== null, `the mix keeps arriving a second at a time (batch ${mixLater ?? mixSeq} a few seconds in; the audience is a few seconds behind the stage)`);
   // ACCURATE AUDIO for the audience: six seconds of exactly what dave's speakers get, recorded at the same moment as
   // six seconds of the host's mix (what her device sends) — the song where the mix player says it is, one continuous
   // sound (no gap; no click beyond what the mix itself carries — the test voice through the vocal chain bursts in the top
@@ -482,8 +484,8 @@ try {
   check(starved || (daveCap.heardMs !== null && Math.abs(daveSound.song.positionS - heardS) < 0.75), starved ? `the sound is where the mix player says it is — ${starvedNote}` : `the sound is where the mix player says it is — the lyrics follow the sound (heard ${daveSound.song.positionS.toFixed(2)} s, said ${heardS.toFixed(2)} s)`);
   // The cushion is the host's batches arriving on time: an encoder starved on this machine sends them late and the player runs its cushion down — that check stands down then, like the others.
   check(starved || (stageBefore !== null && heardBefore.behind >= 3 && heardBefore.behind <= 8), starved ? `the audience runs a known few seconds behind the stage — ${starvedNote}` : `the audience runs a known few seconds behind the stage (${heardBefore.behind} s; the stage at ${stageS.toFixed(1)} s, the host's mix heard at ${hostSound.song.positionS.toFixed(1)} s)`);
-  await alice.page.locator('.sing .stagebar', { hasText: 'wait list · 1' }).waitFor({ timeout: 15000 });
-  check(true, 'the host sees the wait list on the live stage; nothing interrupts the song');
+  await alice.page.locator('.sing .notices[data-notice-ids*="waitlist"]').waitFor({ timeout: 15000 });
+  check(true, 'the host sees the wait list among the live stage’s notices; nothing interrupts the song');
 
   // Publishing mode: carol's show view (open since the lobby) follows the song — same links, now live.
   await carol.page.locator('.show[data-state="live"]').waitFor({ timeout: 30000 });
@@ -767,7 +769,7 @@ try {
   // instant (the song keeps playing until then), and every take follows on the track timeline.
   const tSeek = Date.now();
   await bob.page.locator('.sing .timeline.seekable input[type="range"]').fill('2000');
-  await bob.page.locator('.sing .stagebar', { hasText: /jumping to 0:02/ }).waitFor({ timeout: 5000 }).catch(() => undefined);
+  await bob.page.locator('.sing .notices[data-notice-ids*="jumping"]').waitFor({ timeout: 5000 }).catch(() => undefined);
   await wait(5500);
   const ta4 = await alice.page.locator('.timeline .mono').first().innerText();
   const tb4 = await bob.page.locator('.timeline .mono').first().innerText();
@@ -781,7 +783,7 @@ try {
   const hostStood = seekApart !== null && seekApart > 1000 && hostBlocked > 3000;
   // The song was at 0:07+; the seek took it to 0:02; the readings come 5.5 s plus a stalling machine's delays later: 2–12 s.
   check(secs(tb4) >= 2 && secs(tb4) <= 12 && seekApart !== null && (seekApart <= 1000 || hostStood), `a singer's seek moved the song back for everyone, in sync (${ta4} / ${tb4}, the engines ${seekApart === null ? '?' : Math.round(seekApart)} ms apart${hostStood ? ` — stands down: the host's main thread was blocked for ${hostBlocked} ms of the wait on this machine` : ''})`);
-  check(!/jumping to/.test(await bob.page.locator('.sing .stagebar').innerText()), 'the cued jump landed (no "jumping to…" left)');
+  check(!/jumping/.test((await bob.page.locator('.sing .notices').getAttribute('data-notice-ids').catch(() => '')) ?? ''), 'the cued jump landed (no "Jumping to…" notice left)');
   // Host pauses: cued 3 s ahead; both freeze at the same position.
   await alice.page.getByRole('button', { name: /Pause for everyone/ }).click();
   await wait(5500);
@@ -793,7 +795,7 @@ try {
   console.log('paused:', { alice: [ta1, ta2], bob: [tb1, tb2] });
   check(ta1 === ta2 && tb1 === tb2, 'the timeline freezes on both devices after the cued pause');
   check(ta1 === tb1, `both devices froze at the same position (${ta1} / ${tb1})`);
-  check(/\bpaused\b/.test(await bob.page.locator('.sing .stagebar').innerText()), 'the guest sees "paused"');
+  check(/\bpaused\b/.test((await bob.page.locator('.sing .notices').getAttribute('data-notice-ids').catch(() => '')) ?? ''), 'the guest sees "Paused" among the notices');
   // Talk-back while paused: from the cued instant the song stops on a device, the singers on stage hear each other again.
   const pausedA = await vocalEls(alice.page);
   const pausedB = await vocalEls(bob.page);

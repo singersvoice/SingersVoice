@@ -38,16 +38,28 @@ The strip at the top is the virtual stage: every performer cut out of their came
 **one straight row**, as performers stand in a line across a stage — the same size, evenly spaced by
 slot, every head at the same height, behind a lit riser that hides everything below the chest —
 over the stage background, however many are on it (one to ten). It is live from the first slot
-taken — there is no "start" for the stage itself. Chips on it: *N on stage · x/y video linked*,
-*blending you into the stage…* while the model loads, a camera on/off button for you, and the
-stage's word on your distance to the camera (*Sit back a little* / *Come a little closer*).
+taken — there is no "start" for the stage itself. On it: a count (*N on stage*), a camera on/off
+button for you, and **one bell** — the stage's notices (components/NoticeCenter.tsx): a number on
+the bell, the one worst line beside it, and a popup with everything the stage has to say, each line
+with its severity and what to do about it — *Sit back a little*, *Your camera froze — restart it*,
+*Blending you into the stage…*, *No link to X yet* (Retry), *No sound arrives from X — re-linking*,
+the mix line, the timing, the hours left, and *Links · 6/6 up · sound from 6 · pictures from 5* (what
+the links to the other singers actually carry, read from their own counters every two seconds —
+never a connection taken for a working one). Nothing covers the stage.
+
+**Every device's links, on the host's cards.** Each device sends what its links carry with every
+heartbeat (numbers only, kept in memory on the service); when a singer's device is short of links
+or of sound, their slot card says so (*links 4/6*, *sound 3/6*), so the host knows which device is
+in trouble, not only their own. A pair of devices that cannot connect directly (a phone on cellular,
+a hotel's Wi‑Fi) link through Cloudflare's TURN relay once the service has the keys
+(docs/DEPLOY_CONTROL.md); the Links line then counts them *by relay*.
 
 **Everyone the same size — strictly.** Your own device frames you before anything leaves it (the
 *stage frame*): it finds your head in your cut-out and sends a frame with the head the same size at
 the same place — the top of the head 8 % down, the head 22 % of the frame tall, centred — however
 near or far you sit. Sitting back, you are brought up (never more than 3.3×, a blur helps nobody);
 sitting close, you are brought back — the frame then has room around what the camera could see,
-and the chip asks you to sit back, because the stage can only show what the camera sees (the
+and the notice asks you to sit back, because the stage can only show what the camera sees (the
 camera's bottom edge fades out rather than cutting across you). Every stage draws that frame
 whole, in slots of one size: so the host on a laptop a foot from the webcam and a friend across the
 room from a phone come out as two performers of one size, heads level, on one line. There is no
@@ -313,6 +325,15 @@ singers settle it; none: nothing until somebody picks one). Any number of songs 
 chapter marks on a line — Watch, Share), *Create another meet*, *All performances*, and for the
 host with Publishing, *Publish this meet*. A meet that nobody touched for 5 minutes expires the
 same way.
+
+**What ends with it, and what a device leaving leaves behind.** Ending the meet (End, or the idle
+expiry) ends its broadcasts as Stop would (the state, the segments' window, the relay's streams),
+drops its signals, and tells every device's stream the last word; nothing of it runs on the service
+afterwards. A device that leaves the room frees its slot at once; a tab that closes or reloads says
+so on the way out (a beacon), and its slot is cleared in ten seconds unless it is back (a reload is);
+a device that vanishes without a word (the app killed, the network gone) is taken off the stage after
+a minute of silence. A broadcast whose show view went away (no segment for two minutes) is ended by
+the service by itself. Everything of this is docs/LIVE_MEET_RELIABILITY.md §3.
 
 ## 5a · Performances (`/studio/performances`, also from Home and the Meets page)
 

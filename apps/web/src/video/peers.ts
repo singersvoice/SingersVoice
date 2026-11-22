@@ -157,8 +157,8 @@ const POLL_PUSHED_STEADY_MS = 20_000;
 const TOTAL_UPLINK_BPS = 2_400_000;
 /** A publisher's link carries what goes out to the world — the whole packed frame (enhance.ts, 1440×960 from a computer): up to this for the whole frame; in proportion to the pixels when the show draws it smaller (a crowded stage). */
 const PUBLISHER_BPS = 4_500_000;
-/** The least a publisher's link gets, however small the picture it draws. */
-const PUBLISHER_MIN_BPS = 600_000;
+/** The least a publisher's link gets, however small the picture it draws: enough that the encoder never trades resolution for it. */
+const PUBLISHER_MIN_BPS = 1_500_000;
 
 /**
  * The video codecs in the order this device would send them: H.264 first — hardware-encoded on nearly every phone
@@ -691,22 +691,30 @@ export class PerformerMesh {
       if (!s.track) continue;
       const params = s.getParameters();
       if (!params.encodings?.length) params.encodings = [{}];
-      const enc = params.encodings[0]! as RTCRtpEncodingParameters & { networkPriority?: string; priority?: string };
-      if (s.track.kind === 'audio') {
-        // The vocal goes out at music quality: a fixed, generous Opus bitrate, whatever the mesh size — and first in line on the way out.
-        enc.maxBitrate = VOCAL_BPS;
-        enc.networkPriority = 'high';
-        enc.priority = 'high';
+      const audio = s.track.kind === 'audio';
+      if (audio) {
+        // The vocal goes out at music quality: a fixed, generous Opus bitrate, whatever the mesh size.
+        params.encodings[0]!.maxBitrate = VOCAL_BPS;
       } else {
-        enc.maxBitrate = maxBitrate;
-        enc.maxFramerate = publisher ? 24 : 15;
-        enc.scaleResolutionDownBy = scale;
-        enc.networkPriority = 'low';
-        enc.priority = 'low';
+        params.encodings[0]!.maxBitrate = maxBitrate;
+        params.encodings[0]!.maxFramerate = publisher ? 24 : 15;
+        params.encodings[0]!.scaleResolutionDownBy = scale;
         // A publisher's link under a strained sender gives up resolution and frame rate by turns ('balanced'): a broadcast with a softer picture for a moment, never one that freezes.
         params.degradationPreference = publisher ? 'balanced' : 'maintain-framerate';
       }
-      void s.setParameters(params).catch(() => undefined);
+      // Sound first on the way out (the vocal high, the picture low) — asked for in a second step of its own, so a browser that
+      // does not know the priorities refuses that step alone and the caps above stand.
+      void s
+        .setParameters(params)
+        .then(() => {
+          const again = s.getParameters();
+          const enc = again.encodings?.[0] as (RTCRtpEncodingParameters & { networkPriority?: string; priority?: string }) | undefined;
+          if (!enc) return;
+          enc.networkPriority = audio ? 'high' : 'low';
+          enc.priority = audio ? 'high' : 'low';
+          return s.setParameters(again);
+        })
+        .catch(() => undefined);
     }
   }
 

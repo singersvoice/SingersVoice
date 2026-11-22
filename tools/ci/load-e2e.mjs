@@ -211,7 +211,8 @@ try {
   const stillUp = (await Promise.all(people.map((p) => linksOf(p.page)))).every((r) => r && r.links.filter((l) => l.wanted).every((l) => l.state === 'connected' && l.audioIn));
   check(stillUp, 'with the service down the stage runs on: every link still up, sound still arriving');
   await restarted;
-  report.phases.outage = { downMs: 20000 };
+  const hRestart = await health(); // the counters start over with the process: the meet's total below adds the two runs
+  report.phases.outage = { downMs: 20000, rowsWrittenBeforeOutage: hRestart.storage.rowsWritten };
   const back = await until(async () => (await Promise.all(people.map((p) => worstOf(p.page)))).every((w) => w !== 'link'), 60000, 1000);
   check(back !== null, `once the service is back every room drops the notice (within ${Math.round((Date.now() - tDown) / 1000)} s)`);
   const seatedAfter = await until(async () => (await Promise.all(people.map((p) => onStageOf(p.page)))).every((n) => n === N), 30000);
@@ -250,7 +251,7 @@ try {
   check(h3.storage.live.meets === 0 && h3.storage.live.participants === 0 && h3.storage.live.signals === 0, `the service holds nothing of the meet in memory (${JSON.stringify(h3.storage.live)})`);
   const again = await fetch(`${servers.controlUrl}/meets/${meetId}/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dev-User': 'alice', 'X-Dev-Name': 'alice' }, body: JSON.stringify({ resumeToken: 'stale' }) });
   check(again.status < 500, `ending it again is no error (${again.status})`);
-  report.phases.end = { rowsWrittenTotal: h3.storage.rowsWritten - h0.storage.rowsWritten };
+  report.phases.end = { rowsWrittenTotal: h2.storage.rowsWritten - h0.storage.rowsWritten + (h3.storage.rowsWritten - hRestart.storage.rowsWritten) };
   console.log(`rows written by the whole meet of ${N}: ${report.phases.end.rowsWrittenTotal}`);
 
   for (const [name, errs] of Object.entries(errors)) {

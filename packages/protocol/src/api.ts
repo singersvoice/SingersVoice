@@ -82,6 +82,28 @@ export interface JoinMeetResponse {
   serverEpochMs: number;
 }
 
+export interface AdminLiveMeet {
+  meetId: string;
+  title: string;
+  hostName: string;
+  state: Meet['state'];
+  startedAt: string;
+  expiresAt: string;
+  onStage: number;
+  audience: number;
+  /** Everyone in the meet (the host's view), with what their device's links carry as last reported. */
+  participants: Pick<Participant, 'participantId' | 'displayName' | 'role' | 'slot' | 'media' | 'lastSeenAt' | 'links'>[];
+  /** Broadcasts of this meet on the air. */
+  jobs: { jobId: string; state: PublishJob['state']; destinations: PublishJob['destinations']; lastSegmentAt: string | null }[];
+}
+
+export interface AdminLiveResponse {
+  meets: AdminLiveMeet[];
+  /** The service's own counters (what /health says), for the same glance. */
+  storage: { rowsRead: number; rowsWritten: number; writes: 'ok' | 'failing'; since: string };
+  serverEpochMs: number;
+}
+
 export interface HeartbeatRequest {
   resumeToken: string;
   /** Last chat seq seen, to receive only newer messages. */
@@ -281,6 +303,8 @@ export interface Routes {
   'GET /social/posts': { res: { posts: SocialPost[] } };
   /** How SingersVoice is registered with X and Meta (social.ts): the ids and secrets the super admin pastes on the Admin page; the callbacks to give the networks. */
   'GET /admin/social': { res: AdminSocialStatus };
+  /** What runs on the service right now (super admin): every open meet, who is in it, what each device's links carry — read from memory, costs no row. */
+  'GET /admin/live': { res: AdminLiveResponse };
   'PUT /admin/social': { req: AdminSocialUpdate; res: AdminSocialStatus };
   /** The offers (the ways to pay for a plan) and the promo codes, kept by the super admin (offers.ts). */
   'POST /admin/offers': { req: PlanOfferInput; res: { offer: PlanOffer } };

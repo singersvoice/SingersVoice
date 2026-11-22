@@ -26,8 +26,13 @@ import type { StoredParticipant } from './sql.ts';
 export const SOFT_FLUSH_MS = 60_000;
 /** Video seconds are counted in memory and written once this many have gathered per pool (or at a flush). */
 export const VIDEO_FLUSH_SECONDS = 60;
-/** Signals kept per meet (a mesh of ten forming is a few hundred; an old one is never wanted again). */
-export const SIGNALS_KEEP = 600;
+/**
+ * Signals kept per meet: a mesh of ten forming is ninety links of a dozen or more signals each (over a thousand), and a
+ * stage re-making its links under strain sends as many again; one older than SIGNAL_TTL_MS is never wanted (a link
+ * whose answer is that late was re-made with a new name long ago — peers.ts OFFER_TIMEOUT_MS, STUCK_AFTER_MS).
+ */
+export const SIGNALS_KEEP = 3000;
+export const SIGNAL_TTL_MS = 120_000;
 /** A mix poll within this long counts as somebody listening (the host's device sends the mix only then). */
 export const LISTENER_RECENT_MS = 15_000;
 
@@ -129,12 +134,17 @@ export class LiveRooms {
 
   // ---- signals: a bounded queue per meet, numbered on arrival ----
 
-  addSignal(meetId: string, sig: Omit<MeetSignal, 'seq'>): MeetSignal | null {
+  addSignal(meetId: string, sig: Omit<MeetSignal, 'seq'>, now = Date.now()): MeetSignal | null {
     const e = this.meets.get(meetId);
     if (!e) return null;
     const full: MeetSignal = { ...sig, seq: ++e.signalSeq };
     e.signals.push(full);
-    if (e.signals.length > SIGNALS_KEEP) e.signals.splice(0, e.signals.length - SIGNALS_KEEP);
+    // The old go first: by age (nobody wants a two-minute-old candidate), then by count.
+    const cutoff = now - SIGNAL_TTL_MS;
+    let drop = 0;
+    while (drop < e.signals.length - 1 && Date.parse(e.signals[drop]!.sentAt) < cutoff) drop++;
+    if (e.signals.length - drop > SIGNALS_KEEP) drop = e.signals.length - SIGNALS_KEEP;
+    if (drop > 0) e.signals.splice(0, drop);
     return full;
   }
 

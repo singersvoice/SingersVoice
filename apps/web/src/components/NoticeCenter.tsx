@@ -27,7 +27,7 @@ export function NoticeCenter(props: { /** Where the popup opens: below the bell 
   }, [open]);
   if (!list.length) return null;
   return (
-    <div class={`notices ${props.open ?? 'below'}`} ref={ref} data-notices={list.length} data-notices-critical={critical} data-notices-warn={warn}>
+    <div class={`notices ${props.open ?? 'below'}`} ref={ref} data-notices={list.length} data-notices-critical={critical} data-notices-warn={warn} data-notice-ids={list.map((n) => n.id).join(',')}>
       <button class={`btn sm notices-bell ${critical ? 'critical' : warn ? 'warn' : ''}`} aria-label={`${list.length} notice${list.length === 1 ? '' : 's'}`} aria-expanded={open} onClick={() => setOpen((o) => !o)} data-notices-bell>
         <IcBell size={16} />
         <span class="notices-count">{list.length}</span>
