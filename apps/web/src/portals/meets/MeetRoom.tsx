@@ -7,7 +7,7 @@
  * (`roomStage.ts` → `video/meetRecorder.ts`) and shared, in the background (`meetFilm.ts`), with
  * everyone who was in the meet. Nothing here ever waits for a review or an approval.
  */
-import { clampSlot, formatMs, hoursLabel, MAX_PERFORMERS, planParts, playbackPositionMs, SLOT_COLORS, songChoicePending, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
+import { clampSlot, formatMs, hoursLabel, MAX_PERFORMERS, planParts, playbackPositionMs, SLOT_COLORS, songChoicePending, type LinkSummary, type Meet, type Participant, type SingerSlot, type StageSlot } from '@singersvoice/protocol';
 import { activeRoomInfo } from './activeRoom.ts';
 import { useRoomStage, type RoomStage } from './roomStage.ts';
 import { SetListPanel } from './SetListPanel.tsx';
@@ -81,8 +81,13 @@ export function MeetRoom(props: { id: string }) {
         wait = Math.min(60_000, wait * 2);
       });
     void tryJoin();
+    // The tab closing or the page reloading (no unmount runs then): a word on the way out, so the slot is settled in seconds
+    // (a page kept in the back/forward cache and shown again is back on its slot while the grace lasts, or seated afresh).
+    const onHide = () => session.away();
+    window.addEventListener('pagehide', onHide);
     return () => {
       gone = true;
+      window.removeEventListener('pagehide', onHide);
       // Unmounted = you left the meet (Leave, another meet, sign-out): free the slot right away.
       void session.leave();
       camera.close();
@@ -701,7 +706,7 @@ function Lobby(props: {
             )}
             <div class="stage-grid">
               {meet.stage.map((s) => (
-                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} canClaim={!s.participantId && (onStage || (!live && (host || openStage)))} onClaim={() => void claim(s.slot)} onRemove={host && s.participantId && s.participantId !== you.participantId ? () => void remove(s.participantId!) : undefined} onKick={host && s.participantId && s.participantId !== you.participantId ? () => void kick({ participantId: s.participantId!, displayName: s.displayName }) : undefined} onBlock={host && s.participantId && s.participantId !== you.participantId ? () => void block({ participantId: s.participantId!, displayName: s.displayName }) : undefined} />
+                <SlotCard key={s.slot} slot={s} mine={s.participantId === you.participantId} links={props.participants.find((p) => p.participantId === s.participantId)?.links} canClaim={!s.participantId && (onStage || (!live && (host || openStage)))} onClaim={() => void claim(s.slot)} onRemove={host && s.participantId && s.participantId !== you.participantId ? () => void remove(s.participantId!) : undefined} onKick={host && s.participantId && s.participantId !== you.participantId ? () => void kick({ participantId: s.participantId!, displayName: s.displayName }) : undefined} onBlock={host && s.participantId && s.participantId !== you.participantId ? () => void block({ participantId: s.participantId!, displayName: s.displayName }) : undefined} />
               ))}
             </div>
             <div class="row">
@@ -833,14 +838,22 @@ function MeetFilmSwitch(props: { film: MeetRecorder; onStage: boolean }) {
   );
 }
 
-function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; onClaim: () => void; onRemove?: () => void; onKick?: () => void; onBlock?: () => void }) {
+function SlotCard(props: { slot: StageSlot; mine: boolean; canClaim: boolean; links?: LinkSummary; onClaim: () => void; onRemove?: () => void; onKick?: () => void; onBlock?: () => void }) {
   const s = props.slot;
+  // What that singer's device reported of its own links (with its last heartbeat): said on the card only when something is short — a link down, no sound on one.
+  const l = props.links;
+  const short = l && l.of > 0 && (l.up < l.of || l.sound < l.up);
   return (
-    <div class={`slot-card ${s.participantId ? 'taken' : ''} ${props.mine ? 'mine' : ''}`} style={{ borderColor: SLOT_COLORS[s.slot as SingerSlot] }}>
+    <div class={`slot-card ${s.participantId ? 'taken' : ''} ${props.mine ? 'mine' : ''}`} style={{ borderColor: SLOT_COLORS[s.slot as SingerSlot] }} data-links={l ? `${l.up}/${l.of}/${l.sound}/${l.pictures}/${l.relay}${l.strained ? '/strained' : ''}` : undefined}>
       <button type="button" class="slot-take" disabled={!props.canClaim} onClick={props.onClaim} aria-label={s.participantId ? `Slot ${s.slot}: ${s.displayName}` : `Take slot ${s.slot}`}>
         <span class="slot-badge" style={{ background: SLOT_COLORS[s.slot as SingerSlot] }}>S{s.slot}</span>
         <span class="name">{s.participantId ? s.displayName : 'open'}</span>
         {s.participantId && <span class={`chip ${s.ready ? 'ok' : ''}`}>{s.ready ? 'ready' : 'joined'}</span>}
+        {short && (
+          <span class="chip warn" title={`Their device's links to the other singers, as it last reported: ${l.up} of ${l.of} up, sound arriving from ${l.sound}, pictures from ${l.pictures}${l.relay ? `, ${l.relay} by relay` : ''}${l.strained ? ' — their device is straining' : ''}`}>
+            {l.up < l.of ? `links ${l.up}/${l.of}` : `sound ${l.sound}/${l.up}`}
+          </span>
+        )}
       </button>
       {props.onRemove && (
         <button type="button" class="slot-remove" aria-label={`Clear slot ${s.slot} (${s.displayName}) — back to the audience`} title="Back to the audience" onClick={props.onRemove}>
@@ -1410,7 +1423,7 @@ function Ended(props: { session: MeetSession; meet: Meet; you: Participant }) {
   };
   return (
     <Page title={meet.title}>
-      <div class="stack">
+      <div class="stack" data-closed={meet.state}>
         <div class="review-hero">
           <h2>{meet.state === 'expired' ? 'This meet closed after 5 idle minutes' : 'Meet ended'}</h2>
           <div class="muted small">

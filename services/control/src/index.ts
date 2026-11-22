@@ -9,6 +9,7 @@
  *   PUBLISH_KEY_SECRET=…      base64 32-byte key for stream keys at rest (generate once: node -e "…randomSecretB64()")
  *   DEV_AUTH=1                accept X-Dev-User headers (local dev / CI only)
  *   ICE_SERVERS=[…]           JSON array of RTCIceServer for performer video (default: Google STUN; add TURN for strict NATs)
+ *   CF_TURN_KEY_ID, CF_TURN_API_TOKEN — Cloudflare TURN: short-lived credentials minted for every stage (docs/DEPLOY_CONTROL.md)
  *   YOUTUBE_HLS_BASE=…        YouTube's HLS ingestion endpoint (default https://a.upload.youtube.com/http_upload_hls)
  *   GOOGLE_API_KEY=…          optional: published tracks are then read through the Drive API instead of Drive's public download page
  *   RELAY_URL, RELAY_SECRET   optional: the RTMP relay (services/relay) — low-latency YouTube, Facebook, Instagram, Twitch (docs/RELAY.md)
@@ -38,6 +39,7 @@ const deps: AppDeps = {
   secrets: new SecretBox(process.env.PUBLISH_KEY_SECRET ?? ''),
   runtime: 'node',
   iceServers: parseIceServers(process.env.ICE_SERVERS),
+  turn: process.env.CF_TURN_KEY_ID && process.env.CF_TURN_API_TOKEN ? { keyId: process.env.CF_TURN_KEY_ID, apiToken: process.env.CF_TURN_API_TOKEN, ...(process.env.SV_TURN_FAKE ? { endpoint: process.env.SV_TURN_FAKE } : {}) } : undefined,
   allowedOrigins: (process.env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   privilegedEmails: (process.env.PRIVILEGED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   version: '2.1.0',
@@ -70,4 +72,4 @@ function fakeDriveFetch(base: string): typeof fetch {
 
 const app = createApp(() => deps);
 serve({ fetch: app.fetch, port: PORT }, () => console.log(`sv-control (node) listening on :${PORT}${process.env.DEV_AUTH === '1' ? ' [DEV_AUTH on]' : ''}`));
-setInterval(() => void sweepMeets(store).catch(() => undefined), 30_000).unref();
+setInterval(() => void sweepMeets(store, deps).catch(() => undefined), 30_000).unref();

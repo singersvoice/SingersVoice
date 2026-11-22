@@ -69,6 +69,12 @@ describe('the storage budget of a live meet', () => {
       }
     }
     expect(written() - before).toBe(0);
+    // Every heartbeat carries what the device's links carry (the host's view of every device): in memory with the participant, never a row.
+    const r2 = await json<MeetSnapshot>(await app.request(`/meets/${meetId}/heartbeat`, { method: 'POST', headers: as('s2'), body: JSON.stringify({ resumeToken: singers[1]!.resumeToken, chatSince: 0, links: { up: 5, of: 6, sound: 4, pictures: 5, relay: 1, strained: true } }) }));
+    const hostView = await json<MeetSnapshot>(await app.request(`/meets/${meetId}/heartbeat`, { method: 'POST', headers: as('host'), body: JSON.stringify({ resumeToken: singers[0]!.resumeToken, chatSince: 0 }) }));
+    expect(hostView.participants.find((p) => p.participantId === singers[1]!.you.participantId)?.links).toMatchObject({ up: 5, of: 6, sound: 4, pictures: 5, relay: 1, strained: true });
+    expect(r2.you?.links?.of).toBe(6);
+    expect(written() - before).toBe(0);
     // The host's device sends the mix a second at a time, and the mesh trades signals: memory, never rows.
     const mid = written();
     for (let i = 0; i < 60; i++) {

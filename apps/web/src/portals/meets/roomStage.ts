@@ -18,6 +18,7 @@ import { effect } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AudioEngine } from '../../audio/engine.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
+import { showSize, SINGER_LINK_WIDTH } from '../../video/enhance.ts';
 import { serverNow } from '../../lib/api.ts';
 import type { PerformanceSummary } from '../../lib/storage/types.ts';
 import { media, needsReconnect } from '../../state/session.ts';
@@ -28,10 +29,10 @@ import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
 import { LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
 import { MeetRecorder, stageSound } from '../../video/meetRecorder.ts';
-import { PerformerMesh, type PeerState } from '../../video/peers.ts';
+import { PerformerMesh, type LinkHealth, type PeerState } from '../../video/peers.ts';
 import type { SegmenterMode } from '../../video/segmenter.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
-import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
+import { StageCompositor, wantedSingerWidth, type StagePerformer } from '../../video/stage.ts';
 import { registerMeetFilm } from './meetFilm.ts';
 import type { MeetSession } from './meetSession.ts';
 
@@ -63,6 +64,8 @@ export interface RoomStage {
   others: number;
   /** Other performers whose picture arrives but has not moved for a while (their camera froze on their device), by participant id. */
   still: string[];
+  /** Every link's health as of the last sample (peers.ts): what arrives on it, its path, its loss, this device's strain on it. */
+  links: LinkHealth[];
   /** My camera, in words (frame rate, the cut-out, a picture standing still), refreshed every second while it is on. */
   cameraLine: string;
   /** What each source brings to this device's mix (the host's: what the audience, the film and the takes get), in words, refreshed every second: "mix: you −18 · Team −22 · track −20". */
@@ -138,6 +141,9 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     if ((!app.cameraOn || !videoAllowed) && camOn && !opts.preparing) camera.close();
   }, [onStage, app.cameraOn, camOn, opts.preparing, videoAllowed]);
 
+  // What this device sends right now, as the other side is told (peers.ts `announceMedia`): a link carrying nothing is then a broken one or a quiet one, never a guess.
+  const camSending = useRef(false);
+  const micSending = useRef(false);
   // ---- my cut-out, framed by me; the packed stream goes to the mesh while I am on stage ----
   useEffect(() => {
     feed.onMode = (m) => setBlend(m);
@@ -148,6 +154,8 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       mesh?.setLocalStream(null);
       feed.stopPacking();
     }
+    camSending.current = sending;
+    mesh?.announceMedia(micSending.current, sending);
     // The outgoing track was the feed worker's and the page had to take over: the mesh gets the page's.
     feed.onPackedLost = () => {
       if (sending) mesh?.setLocalStream(feed.packedStream());
@@ -175,6 +183,8 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   // arriving on a link that says it is connected (a decoder or transport that stalled): that one is re-made from here by
   // itself, once a minute at most per singer, before anyone has to tap Reconnect.
   const [still, setStill] = useState<string[]>([]);
+  const [links, setLinks] = useState<LinkHealth[]>([]);
+  const linksRef = useRef<LinkHealth[]>([]);
   const autoRemadeAt = useRef(new Map<string, number>());
   useEffect(() => {
     compositor.onStill = setStill;
@@ -290,6 +300,17 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       setPeerStates((s) => ({ ...s, [id]: state }));
     };
     mesh.onRemoteAudio = (id, stream) => show.setVocal(id, stream); // the mix always; the speakers only between songs (talk-back)
+    mesh.onLinks = (l) => {
+      // every couple of seconds: what each link carries (the notices say what is broken, not what is quiet); the heartbeat carries the numbers to the host's view
+      setLinks(l);
+      linksRef.current = l;
+    };
+    session.linkSummary = () => {
+      const wanted = linksRef.current.filter((l) => l.wanted);
+      if (!wanted.length) return null;
+      const up = wanted.filter((l) => l.state === 'connected');
+      return { up: up.length, of: wanted.length, sound: up.filter((l) => l.audioIn).length, pictures: up.filter((l) => l.videoIn).length, relay: up.filter((l) => l.path === 'relay').length, strained: up.filter((l) => l.limited === 'cpu' || l.limited === 'bandwidth').length >= 2, at: new Date().toISOString() };
+    };
     // Instant: what one singer changes (the background, the song, the transport) reaches the others and the show view
     // over the mesh at once — they fetch the new state now — and what they change reaches this device the same way.
     mesh.onMessage = (_from, m) => {
@@ -306,7 +327,9 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       session.onLeave = null;
       session.onActed = null;
       session.onSignal = null;
+      session.linkSummary = null;
       mesh.onMessage = null;
+      mesh.onLinks = null;
       void mesh.close();
       for (const r of remoteVideos.current.values()) {
         r.frame.dispose();
@@ -358,7 +381,10 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   // singers (heard between songs only — talk-back), to the host's mix (the audience) and to a publisher.
   const micOpen = opts.engine?.micOpen.value ?? false;
   useEffect(() => {
-    mesh?.setLocalAudio(micOpen && onStage ? (opts.engine?.vocalStream()?.getAudioTracks()[0] ?? null) : null);
+    const track = micOpen && onStage ? (opts.engine?.vocalStream()?.getAudioTracks()[0] ?? null) : null;
+    mesh?.setLocalAudio(track);
+    micSending.current = track !== null;
+    mesh?.announceMedia(micSending.current, camSending.current);
   }, [mesh, micOpen, onStage, opts.engine]);
   // Talk-back: the singers on stage hear each other until the countdown, and again while the song is
   // paused (from the cued instant it stops on this device until the resume is cued); from the count-in
@@ -389,6 +415,15 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   useEffect(() => {
     if (onStage) mesh?.setPeers(peerIds);
   }, [peerKey, onStage]);
+  // The host's device films the meet at the show's size: it asks every singer's link for the width a slot of that show draws
+  // them at (a singer link's width on a crowded stage, up to the whole frame when two stand on it); every other singer's
+  // device draws a small strip and asks for nothing more than a singer link carries.
+  const filming = host && app.recordMeet;
+  useEffect(() => {
+    if (!mesh) return;
+    const show = showSize();
+    mesh.announceWant(filming ? wantedSingerWidth(show.width, show.height, Math.max(1, stagePerformers.length), SINGER_LINK_WIDTH) : 0);
+  }, [mesh, filming, stagePerformers.length]);
 
   // Everyone on stage, left to right by slot, on one shared stage (placeholders for video I don't receive — and for an
   // audio-only account, whatever arrives: the rule is applied on every device that draws the stage, not only on theirs).
@@ -490,5 +525,5 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
 
   const others = peerIds.length;
   const linked = onStage ? peerIds.filter((id) => peerStates[id] === 'connected').length : 0;
-  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, reconnect, cameraLine, mixLine, alignLine: alignment?.line ?? '', videoAllowed };
+  return { feed, compositor, mesh, show, film, peerStates, blend, distance, camOn, camStream, camError, openCamera, camHealth, restartCamera, linked, others, still, links, reconnect, cameraLine, mixLine, alignLine: alignment?.line ?? '', videoAllowed };
 }

@@ -1850,6 +1850,18 @@ export class SqlStore {
     return rows.map((r) => this.jobOf(r)!);
   }
 
+  /** Every broadcast on the air (requested, starting, live) across all meets — in memory and in the rows — for the sweep. */
+  async listOnAirJobs(): Promise<PublishJob[]> {
+    const out = new Map<string, PublishJob>();
+    for (const j of this.live.jobs.values()) out.set(j.job.jobId, clone(j.job));
+    const rows = await this.db.all<{ data: string }>("SELECT data FROM publish_jobs WHERE state IN ('requested','starting','live') ORDER BY created_at DESC LIMIT 200");
+    for (const r of rows) {
+      const j = this.jobOf(r);
+      if (j && !out.has(j.jobId)) out.set(j.jobId, j);
+    }
+    return [...out.values()];
+  }
+
   async liveJobsForMeet(meetId: string): Promise<PublishJob[]> {
     // The ones on the air are all in memory: no row is read for a watch page's poll.
     const out = [...this.live.jobs.values()].filter((j) => j.job.meetId === meetId).map((j) => clone(j.job));

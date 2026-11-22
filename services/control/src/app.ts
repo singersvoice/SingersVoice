@@ -122,7 +122,7 @@ import type { SecretBox } from './crypto.ts';
 import { MeetEvents, type RoomViews } from './events.ts';
 import { normalizeTvCode, TV_SIGNAL_MAX_BYTES, TvScreens, type TvSide } from './tv.ts';
 import { fbPostVideo, fbVideoUrl, igContainerStatus, igCreateReel, igPublish, metaAuthorizeUrl, metaConfigured, metaExchange, metaPages, pkce, randomToken, xAuthorizeUrl, xConfigured, xCreatePost, xExchange, xMe, xPostUrl, xRefresh, xRevoke, xUploadVideo, type MetaPage, type SocialConfig } from './social.ts';
-import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, pause, reconcile, reportClock, requestStage, resume, setBackground, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
+import { addSong, claimSlot, decideRequest, ensureMeet, isBanned, isHost, kick, newMeet, nextSong, PARTICIPANT_TIMEOUT_MS, pause, reconcile, reportClock, requestStage, resume, setBackground, setReady, setStagePolicy, songAction, start, stop, tick, touch, touchForHeartbeat, visibleParticipants, withdrawRequest, seek, canTransport } from './meets.ts';
 import { hlsPlaylist, SEGMENT_NAME, sendToYoutube, youtubeWindow } from './live.ts';
 import { fetchPublicDriveFile } from './driveFiles.ts';
 import { chargeFacts, createCheckoutSession, createCoupon, createPortalSession, createRefund, retrieveCheckoutSession, retrieveSubscription, stripeConfigured, subscriptionKeepsPlan, unixIso, verifyStripeSignature, type BillingConfig, type StripeCheckoutSession, type StripeSubscription } from './billing.ts';
@@ -144,9 +144,27 @@ export function parseIceServers(raw: string | undefined): IceServer[] | undefine
   }
 }
 
+/**
+ * Cloudflare's TURN service (CF_TURN_KEY_ID, CF_TURN_API_TOKEN — docs/DEPLOY_CONTROL.md): short-lived credentials
+ * minted here and handed to every performer with /ice, so a stage link finds its way through the strictest NAT
+ * (a phone on cellular, a hotel's Wi-Fi) by relay when it cannot connect directly. The token never leaves the service.
+ */
+export interface TurnConfig {
+  keyId: string;
+  apiToken: string;
+  /** Tests: the TURN API stood in for. */
+  endpoint?: string;
+}
+
+/** The credentials' life, and how long before their end a fresh set is minted (a meet never outlives its credentials). */
+const TURN_TTL_S = 6 * 3600;
+const TURN_REFRESH_BEFORE_S = 2 * 3600;
+
 export interface AppDeps {
   /** ICE servers handed to performers (ICE_SERVERS env, JSON array); STUN only by default. */
   iceServers?: IceServer[];
+  /** Cloudflare TURN (above); without it the stage links have STUN alone (and whatever ICE_SERVERS names). */
+  turn?: TurnConfig;
   store: SqlStore;
   auth: Authenticator;
   secrets: SecretBox;
@@ -231,6 +249,7 @@ const EVENTS_MAX_MS = 20 * 60_000;
 /** A comment line this often keeps the event stream's connection alive through proxies and the edge. */
 const EVENTS_PING_MS = 25_000;
 /** The event stream's own path: the resume token in its query is the credential (the browser's EventSource sends no headers). */
+const AWAY_PATH = /^\/meets\/[^/]+\/away$/;
 const EVENTS_PATH = /^\/meets\/[^/]+\/events$/;
 /** A TV screen's own routes (tv.ts): the TV has no sign-in — its token is its credential; `tv=` in the query says a TV speaks. */
 const TV_PATH = /^\/tv\/screens(\/[A-Za-z0-9]+\/(events|signal|bye))?$/;
@@ -266,6 +285,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
         void deps.store.clearSignals(meetId);
         events.changed(meetId);
         void events.close(meetId);
+        void endMeetJobs(deps, meetId, 'The meet ended').catch(() => undefined); // a broadcast never outlives its meet
       };
     }
     await next();
@@ -437,6 +457,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     if (path === '/health' || path === '/time' || path === '/billing/webhook' || path.startsWith('/watch/') || path.startsWith('/fake/') || c.req.method === 'OPTIONS') return next();
     if (c.req.method === 'GET' && SOCIAL_CALLBACK.test(path)) return next(); // a network sends the browser back here: by the state it carries (below)
     if (c.req.method === 'GET' && EVENTS_PATH.test(path)) return next(); // the stream: by resume token (below)
+    if (c.req.method === 'POST' && AWAY_PATH.test(path)) return next(); // a beacon on the way out: by resume token alone (below) — a beacon carries no headers
     if (TV_PATH.test(path) && ((c.req.method === 'POST' && path === '/tv/screens') || (c.req.method === 'GET' && path.endsWith('/events')) || c.req.query('tv'))) return next(); // a TV (by its token), a screen's stream (by either side's token): below
     const deps = c.get('deps');
     const id = await deps.auth(c.req.raw);
@@ -996,6 +1017,30 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return true;
   }
 
+  /** A device that said it was going is given this long to be heard from again (a reload) before its slot is cleared. */
+  const AWAY_GRACE_MS = 10_000;
+  const settling = new Map<string, ReturnType<typeof setTimeout>>();
+  /** A little later: the meet reconciled with who is still heard from, saved if that changed anything, and the room told (one timer per meet). */
+  function settleLater(deps: AppDeps, meetId: string, ms: number): void {
+    const prev = settling.get(meetId);
+    if (prev) clearTimeout(prev);
+    const t = setTimeout(() => {
+      settling.delete(meetId);
+      void (async () => {
+        const m = await deps.store.getMeet(meetId);
+        if (!m || !meetIsOpen(m)) return;
+        ensureMeet(m);
+        const { changed } = reconcile(m, await deps.store.listParticipants(meetId));
+        if (changed || tick(m)) {
+          await deps.store.saveMeet(m);
+          events.changed(meetId);
+        }
+      })().catch(() => undefined);
+    }, ms);
+    (t as { unref?: () => void }).unref?.();
+    settling.set(meetId, t);
+  }
+
   /**
    * An account's standing changed under the admin's hand (a plan granted or revoked, a role, the month's hours): every
    * seat of theirs in an open meet carries the picture permission as it stands now, and the rooms are told at once —
@@ -1301,6 +1346,11 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     // The participant row is what keeps them in the room; the meet row is rewritten only when the
     // heartbeat changed something worth it (a performer's clock, or an expiry extension that is due).
     const clockChanged = body.driftMs !== undefined || body.rttMs !== undefined ? reportClock(meet, p, body.driftMs ?? null, body.rttMs ?? null) : false;
+    // What this device's links carry, for the host's view of every device (in memory with the participant, never a row).
+    if (body.links && typeof body.links === 'object') {
+      const n = (v: unknown) => Math.max(0, Math.min(20, Math.round(Number(v)) || 0));
+      p.links = { up: n(body.links.up), of: n(body.links.of), sound: n(body.links.sound), pictures: n(body.links.pictures), relay: n(body.links.relay), strained: Boolean(body.links.strained), at: p.lastSeenAt };
+    } else if (body.links === null) delete p.links;
     const touchDue = touchForHeartbeat(meet);
     await store.saveParticipant(p);
     if (clockChanged || touchDue) await store.saveMeet(meet);
@@ -1703,8 +1753,35 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return c.json({ signals, serverEpochMs: Date.now() });
   });
 
-  /** ICE servers for performer-to-performer video (STUN by default; TURN when the deployment sets ICE_SERVERS). */
-  app.get('/ice', (c) => c.json({ iceServers: c.get('deps').iceServers ?? DEFAULT_ICE_SERVERS }));
+  /**
+   * ICE servers for performer-to-performer links: STUN by default, TURN when the deployment sets ICE_SERVERS or
+   * Cloudflare's TURN keys (short-lived credentials, minted here and kept for the meet's length; a mint that fails
+   * leaves the last set, or STUN alone — a link is never refused for it).
+   */
+  let turnCache: { servers: IceServer[]; expiresAt: number } | null = null;
+  app.get('/ice', async (c) => {
+    const deps = c.get('deps');
+    const base = deps.iceServers ?? DEFAULT_ICE_SERVERS;
+    if (!deps.turn) return c.json({ iceServers: base });
+    const now = Date.now();
+    if (!turnCache || turnCache.expiresAt - now < TURN_REFRESH_BEFORE_S * 1000) {
+      try {
+        const r = await (deps.fetchImpl ?? fetch)(`${deps.turn.endpoint ?? 'https://rtc.live.cloudflare.com'}/v1/turn/keys/${encodeURIComponent(deps.turn.keyId)}/credentials/generate-ice-servers`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${deps.turn.apiToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ttl: TURN_TTL_S }),
+        });
+        const body = (await r.json().catch(() => null)) as { iceServers?: IceServer | IceServer[] } | null;
+        const got = body?.iceServers ? (Array.isArray(body.iceServers) ? body.iceServers : [body.iceServers]) : [];
+        const servers = got.filter((x) => x && x.urls).map((x) => ({ ...x, urls: (Array.isArray(x.urls) ? x.urls : [x.urls]).filter((u) => !/:53\b/.test(u)) }));
+        if (r.ok && servers.length) turnCache = { servers, expiresAt: now + TURN_TTL_S * 1000 };
+        else console.warn('turn: credentials not minted', r.status);
+      } catch (e) {
+        console.warn('turn: credentials not minted', e);
+      }
+    }
+    return c.json({ iceServers: turnCache ? [...base.filter((s) => !turnCache!.servers.some((t) => String(t.urls) === String(s.urls))), ...turnCache.servers] : base, ...(turnCache ? { turn: true, expiresAt: new Date(turnCache.expiresAt).toISOString() } : {}) });
+  });
 
   app.post('/meets/:id/leave', async (c) => {
     const { store } = c.get('deps');
@@ -1718,6 +1795,25 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     reconcile(meet, (await store.listParticipants(meet.meetId)).map((x) => x));
     await store.saveMeet(meet);
     events.changed(meet.meetId);
+    return c.json({ ok: true as const });
+  });
+
+  /**
+   * The device is going (the tab closed, the page reloads — a beacon on the way out): heard from within AWAY_GRACE_MS
+   * it stays (a reload is back in seconds, on its slot); otherwise its slot is cleared then — not a minute later —
+   * and the room is told. A plain leave would lose a reload its slot.
+   */
+  app.post('/meets/:id/away', async (c) => {
+    const { store } = c.get('deps');
+    // A beacon carries no sign-in (the browser sends it after the page is gone, with no headers of ours): the resume token —
+    // the meet's own credential for this device, as the stream takes it — names the device; it does nothing but shorten a grace.
+    const token = c.req.query('rt') || ((await c.req.json().catch(() => ({}))) as { resumeToken?: string })?.resumeToken || '';
+    const meet = await store.getMeet(c.req.param('id'));
+    if (!meet) return err(c, 404, 'no_meet', 'Meet not found');
+    const p = token ? await store.getParticipantByToken(meet.meetId, token) : null;
+    if (!p) return c.json({ ok: true as const });
+    await store.saveParticipant({ ...p, lastSeenAt: new Date(Date.now() - (PARTICIPANT_TIMEOUT_MS - AWAY_GRACE_MS)).toISOString() });
+    settleLater(c.get('deps'), meet.meetId, AWAY_GRACE_MS + 500);
     return c.json({ ok: true as const });
   });
 
@@ -2963,19 +3059,10 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
   });
 
   app.post('/publishing/jobs/:id/stop', async (c) => {
-    const { store, relay } = c.get('deps');
+    const { store } = c.get('deps');
     const job = await store.getJob(c.req.param('id'));
     if (!job || job.ownerUserId !== c.get('user').userId) return err(c, 404, 'no_job', 'Job not found');
-    const now = new Date().toISOString();
-    if (job.state !== 'stopped' && job.state !== 'failed') {
-      job.state = 'stopped';
-      job.updatedAt = now;
-      job.events.push({ at: now, state: 'stopped', note: 'Stopped by the publisher' });
-      if (job.live && job.live.relay && job.live.relay !== 'off') job.live.relay = 'off';
-      await store.saveJob(job);
-    }
-    await store.clearLiveSegments(job.jobId);
-    if (relay && job.destinations.some((k) => RELAY_KINDS.includes(k))) await relayStop(relay, job.jobId); // ends the RTMP streams (ffmpeg closes them cleanly)
+    await endJob(c.get('deps'), job, 'Stopped by the publisher');
     return c.json({ job });
   });
 
@@ -3090,7 +3177,7 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
 }
 
 /** Periodic sweep: expire idle meets even when nobody is polling them. */
-export async function sweepMeets(store: SqlStore): Promise<number> {
+export async function sweepMeets(store: SqlStore, deps?: Pick<AppDeps, 'store' | 'relay'>): Promise<number> {
   let n = 0;
   for (const m of await store.listOpenMeets()) {
     ensureMeet(m);
@@ -3099,6 +3186,53 @@ export async function sweepMeets(store: SqlStore): Promise<number> {
       n++;
     }
   }
+  if (deps) await sweepJobs(deps).catch(() => undefined);
   await store.flush().catch(() => undefined);
+  return n;
+}
+
+/** A broadcast whose show view sends nothing this long (it closed, crashed, lost the network for good) is over: no job stays "live" for ever. */
+export const JOB_STALE_MS = 2 * 60_000;
+/** A broadcast asked for whose first segment never came in this long: the show view never started sending. */
+export const JOB_UNSTARTED_MS = 10 * 60_000;
+
+/**
+ * End a broadcast as the publisher's Stop would — the state, the note, the segments' window, the relay's streams —
+ * from whichever hand ends it (Stop, the meet's end, the sweep): the same steps, idempotent, so a second end changes nothing.
+ */
+export async function endJob(deps: Pick<AppDeps, 'store' | 'relay'>, job: PublishJob, note: string): Promise<void> {
+  const { store, relay } = deps;
+  const now = new Date().toISOString();
+  if (job.state !== 'stopped' && job.state !== 'failed') {
+    job.state = 'stopped';
+    job.updatedAt = now;
+    job.events.push({ at: now, state: 'stopped', note });
+    if (job.live && job.live.relay && job.live.relay !== 'off') job.live.relay = 'off';
+    await store.saveJob(job);
+  }
+  await store.clearLiveSegments(job.jobId);
+  if (relay && job.destinations.some((k) => RELAY_KINDS.includes(k))) await relayStop(relay, job.jobId).catch(() => undefined); // ends the RTMP streams (ffmpeg closes them cleanly)
+}
+
+/** Every broadcast of a meet that is on the air, ended (the meet is over). */
+export async function endMeetJobs(deps: Pick<AppDeps, 'store' | 'relay'>, meetId: string, note: string): Promise<number> {
+  let n = 0;
+  for (const job of await deps.store.liveJobsForMeet(meetId)) {
+    await endJob(deps, job, note);
+    n++;
+  }
+  return n;
+}
+
+/** Broadcasts that went quiet (JOB_STALE_MS without a segment) or never began (JOB_UNSTARTED_MS), ended: nothing on the air for ever. */
+export async function sweepJobs(deps: Pick<AppDeps, 'store' | 'relay'>, now = Date.now()): Promise<number> {
+  let n = 0;
+  for (const job of await deps.store.listOnAirJobs()) {
+    const last = job.live?.lastSegmentAt ? Date.parse(job.live.lastSegmentAt) : 0;
+    const stale = last ? now - last > JOB_STALE_MS : now - Date.parse(job.createdAt) > JOB_UNSTARTED_MS;
+    if (!stale) continue;
+    await endJob(deps, job, last ? 'No segment for two minutes — the show view went away' : 'The show view never started sending');
+    n++;
+  }
   return n;
 }

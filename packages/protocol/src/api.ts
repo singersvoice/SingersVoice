@@ -1,7 +1,7 @@
 /** sv-control HTTP API shapes shared by the client and the server. All routes are JSON. */
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
 import type { InviteRequest, JoinInvite } from './join.ts';
-import type { ChatMessage, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy, TvSignal } from './meet.ts';
+import type { ChatMessage, LinkSummary, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy, TvSignal } from './meet.ts';
 import type { MixBatch } from './mix.ts';
 import type { AdminUserUpdate, AdminUsersResponse, Destination, DestinationKind, DestinationUpdate, LiveStatus, PublishJob, PublishJobRequest, UserRecord } from './publishing.ts';
 import type { AdminBillingOverview, BillingSettings, ClubStatus, OrderRecord, PlanId, PlansResponse } from './plans.ts';
@@ -88,6 +88,8 @@ export interface HeartbeatRequest {
   chatSince?: number;
   driftMs?: number | null;
   rttMs?: number | null;
+  /** What this device's links to the other singers carry (meet.ts LinkSummary): kept in memory for the host's view, never a row. */
+  links?: LinkSummary | null;
 }
 
 export interface MeetSnapshot {
@@ -336,10 +338,13 @@ export interface Routes {
   'GET /watch/:id/mix': { res: { batches: MixBatch[]; latest: number; serverEpochMs: number } };
   /** The mix as a stream (SSE): a `batch` event per batch from `since` on, a `ping` every so often; one request for the whole listen. */
   'GET /watch/:id/mix/stream': { res: never };
+  /** The device is going (a beacon on the way out, `?rt=` the resume token — no sign-in, as the stream): heard from within seconds it stays on its slot (a reload); otherwise the slot is cleared then, not a minute later. */
+  'POST /meets/:id/away': { req: { resumeToken?: string }; res: { ok: true } };
   /** `gone`: the addressee left the meet (no error — the sender just forgets the link). */
   'POST /meets/:id/signal': { req: SignalRequest; res: { seq: number; gone?: boolean } };
   'POST /meets/:id/signals': { req: { resumeToken: string; since: number }; res: { signals: MeetSignal[]; serverEpochMs: number } };
-  'GET /ice': { res: { iceServers: IceServer[] } };
+  /** STUN, and TURN where the deployment has it (`turn`: credentials minted for the meet's length, good until `expiresAt`). */
+  'GET /ice': { res: { iceServers: IceServer[]; turn?: boolean; expiresAt?: string } };
   /** TV screens (services/control/src/tv.ts): the TV registers a code (no sign-in); the singer claims it; the two trade WebRTC signals through the service. */
   'POST /tv/screens': { res: { code: string; token: string } };
   'POST /tv/screens/:code/claim': { res: { code: string; phoneToken: string } };

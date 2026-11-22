@@ -70,6 +70,9 @@ jobs:
           META_APP_ID: ${{ secrets.META_APP_ID }}
           META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          # Cloudflare TURN for the stage links (docs/DEPLOY_CONTROL.md): the key's id and API token, optional.
+          CF_TURN_KEY_ID: ${{ secrets.CF_TURN_KEY_ID }}
+          CF_TURN_API_TOKEN: ${{ secrets.CF_TURN_API_TOKEN }}
           SERVICE_URL: ${{ vars.SERVICE_URL }}
           GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
           PRIVILEGED_EMAILS: ${{ vars.PRIVILEGED_EMAILS }}

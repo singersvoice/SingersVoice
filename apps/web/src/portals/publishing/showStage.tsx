@@ -11,9 +11,9 @@ import { StageBackground } from '../../components/BackgroundPicker.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { serverNow } from '../../lib/api.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
-import { SINGER_LINK_WIDTH } from '../../video/enhance.ts';
+import { showSize, SINGER_LINK_WIDTH } from '../../video/enhance.ts';
 import { PerformerMesh, type PeerState } from '../../video/peers.ts';
-import { StageCompositor, type StagePerformer } from '../../video/stage.ts';
+import { StageCompositor, wantedSingerWidth, type StagePerformer } from '../../video/stage.ts';
 import type { MeetSession } from '../meets/meetSession.ts';
 
 export interface ShowFeed {
@@ -41,9 +41,14 @@ export interface ShowFeed {
 export function useShowFeed(session: MeetSession, meet: Meet, you: Participant, opts: { small?: boolean } = {}): ShowFeed {
   const compositor = useMemo(() => new StageCompositor('show'), []);
   const mesh = useMemo(() => (PerformerMesh.supported() ? new PerformerMesh(session, you.participantId, { receiveOnly: true }) : null), [session, you.participantId]);
+  // What this view draws of each singer: a Preview tile a singer-link's width; the show the width of a slot in its row (a
+  // crowded stage draws small slots — their links scale to that, and a stage of seven costs each singer a singer link's uplink).
+  const onStageCount = meet.stage.filter((s) => s.participantId).length;
+  const show = showSize();
+  const want = opts.small ? SINGER_LINK_WIDTH : wantedSingerWidth(show.width, show.height, Math.max(1, onStageCount), SINGER_LINK_WIDTH);
   useEffect(() => {
-    mesh?.announceWant(opts.small ? SINGER_LINK_WIDTH : 0);
-  }, [mesh, opts.small]);
+    mesh?.announceWant(want);
+  }, [mesh, want]);
   const remoteVideos = useRef(new Map<string, { video: HTMLVideoElement; frame: UnpackedFrame }>());
   const [peerStates, setPeerStates] = useState<Record<string, PeerState>>({});
   const [vocals, setVocals] = useState<Record<string, MediaStream>>({});

@@ -14,10 +14,19 @@
  * renegotiates): a singer who changes something on stage — the background, the song, the
  * transport — tells the others and the show view over it, and they fetch the new state at once
  * rather than at their next poll. The service stays the source of truth; the channel only says "now".
+ * Over the same channel each side says whether its microphone is open and its camera on, so the
+ * other side can tell a link that carries nothing because there is nothing to carry from one that
+ * is broken: a connected link from a singer whose mic is open, with no sound arriving on it for
+ * NO_MEDIA_MS, is re-made from scratch by itself (at most once a minute per singer) — and said so.
+ *
+ * What every link is actually doing is read from its statistics every LATENCY_SAMPLE_MS and handed
+ * to the room (`onLinks`, `links()`): whether sound and a picture arrive, the path (direct, or by a
+ * TURN relay), the round trip, the loss, and the encoder's reason when it sends a smaller picture
+ * than asked (a strained device, a thin uplink) — a connected link is never taken for a working one.
  */
 import type { IceServer, MeetSignal } from '@singersvoice/protocol';
 import { api } from '../lib/api.ts';
-import { PACK_WIDTH, singerLinkScale } from './enhance.ts';
+import { PACK_WIDTH, SINGER_LINK_WIDTH, singerLinkScale } from './enhance.ts';
 import { fingerprintOf } from './sdp.ts';
 
 export interface SignalChannel {
@@ -77,14 +86,65 @@ interface Peer {
   playoutMs: number;
   /** How wide a picture they draw of us, as they announced it (0: the whole frame — the default, and every singer's). */
   wantWidth: number;
+  /** Their microphone and camera, as they announced them over the channel (null until they said). */
+  micOpen: boolean | null;
+  camOn: boolean | null;
+  /** The last counters read from the link's statistics, for the deltas. */
+  counters: { audioBytes: number; videoFrames: number; audioLost: number; audioPackets: number } | null;
+  /** When sound / a picture last moved on this link (ms; 0 = never since it connected). */
+  audioAt: number;
+  videoAt: number;
+  /** When the current state began (ms). */
+  sinceMs: number;
+  /** When the link was last re-made by itself for carrying nothing (ms). */
+  healedAt: number;
+  /** What the statistics said last: the path, the round trip, the loss, the encoder's limitation. */
+  path: 'direct' | 'relay' | null;
+  rttMs: number | null;
+  lossPct: number | null;
+  limited: LinkLimit;
+}
+
+/** Why this device sends a smaller picture than asked on a link, from the encoder's own statistics. */
+export type LinkLimit = 'none' | 'cpu' | 'bandwidth' | 'other';
+
+/** One link's health as the room shows it and support reads it. */
+export interface LinkHealth {
+  id: string;
+  state: PeerState;
+  /** How long the link has been in this state (ms). */
+  forMs: number;
+  /** They say their microphone is open / their camera is on (null: they have not said — an older build). */
+  micOpen: boolean | null;
+  camOn: boolean | null;
+  /** Sound / a picture arrived on this link within the last sample. */
+  audioIn: boolean;
+  videoIn: boolean;
+  /** Connected, they say the mic is open (the camera on), and nothing has arrived for NO_MEDIA_MS: the link is broken, not quiet. */
+  silent: boolean;
+  blind: boolean;
+  path: 'direct' | 'relay' | null;
+  rttMs: number | null;
+  /** Audio packets lost on the way here over the last sample, per cent. */
+  lossPct: number | null;
+  /** Our own encoder on this link: limited by this device's cpu, the uplink, or not at all. */
+  limited: LinkLimit;
+  /** A link we opened to a singer on stage (false: one a publisher's view opened to us). */
+  wanted: boolean;
 }
 
 /** What travels over the mesh's message channel: "something changed, fetch the state", a singer's round trip (align.ts), and how wide a picture a device draws of us (enhance.ts). */
-export type MeshMessage = { type: 'changed' } | { type: 'rt'; ms: number } | { type: 'want'; width: number };
+export type MeshMessage = { type: 'changed' } | { type: 'rt'; ms: number } | { type: 'want'; width: number } | { type: 'media'; mic: boolean; cam: boolean };
 /** Encode, decode and the capture pipeline, which the link's own statistics do not see (ms). */
 const CODEC_MS = 30;
 /** How often the links' latency is read (ms). */
 const LATENCY_SAMPLE_MS = 2000;
+/** A connected link from a singer whose mic is open (camera on) with no sound (no frames) arriving this long is broken: re-made. */
+export const NO_MEDIA_MS = 12_000;
+/** A link is re-made for carrying nothing at most this often (a singer whose device really sends nothing is not hammered). */
+const HEAL_EVERY_MS = 60_000;
+/** The ICE servers (TURN credentials among them) are fetched again before a new link when the last set is this old. */
+const ICE_REFRESH_MS = 45 * 60_000;
 /** The channel's negotiated id (the same on both sides of every link). */
 const DC_ID = 1;
 
@@ -95,8 +155,10 @@ const POLL_PUSHED_CONNECTING_MS = 5000;
 const POLL_PUSHED_STEADY_MS = 20_000;
 /** A singer's whole video uplink, shared by their links to the other singers (a publisher's link gets its own, generous cap). */
 const TOTAL_UPLINK_BPS = 2_400_000;
-/** A publisher's link carries what goes out to the world — the whole packed frame (enhance.ts, 1440×960 from a computer): up to this, always. */
+/** A publisher's link carries what goes out to the world — the whole packed frame (enhance.ts, 1440×960 from a computer): up to this for the whole frame; in proportion to the pixels when the show draws it smaller (a crowded stage). */
 const PUBLISHER_BPS = 4_500_000;
+/** The least a publisher's link gets, however small the picture it draws. */
+const PUBLISHER_MIN_BPS = 600_000;
 
 /**
  * The video codecs in the order this device would send them: H.264 first — hardware-encoded on nearly every phone
@@ -143,6 +205,13 @@ export class PerformerMesh {
   /** How wide a picture this device draws of the singers it receives (0: the whole frame), announced to every peer the same way — a Preview tile asks for a small one (enhance.ts). */
   private wantWidth: number | null = null;
   private latencyTimer: ReturnType<typeof setInterval> | undefined;
+  /** My microphone and camera, announced to every peer when their channel opens (and again when they change). */
+  private mediaState: { mic: boolean; cam: boolean } | null = null;
+  /** When the ICE servers were last fetched (ms; 0 = never). */
+  private iceFetchedAt = 0;
+  private iceFetching: Promise<void> | null = null;
+  /** The links' health, after every sample (the room's notices draw on it). */
+  onLinks: ((links: LinkHealth[]) => void) | null = null;
   /** A publisher's show view only receives (never sends a camera). */
   private readonly receiveOnly: boolean;
   /** Ask every singer for their vocal (and offer mine): the saved show needs the whole mix. */
@@ -164,15 +233,27 @@ export class PerformerMesh {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    try {
-      const r = await api.get('GET /ice', '/ice');
-      if (r.iceServers?.length) this.iceServers = r.iceServers;
-    } catch {
-      /* STUN defaults */
-    }
+    await this.refreshIce();
     this.schedule(0);
     clearInterval(this.latencyTimer);
-    this.latencyTimer = setInterval(() => void this.sampleLatency(), LATENCY_SAMPLE_MS);
+    this.latencyTimer = setInterval(() => void this.sampleLinks(), LATENCY_SAMPLE_MS);
+  }
+
+  /** The ICE servers from the service (STUN, and TURN with credentials good for hours where the deployment has it); the defaults stand when it cannot answer. */
+  private refreshIce(): Promise<void> {
+    if (this.iceFetching) return this.iceFetching;
+    this.iceFetching = (async () => {
+      try {
+        const r = await api.get('GET /ice', '/ice');
+        if (r.iceServers?.length) this.iceServers = r.iceServers;
+        this.iceFetchedAt = Date.now();
+      } catch {
+        /* STUN defaults, or the last set */
+      } finally {
+        this.iceFetching = null;
+      }
+    })();
+    return this.iceFetching;
   }
 
   // ---- timing (align.ts): what each singer's voice arrives behind the shared clock by, and the hold applied to it ----
@@ -191,6 +272,39 @@ export class PerformerMesh {
     if (this.wantWidth === v) return;
     this.wantWidth = v;
     this.say({ type: 'want', width: v });
+  }
+
+  /** Tell every peer whether my microphone is open and my camera on: a link carrying nothing is then a broken one or a quiet one, never a guess. */
+  announceMedia(mic: boolean, cam: boolean): void {
+    if (this.mediaState && this.mediaState.mic === mic && this.mediaState.cam === cam) return;
+    this.mediaState = { mic, cam };
+    this.say({ type: 'media', mic, cam });
+  }
+
+  /** Every link's health as of the last sample (LATENCY_SAMPLE_MS): what arrives on it, its path, its loss, our encoder's strain. */
+  links(now = Date.now()): LinkHealth[] {
+    const out: LinkHealth[] = [];
+    for (const [id, p] of this.peers) {
+      const connected = p.state === 'connected';
+      const since = Math.max(p.sinceMs, p.healedAt);
+      out.push({
+        id,
+        state: p.state,
+        forMs: Math.max(0, now - p.sinceMs),
+        micOpen: p.micOpen,
+        camOn: p.camOn,
+        audioIn: connected && now - p.audioAt < LATENCY_SAMPLE_MS * 2,
+        videoIn: connected && now - p.videoAt < LATENCY_SAMPLE_MS * 2,
+        silent: connected && p.micOpen === true && now - Math.max(p.audioAt, since) >= NO_MEDIA_MS,
+        blind: connected && p.camOn === true && now - Math.max(p.videoAt, since) >= NO_MEDIA_MS,
+        path: p.path,
+        rttMs: p.rttMs,
+        lossPct: p.lossPct,
+        limited: p.limited,
+        wanted: this.wanted.has(id),
+      });
+    }
+    return out;
   }
 
   /** Every singer linked from the stage (never a publisher's view, which sends nothing): how far behind the shared clock their voice reaches this device before the hold applied here (null until known). */
@@ -225,27 +339,50 @@ export class PerformerMesh {
     }
   }
 
-  /** The way here on every link, from its statistics: half the round trip, the jitter buffer's recent average, encode and decode. */
-  private async sampleLatency(): Promise<void> {
-    for (const p of this.peers.values()) {
+  /**
+   * Every link, from its statistics: the way here (half the round trip, the jitter buffer's recent average, encode
+   * and decode — align.ts), whether sound and a picture actually arrived since the last sample, the path (a TURN
+   * relay or direct), the loss, and our own encoder's limitation on it. A connected link from a singer whose mic
+   * is open (camera on) that carried nothing for NO_MEDIA_MS is re-made from scratch, at most once a minute.
+   */
+  private async sampleLinks(): Promise<void> {
+    const now = Date.now();
+    for (const [id, p] of [...this.peers]) {
       if (p.state !== 'connected') continue;
       try {
         const stats = await p.pc.getStats();
         let rttMs: number | null = null;
         let jbDelay = 0;
         let jbCount = 0;
-        const pairs = new Map<string, { currentRoundTripTime?: number; nominated?: boolean; state?: string }>();
+        let audioBytes = 0;
+        let videoFrames = 0;
+        let audioLost = 0;
+        let audioPackets = 0;
+        let limited: LinkLimit = 'none';
+        const pairs = new Map<string, { currentRoundTripTime?: number; nominated?: boolean; state?: string; localCandidateId?: string; remoteCandidateId?: string }>();
+        const candidates = new Map<string, { candidateType?: string }>();
         let selected: string | null = null;
-        stats.forEach((r: { type: string; id: string; kind?: string; selectedCandidatePairId?: string; currentRoundTripTime?: number; nominated?: boolean; state?: string; jitterBufferDelay?: number; jitterBufferEmittedCount?: number }) => {
+        stats.forEach((r: { type: string; id: string; kind?: string; selectedCandidatePairId?: string; currentRoundTripTime?: number; nominated?: boolean; state?: string; localCandidateId?: string; remoteCandidateId?: string; candidateType?: string; jitterBufferDelay?: number; jitterBufferEmittedCount?: number; bytesReceived?: number; framesDecoded?: number; packetsLost?: number; packetsReceived?: number; qualityLimitationReason?: string }) => {
           if (r.type === 'transport' && r.selectedCandidatePairId) selected = r.selectedCandidatePairId;
           if (r.type === 'candidate-pair') pairs.set(r.id, r);
+          if (r.type === 'local-candidate' || r.type === 'remote-candidate') candidates.set(r.id, r);
           if (r.type === 'inbound-rtp' && r.kind === 'audio') {
             jbDelay += r.jitterBufferDelay ?? 0;
             jbCount += r.jitterBufferEmittedCount ?? 0;
+            audioBytes += r.bytesReceived ?? 0;
+            audioLost += r.packetsLost ?? 0;
+            audioPackets += r.packetsReceived ?? 0;
           }
+          if (r.type === 'inbound-rtp' && r.kind === 'video') videoFrames += r.framesDecoded ?? 0;
+          if (r.type === 'outbound-rtp' && r.kind === 'video' && r.qualityLimitationReason && r.qualityLimitationReason !== 'none') limited = r.qualityLimitationReason === 'cpu' ? 'cpu' : r.qualityLimitationReason === 'bandwidth' ? 'bandwidth' : 'other';
         });
         const pair = (selected && pairs.get(selected)) ?? [...pairs.values()].find((c) => c.nominated && c.state === 'succeeded') ?? [...pairs.values()].find((c) => c.currentRoundTripTime !== undefined);
         if (pair?.currentRoundTripTime !== undefined) rttMs = pair.currentRoundTripTime * 1000;
+        if (pair) {
+          const local = pair.localCandidateId ? candidates.get(pair.localCandidateId) : undefined;
+          const remote = pair.remoteCandidateId ? candidates.get(pair.remoteCandidateId) : undefined;
+          if (local || remote) p.path = local?.candidateType === 'relay' || remote?.candidateType === 'relay' ? 'relay' : 'direct';
+        }
         // The jitter buffer's delay over the last sample (the counters are lifetime sums), in ms per emitted sample.
         let jbMs: number | null = null;
         if (p.jb && jbCount > p.jb.count) jbMs = ((jbDelay - p.jb.delay) / (jbCount - p.jb.count)) * 1000;
@@ -253,10 +390,35 @@ export class PerformerMesh {
         p.jb = { delay: jbDelay, count: jbCount };
         if (rttMs !== null && jbMs !== null) p.netMs = Math.round(rttMs / 2 + jbMs + CODEC_MS);
         else if (rttMs !== null && p.netMs === null && p.audio === null) p.netMs = Math.round(rttMs / 2 + CODEC_MS); // no vocal on this link yet: the network alone
+        p.rttMs = rttMs === null ? p.rttMs : Math.round(rttMs);
+        p.limited = limited;
+        // What moved since the last sample: sound, frames, and the loss among the audio packets that came.
+        const c = p.counters;
+        if (c) {
+          if (audioBytes > c.audioBytes) p.audioAt = now;
+          if (videoFrames > c.videoFrames) p.videoAt = now;
+          const got = audioPackets - c.audioPackets;
+          const lost = audioLost - c.audioLost;
+          p.lossPct = got + lost > 0 ? Math.round((100 * Math.max(0, lost)) / (got + Math.max(0, lost))) : p.lossPct;
+        } else {
+          if (audioBytes > 0) p.audioAt = now;
+          if (videoFrames > 0) p.videoAt = now;
+        }
+        p.counters = { audioBytes, videoFrames, audioLost, audioPackets };
+        // Broken, not quiet: they say the mic is open (the camera on) and nothing has come for NO_MEDIA_MS on a connected link — re-made.
+        const since = Math.max(p.sinceMs, p.healedAt);
+        const silent = p.micOpen === true && now - Math.max(p.audioAt, since) >= NO_MEDIA_MS;
+        const blind = p.camOn === true && now - Math.max(p.videoAt, since) >= NO_MEDIA_MS;
+        if ((silent || blind) && this.wanted.has(id) && now - p.healedAt >= HEAL_EVERY_MS) {
+          p.healedAt = now;
+          console.warn(`mesh: nothing arrives from ${id} on a connected link (${silent ? 'no sound' : 'no frames'} though their ${silent ? 'mic is open' : 'camera is on'}) — re-making it`);
+          this.remake(id);
+        }
       } catch {
         /* stats unavailable */
       }
     }
+    this.onLinks?.(this.links(now));
   }
 
   /** The alpha-packed stream to send (replace at any time; null stops sending). */
@@ -377,8 +539,10 @@ export class PerformerMesh {
   }
 
   private connect(id: string, inbound: boolean): void {
+    // TURN credentials age: a set fetched long ago is renewed for the links after this one (this one takes what there is — a link is never held up for it).
+    if (this.iceFetchedAt && Date.now() - this.iceFetchedAt > ICE_REFRESH_MS) void this.refreshIce();
     const pc = new RTCPeerConnection({ iceServers: this.iceServers as RTCIceServer[], bundlePolicy: 'max-bundle' });
-    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, settledAt: 0, retryAt: 0, dc: null, token: Math.random().toString(36).slice(2, 10), remoteToken: null, rtMs: null, netMs: null, jb: null, playoutMs: 0, wantWidth: 0 };
+    const peer: Peer = { id, pc, polite: this.me < id, makingOffer: false, ignoreOffer: false, stream: null, tracks: new Set(), state: 'connecting', restarts: 0, inbound, wantsAudio: false, audio: null, sendChain: Promise.resolve(), pendingIce: [], offeredAt: 0, settledAt: 0, retryAt: 0, dc: null, token: Math.random().toString(36).slice(2, 10), remoteToken: null, rtMs: null, netMs: null, jb: null, playoutMs: 0, wantWidth: 0, micOpen: null, camOn: null, counters: null, audioAt: 0, videoAt: 0, sinceMs: Date.now(), healedAt: 0, path: null, rttMs: null, lossPct: null, limited: 'none' };
     this.peers.set(id, peer);
     // The message channel, made before the first offer on both sides with the same id: part of the link from the start, never a renegotiation.
     try {
@@ -391,6 +555,9 @@ export class PerformerMesh {
           else if (m && m.type === 'want' && Number.isFinite(Number(m.width))) {
             peer.wantWidth = Math.max(0, Math.min(4096, Math.round(Number(m.width))));
             this.applyCaps(peer); // the link scales to what they draw
+          } else if (m && m.type === 'media') {
+            peer.micOpen = Boolean(m.mic);
+            peer.camOn = Boolean(m.cam);
           }
         } catch {
           /* not ours */
@@ -400,6 +567,7 @@ export class PerformerMesh {
         try {
           if (this.roundTripMs !== null) dc.send(JSON.stringify({ type: 'rt', ms: this.roundTripMs } satisfies MeshMessage));
           if (this.wantWidth !== null) dc.send(JSON.stringify({ type: 'want', width: this.wantWidth } satisfies MeshMessage));
+          if (this.mediaState) dc.send(JSON.stringify({ type: 'media', ...this.mediaState } satisfies MeshMessage));
         } catch {
           /* closing */
         }
@@ -478,10 +646,12 @@ export class PerformerMesh {
     };
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
+      const was = peer.state;
       if (s === 'connected') {
         peer.state = 'connected';
         peer.restarts = 0;
         peer.settledAt = 0;
+        peer.counters = null; // the counters start over with the connection (an ICE restart keeps them; a fresh read tells)
         this.applyCaps(peer); // negotiated now: the bitrate caps stick
       } else if (s === 'failed') {
         peer.state = 'failed';
@@ -489,30 +659,50 @@ export class PerformerMesh {
         else if (peer.inbound && !this.wanted.has(id)) this.drop(id, false); // a publisher that went away; it re-offers if it returns
         else peer.retryAt = Date.now() + REMAKE_AFTER_MS; // a performer we want: re-made from scratch by heal()
       } else if (s === 'disconnected' || s === 'connecting' || s === 'new') peer.state = 'connecting';
+      if (peer.state !== was) peer.sinceMs = Date.now();
       this.onRemote?.(id, peer.stream, peer.state);
       this.schedule(0);
     };
   }
 
   private applyCaps(peer: Peer): void {
-    // Links to other singers share the uplink; a link to a publisher (someone we did not ask for — the show view) is the broadcast's source and gets the full
-    // picture — unless it said it draws a small one (a Preview tile): then the frame is scaled to that, at a singer link's bitrate.
+    // Links to other singers share the uplink at the singer-link size (enhance.ts); a link to a publisher (someone we did not ask for — the
+    // show view) is the broadcast's source and gets the whole picture at the full bitrate — unless it said how wide it draws us (a crowded
+    // show, a Preview tile): then the frame is scaled to that and the bitrate follows the pixels. A singer's link that asked for more than
+    // the singer-link size (the host's device filming the meet) gets that, within the publisher's ceiling.
     const singers = Math.max(1, [...this.peers.keys()].filter((id) => this.wanted.has(id)).length);
     const publisher = !this.wanted.has(peer.id);
-    const small = publisher && peer.wantWidth > 0 && peer.wantWidth < PACK_WIDTH;
-    const maxBitrate = publisher && !small ? PUBLISHER_BPS : Math.max(300_000, Math.min(1_200_000, publisher ? 1_200_000 : Math.round(TOTAL_UPLINK_BPS / singers)));
+    const share = Math.max(300_000, Math.min(1_200_000, Math.round(TOTAL_UPLINK_BPS / singers)));
+    let scale: number;
+    let maxBitrate: number;
+    if (publisher) {
+      const width = peer.wantWidth > 0 ? Math.min(PACK_WIDTH, peer.wantWidth) : PACK_WIDTH;
+      scale = Math.max(1, PACK_WIDTH / width);
+      maxBitrate = Math.max(PUBLISHER_MIN_BPS, Math.min(PUBLISHER_BPS, Math.round(PUBLISHER_BPS * (width / 720) ** 2)));
+    } else if (peer.wantWidth > SINGER_LINK_WIDTH) {
+      const width = Math.min(PACK_WIDTH, peer.wantWidth);
+      scale = Math.max(1, PACK_WIDTH / width);
+      maxBitrate = Math.max(share, Math.min(PUBLISHER_BPS, Math.round(share * (width / SINGER_LINK_WIDTH) ** 2)));
+    } else {
+      scale = singerLinkScale(singers);
+      maxBitrate = share;
+    }
     for (const s of peer.pc.getSenders()) {
       if (!s.track) continue;
       const params = s.getParameters();
       if (!params.encodings?.length) params.encodings = [{}];
+      const enc = params.encodings[0]! as RTCRtpEncodingParameters & { networkPriority?: string; priority?: string };
       if (s.track.kind === 'audio') {
-        // The vocal goes out at music quality: a fixed, generous Opus bitrate, whatever the mesh size.
-        params.encodings[0]!.maxBitrate = VOCAL_BPS;
+        // The vocal goes out at music quality: a fixed, generous Opus bitrate, whatever the mesh size — and first in line on the way out.
+        enc.maxBitrate = VOCAL_BPS;
+        enc.networkPriority = 'high';
+        enc.priority = 'high';
       } else {
-        // The packed frame goes out at its full size (enhance.ts): a publisher's link gets the whole of it, a singer's is scaled down to the size their stage draws.
-        params.encodings[0]!.maxBitrate = maxBitrate;
-        params.encodings[0]!.maxFramerate = publisher ? 24 : 15;
-        params.encodings[0]!.scaleResolutionDownBy = publisher ? (small ? Math.max(1, PACK_WIDTH / peer.wantWidth) : 1) : singerLinkScale(singers);
+        enc.maxBitrate = maxBitrate;
+        enc.maxFramerate = publisher ? 24 : 15;
+        enc.scaleResolutionDownBy = scale;
+        enc.networkPriority = 'low';
+        enc.priority = 'low';
         // A publisher's link under a strained sender gives up resolution and frame rate by turns ('balanced'): a broadcast with a softer picture for a moment, never one that freezes.
         params.degradationPreference = publisher ? 'balanced' : 'maintain-framerate';
       }

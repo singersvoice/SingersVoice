@@ -95,7 +95,11 @@ function Show(props: { id: string }) {
   useEffect(() => {
     void session.join('publisher').catch(() => undefined);
     void keepAwake(true);
+    // The tab closing or reloading: a word on the way out, so the singers' links to this view are dropped in seconds.
+    const onHide = () => session.away();
+    window.addEventListener('pagehide', onHide);
     return () => {
+      window.removeEventListener('pagehide', onHide);
       session.stop();
       void keepAwake(false);
     };

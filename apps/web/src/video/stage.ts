@@ -170,6 +170,18 @@ export function layoutStage(width: number, height: number, count: number, mode: 
 }
 
 /**
+ * How wide a picture of each singer a device drawing a `width`×`height` show of `count` singers needs from
+ * them (in the sender's packed-frame pixels: the person's half): the slot's width with a quarter to spare for
+ * the crop and the sharpening, never less than a singer link carries anyway, never more than a computer's
+ * cut-out. A show view announces it over the mesh (peers.ts `announceWant`) and every singer's link to it
+ * scales to that: a stage of seven costs each singer's uplink what a singer link does, not the whole frame.
+ */
+export function wantedSingerWidth(width: number, height: number, count: number, linkWidth = 320, packWidth = 720): number {
+  const slot = layoutStage(width, height, count, 'show')[0]!.w;
+  return Math.max(linkWidth, Math.min(packWidth, Math.ceil((slot * 1.25) / 16) * 16));
+}
+
+/**
  * Pure framing: the whole frame, as the singer's device framed it, as large as the slot allows — as
  * wide as the slot, as tall as the room between the headroom and the slot's floor — its bottom edge
  * on the slot's floor, centred in the slot. Every frame is the stage frame (the same proportions,

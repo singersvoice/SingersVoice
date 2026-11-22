@@ -31,7 +31,11 @@ async function waitFor(url, ms = 20000) {
   throw new Error(`${url} did not come up`);
 }
 
-export async function startServers({ base = '/SingersVoice/', logDir = process.env.SV_SERVER_LOGS, fakeYoutubeDir = process.env.SV_FAKE_YOUTUBE_DIR, fakeSocial = false } = {}) {
+/**
+ * `controlDb`: a SQLite file for the service instead of memory — a test that restarts the service mid-meet
+ * (`restartControl`) needs the meets to survive it, as a redeploy on Cloudflare does.
+ */
+export async function startServers({ base = '/SingersVoice/', logDir = process.env.SV_SERVER_LOGS, fakeYoutubeDir = process.env.SV_FAKE_YOUTUBE_DIR, fakeSocial = false, controlDb = ':memory:' } = {}) {
   const controlPort = await freePort();
   const port = await freePort();
   const procs = [];
@@ -44,39 +48,46 @@ export async function startServers({ base = '/SingersVoice/', logDir = process.e
     procs.push(p);
     return p;
   };
-  run('node', ['--no-warnings=ExperimentalWarning', 'src/index.ts'], {
-    name: 'control',
-    cwd: path.resolve('services/control'),
-    // The first account seen (alice) is privileged by bootstrap; carol is the Publishing-mode tester.
-    env: {
-      ...process.env,
-      PORT: String(controlPort),
-      DEV_AUTH: '1',
-      // Google sign-ins are checked against this client id (auth.ts refuses every token without one); the fakes answer with it.
-      GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || 'e2e-client',
-      SV_DB: ':memory:',
-      ALLOWED_ORIGINS: `http://localhost:${port}`,
-      PRIVILEGED_EMAILS: 'carol@dev.local',
-      COUPONS_REQUIRED: process.env.COUPONS_REQUIRED ?? '0', // the coupon gate is tried in its own e2e; every other e2e signs its singers in without one
-      // YouTube stands in for itself: the control server's own fake ingestion endpoint keeps the segments in a directory.
-      ...(fakeYoutubeDir ? { SV_FAKE_YOUTUBE_DIR: fakeYoutubeDir, YOUTUBE_HLS_BASE: `http://localhost:${controlPort}/fake/youtube/http_upload_hls` } : {}),
-      // The networks' endpoints only: the ids and secrets are pasted on the Admin page by the e2e (as the operator does).
-      ...(social ? { SV_SOCIAL_FAKE: social.url, SERVICE_URL: `http://localhost:${controlPort}` } : {}),
-    },
-  });
+  const controlEnv = {
+    ...process.env,
+    PORT: String(controlPort),
+    DEV_AUTH: '1',
+    // Google sign-ins are checked against this client id (auth.ts refuses every token without one); the fakes answer with it.
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || 'e2e-client',
+    SV_DB: controlDb,
+    ALLOWED_ORIGINS: `http://localhost:${port}`,
+    PRIVILEGED_EMAILS: 'carol@dev.local',
+    COUPONS_REQUIRED: process.env.COUPONS_REQUIRED ?? '0', // the coupon gate is tried in its own e2e; every other e2e signs its singers in without one
+    // YouTube stands in for itself: the control server's own fake ingestion endpoint keeps the segments in a directory.
+    ...(fakeYoutubeDir ? { SV_FAKE_YOUTUBE_DIR: fakeYoutubeDir, YOUTUBE_HLS_BASE: `http://localhost:${controlPort}/fake/youtube/http_upload_hls` } : {}),
+    // The networks' endpoints only: the ids and secrets are pasted on the Admin page by the e2e (as the operator does).
+    ...(social ? { SV_SOCIAL_FAKE: social.url, SERVICE_URL: `http://localhost:${controlPort}` } : {}),
+  };
+  // The first account seen (alice) is privileged by bootstrap; carol is the Publishing-mode tester.
+  const startControl = () => run('node', ['--no-warnings=ExperimentalWarning', 'src/index.ts'], { name: 'control', cwd: path.resolve('services/control'), env: controlEnv });
+  let control = startControl();
   run('npx', ['vite', 'preview', '--port', String(port), '--strictPort'], { name: 'web', cwd: path.resolve('apps/web'), env: { ...process.env, BASE_PATH: base } });
-  const stop = () => {
-    social?.stop();
-    for (const p of procs) {
-      try {
-        if (p.pid && process.platform !== 'win32') process.kill(-p.pid, 'SIGTERM');
-        else p.kill();
-      } catch {
-        /* already gone */
-      }
+  const kill = (p) => {
+    try {
+      if (p.pid && process.platform !== 'win32') process.kill(-p.pid, 'SIGTERM');
+      else p.kill();
+    } catch {
+      /* already gone */
     }
   };
+  const stop = () => {
+    social?.stop();
+    for (const p of procs) kill(p);
+  };
   process.on('exit', stop);
+  /** The service killed outright (no goodbye) and, after `downMs`, started again on the same port with the same file: a redeploy, a crash. */
+  const restartControl = async (downMs = 0) => {
+    kill(control);
+    procs.splice(procs.indexOf(control), 1);
+    await new Promise((r) => setTimeout(r, downMs));
+    control = startControl();
+    await waitFor(`http://localhost:${controlPort}/health`);
+  };
   await Promise.all([waitFor(`http://localhost:${controlPort}/health`), waitFor(`http://localhost:${port}${base}`)]);
-  return { port, controlPort, base, appUrl: `http://localhost:${port}${base}`, controlUrl: `http://localhost:${controlPort}`, fakeYoutubeDir, social, stop };
+  return { port, controlPort, base, appUrl: `http://localhost:${port}${base}`, controlUrl: `http://localhost:${controlPort}`, fakeYoutubeDir, social, stop, restartControl };
 }

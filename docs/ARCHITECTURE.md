@@ -961,8 +961,11 @@ link; the first four tiles connect by themselves, the rest on request.
 A meet is light by construction, and light in a different way for each kind of participant:
 
 - **A singer on stage** (up to ten) carries the heavy part on their own device: their cut-out,
-  their vocal chain, the mesh links to the other singers and the publisher (video only, capped
-  and scaled with the mesh size), and their own stage. Nothing of that grows with the audience.
+  their vocal chain, the mesh links to the other singers and the publisher (their vocal and their
+  picture, the picture scaled to what the other side draws), and their own stage. Nothing of that
+  grows with the audience — but it grows with the **stage**: a full mesh means one encoder and one
+  uplink per other singer, so seven on stage is six encoders on every phone. The measurements, the
+  ceiling and the way past it (an SFU) are in docs/LIVE_MEET_RELIABILITY.md §6.
 - **The publisher** (one device) receives the ten and makes the one picture and the one mix
   everyone else gets. Nothing of that grows with the audience either.
 - **The audience** (any number) receives no video and no mesh: the stage with placeholders, the
@@ -980,9 +983,13 @@ A meet is light by construction, and light in a different way for each kind of p
 - **What every participant's poll carries is independent of the crowd**: a snapshot names the
   stage, the host, the publishers, the wait list and the first dozen of the audience
   (`visibleParticipants`), the rest is `meet.audienceCount` — so a heartbeat answer is a few
-  kilobytes whether three or three hundred are in the room; a heartbeat writes the participant's
-  row and rewrites the meet row only when something changed (a performer's clock) or the idle-expiry
-  extension is due (`TOUCH_COALESCE_MS`, 2 s), not for every heartbeat of every listener.
+  kilobytes whether three or three hundred are in the room; and **a heartbeat writes nothing**: a
+  running meet lives in memory on the service (`services/control/src/store/live.ts`) and a row is
+  written only when a slot, a song, the transport or who is in the meet changed, the idle expiry once
+  a minute (Cloudflare's free plan allows 100,000 rows written a day — docs/LIVE_MEET_RELIABILITY.md §4).
+- **A device that goes** (the tab closed, the page reloaded) says so with a beacon on the way out and
+  is given ten seconds to come back before its slot is cleared and the room told; one that vanishes
+  without a word (the app killed) is taken off the stage after a minute of silence.
 - **An audience phone draws nothing it does not have to**: the stage compositor redraws a still
   stage (placeholders — no video reaches the audience) twice a second instead of 24 times.
 

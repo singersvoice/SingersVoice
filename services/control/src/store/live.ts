@@ -39,7 +39,7 @@ export function meetDurableKey(m: Meet): string {
 
 /** The durable projection of a participant: everything but when they were last heard from. */
 export function participantDurableKey(p: StoredParticipant): string {
-  const { lastSeenAt: _s, videoTickAt: _v, ...rest } = p;
+  const { lastSeenAt: _s, videoTickAt: _v, links: _l, ...rest } = p;
   return JSON.stringify(rest);
 }
 

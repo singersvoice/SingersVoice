@@ -97,6 +97,20 @@ and the clip's bytes, X's token was asked once); the posts are listed in Setting
 to drop the token. Screenshots: `clip-sheet.png`, `clip-ready.png`, `settings-social.png`,
 `clip-posted.png`.
 
+## Load and chaos (`tools/ci/load-e2e.mjs`)
+
+`node tools/ci/load-e2e.mjs <outDir> [N]` (after a build) puts N singers (default 7; CI runs 3) on one stage —
+each a Chromium context with the synthetic camera and voice, the admin granting each one SVV so the picture is on —
+and checks what a meet of N actually does, from the links' own statistics (`window.__svMesh.links()`), never from
+a connection's state: every link up, sound and a picture arriving on each where the other side says its mic is
+open and its camera on, nothing marked silent or blind. Then a 30 s sample of what the mesh costs (each device's
+uplink, the browser's CPU seconds from /proc, the service's rows written from /health — written to `load-N.json`
+in the out dir), and three kinds of trouble: the service killed for 20 s and started again on its file (every room
+says so within seconds, the stage runs on, nobody loses a slot when it is back), a singer's tab closed without a
+word (their slot cleared everywhere within 20 s, the other links untouched), and End meet twice (every device
+shows it over, the service holds nothing in memory, the second end is no error). A 2-core machine fits three;
+seven on it is a demonstration of a starved device (docs/LIVE_MEET_RELIABILITY.md §6).
+
 ## Live meet with two performers (`tools/ci/live-duet.mjs`)
 
 Two Chromium contexts with a synthetic-person clip as the fake camera (`tools/ci/fake-person.mjs`,

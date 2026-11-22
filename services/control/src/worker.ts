@@ -6,7 +6,8 @@
  * Vars/secrets: GOOGLE_CLIENT_ID (required: without it every Google sign-in is refused), ALLOWED_ORIGINS, PRIVILEGED_EMAILS, PUBLISH_KEY_SECRET, ICE_SERVERS, YOUTUBE_HLS_BASE, GOOGLE_API_KEY (optional),
  * STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, APP_URL (the plans through Stripe — docs/BILLING.md),
  * RELAY_URL, RELAY_SECRET (the RTMP relay for low-latency YouTube, Facebook, Instagram, Twitch — docs/RELAY.md),
- * X_CLIENT_ID, X_CLIENT_SECRET, META_APP_ID, META_APP_SECRET, SERVICE_URL (posting clips — docs/SOCIAL.md)
+ * X_CLIENT_ID, X_CLIENT_SECRET, META_APP_ID, META_APP_SECRET, SERVICE_URL (posting clips — docs/SOCIAL.md),
+ * CF_TURN_KEY_ID, CF_TURN_API_TOKEN (Cloudflare TURN for the stage links — docs/DEPLOY_CONTROL.md)
  */
 import { createApp, parseIceServers, sweepMeets, type AppDeps } from './app.ts';
 import { createAuthenticator } from './auth.ts';
@@ -36,6 +37,9 @@ interface Env {
   SERVICE_URL?: string;
   /** The coupon gate's default (coupons.ts): on unless '0'; the Admin page decides from then on. */
   COUPONS_REQUIRED?: string;
+  /** Cloudflare TURN (app.ts TurnConfig): the key's id and API token — the links through the strictest NATs. */
+  CF_TURN_KEY_ID?: string;
+  CF_TURN_API_TOKEN?: string;
 }
 
 interface DurableState {
@@ -58,6 +62,7 @@ export class SvtDb {
       secrets: new SecretBox(env.PUBLISH_KEY_SECRET ?? ''),
       runtime: 'cloudflare',
       iceServers: parseIceServers(env.ICE_SERVERS),
+      turn: env.CF_TURN_KEY_ID && env.CF_TURN_API_TOKEN ? { keyId: env.CF_TURN_KEY_ID, apiToken: env.CF_TURN_API_TOKEN } : undefined,
       allowedOrigins: (env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
       privilegedEmails: (env.PRIVILEGED_EMAILS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
       version: '2.1.0',
@@ -77,7 +82,7 @@ export class SvtDb {
     if (url.pathname === SWEEP_PATH) {
       if (req.headers.get(SWEEP_HEADER) !== '1') return new Response('not found', { status: 404 });
       await this.deps.store.migrate();
-      const n = await sweepMeets(this.deps.store);
+      const n = await sweepMeets(this.deps.store, this.deps);
       return Response.json({ swept: n });
     }
     return this.app.fetch(req);

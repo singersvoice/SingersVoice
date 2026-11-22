@@ -212,6 +212,20 @@ export interface Participant {
   stageRequest: 'none' | 'pending' | 'declined';
   joinedAt: string;
   lastSeenAt: string;
+  /** What this device's links to the other singers carry, as it last reported with a heartbeat (in memory on the service, never a row): the host's view of every device. */
+  links?: LinkSummary;
+}
+
+/** One device's links to the other singers on stage, in numbers: how many are up of how many, how many carry sound and a picture right now, how many go by a relay, whether the device's encoder is strained. */
+export interface LinkSummary {
+  up: number;
+  of: number;
+  sound: number;
+  pictures: number;
+  relay: number;
+  strained: boolean;
+  /** When the device read them (ISO). */
+  at: string;
 }
 
 /**

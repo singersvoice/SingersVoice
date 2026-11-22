@@ -16,8 +16,8 @@
  * room shows the real reason; the stream, watched for silence, is opened again when it goes quiet.
  */
 import { signal } from '@preact/signals';
-import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type MixBatch, type Participant, type RegisterPerformanceRequest, type RoomUpdate, type SongPick, type StagePolicy } from '@singersvoice/protocol';
-import { api, ApiError, clock, controlUrl, serverNow, serviceUrl, syncClock } from '../../lib/api.ts';
+import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type LinkSummary, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type MixBatch, type Participant, type RegisterPerformanceRequest, type RoomUpdate, type SongPick, type StagePolicy } from '@singersvoice/protocol';
+import { api, ApiError, beacon, clock, controlUrl, serverNow, serviceUrl, syncClock } from '../../lib/api.ts';
 
 interface Pace {
   forming: number;
@@ -62,6 +62,8 @@ export class MeetSession {
   onActed: (() => void) | null = null;
   /** The service says a WebRTC signal waits for this device (polled when the event carries none). */
   onSignal: ((signal: MeetSignal | null) => void) | null = null;
+  /** What this device's links to the other singers carry (the stage sets it): sent with every heartbeat for the host's view of every device. */
+  linkSummary: (() => LinkSummary | null) | null = null;
   /** The push stream, while the device is in the meet. */
   private source: EventSource | null = null;
   private pushed = false;
@@ -289,11 +291,13 @@ export class MeetSession {
     if (this.inFlight || !this.resumeToken) return;
     this.inFlight = true;
     try {
+      const links = this.linkSummary?.() ?? null;
       const snap = await api.post('POST /meets/:id/heartbeat', `/meets/${encodeURIComponent(this.meetId)}/heartbeat`, {
         resumeToken: this.resumeToken,
         chatSince: this.lastSeq,
         driftMs: Math.round(clock.value.offsetMs),
         rttMs: Math.round(clock.value.rttMs),
+        ...(links ? { links } : {}),
       });
       this.apply(snap);
       this.error.value = null;
@@ -472,6 +476,16 @@ export class MeetSession {
     }
     this.stop(); // no more polling from this session
     if (token) await api.post('POST /meets/:id/leave', `/meets/${encodeURIComponent(this.meetId)}/leave`, { resumeToken: token }).catch(() => undefined);
+  }
+
+  /**
+   * The page is going (closed, reloaded — `pagehide`): told to the service with a beacon, no answer waited for. A device
+   * heard from again within seconds (a reload) keeps its slot; one that does not is taken off the stage then, and the
+   * others' links to it are dropped — not a minute later, when its silence would have been noticed anyway.
+   */
+  away(): void {
+    if (this.stopped || !this.resumeToken) return;
+    beacon('POST /meets/:id/away', `/meets/${encodeURIComponent(this.meetId)}/away?rt=${encodeURIComponent(this.resumeToken)}`);
   }
 
   stop(): void {

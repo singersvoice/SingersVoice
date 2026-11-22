@@ -54,8 +54,29 @@ Then set the repo variable `VITE_CONTROL_URL` to `https://<your host>` and run *
 | `RELAY_URL`, `RELAY_SECRET` | secret | The RTMP relay (`services/relay`): YouTube at ultra-low latency, Facebook / Instagram / Twitch live — docs/RELAY.md. Without them YouTube goes through HLS ingestion and the other three stay queued |
 | `PUBLISH_KEY_SECRET` | secret | AES-GCM key (base64, 32 bytes) for stream keys at rest — generated on the worker if not given |
 | `DEV_AUTH` | var | `1` accepts `X-Dev-User` headers — local dev and CI only, never in production |
-| `ICE_SERVERS` | var/secret | JSON array of RTCIceServer for performer-to-performer video, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]`. Default: Google STUN only (works for most home/mobile networks; add TURN for corporate NATs) |
+| `ICE_SERVERS` | var/secret | JSON array of RTCIceServer for performer-to-performer links, e.g. `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]`. Default: Google STUN only (works for most home networks; see TURN below for the rest) |
+| `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN` | secret | Cloudflare TURN (below): the service mints short-lived TURN credentials for every stage, and a singer whose network allows no direct connection (a phone on cellular, a hotel's or an office's Wi‑Fi) is linked through Cloudflare's relay instead of not at all |
 | `SV_DB` | env (Node only) | SQLite file path, default `./sv-control.sqlite` |
+
+## TURN — links for singers behind strict networks (5 minutes, once)
+
+Singers' devices connect to each other directly (WebRTC) and find each other through STUN. Some networks allow
+no direct connection at all — cellular carriers, hotels, offices, some home routers — and then two singers
+simply never link: no sound between them between songs, no picture of each other, the host's film without
+that voice. The fix is a TURN relay, which carries the link when nothing direct works. Cloudflare runs one; the
+free allowance (1,000 GB a month) covers a lot of singing.
+
+1. Cloudflare dashboard → **Realtime** (in the left menu; "Calls" on older dashboards) → **TURN** → **Create**.
+   Give the key a name (say `singersvoice`). Cloudflare shows a **Turn Token ID** and an **API Token**.
+2. GitHub → the repository → **Settings → Secrets and variables → Actions → New repository secret**, twice:
+   `CF_TURN_KEY_ID` = the Turn Token ID, `CF_TURN_API_TOKEN` = the API Token. (Paste the token only there — never
+   into chat, a file or an issue.)
+3. Push anything to `main` (or run *Deploy sv-control* from the Actions tab): the deploy puts both on the
+   service. From then on every stage's links carry TURN credentials minted on the service (good for six hours,
+   renewed before they end; the API token itself never leaves the service), and the room's notices say when a
+   link runs "by relay".
+
+Without the keys nothing is refused: links are made as before, direct only.
 
 ## Testing against a different service
 

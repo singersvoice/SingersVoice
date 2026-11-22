@@ -119,6 +119,30 @@ describe('mesh messages', () => {
     expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBeLessThanOrEqual(1_200_000);
     viewer.channels[0]!.onmessage!({ data: '{"type":"want","width":0}' }); // the whole frame: the show view
     expect((applied!.encodings[0] as { scaleResolutionDownBy: number }).scaleResolutionDownBy).toBe(1);
-    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBe(4_500_000);
+    // The bitrate follows the pixels sent: the whole of a computer's 720-wide cut-out gets 4.5 Mbps; a smaller pack, in proportion (never under 600 kbps).
+    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBe(Math.max(600_000, Math.min(4_500_000, Math.round(4_500_000 * (PACK_WIDTH / 720) ** 2))));
+    // Sound goes first on every link: the vocal's encoding asks for high network priority, the picture's for low.
+    expect((applied!.encodings[0] as { networkPriority: string }).networkPriority).toBe('low');
+    // A singer whose device says how wide it draws us beyond a singer link's width (the host's device filming the meet) gets that, within the publisher's ceiling.
+    const singer = new (class extends FakePC {
+      override getSenders() {
+        return [sender];
+      }
+    })();
+    vi.stubGlobal('RTCPeerConnection', class { constructor() { return singer; } });
+    mesh.setPeers(['p1', 'host-device']);
+    singer.channels[0]!.onmessage!({ data: '{"type":"want","width":640}' });
+    expect((applied!.encodings[0] as { scaleResolutionDownBy: number }).scaleResolutionDownBy).toBe(Math.max(1, PACK_WIDTH / Math.min(PACK_WIDTH, 640)));
+    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBeGreaterThan(300_000);
+    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBeLessThanOrEqual(4_500_000);
+    // What this device sends is announced to every open link, and once more only when it changes.
+    const before = p1.channels[0]!.sent.length;
+    mesh.announceMedia(true, false);
+    mesh.announceMedia(true, false);
+    expect(p1.channels[0]!.sent.slice(before)).toEqual(['{"type":"media","mic":true,"cam":false}']);
+    singer.channels[0]!.onmessage!({ data: '{"type":"media","mic":true,"cam":true}' });
+    const link = mesh.links().find((l) => l.id === 'host-device');
+    expect(link?.micOpen).toBe(true);
+    expect(link?.camOn).toBe(true);
   });
 });

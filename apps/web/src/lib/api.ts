@@ -223,6 +223,23 @@ export const api = {
 /** An absolute URL on the service for things the browser fetches itself (an HLS playlist). */
 export const serviceUrl = (path: string): string => `${controlUrl.value}${path}`;
 
+/**
+ * A word on the way out (the tab closing, the page reloading): a POST the browser keeps alive after the page is gone,
+ * with the sign-in on it, never waited for. Nothing is said when the service is not configured or the browser cannot.
+ */
+export function beacon<K extends keyof Routes>(_key: K, path: string): void {
+  const base = controlUrl.value;
+  if (!base) return;
+  const url = `${base}${path}`;
+  try {
+    // sendBeacon is the browser's own way out (no headers, no preflight, finished after the page is gone); a keepalive POST where there is none.
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function' && navigator.sendBeacon(url)) return;
+    if (typeof fetch === 'function') void fetch(url, { method: 'POST', keepalive: true }).catch(() => undefined);
+  } catch {
+    /* a browser without either: the service's own timeout takes it from here */
+  }
+}
+
 export async function checkControl(): Promise<ControlStatus> {
   if (!controlUrl.value) return (controlStatus.value = 'unconfigured');
   try {

@@ -3,11 +3,13 @@
  * and taken down the moment it no longer holds. Critical: this device's own camera failed or froze, the link to
  * the service is down or the service cannot save, a singer's picture froze on their device (with Reconnect).
  * Warn: sit back / come closer, soft-focus mode, a pause on its way, a jump on its way, the video hours nearly
- * used up, the voice alone on stage and why. Info: the mix, the timing, the camera's line, blending, talk-back,
- * the wait list, the hours left. Shown by one control (components/NoticeCenter.tsx).
+ * used up, the voice alone on stage and why, a link that carries nothing though the other side sends (re-made by
+ * itself), this device straining under its links. Info: the mix, the timing, the camera's line, blending,
+ * talk-back, the wait list, the hours left, the links in one line (up, sound from, pictures from, by relay).
+ * Critical too: no link to a singer after LINK_SLOW_MS. Shown by one control (components/NoticeCenter.tsx).
  */
 import type { Meet } from '@singersvoice/protocol';
-import { useEffect } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
 import { formatMs, hoursLabel } from '@singersvoice/protocol';
 import { serviceNotice } from '../../lib/api.ts';
 import { clearNotices, setNotice } from '../../lib/notices.ts';
@@ -15,6 +17,9 @@ import { appSettings } from '../../state/settings.ts';
 import { gpuFailedAtMs } from '../../video/segmenter.ts';
 import type { MeetSession } from './meetSession.ts';
 import type { RoomStage } from './roomStage.ts';
+
+/** A link to a singer on stage that is not up this long after it was begun (or failed) is said so: their network and ours could not meet. */
+export const LINK_SLOW_MS = 20_000;
 
 export interface LiveNoticeContext {
   paused: boolean;
@@ -63,6 +68,38 @@ export function useStageNotices(stage: RoomStage, meet: Meet, session: MeetSessi
       for (const id of ids) setNotice(`still:${id}`, null);
     };
   }, [stillKey, onStage]);
+
+  // ---- the links to the other singers: what actually arrives on each (peers.ts), not whether a connection exists ----
+  const linkKey = stage.links.map((l) => `${l.id}:${l.state}:${l.forMs > LINK_SLOW_MS ? 1 : 0}:${l.silent ? 1 : 0}:${l.blind ? 1 : 0}:${l.audioIn ? 1 : 0}:${l.videoIn ? 1 : 0}:${l.path ?? ''}:${l.limited}:${l.lossPct ?? ''}:${l.wanted ? 1 : 0}`).join('|');
+  const linkIds = useRef(new Set<string>());
+  useEffect(() => {
+    const gone = [...linkIds.current].filter((id) => !stage.links.some((l) => l.id === id));
+    for (const id of gone) for (const k of ['link', 'silent', 'blind']) setNotice(`${k}:${id}`, null);
+    linkIds.current = new Set(stage.links.map((l) => l.id));
+    if (!onStage) {
+      for (const id of linkIds.current) for (const k of ['link', 'silent', 'blind']) setNotice(`${k}:${id}`, null);
+      setNotice('links', null);
+      setNotice('strain', null);
+      return;
+    }
+    const wanted = stage.links.filter((l) => l.wanted);
+    const up = wanted.filter((l) => l.state === 'connected');
+    for (const l of stage.links) {
+      const name = names(l.id);
+      const slow = l.wanted && l.state !== 'connected' && l.forMs > LINK_SLOW_MS;
+      setNotice(`link:${l.id}`, slow ? { severity: 'critical', text: `No link to ${name}${l.state === 'failed' ? '' : ' yet'}`, detail: 'Their device and yours could not connect to each other (a network that allows no direct connection: a phone on cellular, a hotel’s or an office’s Wi‑Fi). It is tried again by itself; with TURN set up for the SingersVoice service (docs/DEPLOY_CONTROL.md) such links go through its relay instead.', action: { label: 'Retry', run: () => stage.reconnect(l.id) } } : null);
+      setNotice(`silent:${l.id}`, l.silent ? { severity: 'warn', text: `No sound arrives from ${name} — re-linking`, detail: 'Their microphone is open, the link is up, and nothing has come over it for a while: the link is made again from scratch by itself (once a minute at most). Reconnect makes it again now.', action: { label: 'Reconnect', run: () => stage.reconnect(l.id) } } : null);
+      setNotice(`blind:${l.id}`, l.blind && !l.silent ? { severity: 'warn', text: `No picture arrives from ${name} — re-linking`, detail: 'Their camera is on, the link is up, and no frame has come over it for a while: the link is made again from scratch by itself (once a minute at most).', action: { label: 'Reconnect', run: () => stage.reconnect(l.id) } } : null);
+    }
+    const sound = up.filter((l) => l.audioIn).length;
+    const pictures = up.filter((l) => l.videoIn).length;
+    const relayed = up.filter((l) => l.path === 'relay').length;
+    const loss = up.reduce((m, l) => Math.max(m, l.lossPct ?? 0), 0);
+    setNotice('links', wanted.length ? { severity: 'info', text: `Links · ${up.length}/${wanted.length} up · sound from ${sound} · pictures from ${pictures}${relayed ? ` · ${relayed} by relay` : ''}${loss >= 5 ? ` · ${loss}% loss` : ''}`, detail: 'What the links to the other singers carry right now: sound and pictures that actually arrive (a connection alone is not counted), links that go through the service’s relay, and the worst packet loss on the way here.', dismissible: true } : null);
+    const strained = up.filter((l) => l.limited === 'cpu').length;
+    const thin = up.filter((l) => l.limited === 'bandwidth').length;
+    setNotice('strain', strained >= 2 ? { severity: 'warn', text: 'This device is straining — your picture goes out smaller for now', detail: `A picture encoded for ${wanted.length} links is a lot for this device. Settings → Camera → “My camera as it is” (no cut-out) lightens it, and so does closing other apps and tabs. Your voice goes first on every link, whatever happens to the picture.` } : thin >= 2 ? { severity: 'warn', text: 'Your connection is thin — your picture goes out smaller for now', detail: 'Your uplink cannot carry the full picture to everyone at once: it is scaled down by itself. Your voice goes first on every link.' } : null);
+  }, [onStage, linkKey]);
 
   // ---- the voice and the picture on stage: the plan's word ----
   useEffect(() => {

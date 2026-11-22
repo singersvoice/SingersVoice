@@ -114,6 +114,11 @@ jobs:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/social-e2e.mjs screenshots
 
+      - name: Load and chaos (three singers on one stage, every link's sound and picture verified from its counters, the service's rows counted, the service killed for 20 s and back, a tab closed without a word, End meet twice)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/load-e2e.mjs screenshots 3
+
       - name: Live meet with two performers on one stage (cut-outs, WebRTC relay, cued pause/resume, the film in chapters, nothing mirrored, the sound measured)
         env:
           BASE_PATH: /SingersVoice/

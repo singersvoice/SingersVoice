@@ -96,7 +96,7 @@ if (keySecret) {
 //     (docs/SOCIAL.md), the relay. Each is put on the worker when the repo has it; one the repo does not have is
 //     left as the worker has it (secrets survive deploys). SERVICE_URL — the service's own address, which the
 //     networks send the browser back to — is the worker's URL unless the repo pins one. Never printed.
-const optional = ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'APP_URL', 'X_CLIENT_ID', 'X_CLIENT_SECRET', 'META_APP_ID', 'META_APP_SECRET', 'RELAY_URL', 'RELAY_SECRET', 'GOOGLE_API_KEY'];
+const optional = ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'APP_URL', 'X_CLIENT_ID', 'X_CLIENT_SECRET', 'META_APP_ID', 'META_APP_SECRET', 'RELAY_URL', 'RELAY_SECRET', 'GOOGLE_API_KEY', 'CF_TURN_KEY_ID', 'CF_TURN_API_TOKEN'];
 const put = (name, value) => execFileSync('npx', ['--yes', 'wrangler@4', 'secret', 'put', name, '--config', cfgPath], { cwd: svc, env, input: value, stdio: ['pipe', 'inherit', 'inherit'] });
 const putNames = [];
 for (const name of optional) {
