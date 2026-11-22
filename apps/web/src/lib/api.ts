@@ -93,7 +93,8 @@ export class ApiError extends Error {
   }
 }
 
-function authHeaders(): Record<string, string> {
+/** The sign-in on every request: the Google token, or the dev identity (a DEV_AUTH server, local dev / CI). A Worker that sends on the page's behalf (the broadcast) takes these with it. */
+export function authHeaders(): Record<string, string> {
   const t = token.value;
   if (t) return { Authorization: `Bearer ${t.accessToken}` };
   // Device mode talks to a DEV_AUTH server (local dev / CI) with a dev identity.

@@ -9,8 +9,9 @@
 import { signal } from '@preact/signals';
 import type { BackgroundItem, PerformanceSinger, PublishJob } from '@singersvoice/protocol';
 import { LIVE_HEIGHT, LIVE_WIDTH, LiveEncoder, liveSupport, type LiveSupport } from '../../broadcast/liveEncoder.ts';
-import { LiveSender, type SenderState } from '../../broadcast/liveSender.ts';
+import { authHeaders, controlUrl } from '../../lib/api.ts';
 import { PublisherBus } from '../../broadcast/publisherBus.ts';
+import type { SenderState } from '../../broadcast/senderState.ts';
 import { BROADCAST_TITLE, busSound, MeetRecorder } from '../../video/meetRecorder.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
 import type { ChapterCue } from '../../video/chapters.ts';
@@ -33,7 +34,6 @@ export class Broadcast {
   /** The footage: the whole broadcast, into the publisher's Drive (its state says how far, and what is wrong). */
   readonly film = new MeetRecorder(this.picture);
   private encoder: LiveEncoder | null = null;
-  private sender: LiveSender | null = null;
   private unsubscribe: (() => void) | null = null;
   /** The job being broadcast (null when nothing goes out). */
   job: PublishJob | null = null;
@@ -70,23 +70,22 @@ export class Broadcast {
     } catch {
       this.mirror.value = null;
     }
-    const sender = new LiveSender(job.jobId);
-    sender.start();
-    this.sender = sender;
-    this.unsubscribe = sender.state.subscribe((s) => {
-      this.status.value = s;
-    });
     const encoder = new LiveEncoder({
       canvas: this.picture.canvas,
       ctx: this.bus.ctx,
       source: this.bus.output,
-      onSegment: (seg) => sender.push(seg),
+      jobId: job.jobId,
+      controlUrl: controlUrl.value,
+      headers: authHeaders,
       onError: (m) => {
         onError(m);
         this.stop();
       },
     });
     this.encoder = encoder;
+    this.unsubscribe = encoder.state.subscribe((s) => {
+      this.status.value = s;
+    });
     const support = await encoder.start();
     this.support.value = support;
     if (!support.ok) {
@@ -104,8 +103,6 @@ export class Broadcast {
   stop(): void {
     this.encoder?.stop();
     this.encoder = null;
-    this.sender?.stop();
-    this.sender = null;
     this.unsubscribe?.();
     this.unsubscribe = null;
     void this.film.stop(); // the last piece goes out and the upload completes; the film's state says when it is saved
@@ -113,6 +110,11 @@ export class Broadcast {
     this.mirror.value?.getTracks().forEach((t) => t.stop());
     this.mirror.value = null;
     this.job = null;
+  }
+
+  /** The encoders' health as the Worker reports it (frames encoded, dropped, held — the picture stalled —, the achieved frame rate), for the show view's chrome. */
+  get encoderStats() {
+    return this.encoder?.stats ?? null;
   }
 
   /** The broadcast balance (dB), from the device's Track / Vocal controls. */

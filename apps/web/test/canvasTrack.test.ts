@@ -47,11 +47,13 @@ describe('CanvasTrack', () => {
     const frames: { src: unknown; timestamp: number; closed: boolean }[] = [];
     g.VideoFrame = class {
       closed = false;
+      readonly timestamp: number;
       constructor(
         public src: unknown,
-        public init: { timestamp: number },
+        init: { timestamp: number },
       ) {
-        frames.push({ src, timestamp: init.timestamp, closed: false });
+        this.timestamp = init.timestamp;
+        frames.push(this);
       }
       close() {
         this.closed = true;
@@ -77,9 +79,16 @@ describe('CanvasTrack', () => {
     t.push();
     expect(t.pushed).toBe(2);
     t.stop();
-    expect((t.track as unknown as { stopped: boolean }).stopped).toBe(true);
     t.push();
     expect(t.pushed).toBe(2); // nothing after stop
+    // The frame still on its way lands and is closed before the track stops (a frame written to a stopped track is dropped unclosed: a leak).
+    expect((t.track as unknown as { stopped: boolean }).stopped).toBe(false);
+    expect(frames[1]!.closed).toBe(false);
+    await new Promise((r) => setTimeout(r, 0)); // the sink takes the second write
+    release();
+    for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(frames[1]!.closed).toBe(true);
+    expect((t.track as unknown as { stopped: boolean }).stopped).toBe(true);
   });
 
   it('falls back to the canvas capture where there is no generator', () => {

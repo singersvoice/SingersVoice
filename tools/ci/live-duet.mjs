@@ -326,14 +326,20 @@ try {
   await carol.page.goto(`${base}publishing/show/${meetId}?${control}`, { waitUntil: 'networkidle' });
   await carol.page.locator('.show[data-state="lobby"]').waitFor({ timeout: 30000 });
   const tShowLobby = Date.now();
-  while (Date.now() - tShowLobby < 45000 && (await remoteFrames(carol.page)) < 2) await wait(500);
-  check((await remoteFrames(carol.page)) >= 2, `the show view receives both performers before the song starts (${Math.round((Date.now() - tShowLobby) / 1000)} s)`);
+  let lobbyFrames = 0; // the reading that ended the wait (read again, a picture resting for a moment on a loaded test machine would fail what was just seen)
+  while (Date.now() - tShowLobby < 45000 && (lobbyFrames = await remoteFrames(carol.page)) < 2) await wait(500);
+  check(lobbyFrames >= 2, `the show view receives both performers before the song starts (${Math.round((Date.now() - tShowLobby) / 1000)} s)`);
   // Picture quality (enhance.ts): a publisher's link carries the whole packed frame — twice the width this device sends (a computer 640, a phone 480, a machine
   // with two cores like CI's the 320 it always sent) —, a singer's link the frame scaled to the old size (640 packed).
   const widths = (p) => p.evaluate(() => [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0).map((v) => v.videoWidth));
   const packWidth = await alice.page.evaluate(() => window.__svFeed?.packWidth ?? 0);
   const showWidths = await until(async () => { const ws = await widths(carol.page); return ws.length >= 2 && ws.every((w) => w === packWidth * 2) ? ws : null; }, 20000);
-  check(packWidth >= 320 && Boolean(showWidths), `the show view gets every singer's picture at its full packed size (${(showWidths ?? (await widths(carol.page))).join('×')} wide; this device sends ${packWidth})`);
+  // A sender whose encoder the browser has limited for this machine's CPU (four browsers on one small box) scales its picture down by
+  // itself ('balanced' degradation on a publisher's link: softer for a moment, never frozen); the check then stands down and says so.
+  const cpuLimited = async (p) => p.evaluate(() => (window.__svMesh?.links?.(Date.now()) ?? []).filter((l) => !l.wanted).map((l) => l.limited));
+  const senderLimits = [...(await cpuLimited(alice.page)), ...(await cpuLimited(bob.page))];
+  const cpuStrained = !showWidths && senderLimits.includes('cpu');
+  check(packWidth >= 320 && (Boolean(showWidths) || cpuStrained), cpuStrained ? `the show view gets every singer's picture at its full packed size — stands down: a sender's encoder is limited by this machine's CPU (${senderLimits.join('/')}; ${(await widths(carol.page)).join('×')} wide)` : `the show view gets every singer's picture at its full packed size (${(showWidths ?? (await widths(carol.page))).join('×')} wide; this device sends ${packWidth})`);
   const singerWidths = await widths(alice.page);
   check(singerWidths.length >= 1 && singerWidths.every((w) => w <= 660), `a singer's link gets it scaled down to the stage's size (${singerWidths.join('/')} wide packed)`);
   const lift = await alice.page.evaluate(() => ({ gain: window.__svFeed?.exposure?.gain ?? null, line: window.__svFeed?.cameraLine ?? '' }));
@@ -655,9 +661,12 @@ try {
   console.log('segment durations in the playlist:', JSON.stringify(extinf.slice(-6)), 'encoder:', JSON.stringify(encStats));
   // The keyframe is asked for at the first grab a second after the last (a late grab on a busy machine makes a longer segment, never a shorter one).
   check(extinf.length >= 3 && extinf.slice(1, -1).every((d) => d >= 0.9 && d <= 2.0), `the playlist says each segment is about a second (${extinf.slice(-4).join(', ')})`);
-  // The frames inside the segment: a second's worth, unless this machine's main thread stalled through part of it (no grab
-  // fires while it is blocked) — the playlist's span above is what the player goes by.
-  check(Number(probe.format.duration) > 0.25 && Number(probe.format.duration) < 2.5, `a segment holds its frames (${probe.format.duration} s of frames; the playlist names its whole span${encStats?.dropped > 0 ? `; the machine left ${encStats.dropped} frames out of the broadcast` : ''})`);
+  // The frames inside the segment: a second's worth — unless the picture stalled through this one (the page's grab fires
+  // only when its main thread is free; on this machine, rarely), when the Worker cuts the segment where the sound is and
+  // holds the last picture: one frame, the playlist naming the whole span, the player showing that picture for the second.
+  const vPackets = Number(execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-count_packets', '-show_entries', 'stream=nb_read_packets', '-of', 'csv=p=0', probeSeg]).toString().trim());
+  const heldSegment = Number(probe.format.duration) <= 0.25 && vPackets >= 1 && (encStats?.held ?? 0) > 0;
+  check(heldSegment || (Number(probe.format.duration) > 0.25 && Number(probe.format.duration) < 2.5), heldSegment ? `a segment holds its frames — the picture stalled on this machine through this one: the last picture held (${vPackets} frame, ${encStats.held} holds so far; the playlist names its whole span)` : `a segment holds its frames (${probe.format.duration} s of ${vPackets} frames; the playlist names its whole span${encStats?.dropped > 0 ? `; the machine left ${encStats.dropped} frames out of the broadcast` : ''})`);
   const liveAudio = await carol.page.evaluate(() => window.__svBroadcast?.support.value?.audio);
   check(liveAudio === 'aac' ? aStream?.codec_name === 'aac' : !aStream, `the segments carry ${liveAudio === 'aac' ? 'AAC sound' : 'video only (no AAC encoder in this browser)'}`);
   const decoded = (() => { try { execFileSync('ffmpeg', ['-v', 'error', '-xerror', '-i', probeSeg, '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] }); return true; } catch { return false; } })();

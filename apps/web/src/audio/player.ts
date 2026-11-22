@@ -83,6 +83,11 @@ export class BackingPlayer {
     this.gain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
   }
 
+  /** The playback rate (1 = as recorded). */
+  get tempoRate(): number {
+    return this.tempo;
+  }
+
   setTempo(t: number): void {
     const was = this.playing ? this.positionMs() : null;
     this.tempo = Math.min(1.5, Math.max(0.5, t));

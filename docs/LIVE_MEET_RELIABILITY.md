@@ -108,12 +108,13 @@ Preview tile). The decoding side is N−1 decoders and unpackers. The cut-out mo
 What each link now carries: a singer's link, the picture at 320 px wide (213 on a stage of more than six), 15 fps,
 300–400 kbps; the vocal 96 kbps. A publisher's link used to carry the whole frame (720×960, 24 fps, 4.5 Mbps)
 whatever the stage drew; it now carries **the width the show draws a slot at** (`stage.ts wantedSingerWidth`): on a
-1080p show a stage of seven draws each singer 258 px wide, so the link carries 336 px at 1.5 Mbps (the floor,
-so the encoder never trades resolution for bitrate) instead of 720 px at 4.5 Mbps; a stage of four gets 576 px at
-2.9 Mbps; one or two singers the whole frame as before. The host's device filming the meet asks for the same. A
-singer's uplink on a stage of seven with a show view and the host filming: 5 × 0.4 + 0.4 + 1.5 ≈ **3.9 Mbps** (it
-was ≈ 7 Mbps), seven small encoders instead of six small and one large. The vocal is marked high priority on the
-way out, the picture low.
+1080p show a stage of seven draws each singer 258 px wide, so a computer's link carries 336 px (its cut-out is
+720) at 1.5 Mbps — the floor, so the encoder never trades resolution for bitrate — instead of 720 px at 4.5 Mbps;
+a stage of four gets 576 px at 2.9 Mbps; one or two singers the whole frame at the full rate, as before (a phone's
+480-wide cut-out is scaled only when the show draws it smaller than that). The host's device filming the meet asks
+for the same. A singer's uplink on a stage of seven with a show view and the host filming: 5 × 0.4 + 0.4 + 1.5 ≈
+**3.9 Mbps** (it was ≈ 7 Mbps), seven small encoders instead of six small and one large. The vocal is marked high
+priority on the way out, the picture low.
 
 Measured in the load test (`tools/ci/load-e2e.mjs`, headless Chromium with a synthetic camera and voice, the real
 cut-out model, on a **2-core** test machine — the numbers are that machine's, phones differ):
@@ -199,8 +200,10 @@ Nothing covers the stage.
 
 ## 11 · Tests run for this work
 
-- Unit: protocol 83, web 158, control 55 (`lifecycle.test.ts`, `ice.test.ts`, `budget.test.ts` among them), relay 5 —
-  all green.
+- Unit: protocol 83, web 165 (`liveCore.test.ts` — the cut and the clock —, `mixOut.test.ts` — the fades, the second
+  port —, `canvasTrack.test.ts` among them), control 55 (`lifecycle.test.ts`, `ice.test.ts`, `budget.test.ts`), relay 5 —
+  all green. The mix lab (`npm run mix-lab`): the audience's player exact at 48 and 44.1 kHz, and through a four-second
+  stall (one silence, no click, nothing skipped).
 - E2E on the built app against the real service, all green: join (57), roles (100), tracks (83), tv (16), social
   (38), coupons (30), yt-track (17), signin (8); the 25-minute live duet (179 — two performers, a publisher, an
   audience, a TV, the sound measured on the way to the audience and the broadcast); **the new load and chaos e2e**
@@ -209,16 +212,64 @@ Nothing covers the stage.
   without a word, End meet twice. The seven-singer run on the 2-core machine is reported in §6 as what it is.
 - Build budget: 230 KB gzipped first load of 400.
 
-## 12 · What is not verified, and what the operator has to do
+## 12 · The YouTube stream, measured (the recording of 22 November)
+
+A 155-second screen recording of the YouTube playback of the 21 November meet (1080p30, AAC; seven singers on the
+stage) was analysed frame by frame and sample by sample (ffmpeg/ffprobe, numpy):
+
+| What | Measured | What it means |
+| --- | --- | --- |
+| The picture | The frame changes **0.33 times a second** overall (52 distinct frames in 4,665); the median gap between two distinct frames is **2.00 s**, the longest 18 s; `freezedetect` reports the picture frozen almost the whole time, in stretches of 2, 4, 6, 8 s | The stream carried about one picture per segment: the publisher's encoder was handed almost no frames. Not the player, not YouTube, not the relay — the segments themselves held one frame each |
+| The sound — clicks | **5,826 waveform discontinuities** (a jump of more than a quarter of full scale between two samples: `+0.77 → −0.65`, no music does that), in 290 bursts — 232 in one second at 31 s, **2,738 in two seconds at 117–118 s** | Blocks of sound joined out of order or with pieces missing: the signature of an encoder fed late and in bursts |
+| The sound — holes | 172 runs of exact digital silence of 5–65 ms; dead stretches of 2.1, 4.1, 2.7, 1.9 and **6.1 s** (109.7–115.8 s, −90 dBFS) in the middle of a song, each followed by a burst of clicks | The encoder received nothing for seconds, then everything at once |
+| Clipping | None (peak −1 dBFS) | The levels were fine |
+| Bandwidth | −50 dB above 15 kHz | YouTube's AAC; not the problem |
+
+**Where it came from.** The sound and the picture of a broadcast are made in the publisher's browser
+(`broadcast/liveEncoder.ts`): the show canvas is encoded with WebCodecs, the mix with AAC, the two cut into
+one-second MPEG-TS segments and PUT to the service, which stores them and hands them to the relay; the relay pipes
+them into one ffmpeg per show with **`-c copy`** — it never decodes or encodes a frame or a sample — and ffmpeg
+writes them to YouTube's RTMP ingest. Nothing on any server makes or changes the sound or the picture: a larger
+container on Fly or Cloudflare would have changed nothing in this recording. Until this commit the encoder ran on
+the page's **main thread**: the frame grab was a timer there, the sound's 20 ms blocks were posted there, the
+segments were cut there. On the publisher's computer that thread was also decoding and unpacking seven singers'
+pictures, drawing the 720p show, writing the footage, and (in the room's tab on the same computer) running the
+host's whole stage. When it stalled, no frames were grabbed (one picture a segment), the sound's blocks queued
+and went out late — some after the cut of the segment they belonged to, landing in the next segment with earlier
+stamps, which a player plays as a click or drops as a hole — and a stall of seconds was a dead stretch followed
+by a burst. The 21 November WebGL fault (§1) made the stalls far worse: a modal per frame.
+
+**The fix.** The broadcast encoder runs in a **Worker** (`broadcast/live.worker.ts`): the mix tap posts its
+blocks straight to the Worker's port (the page is not on the way), the AAC and H.264 encoders, the segment cut,
+the muxing and the uploads all run there, and the rule of the cut is **the sound is the clock, the picture best
+effort** (`broadcast/liveCore.ts`, unit-tested): a segment goes out when the sound has reached its next keyframe,
+with all of its sound in order; a picture that stops is held (the segment is cut where the sound is, the last frame
+encoded again as a keyframe) so the stream never breaks; a late frame is left out. The page's main thread can
+stall for seconds and the viewer hears every note. The same is done for the audience's mix in the room and on the
+TV, at both ends: the host's device encodes it in a Worker (`audio/mix.worker.ts`), and every listener's device
+receives and decodes it in a Worker (`audio/mixPlay.worker.ts`) that feeds the playing worklet through a port of its
+own — a listener's page stalled for a second used to cost the three-second cushion, three seconds of silence, and the
+edges of that silence were cuts (two clicks); now a stalled page costs nothing, and when the cushion does run out
+(the batches themselves late by seconds) the pause is faded out and in, and the sound resumes from exactly where it
+stopped (measured in `tools/ci/mix-lab.mjs`: a four-second stall → one silence, no click, nothing skipped). The show
+view says when the picture is short ("picture 4 fps — this computer is straining").
+
+**Still true after the fix:** when the publisher's computer cannot keep up, the picture stutters or holds — the
+sound is whole. To keep the picture smooth too: publish from a computer that does not also run the room (the
+host's room and the show view on one computer is twice the work — in the meet of 21 November both ran on one
+Mac), close other tabs and apps, and keep the cut-out off on a weak machine. The mesh ceiling of §6 applies.
+
+## 13 · What is not verified, and what the operator has to do
 
 1. **Push** (`cd C:\Work\MyProjects2026\SingersVoice`, `git push origin main`): the site everyone sang on is the
    10 November build; none of this is deployed until the push. Devices must close and reopen the app once.
 2. **TURN keys** (docs/DEPLOY_CONTROL.md, five minutes): until then a pair of singers behind strict networks
    still never link, and the room now says so ("No link to X").
 3. **The Workers paid plan** ($5/month) for a public service: not the fix, but the right setting.
-4. **The YouTube stream** (`https://www.youtube.com/live/QxogR6wjfqE`): not inspected — this workspace cannot fetch
-   the video, and claiming otherwise would be worse than saying so. To measure it: attach a downloaded recording
-   (a minute is enough) and the relay's log for that hour (`fly logs -a <relay app>`), and the next pass compares
-   the broadcast's own bus capture (the live e2e already measures that path) with what arrived.
+4. **The YouTube stream**: measured from the recording (§12), the cause found in the publisher's browser, and
+   fixed there. The AAC path of the Worker (`live.worker.ts`) runs only where the browser encodes AAC — Chrome and
+   Edge on Windows and Mac — which the CI machine (Linux) cannot: the cut and the clock are unit-tested
+   (`test/liveCore.test.ts`), the Worker's video path and the mix Worker's Opus path run in the live e2e, and the
+   AAC path itself is the one piece verified only by the next broadcast from a Mac.
 5. **Phones**: the crackle candidates in §7, the mesh ceiling in §6 — the next meet's notices (the Links line, the
    strain line, "by relay") are the measurements; a screenshot of the popup after a song says what each device saw.

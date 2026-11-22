@@ -152,6 +152,7 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
   // The broadcast: sound bus + picture + encoder + sender, one per show view.
   const broadcast = useMemo(() => new Broadcast(), []);
   const sending = broadcast.status.value;
+  const enc = broadcast.encoderStats;
   // The publisher's own check of the stream: half a minute after the first segments, the playlist played back here, hidden.
   const streamCheck = useStreamCheck(`/watch/${encodeURIComponent(meet.meetId)}/live.m3u8`, sending?.state === 'live' && sending.segments >= 4);
   const support = broadcast.support.value;
@@ -644,6 +645,12 @@ function ShowStage(props: { session: MeetSession; meet: Meet; you: Participant }
               </span>
             )}
             {sending?.state === 'live' && !sending.audio && <span class="chip warn">video only — no AAC in this browser</span>}
+            {/* The encoder's health, said only when the picture is short: this computer is not keeping up (the sound goes out whole whatever happens to the picture). */}
+            {sending?.state === 'live' && enc && sending.segments > 3 && (enc.held > 0 || enc.fps < 10) && (
+              <span class="chip warn" data-live-strain={`${enc.fps}/${enc.dropped}/${enc.held}`} title={`The picture is encoded at ${enc.fps} frames a second (${enc.dropped} frames dropped, the last picture held ${enc.held} time${enc.held === 1 ? '' : 's'}): this computer is not keeping up with the stage. The sound goes out whole whatever happens to the picture. Fewer tabs and apps help; publishing from a computer that does not also run the room helps most.`}>
+                picture {enc.fps} fps — this computer is straining
+              </span>
+            )}
             {job && job.destinations.includes('youtube') && (sending?.state === 'live' || yt) && (
               <span class={`chip ${yt ? (yt.ok ? 'ok' : 'danger') : sending?.youtube === 'ok' ? 'ok' : sending?.youtube === 'waiting' ? '' : 'danger'}`} data-youtube-word={yt ? (yt.ok ? 'ok' : 'off') : ''}>
                 {yt ? yt.text : sending?.youtubeNote || `YouTube: ${sending?.youtube === 'waiting' ? 'sending…' : sending?.youtube}`}

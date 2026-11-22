@@ -1,7 +1,8 @@
 /**
  * Crackle-free sound for the audience and the broadcast: the block resampler carries its place
  * across blocks (no seam), and the mix-out worklet plays pushed PCM as one continuous stream at
- * the device's rate, behind a cushion, silent (not noisy) when it runs dry.
+ * the device's rate, behind a cushion, silent (not noisy) when it runs dry — fading out over the
+ * last ten milliseconds before the silence and in again after it (a cut to zero is a click).
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
@@ -86,8 +87,14 @@ describe("'sv-mix-out' worklet", () => {
     expect(maxJump(played)).toBeLessThan(((2 * Math.PI * hz) / 48000) * 1.05); // one curve through every packet edge
     const ref = sine(9600, 48000, hz);
     let err = 0;
-    for (let i = 0; i < 9600; i++) err = Math.max(err, Math.abs(played[i]! - ref[i]!));
+    for (let i = 480; i < 9600 - 700; i++) err = Math.max(err, Math.abs(played[i]! - ref[i]!)); // past the fade-in (10 ms), short of the fade-out
     expect(err).toBeLessThan(1e-5); // at the same rate the samples pass through exactly
+    // The edges fade: the first ten milliseconds ramp up from silence, the last ten before the queue runs out ramp down to it — no step.
+    for (let i = 0; i < 480; i++) expect(Math.abs(played[i]!)).toBeLessThanOrEqual(((i + 1) / 480) * 1.0001);
+    const tail = played.slice(9600 - 700);
+    expect(tail.some((v) => v !== 0)).toBe(true);
+    expect(Math.abs(played[9599]!)).toBeLessThan(1e-6); // silence by the end: the fade reached zero before the sound ran out
+    expect(maxJump(tail)).toBeLessThan(((2 * Math.PI * hz) / 48000) * 1.05); // the ramp is no step either
   });
 
   it('resamples to the device rate in one piece (44.1 kHz device, 48 kHz sound): no seam between packets', () => {
@@ -99,8 +106,25 @@ describe("'sv-mix-out' worklet", () => {
     expect(maxJump(out)).toBeLessThan(((2 * Math.PI * hz) / 44100) * 1.05);
     const ref = sine(out.length, 44100, hz);
     let err = 0;
-    for (let i = 0; i < out.length; i++) err = Math.max(err, Math.abs(out[i]! - ref[i]!));
+    for (let i = 441; i < out.length; i++) err = Math.max(err, Math.abs(out[i]! - ref[i]!)); // past the fade-in
     expect(err).toBeLessThan(0.02);
+  });
+
+  it('takes its sound from a second port too (the page\'s Worker) and keeps what was left when the fade-out stopped it', () => {
+    const { Processor } = loadMixOut(48000);
+    const p = new Processor({ processorOptions: { sampleRate: 48000, cushionFrames: 960 } });
+    const port = { onmessage: null as ((e: { data: unknown }) => void) | null };
+    p.port.onmessage!({ data: { type: 'port', port } });
+    const hz = 1000;
+    for (let b = 0; b < 2; b++) port.onmessage!({ data: { type: 'pcm', data: sine(960, 48000, hz, (2 * Math.PI * hz * b * 960) / 48000), rate: 48000 } });
+    const first = render(p, 20); // 2560 asked of 1920 queued: the fade-out stops the sound with a quantum or so still queued
+    expect(first.slice(0, 1000).some((v) => v !== 0)).toBe(true);
+    expect(first.slice(1920).every((v) => v === 0)).toBe(true);
+    // more sound (by the node's own port this time) brings the cushion back: the leftover plays first, nothing skipped
+    for (let b = 2; b < 4; b++) push(p, sine(960, 48000, hz, (2 * Math.PI * hz * b * 960) / 48000));
+    const again = render(p, 20);
+    expect(again.some((v) => v !== 0)).toBe(true);
+    expect(maxJump(again)).toBeLessThan(((2 * Math.PI * hz) / 48000) * 1.05); // the resumed sound is the same curve, faded in — no step
   });
 
   it('runs dry into silence, not noise, and starts again once the cushion is back; reports how far it played', () => {

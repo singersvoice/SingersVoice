@@ -14,9 +14,9 @@
  * show view does the same with its backing track — and the recording's own timeline is simply
  * "the others' time". Nothing is ever played out loud: the vocals go to the mix only.
  */
-import type { BackgroundItem, MixBatch } from '@singersvoice/protocol';
+import type { BackgroundItem } from '@singersvoice/protocol';
 import type { AudioEngine } from '../audio/engine.ts';
-import { MixBroadcaster } from '../audio/mixBroadcast.ts';
+import { MixBroadcaster, type MixTarget } from '../audio/mixBroadcast.ts';
 import { MixBus } from '../audio/mixBus.ts';
 import { LAG_MAX_MS } from './align.ts';
 import { BrandMark } from './brandMark.ts';
@@ -139,8 +139,8 @@ export class ShowRecorder {
   /** Remote vocals: each one feeds the mix (and a muted element, which some browsers need before a remote stream flows into WebAudio). */
   private vocals = new Map<string, { stream: MediaStream; el: HTMLAudioElement; node: MediaStreamAudioSourceNode | null }>();
   private audio: { ctx: AudioContext; dest: MediaStreamAudioDestinationNode; bus: MixBus; localTrack: DelayNode; localVocal: DelayNode; taps: { node: AudioNode; to: AudioNode }[] } | null = null;
-  /** The host's device: the mix goes out to the audience in one-second batches through this (null elsewhere). */
-  broadcast: ((batch: MixBatch) => Promise<void>) | null = null;
+  /** The host's device: the mix goes out to the audience in one-second batches, to this (the meet's mix route and this device's resume token; null elsewhere). */
+  broadcast: (() => MixTarget | null) | null = null;
   /** Whether anybody is listening to the mix right now (the service's word): no listener, no encoding, nothing sent. */
   broadcastWanted: (() => boolean) | null = null;
   private broadcaster: MixBroadcaster | null = null;
@@ -641,8 +641,14 @@ export class ShowRecorder {
     for (const [id, v] of this.vocals) this.plugVocal(id, v);
     // The audience hears this very mix: the host's device sends it out a second at a time (WebCodecs/Opus).
     if (this.broadcast) {
-      const send = this.broadcast;
-      this.broadcaster = new MixBroadcaster(ctx, send, (t) => engine.player?.positionAt(t - this.lagMs / 1000) ?? 0, this.broadcastWanted ?? (() => true));
+      // The Worker labels every block with the track's position at that instant, from the schedule it is told every quarter second (the player's own arithmetic, the mix's lag taken off).
+      const schedule = () => {
+        const p = engine.player;
+        if (!p) return null;
+        const now = ctx.currentTime;
+        return { ctxTime: now, posMs: Math.max(0, p.positionAt(now - this.lagMs / 1000)), playing: p.playing, tempo: p.tempoRate, durationMs: p.durationMs };
+      };
+      this.broadcaster = new MixBroadcaster(ctx, this.broadcast, schedule, this.broadcastWanted ?? (() => true));
       this.broadcaster.start(bus.output);
     }
   }

@@ -1,8 +1,8 @@
 /**
  * The audience's sound, end to end, in one page (tools/ci/mix-lab.mjs): a song is encoded exactly as
  * the host's device encodes the stage mix (Opus, 48 kHz mono, 64 kbps, 20 ms packets, one batch a
- * second with the track position of its first frame), the batches are handed to a `MixPlayer` as a
- * polling listener would get them (three there at once, then one a second), and what the player
+ * second with the track position of its first frame), the batches are handed to a `MixPlayer` as the
+ * service's stream would hand them (three there at once, then one a second), and what the player
  * puts out — on an AudioContext at the rate asked for, 48 or 44.1 kHz — is recorded through the
  * `sv-tap` worklet and handed back as PCM, with the player's own reading of the track position
  * along the way. Not part of the app: bundled by the lab alone.
@@ -48,14 +48,14 @@ export interface MixLabRun {
   b64: string;
   /** The player's reading every half second: ms since the start, the track position it reports (ms), how far behind it says it is. */
   positions: { t: number; pos: number | null; behind: number; hearing: boolean }[];
-  /** How many batches each poll returned. */
+  /** How many batches had been handed over at each look (ten a second). */
   fetched: number[];
   batches: number;
 }
 
 declare global {
   interface Window {
-    svMixLab: (o: { ctxRate: number; seconds: number; songUrl: string; startMs: number; arrivalMs: number; workletBase: string }) => Promise<MixLabRun>;
+    svMixLab: (o: { ctxRate: number; seconds: number; songUrl: string; startMs: number; arrivalMs: number; workletBase: string; stallAfterBatches?: number; stallMs?: number }) => Promise<MixLabRun>;
   }
 }
 
@@ -67,26 +67,35 @@ window.svMixLab = async (o) => {
   const buf = await dec.decodeAudioData(song);
   const batches = await makeBatches(buf.getChannelData(0), o.startMs);
   const t0 = performance.now();
-  // the host sends one batch a second; three are already there when the listener arrives
-  const available = () => batches.filter((_b, i) => i < 3 || (i - 3) * o.arrivalMs <= performance.now() - t0);
+  // the host sends one batch a second; three are already there when the listener arrives — handed to the player as
+  // the stream would hand them (the lab has no service), on the same clock
+  const mp = new MixPlayer(ctx, ctx.destination, null);
   const fetched: number[] = [];
-  const mp = new MixPlayer(ctx, ctx.destination, async (since) => {
-    const av = available().filter((b) => b.seq > since);
-    fetched.push(av.length);
-    return { batches: av, latest: available().length };
-  });
+  let given = 0;
+  // (a stall: from `stallAfterBatches` on, every batch comes `stallMs` late — the host's device held its breath, or the network did)
+  const dueAt = (i: number) => (i < 3 ? 0 : (i - 3) * o.arrivalMs + (o.stallAfterBatches !== undefined && i >= o.stallAfterBatches ? (o.stallMs ?? 0) : 0));
+  const hand = () => {
+    const due = batches.filter((_b, i) => dueAt(i) <= performance.now() - t0).length;
+    for (; given < due; given++) mp.feed(batches[given]!);
+    fetched.push(due);
+  };
   const want = Math.round(ctx.sampleRate * o.seconds);
   await ctx.audioWorklet.addModule(`${o.workletBase}tap.js`);
   const tap = new AudioWorkletNode(ctx, 'sv-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], processorOptions: { frames: want } });
   const positions: MixLabRun['positions'] = [];
   mp.start();
+  hand();
+  const feeder = setInterval(hand, 100);
   const poll = setInterval(() => positions.push({ t: Math.round(performance.now() - t0), pos: mp.positionMs(), behind: mp.behindS(), hearing: mp.state.value.hearing }), 500);
+  // The capture begins once the sound plays (the cushion full, the Worker up): what is measured is the playing, not the wait for it.
+  for (let i = 0; i < 500 && mp.positionMs() === null; i++) await new Promise((r) => setTimeout(r, 20));
   const data = await new Promise<Float32Array>((resolve) => {
     tap.port.onmessage = (e: MessageEvent<{ type: string; data: Float32Array }>) => e.data.type === 'done' && resolve(e.data.data);
     mp.out.connect(tap);
     tap.connect(ctx.destination);
   });
   clearInterval(poll);
+  clearInterval(feeder);
   mp.out.disconnect(tap);
   tap.disconnect();
   mp.stop();

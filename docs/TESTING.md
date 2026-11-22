@@ -313,7 +313,12 @@ the capture is matched against the whole song by FFT in the band of a sweep the 
 so the answer is a correlation coefficient and the exact track position), located within 0.3 s of
 where the player says it is (the lyrics follow the sound), **not one click** (the song puts nothing
 in the top of the spectrum, so a burst there is a seam — none), not one gap, the position advancing
-at real time, 3–5 s behind the newest batch.
+at real time, 3–5 s behind the newest batch. The player's Worker (`audio/mixPlay.worker.ts`) runs in
+the lab as in the app (the lab serves it next to its page); the batches are handed to the player as
+the service's stream would hand them. A third run is **a stall**: the batches stop for four seconds
+and then come on — the cushion runs out, the sound pauses in silence (faded out, never cut: no
+click at either edge), and comes back faded in once the cushion is full, from exactly where it
+stopped, nothing skipped — twelve seconds measured, the pause and both sides of it.
 
 **The rider lab (`tools/ci/rider-lab.mjs`, `npm run rider-lab`)** measures the mix's automatic
 vocal level: the real `sv-leveler` worklet with the real `VOCAL_RIDER` settings on an
@@ -339,7 +344,8 @@ where in the song they were):
   host's Opus encoder is starved on the test machine (its queue past 25 blocks, or blocks left out
   during the capture), the gap, click, song and position checks stand down and say so: the audience
   then hears the skips the bounded backlog makes, which is the broadcaster working as designed, and
-  the player itself is measured exactly in the mix lab;
+  the player itself is measured exactly in the mix lab (with the encoder and the player each in a
+  Worker of their own, that stand-down is rare: the checks run for real);
 - **the broadcast**: six seconds of the publisher bus (`window.__svBroadcast.bus.output`, exactly
   what the encoder gets) against the host's mix at the same moment — sound, no gap, no click, the
   backing track in it (correlation above 0.3), and the track **where the singers are** (the stage's
@@ -349,8 +355,10 @@ The measurements print beside the checks (`audience sound: …`, `the host's mix
 sound: …`). The unit side of the same thing is `apps/web/test/mixOut.test.ts`: the stateful
 resampler keeps one curve across 20 ms blocks at 44.1 → 48 and 48 → 44.1 kHz, and the `sv-mix-out`
 worklet (loaded with stand-ins for the AudioWorklet globals) waits for its cushion, plays packets
-back to back without a seam at either rate, goes silent (not noisy) when dry and resumes once the
-cushion is back.
+back to back without a seam at either rate, fades in over its first ten milliseconds and out over
+the last ten before it would run dry (no step at either edge), goes silent (not noisy) when dry,
+takes its sound from a second port (the page's Worker) as from its own, and resumes once the cushion
+is back from exactly where it stopped.
 
 **The HLS lab (`tools/ci/hls-lab.mjs`, `npm run hls-lab`)** measures what the watch page plays: the
 browser's own muxer (`apps/web/src/broadcast/tsMuxer.ts`) runs in Node on real H.264 + AAC that

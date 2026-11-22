@@ -56,12 +56,7 @@ export function Watch(props: { id: string }) {
     if (!listen || showHasSound || !mixPlaySupported()) return;
     const e = getEngine();
     void e.resume();
-    const mp = new MixPlayer(
-      e.ctx,
-      e.master,
-      async (since) => api.get('GET /watch/:id/mix', `/watch/${encodeURIComponent(props.id)}/mix?since=${since}`),
-      (since) => serviceUrl(`/watch/${encodeURIComponent(props.id)}/mix/stream?since=${since}`),
-    );
+    const mp = new MixPlayer(e.ctx, e.master, { pollUrl: serviceUrl(`/watch/${encodeURIComponent(props.id)}/mix`), streamUrl: serviceUrl(`/watch/${encodeURIComponent(props.id)}/mix/stream`) });
     mixRef.current = mp;
     mp.start();
     const t = setInterval(() => setMix({ ...mp.state.value }), 500);

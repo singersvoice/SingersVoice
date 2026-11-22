@@ -73,8 +73,25 @@ export class CanvasTrack {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    this.track.stop();
-    void this.writer?.close().catch(() => undefined);
+    const writer = this.writer;
     this.writer = null;
+    if (!writer) {
+      this.track.stop();
+      return;
+    }
+    // The writer first, then the track: a frame still on its way lands and is closed; a frame written to a track
+    // already stopped is dropped by the browser without being closed (a stall warning in the console, a leak).
+    // (Half a second at most: a sink that never settles does not keep the track alive.)
+    let done = false;
+    const stopTrack = () => {
+      if (done) return;
+      done = true;
+      this.track.stop();
+    };
+    void writer
+      .close()
+      .catch(() => undefined)
+      .finally(stopTrack);
+    setTimeout(stopTrack, 500);
   }
 }

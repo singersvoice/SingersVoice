@@ -1,162 +1,108 @@
 /**
- * The host's device sends the stage mix to the audience: the blend it already builds for the
- * recording (backing track + every singer's vocal after their FX) is tapped by an AudioWorklet in
- * 20 ms blocks, encoded with WebCodecs (Opus, 64 kbps, mono, 48 kHz) and posted a second at a
- * time, each batch tagged with the track position of its first frame. Needs WebCodecs (Chrome,
- * Edge, Safari 16.4+, Firefox 130+); without it the audience gets the backing track alone, as before.
+ * The host's device sends the stage mix to the audience: the blend it already builds for the recording (backing
+ * track + every singer's vocal after their FX) is tapped by an AudioWorklet in 20 ms blocks, encoded with
+ * WebCodecs (Opus, 64 kbps, mono, 48 kHz) and posted a second at a time, each batch tagged with the track
+ * position of its first frame. The encoding and the posting run in a Worker of their own (mix.worker.ts), fed
+ * straight from the tap: a host's page busy with a crowded stage never costs the audience a block. This is the
+ * page's side: the tap, the Worker, and what the Worker needs to know — where to send, whether anybody listens,
+ * and the track's schedule (every quarter second), from which the Worker labels every block with the position
+ * the song had at that instant. Needs WebCodecs (Chrome, Edge, Safari 16.4+, Firefox 130+); without it the
+ * audience gets the backing track alone, as before.
  */
-import { MIX_BITRATE, type MixBatch, type MixPacket } from '@singersvoice/protocol';
-import { LinearResampler } from './resample.ts';
+import type { MixSchedule, MixStats, MixWorkerIn, MixWorkerOut } from './mix.worker.ts';
 
-const OUT_RATE = 48000;
-const BATCH_MS = 1000;
-/** How much sound may wait in the encoder before blocks are left out (20 ms blocks: two seconds) — and until the wait is down to a second again, so skips come in stretches, not as a constant stutter. */
-const MAX_QUEUE_BLOCKS = 100;
-const RESUME_QUEUE_BLOCKS = 50;
-/** A second whose loudest sample is under this (−54 dBFS) is silence — nobody is singing or talking — and is not sent. */
-const SILENCE_PEAK = 0.002;
+/** Where a batch goes: the service's mix route for the meet, this device's resume token (the batch carries it) and the sign-in headers (read again whenever asked: a renewed token). */
+export interface MixTarget {
+  url: string;
+  resumeToken: string;
+  headers: Record<string, string>;
+}
 
-export const mixBroadcastSupported = (): boolean => typeof AudioEncoder !== 'undefined' && typeof AudioData !== 'undefined';
+/** How often the Worker is told the track's schedule, whether anybody listens, and the sign-in (when it changed). */
+const TELL_MS = 250;
+
+export const mixBroadcastSupported = (): boolean => typeof AudioEncoder !== 'undefined' && typeof AudioData !== 'undefined' && typeof Worker !== 'undefined';
 
 export class MixBroadcaster {
   private tap: AudioWorkletNode | null = null;
-  private encoder: AudioEncoder | null = null;
-  private packets: MixPacket[] = [];
-  /**
-   * Where the track was at each block as it arrived (the stream's frame the block starts at, and the
-   * position then): a batch is labelled from the frame its first packet starts at, so the label is the
-   * sound's own — exact even when the encoder runs behind (a starved device: the packets of a second
-   * come out later, and a label taken at flush time would name a position the sound has not reached).
-   */
-  private marks: { frame: number; posMs: number }[] = [];
-  /** The loudest sample of the batch being built: a silent second (the stage between songs, nobody talking) is not sent. */
-  private batchPeak = 0;
-  private seq = 0;
-  private frames = 0;
+  private worker: Worker | null = null;
   private timer: ReturnType<typeof setInterval> | undefined;
   private running = false;
-  private failed = false;
-  /** Batches sent so far (for the UI / e2e). */
+  private lastHeaders = '';
+  private lastWanted: boolean | null = null;
+  /** As the Worker reports, once a second: batches sent, blocks left out (a starved encoder), seconds not encoded for want of a listener, the encoder's queue. */
   sent = 0;
-  /** Blocks left out because the encoder was too far behind (a starved device): the audience skipped ahead instead of drifting behind. */
   dropped = 0;
-  private skipping = false;
-  /** Only on a context that does not run at 48 kHz: one converter for the whole stream, carried from block to block (no seam). */
-  private resampler: LinearResampler | null = null;
+  idle = 0;
+  queue = 0;
+  /** The encoder's queue as the Worker reports it (support / e2e, where the encoder itself used to be read). */
+  get encoder(): { encodeQueueSize: number } {
+    return { encodeQueueSize: this.queue };
+  }
 
   constructor(
     private readonly ctx: AudioContext,
-    private readonly send: (batch: MixBatch) => Promise<void>,
-    /** The track position (ms) of the mix at an audio-clock time. */
-    private readonly positionAt: (ctxTime: number) => number,
+    /** Where the batches go (null: nowhere yet — nothing is started). */
+    private readonly target: () => MixTarget | null,
+    /** The track's schedule right now: the position at this instant of the audio clock (shifted by the mix's lag), whether it plays, the tempo, the length. */
+    private readonly schedule: () => MixSchedule | null,
     /** Whether anybody is listening right now: while nobody is, no block is encoded and nothing is sent (the device's CPU and the service's day are spared). */
     private readonly wanted: () => boolean = () => true,
   ) {}
 
-  /** Seconds not even encoded because nobody was listening (for the UI / e2e). */
-  idle = 0;
-
   start(source: AudioNode): void {
     if (this.running || !mixBroadcastSupported()) return;
+    const target = this.target();
+    if (!target) return;
     let tap: AudioWorkletNode;
     try {
       tap = new AudioWorkletNode(this.ctx, 'sv-mix-tap', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: 'explicit' });
     } catch {
       return;
     }
-    const encoder = new AudioEncoder({
-      output: (chunk) => {
-        const buf = new Uint8Array(chunk.byteLength);
-        chunk.copyTo(buf);
-        this.packets.push({ ts: chunk.timestamp, b64: toBase64(buf) });
-      },
-      error: (e) => {
-        console.warn('mix encoder', e);
-        this.failed = true;
-      },
-    });
-    encoder.configure({ codec: 'opus', sampleRate: OUT_RATE, numberOfChannels: 1, bitrate: MIX_BITRATE });
-    this.encoder = encoder;
+    const worker = new Worker(new URL('./mix.worker.ts', import.meta.url), { type: 'module', name: 'sv-mix' });
+    worker.onmessage = (e: MessageEvent<MixWorkerOut>) => {
+      if (e.data.type !== 'stats') return;
+      const s: MixStats = e.data.stats;
+      this.sent = s.sent;
+      this.dropped = s.dropped;
+      this.idle = s.idle;
+      this.queue = s.queue;
+    };
+    worker.onerror = (e) => console.warn('mix worker', e.message);
+    const send = (m: MixWorkerIn, transfer?: Transferable[]) => worker.postMessage(m, transfer ?? []);
+    // The tap posts its blocks to the Worker's own port: the sound never waits for this page.
+    const channel = new MessageChannel();
+    tap.port.postMessage({ type: 'port', port: channel.port1 }, [channel.port1]);
+    send({ type: 'port', port: channel.port2 }, [channel.port2]);
+    this.lastHeaders = JSON.stringify(target.headers);
+    this.lastWanted = this.wanted();
+    send({ type: 'start', url: target.url, headers: target.headers, resumeToken: target.resumeToken, wanted: this.lastWanted });
+    const sch = this.schedule();
+    if (sch) send({ type: 'schedule', schedule: sch });
+    this.worker = worker;
     this.tap = tap;
     this.running = true;
-    this.frames = 0;
-    this.packets = [];
-    this.marks = [];
-    this.resampler = null;
-    tap.port.onmessage = (e: MessageEvent<{ type: string; data: Float32Array<ArrayBuffer>; contextTime: number; sampleRate: number }>) => {
-      const m = e.data;
-      if (m.type !== 'block' || !this.running || this.failed || encoder.state !== 'configured') return;
-      if (!this.wanted()) {
-        // Nobody listening: the block is let go (the batches are labelled by track position, so the sound picks up where the stage is when a listener comes).
-        if (this.packets.length || this.marks.length) {
-          this.packets = [];
-          this.marks = [];
-          this.batchPeak = 0;
-        }
-        return;
-      }
-      // An encoder that cannot keep up (the device is starved) would queue sound without end and the audience
-      // would drift ever further behind: past the bound the block is left out — a skip, and the audience stays near.
-      if (this.skipping ? encoder.encodeQueueSize > RESUME_QUEUE_BLOCKS : encoder.encodeQueueSize > MAX_QUEUE_BLOCKS) {
-        this.skipping = true;
-        this.dropped++;
-        return;
-      }
-      this.skipping = false;
-      this.marks.push({ frame: this.frames, posMs: Math.max(0, this.positionAt(m.contextTime)) });
-      if (this.marks.length > 1000) this.marks.splice(0, this.marks.length - 1000); // the last twenty seconds
-      let peak = this.batchPeak;
-      for (let i = 0; i < m.data.length; i++) {
-        const a = Math.abs(m.data[i]!);
-        if (a > peak) peak = a;
-      }
-      this.batchPeak = peak;
-      let data: Float32Array<ArrayBuffer> = m.data;
-      if (m.sampleRate !== OUT_RATE) {
-        if (!this.resampler || this.resampler.from !== m.sampleRate) this.resampler = new LinearResampler(m.sampleRate, OUT_RATE);
-        data = this.resampler.push(m.data);
-      }
-      try {
-        encoder.encode(new AudioData({ format: 'f32', sampleRate: OUT_RATE, numberOfFrames: data.length, numberOfChannels: 1, timestamp: Math.round((this.frames / OUT_RATE) * 1e6), data }));
-      } catch (err) {
-        console.warn('mix encode', err);
-      }
-      this.frames += data.length;
-    };
     source.connect(tap);
-    this.timer = setInterval(() => void this.flush(), BATCH_MS);
+    this.timer = setInterval(() => this.tell(), TELL_MS);
   }
 
-  /** The track position (ms) of the stream's frame `f`, from the block it fell in. */
-  private positionOfFrame(f: number): number {
-    let mark: { frame: number; posMs: number } | null = null;
-    for (const m of this.marks) {
-      if (m.frame <= f) mark = m;
-      else break;
+  /** The Worker is told what changed: the schedule (always — the song moves), whether anybody listens, the sign-in. */
+  private tell(): void {
+    const w = this.worker;
+    if (!w || !this.running) return;
+    const sch = this.schedule();
+    if (sch) w.postMessage({ type: 'schedule', schedule: sch } satisfies MixWorkerIn);
+    const wanted = this.wanted();
+    if (wanted !== this.lastWanted) {
+      this.lastWanted = wanted;
+      w.postMessage({ type: 'wanted', on: wanted } satisfies MixWorkerIn);
     }
-    if (!mark) return 0;
-    return Math.max(0, Math.round(mark.posMs + ((f - mark.frame) / OUT_RATE) * 1000));
-  }
-
-  private async flush(): Promise<void> {
-    if (!this.packets.length) {
-      if (this.running && !this.wanted()) this.idle++;
-      return;
-    }
-    const silent = this.batchPeak < SILENCE_PEAK;
-    const first = this.packets[0]!;
-    const batch: MixBatch = { seq: ++this.seq, atMs: this.positionOfFrame(Math.round((first.ts / 1e6) * OUT_RATE)), codec: 'opus', sampleRate: OUT_RATE, channels: 1, packets: this.packets };
-    this.packets = [];
-    this.batchPeak = 0;
-    if (silent) {
-      this.seq--; // nothing to hear: the next audible second takes this number
-      return;
-    }
-    try {
-      await this.send(batch);
-      this.sent++;
-    } catch (e) {
-      console.warn('mix send', e); // the next second goes out anyway; the audience bridges the gap
+    const t = this.target();
+    const h = JSON.stringify(t?.headers ?? {});
+    if (t && h !== this.lastHeaders) {
+      this.lastHeaders = h;
+      w.postMessage({ type: 'auth', headers: t.headers } satisfies MixWorkerIn);
     }
   }
 
@@ -171,23 +117,15 @@ export class MixBroadcaster {
       /* gone */
     }
     this.tap = null;
-    const enc = this.encoder;
-    this.encoder = null;
-    if (enc && enc.state !== 'closed') {
+    const w = this.worker;
+    this.worker = null;
+    if (w) {
       try {
-        enc.close();
+        w.postMessage({ type: 'stop' } satisfies MixWorkerIn);
       } catch {
-        /* closed */
+        /* gone */
       }
+      setTimeout(() => w.terminate(), 1500); // the last batch on its way out first
     }
-    this.packets = [];
-    this.marks = [];
   }
 }
-
-function toBase64(bytes: Uint8Array): string {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)));
-  return btoa(bin);
-}
-

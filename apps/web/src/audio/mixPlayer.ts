@@ -2,34 +2,43 @@
  * Hearing the stage: an audience device (or the public watch page) takes the host's one-second mix
  * batches — from the service's stream (one request for the whole listen, each batch the moment it is
  * sent), or by polling a second at a time where a stream cannot be kept — decodes the Opus packets
- * with WebCodecs and hands the sound to one AudioWorklet
- * (`sv-mix-out`) that plays it as a single continuous stream on the audio clock — resampled in
- * one piece to whatever rate this device runs at, never a seam between packets, a couple of seconds
- * behind the stage (a cushion against a late batch; silence, not a stutter, if it ever runs dry) —
- * with the track position of what is being heard right now on offer, so the lyrics follow the sound,
- * not the clock. (An earlier version scheduled fifty buffer nodes a second back to back; on a device
- * running at 44.1 kHz each node resampled on its own and every seam clicked.)
+ * with WebCodecs and hands the sound to one AudioWorklet (`sv-mix-out`) that plays it as a single
+ * continuous stream on the audio clock — resampled in one piece to whatever rate this device runs at,
+ * never a seam between packets, a couple of seconds behind the stage (a cushion against a late batch;
+ * silence, not a stutter, if it ever runs dry) — with the track position of what is being heard right
+ * now on offer, so the lyrics follow the sound, not the clock. The receiving and the decoding run in a
+ * Worker of their own (mixPlay.worker.ts) that feeds the worklet through a port of its own: a page
+ * busy with the room never costs the listener a block. This is the page's side: the worklet, the
+ * Worker, the state, and where the sound is. (An earlier version scheduled fifty buffer nodes a
+ * second back to back; on a device running at 44.1 kHz each node resampled on its own and every seam
+ * clicked. The one before this decoded on the main thread; a page stalled for a second cost the
+ * cushion, three seconds of silence.)
  */
 import { signal } from '@preact/signals';
 import type { MixBatch } from '@singersvoice/protocol';
+import type { MixPlayWorkerIn, MixPlayWorkerOut } from './mixPlay.worker.ts';
 
-export const mixPlaySupported = (): boolean => typeof AudioDecoder !== 'undefined' && typeof AudioWorkletNode !== 'undefined';
+export const mixPlaySupported = (): boolean => typeof AudioDecoder !== 'undefined' && typeof AudioWorkletNode !== 'undefined' && typeof Worker !== 'undefined';
 
 /**
  * How far behind the newest batch playback runs: room for a batch that comes a poll late — the edge
  * cache in front of the relay may hold an answer for a second, so a batch can take two polls to arrive
  * (and then two come at once) — and for the host's device holding its breath for a couple of seconds
- * (a phone hosting ten singers: the batches are built on its main thread and come in a burst after a
- * stall). The lyrics follow the sound, so the audience never notices the delay; a stutter they would.
+ * (a phone hosting ten singers). The lyrics follow the sound, so the audience never notices the delay;
+ * a stutter they would.
  */
 const JITTER_S = 3.0;
 const POLL_MS = 1000;
-/** A stream that failed is tried again this often (the polls carry the sound meanwhile). */
-const STREAM_RETRY_MS = 20_000;
-/** No batch for this long → the host is not sending (never was, or stopped). */
-const SILENT_MS = 6000;
 /** The worklet module, loaded on the context if the engine has not loaded it already. */
 const MODULE = 'worklets/mix-out.js';
+/** The host's mix is 48 kHz mono (the worklet is made for that rate; a batch at another rate retunes it). */
+const MIX_RATE = 48000;
+
+/** Where the batches come from: the service's poll route and its stream (both without `since`); null when the page hands them over (`feed`). */
+export interface MixSource {
+  pollUrl: string;
+  streamUrl: string | null;
+}
 
 export interface MixState {
   /** Batches are arriving and playing. */
@@ -44,45 +53,27 @@ export interface MixState {
 
 export class MixPlayer {
   readonly state = signal<MixState>({ hearing: false, seq: 0, behindS: 0, silent: false });
-  private decoder: AudioDecoder | null = null;
   private running = false;
-  private timer: ReturnType<typeof setTimeout> | undefined;
-  private since = 0;
-  private lastBatchAt = 0;
-  private startedAt = 0;
+  private worker: Worker | null = null;
   private node: AudioWorkletNode | null = null;
   private nodeReady: Promise<AudioWorkletNode | null> | null = null;
-  private inRate = 48000;
-  /** Input frames handed to the worklet so far (the stream's clock). */
-  private pushed = 0;
+  private inRate = MIX_RATE;
   /** What the worklet last said: input frames played, frames queued, at which audio-clock time. */
   private played = { consumed: 0, queued: 0, playing: false, contextTime: 0 };
-  /** Where each batch starts on the stream's clock, and the track position it carries. */
+  /** Where each batch starts on the stream's clock, and the track position it carries (the Worker's marks). */
   private timeline: { atFrame: number; atMs: number }[] = [];
-  /**
-   * Each batch marks where the track is at its first packet; the entry goes on the timeline when that
-   * packet's sound comes out of the decoder — found by order (the decoder gives one sound per packet,
-   * in order), never by timestamp: a decoder may renumber its output after a packet the host left out.
-   */
-  private pendingMarks: { packet: number; atMs: number }[] = [];
-  /** Packets fed to the decoder, and sounds that came out of it, since the start. */
-  private fed = 0;
-  private decoded = 0;
   /** The player's output (support / e2e: a tap here hears exactly what the audience hears). */
   readonly out: GainNode;
-
-  /** The stream, while one is open; the polls run when there is none. */
-  private es: EventSource | null = null;
-  private streamTriedAt = 0;
-  /** Batches taken from the stream rather than a poll (for the UI / e2e). */
+  /** Batches taken from the stream rather than a poll (for the UI / e2e), and whether the stream carries the sound right now. */
   streamed = 0;
+  private streamingNow = false;
+  /** Batches handed over before the Worker is up (the worklet module loading): they go in first. */
+  private handed: MixBatch[] = [];
 
   constructor(
     readonly ctx: AudioContext,
     destination: AudioNode,
-    private readonly fetchSince: (since: number) => Promise<{ batches: MixBatch[]; latest: number }>,
-    /** The stream's address for a position (SSE, `batch` events); without one the player polls alone. */
-    private readonly streamUrl: ((since: number) => string) | null = null,
+    private readonly source: MixSource | null,
   ) {
     this.out = ctx.createGain();
     this.out.connect(destination);
@@ -91,71 +82,67 @@ export class MixPlayer {
   start(): void {
     if (this.running || !mixPlaySupported()) return;
     this.running = true;
-    this.since = 0;
-    this.startedAt = Date.now();
-    this.lastBatchAt = 0;
-    this.pushed = 0;
     this.played = { consumed: 0, queued: 0, playing: false, contextTime: 0 };
     this.timeline = [];
-    this.pendingMarks = [];
-    this.fed = 0;
-    this.decoded = 0;
     this.streamed = 0;
+    this.streamingNow = false;
     this.state.value = { hearing: false, seq: 0, behindS: 0, silent: false };
-    this.openStream();
-    void this.poll();
+    void this.boot();
+  }
+
+  /** The worklet first, then the Worker with the worklet's port in hand: nothing decoded has nowhere to go. */
+  private async boot(): Promise<void> {
+    const node = await this.ensureNode();
+    if (!node || !this.running) return;
+    const worker = new Worker(new URL('./mixPlay.worker.ts', import.meta.url), { type: 'module', name: 'sv-mix-play' });
+    worker.onmessage = (e: MessageEvent<MixPlayWorkerOut>) => this.onMessage(e.data);
+    worker.onerror = (e) => console.warn('mix play worker', e.message);
+    const channel = new MessageChannel();
+    node.port.postMessage({ type: 'port', port: channel.port1 }, [channel.port1]);
+    worker.postMessage({ type: 'port', port: channel.port2 } satisfies MixPlayWorkerIn, [channel.port2]);
+    worker.postMessage({ type: 'start', pollUrl: this.source?.pollUrl ?? null, streamUrl: this.source?.streamUrl ?? null } satisfies MixPlayWorkerIn);
+    this.worker = worker;
+    for (const batch of this.handed.splice(0)) worker.postMessage({ type: 'batch', batch } satisfies MixPlayWorkerIn);
+  }
+
+  private onMessage(m: MixPlayWorkerOut): void {
+    if (!this.running) return;
+    if (m.type === 'mark') {
+      this.inRate = m.rate;
+      this.timeline.push({ atFrame: m.atFrame, atMs: m.atMs });
+      if (this.timeline.length > 12) this.timeline.shift();
+    } else if (m.type === 'tick') {
+      this.streamed = m.streamed;
+      this.streamingNow = m.streaming;
+      this.state.value = { hearing: m.hearing, seq: m.seq, behindS: m.hearing ? this.behindS() : 0, silent: m.silent };
+    }
   }
 
   /** Whether the stream carries the sound right now (the polls then only keep the state fresh). */
   get streaming(): boolean {
-    return this.es !== null && this.es.readyState === EventSource.OPEN;
+    return this.streamingNow;
   }
 
-  private openStream(): void {
-    if (!this.streamUrl || typeof EventSource !== 'function' || this.es) return;
-    this.streamTriedAt = Date.now();
-    let es: EventSource;
-    try {
-      es = new EventSource(this.streamUrl(this.since));
-    } catch {
-      return;
-    }
-    this.es = es;
-    es.addEventListener('batch', (ev) => {
-      if (this.es !== es || !this.running) return;
-      try {
-        const b = JSON.parse(String((ev as MessageEvent).data)) as MixBatch;
-        if (b.seq <= this.since) return; // a poll had it already
-        this.play(b);
-        this.since = b.seq;
-        this.lastBatchAt = Date.now();
-        this.streamed++;
-      } catch {
-        /* a batch the next one makes up for */
-      }
-    });
-    es.addEventListener('end', () => {
-      if (this.es === es) this.closeStream();
-    });
-    es.onerror = () => {
-      // The browser reconnects by itself from where it was; closed for good: the polls carry on, the stream is tried again later.
-      if (this.es === es && es.readyState === EventSource.CLOSED) this.closeStream();
-    };
-  }
-
-  private closeStream(): void {
-    const es = this.es;
-    this.es = null;
-    es?.close();
+  /** A batch handed over by the page (the mix lab feeds the player this way, in place of the service). */
+  feed(batch: MixBatch): void {
+    if (!this.running) return;
+    if (this.worker) this.worker.postMessage({ type: 'batch', batch } satisfies MixPlayWorkerIn);
+    else this.handed.push(batch);
   }
 
   stop(): void {
     this.running = false;
-    clearTimeout(this.timer);
-    this.closeStream();
-    const dec = this.decoder;
-    this.decoder = null;
-    if (dec && dec.state !== 'closed') dec.close();
+    this.handed = [];
+    const w = this.worker;
+    this.worker = null;
+    if (w) {
+      try {
+        w.postMessage({ type: 'stop' } satisfies MixPlayWorkerIn);
+      } catch {
+        /* gone */
+      }
+      setTimeout(() => w.terminate(), 500);
+    }
     const node = this.node;
     this.node = null;
     this.nodeReady = null;
@@ -187,43 +174,15 @@ export class MixPlayer {
     return Math.round((this.played.queued / this.inRate + POLL_MS / 1000) * 10) / 10;
   }
 
-  private async poll(): Promise<void> {
-    if (!this.running) return;
-    // The stream carries the sound; the poll is the fallback — and the way back to a stream that was lost.
-    if (!this.streaming) {
-      if (!this.es && this.streamUrl && Date.now() - this.streamTriedAt > STREAM_RETRY_MS) this.openStream();
-      try {
-        const r = await this.fetchSince(this.since);
-        if (!this.running) return;
-        // A late joiner starts from the newest few seconds, not from the beginning of the window.
-        if (this.since === 0 && r.batches.length > 3) r.batches = r.batches.slice(-3);
-        for (const b of r.batches) {
-          if (b.seq <= this.since) continue;
-          this.play(b);
-          this.since = b.seq;
-          this.lastBatchAt = Date.now();
-        }
-        if (!r.batches.length && r.latest > this.since) this.since = r.latest - 1; // we fell behind the window: skip ahead
-      } catch {
-        /* try again next second */
-      }
-    }
-    const quiet = this.lastBatchAt ? Date.now() - this.lastBatchAt : Date.now() - this.startedAt;
-    const hearing = this.lastBatchAt > 0 && quiet < SILENT_MS;
-    this.state.value = { hearing, seq: this.since, behindS: hearing ? this.behindS() : 0, silent: quiet >= SILENT_MS };
-    this.timer = setTimeout(() => void this.poll(), POLL_MS);
-  }
-
-  /** The output node: made once, for the rate of the first batch (the host's mix is 48 kHz mono). */
-  private ensureNode(rate: number): Promise<AudioWorkletNode | null> {
+  /** The output node: made once, for the host's mix rate. */
+  private ensureNode(): Promise<AudioWorkletNode | null> {
     if (this.nodeReady) return this.nodeReady;
-    this.inRate = rate;
     const make = () =>
       new AudioWorkletNode(this.ctx, 'sv-mix-out', {
         numberOfInputs: 0,
         numberOfOutputs: 1,
         outputChannelCount: [1],
-        processorOptions: { sampleRate: rate, cushionFrames: Math.round(rate * JITTER_S) },
+        processorOptions: { sampleRate: MIX_RATE, cushionFrames: Math.round(MIX_RATE * JITTER_S) },
       });
     this.nodeReady = (async () => {
       let node: AudioWorkletNode;
@@ -248,70 +207,4 @@ export class MixPlayer {
     })();
     return this.nodeReady;
   }
-
-  private ensureDecoder(b: MixBatch): AudioDecoder | null {
-    if (this.decoder && this.decoder.state === 'configured') return this.decoder;
-    try {
-      const dec = new AudioDecoder({
-        output: (data) => this.push(data),
-        error: (e) => {
-          console.warn('mix decoder', e);
-          this.decoder = null;
-        },
-      });
-      dec.configure({ codec: 'opus', sampleRate: b.sampleRate || 48000, numberOfChannels: b.channels || 1 });
-      this.decoder = dec;
-      return dec;
-    } catch {
-      return null;
-    }
-  }
-
-  private play(b: MixBatch): void {
-    void this.ensureNode(b.sampleRate || 48000);
-    const dec = this.ensureDecoder(b);
-    if (!dec || !b.packets.length) return;
-    this.pendingMarks.push({ packet: this.fed, atMs: b.atMs });
-    for (const p of b.packets) {
-      try {
-        dec.decode(new EncodedAudioChunk({ type: 'key', timestamp: p.ts, data: fromBase64(p.b64) }));
-        this.fed++;
-      } catch (e) {
-        console.warn('mix packet', e);
-      }
-    }
-  }
-
-  /** Decoded sound → the worklet, mono (a stereo mix is summed), in order; the batch marks go on the stream's clock. */
-  private push(data: AudioData): void {
-    const frames = data.numberOfFrames;
-    const ch = data.numberOfChannels;
-    const mono = new Float32Array(new ArrayBuffer(frames * 4));
-    if (ch === 1) data.copyTo(mono, { planeIndex: 0, format: 'f32-planar' });
-    else {
-      const tmp = new Float32Array(frames);
-      for (let c = 0; c < ch; c++) {
-        data.copyTo(tmp, { planeIndex: c, format: 'f32-planar' });
-        for (let i = 0; i < frames; i++) mono[i] = mono[i]! + tmp[i]! / ch;
-      }
-    }
-    data.close();
-    const index = this.decoded++;
-    while (this.pendingMarks.length && this.pendingMarks[0]!.packet <= index) {
-      const m = this.pendingMarks.shift()!;
-      this.timeline.push({ atFrame: this.pushed, atMs: m.atMs });
-      if (this.timeline.length > 12) this.timeline.shift();
-    }
-    this.pushed += frames;
-    void this.ensureNode(data.sampleRate).then((node) => {
-      if (node && this.running) node.port.postMessage({ type: 'pcm', data: mono }, [mono.buffer]);
-    });
-  }
-}
-
-function fromBase64(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
 }

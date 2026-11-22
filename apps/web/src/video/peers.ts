@@ -676,9 +676,11 @@ export class PerformerMesh {
     let scale: number;
     let maxBitrate: number;
     if (publisher) {
+      // The whole frame at the full bitrate (whatever size this device packs — an encoder with headroom never trades resolution for it);
+      // a show that draws us smaller than we pack gets the frame scaled to that, the bitrate following the pixels, never under the floor.
       const width = peer.wantWidth > 0 ? Math.min(PACK_WIDTH, peer.wantWidth) : PACK_WIDTH;
       scale = Math.max(1, PACK_WIDTH / width);
-      maxBitrate = Math.max(PUBLISHER_MIN_BPS, Math.min(PUBLISHER_BPS, Math.round(PUBLISHER_BPS * (width / 720) ** 2)));
+      maxBitrate = Math.max(PUBLISHER_MIN_BPS, Math.min(PUBLISHER_BPS, Math.round(PUBLISHER_BPS * (width / PACK_WIDTH) ** 2)));
     } else if (peer.wantWidth > SINGER_LINK_WIDTH) {
       const width = Math.min(PACK_WIDTH, peer.wantWidth);
       scale = Math.max(1, PACK_WIDTH / width);

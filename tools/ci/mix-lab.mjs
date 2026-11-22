@@ -29,11 +29,15 @@ const root = path.resolve(new URL('../..', import.meta.url).pathname);
 const songFile = makeSong(path.join(tmpdir(), 'sv-mix-lab-song.mp3'), 60);
 const bundle = esbuild.buildSync({ entryPoints: [path.join(root, 'apps/web/src/audio/mixLab.ts')], bundle: true, format: 'esm', platform: 'browser', write: false, define: { 'import.meta.env.BASE_URL': '"/"' }, absWorkingDir: root });
 const labJs = bundle.outputFiles[0].text;
+// The player's Worker: the page asks for it next to lab.js, by the name the source gives it (new URL('./mixPlay.worker.ts', import.meta.url)).
+const workerBundle = esbuild.buildSync({ entryPoints: [path.join(root, 'apps/web/src/audio/mixPlay.worker.ts')], bundle: true, format: 'esm', platform: 'browser', write: false, absWorkingDir: root });
+const workerJs = workerBundle.outputFiles[0].text;
 const html = '<!doctype html><meta charset="utf-8"><title>mix lab</title><script type="module" src="/lab.js"></script>';
 const song = readFileSync(songFile);
 const server = http.createServer((req, res) => {
   if (req.url === '/') return res.writeHead(200, { 'content-type': 'text/html' }).end(html);
   if (req.url === '/lab.js') return res.writeHead(200, { 'content-type': 'text/javascript' }).end(labJs);
+  if (req.url === '/mixPlay.worker.ts') return res.writeHead(200, { 'content-type': 'text/javascript' }).end(workerJs);
   if (req.url === '/song.mp3') return res.writeHead(200, { 'content-type': 'audio/mpeg' }).end(song);
   const m = /^\/worklets\/([a-z-]+\.js)$/.exec(req.url ?? '');
   if (m) return res.writeHead(200, { 'content-type': 'text/javascript' }).end(readFileSync(path.join(root, 'apps/web/public/worklets', m[1])));
@@ -80,6 +84,34 @@ for (const ctxRate of [48000, 44100]) {
   }
   const behind = told.map((p) => p.behind);
   check(behind.every((b) => b >= 3 && b <= 5.5), `the sound runs 3–5 s behind the newest batch (${Math.min(...behind)}–${Math.max(...behind)} s)`);
+}
+// A stall: the batches stop for four seconds (the host's device held its breath, or the network did) and
+// then come on. The cushion runs out → silence, faded out over ten milliseconds (never a click, never
+// noise); the sound comes back, faded in, once the cushion is full again — the same song, from where it
+// stopped, nothing skipped: the audience hears a pause, not a stutter.
+{
+  const r = await page.evaluate((o) => window.svMixLab(o), { ctxRate: 48000, seconds: 12, songUrl: '/song.mp3', startMs: 0, arrivalMs: 1000, workletBase: '/worklets/', stallAfterBatches: 7, stallMs: 4000 });
+  const bytes = Buffer.from(r.b64, 'base64');
+  const pcm = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  const ref = decodeToPcm(songFile, r.rate);
+  const m = measure(pcm, ref, r.rate);
+  // where the silence sits: the longest run of near-silence
+  let run = 0, best = { at: 0, len: 0 };
+  for (let i = 0; i < pcm.length; i++) {
+    if (Math.abs(pcm[i]) <= 1e-5) { run++; if (run > best.len) best = { at: i - run + 1, len: run }; } else run = 0;
+  }
+  const gapS = best.len / r.rate, gapAtS = best.at / r.rate;
+  const before = measure(pcm.subarray(0, Math.max(0, best.at - r.rate)), ref, r.rate);
+  const afterFrom = best.at + best.len + Math.round(0.05 * r.rate);
+  const after = measure(pcm.subarray(afterFrom), ref, r.rate);
+  console.log('a stall of four seconds:', JSON.stringify({ gaps: m.gaps, clicks: m.clicks.count, maxJump: m.clicks.maxJump.toFixed(3), silence: { atS: gapAtS.toFixed(2), forS: gapS.toFixed(2) }, before: { r: before.song.r.toFixed(3), positionS: before.song.positionS.toFixed(3) }, after: { r: after.song.r.toFixed(3), positionS: after.song.positionS.toFixed(3) } }));
+  console.log('  the player says:', JSON.stringify(r.positions.map((p) => [p.t, p.pos === null ? null : Math.round(p.pos), p.behind, p.hearing ? 'H' : '-'])));
+  check(m.gaps.count === 1 && gapS > 2 && gapS < 4.5, `the cushion runs out once and the sound pauses, in silence (${m.gaps.count} gap, ${gapS.toFixed(2)} s at ${gapAtS.toFixed(2)} s)`);
+  check(m.clicks.count === 0, `no click at either edge of the pause — the sound fades out and in (${m.clicks.count} clicks; the biggest jump ${m.clicks.maxJump.toFixed(3)})`);
+  check(before.song.r > 0.9 && after.song.r > 0.9, `the song before the pause and after it (correlation ${before.song.r.toFixed(3)} / ${after.song.r.toFixed(3)})`);
+  // nothing skipped: the song resumes where it stopped (the position after = the position before + the time played between, not the time elapsed)
+  const expectAfter = before.song.positionS + afterFrom / r.rate - gapS;
+  check(Math.abs(after.song.positionS - expectAfter) < 0.15, `the sound resumes where it stopped — nothing skipped (at ${after.song.positionS.toFixed(2)} s; expected ${expectAfter.toFixed(2)} s)`);
 }
 await browser.close();
 server.close();

@@ -374,7 +374,7 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   useEffect(() => show.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
   // The host's device sends the mix to the audience (nobody on stage ever hears it) — and only while somebody is
   // listening (the service says so with every room it hands over): no listener, no encoding, no requests.
-  show.broadcast = you.userId === meet.hostUserId ? (b) => session.sendMix(b) : null;
+  show.broadcast = you.userId === meet.hostUserId ? () => session.mixTarget() : null;
   show.broadcastWanted = () => session.mixWanted();
 
   // My vocal (after FX) goes out over the mesh from the moment my mic is open on stage: to the other

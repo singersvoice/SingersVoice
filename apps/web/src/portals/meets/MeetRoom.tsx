@@ -538,7 +538,7 @@ function Lobby(props: {
       setMixState({ hearing: false, silent: true, seq: 0, behindS: 0 });
       return;
     }
-    const mp = new MixPlayer(e.ctx, e.master, (since) => session.fetchMix(since), (since) => session.mixStreamUrl(since));
+    const mp = new MixPlayer(e.ctx, e.master, session.mixSource());
     mixRef.current = mp;
     (window as unknown as { __svMix?: MixPlayer | null }).__svMix = mp; // support / e2e: the sound the audience hears
     mp.start();

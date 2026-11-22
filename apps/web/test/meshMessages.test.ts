@@ -119,8 +119,8 @@ describe('mesh messages', () => {
     expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBeLessThanOrEqual(1_500_000); // a small picture at the publisher's floor, never the whole frame's 4.5 Mbps
     viewer.channels[0]!.onmessage!({ data: '{"type":"want","width":0}' }); // the whole frame: the show view
     expect((applied!.encodings[0] as { scaleResolutionDownBy: number }).scaleResolutionDownBy).toBe(1);
-    // The bitrate follows the pixels sent: the whole of a computer's 720-wide cut-out gets 4.5 Mbps; a smaller pack, in proportion (never under 600 kbps).
-    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBe(Math.max(1_500_000, Math.min(4_500_000, Math.round(4_500_000 * (PACK_WIDTH / 720) ** 2))));
+    // The whole frame goes at the full bitrate whatever this device packs; a show that draws us smaller gets the bitrate in proportion to the pixels (never under the floor).
+    expect((applied!.encodings[0] as { maxBitrate: number }).maxBitrate).toBe(4_500_000);
     // Sound goes first on every link: the vocal's encoding asks for high network priority, the picture's for low — in a second step of its own.
     await Promise.resolve();
     await Promise.resolve();

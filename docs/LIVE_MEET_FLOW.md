@@ -292,10 +292,13 @@ every singer's vocal, after their FX, in sync) is sent out by the host's device 
 (WebCodecs/Opus, 64 kbps, through the relay — no media server; listeners read it from the public
 `/watch/:id/mix` route, which the edge caches, so a hundred listeners cost the relay one answer
 per second) and played a couple of seconds behind the stage — **as one continuous sound**: the
-decoded packets go into one audio worklet (`sv-mix-out`) that plays them back to back on the audio
-clock, resampled in one piece to whatever rate the device runs at (a 44.1 kHz laptop, a 48 kHz
-phone), so there is no seam and no click at any packet edge, behind a three-second cushion (a batch
-that arrives a poll late is still in time, and so is a burst of them after the host's device held its breath), and silence — never a stutter — if it ever runs dry.
+batches are taken and decoded in a Worker of the listener's page (whatever the page is busy with,
+the sound never waits for it), and the decoded packets go into one audio worklet (`sv-mix-out`)
+that plays them back to back on the audio clock, resampled in one piece to whatever rate the device
+runs at (a 44.1 kHz laptop, a 48 kHz phone), so there is no seam and no click at any packet edge,
+behind a three-second cushion (a batch that arrives late is still in time, and so is a burst of
+them after the host's device held its breath), and silence — never a stutter, faded out and in,
+never cut — if it ever runs dry.
 The lyrics' clock on an audience device is the sound itself: the worklet reports how far it has
 played, so the words follow what is being heard. The status line says *Hearing the stage · 4.1 s behind*. When
 nothing arrives (the host's browser has no WebCodecs — Chrome, Edge, Safari 16.4+ and Firefox 130+

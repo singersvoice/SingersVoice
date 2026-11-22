@@ -16,8 +16,8 @@
  * room shows the real reason; the stream, watched for silence, is opened again when it goes quiet.
  */
 import { signal } from '@preact/signals';
-import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type LinkSummary, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type MixBatch, type Participant, type RegisterPerformanceRequest, type RoomUpdate, type SongPick, type StagePolicy } from '@singersvoice/protocol';
-import { api, ApiError, beacon, clock, controlUrl, serverNow, serviceUrl, syncClock } from '../../lib/api.ts';
+import { MEET_IDLE_EXPIRY_MS, meetIsOpen, type ChatMessage, type LinkSummary, type MeetPerformance, type MeetSignal, type MeetSignalType, type MeetSnapshot, type Participant, type RegisterPerformanceRequest, type RoomUpdate, type SongPick, type StagePolicy } from '@singersvoice/protocol';
+import { api, ApiError, authHeaders, beacon, clock, controlUrl, serverNow, serviceUrl, syncClock } from '../../lib/api.ts';
 
 interface Pace {
   forming: number;
@@ -411,21 +411,21 @@ export class MeetSession {
   seek(toMs: number, leadMs = 3000): Promise<void> {
     return this.act('seek', { leadMs, toMs });
   }
-  /** The host's device sends a second of the stage mix for the audience. */
-  async sendMix(batch: MixBatch): Promise<void> {
-    await api.post('POST /meets/:id/mix', `/meets/${encodeURIComponent(this.meetId)}/mix`, { ...batch, resumeToken: this.resumeToken });
+  /** Where the host's device sends the mix from its Worker (audio/mix.worker.ts): the route, and this device's resume token to carry; null before the join. */
+  mixTarget(): { url: string; resumeToken: string; headers: Record<string, string> } | null {
+    return this.resumeToken && controlUrl.value ? { url: serviceUrl(`/meets/${encodeURIComponent(this.meetId)}/mix`), resumeToken: this.resumeToken, headers: authHeaders() } : null;
   }
   /** Somebody is hearing the mix right now (the service says so with every room it hands over): the host's device encodes and sends it only then. */
   mixWanted(): boolean {
     return this.snapshot.value?.mixListening === true;
   }
-  /** The audience fetches what came after `since` — through the public watch route, which the edge caches: a hundred listeners at the live edge ask the same question and the service answers it once. */
-  fetchMix(since: number): Promise<{ batches: MixBatch[]; latest: number }> {
-    return api.get('GET /watch/:id/mix', `/watch/${encodeURIComponent(this.meetId)}/mix?since=${since}`);
-  }
-  /** The mix as a stream (one request for the whole listen); the player falls back to `fetchMix` where streams fail. */
-  mixStreamUrl(since: number): string {
-    return serviceUrl(`/watch/${encodeURIComponent(this.meetId)}/mix/stream?since=${since}`);
+  /**
+   * Where the audience's player (audio/mixPlayer.ts, its Worker) takes the mix from: the public watch route — the mix
+   * as a stream (one request for the whole listen), and the poll the player falls back on where streams fail, which
+   * the edge caches: a hundred listeners at the live edge ask the same question and the service answers it once.
+   */
+  mixSource(): { pollUrl: string; streamUrl: string } {
+    return { pollUrl: serviceUrl(`/watch/${encodeURIComponent(this.meetId)}/mix`), streamUrl: serviceUrl(`/watch/${encodeURIComponent(this.meetId)}/mix/stream`) };
   }
 
   // ---- WebRTC signalling relay (performer ↔ performer) ----
