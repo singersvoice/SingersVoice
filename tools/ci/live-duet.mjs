@@ -11,7 +11,7 @@ import { decodeToPcm, measure, voiceOfSong } from './audio-measure.mjs';
 import { makeSong } from './e2e-song.mjs';
 const require = createRequire(import.meta.url);
 let pw; try { pw = require('playwright'); } catch { pw = require('/opt/npm-tools/node_modules/playwright'); }
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { appendFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -334,12 +334,13 @@ try {
   const widths = (p) => p.evaluate(() => [...document.querySelectorAll('video')].filter((v) => v.srcObject && v.videoWidth > 0).map((v) => v.videoWidth));
   const packWidth = await alice.page.evaluate(() => window.__svFeed?.packWidth ?? 0);
   const showWidths = await until(async () => { const ws = await widths(carol.page); return ws.length >= 2 && ws.every((w) => w === packWidth * 2) ? ws : null; }, 20000);
-  // A sender whose encoder the browser has limited for this machine's CPU (four browsers on one small box) scales its picture down by
-  // itself ('balanced' degradation on a publisher's link: softer for a moment, never frozen); the check then stands down and says so.
-  const cpuLimited = async (p) => p.evaluate(() => (window.__svMesh?.links?.(Date.now()) ?? []).filter((l) => !l.wanted).map((l) => l.limited));
-  const senderLimits = [...(await cpuLimited(alice.page)), ...(await cpuLimited(bob.page))];
-  const cpuStrained = !showWidths && senderLimits.includes('cpu');
-  check(packWidth >= 320 && (Boolean(showWidths) || cpuStrained), cpuStrained ? `the show view gets every singer's picture at its full packed size — stands down: a sender's encoder is limited by this machine's CPU (${senderLimits.join('/')}; ${(await widths(carol.page)).join('×')} wide)` : `the show view gets every singer's picture at its full packed size (${(showWidths ?? (await widths(carol.page))).join('×')} wide; this device sends ${packWidth})`);
+  // A sender whose encoder the browser has limited for this machine (four browsers on one small box: its CPU, or the send estimate
+  // the stalls leave it — 'cpu' or 'bandwidth') scales its picture down by itself ('balanced' degradation on a publisher's link:
+  // softer for a moment, never frozen; the unpacker follows the size); the check then stands down and says so.
+  const senderLimited = async (p) => p.evaluate(() => (window.__svMesh?.links?.(Date.now()) ?? []).filter((l) => !l.wanted).map((l) => l.limited));
+  const senderLimits = [...(await senderLimited(alice.page)), ...(await senderLimited(bob.page))];
+  const encoderStrained = !showWidths && senderLimits.some((l) => l === 'cpu' || l === 'bandwidth');
+  check(packWidth >= 320 && (Boolean(showWidths) || encoderStrained), encoderStrained ? `the show view gets every singer's picture at its full packed size — stands down: a sender's encoder is limited by this machine (${senderLimits.join('/')}; ${(await widths(carol.page)).join('×')} wide)` : `the show view gets every singer's picture at its full packed size (${(showWidths ?? (await widths(carol.page))).join('×')} wide; this device sends ${packWidth}; the senders' limits: ${senderLimits.join('/') || 'none'})`);
   const singerWidths = await widths(alice.page);
   check(singerWidths.length >= 1 && singerWidths.every((w) => w <= 660), `a singer's link gets it scaled down to the stage's size (${singerWidths.join('/')} wide packed)`);
   const lift = await alice.page.evaluate(() => ({ gain: window.__svFeed?.exposure?.gain ?? null, line: window.__svFeed?.cameraLine ?? '' }));
@@ -523,7 +524,9 @@ try {
   console.log('carol show:', JSON.stringify(show));
   check(show.tiles.length === 2 && show.tiles.every((t) => t.source === 'frame'), 'the show view lays out both performers from their video');
   check(show.tiles.every((t) => t.h > show.h * 0.9), `performers stand huge on the show stage (tile ${show.tiles[0]?.h} of ${show.h} px)`);
-  check(show.left > 2000 && show.right > 2000 && show.top > 0, 'both cut-outs are drawn, filling the frame up to the top');
+  // The top of the head just crosses the frame's top 30 % at full size; a picture the sender's encoder scaled down (above) comes
+  // back through the upscaler a few rows lower, so that part of the check stands down with the size check.
+  check(show.left > 2000 && show.right > 2000 && (show.top > 0 || encoderStrained), encoderStrained ? `both cut-outs are drawn (${show.left} / ${show.right} px; the top of the frame not judged: a sender's picture is scaled by its encoder)` : 'both cut-outs are drawn, filling the frame up to the top');
   check(show.lyrics === 0, 'no lyrics in publish mode');
   check(/2 on stage · 2\/2 video/.test(show.top_text), `show header: ${show.top_text}`);
   // The stage background, switched from the live stage by a singer who is not the host (bob, on his phone): every
@@ -804,15 +807,18 @@ try {
   console.log('paused:', { alice: [ta1, ta2], bob: [tb1, tb2] });
   check(ta1 === ta2 && tb1 === tb2, 'the timeline freezes on both devices after the cued pause');
   check(ta1 === tb1, `both devices froze at the same position (${ta1} / ${tb1})`);
-  check(/\bpaused\b/.test((await bob.page.locator('.sing .notices').getAttribute('data-notice-ids').catch(() => '')) ?? ''), 'the guest sees "Paused" among the notices');
+  // The pause itself is cued (the engines froze above, on their own clocks); the word "Paused" reaches the notices with the
+  // next poll of the meet — on a stalled machine (four browsers, two cores) a few seconds later, so these three wait for it.
+  const guestPaused = await until(async () => /\bpaused\b/.test((await bob.page.locator('.sing .notices').getAttribute('data-notice-ids').catch(() => '')) ?? '') || null, 10000);
+  check(Boolean(guestPaused), 'the guest sees "Paused" among the notices');
   // Talk-back while paused: from the cued instant the song stops on a device, the singers on stage hear each other again.
   const pausedA = await vocalEls(alice.page);
   const pausedB = await vocalEls(bob.page);
   console.log('talk-back while paused — alice:', JSON.stringify(pausedA), 'bob:', JSON.stringify(pausedB));
   check(pausedA.length >= 1 && pausedA.every((a) => a.muted === false) && pausedB.length >= 1 && pausedB.every((a) => a.muted === false), 'while the song is paused the singers on stage hear each other (talk-back)');
-  check((await alice.page.locator('[data-talkback-live="1"]').count()) === 1, 'the live stage says talk-back is on until Resume');
+  check(Boolean(await until(async () => (await alice.page.locator('[data-talkback-live="1"]').count()) === 1 || null, 10000)), 'the live stage says talk-back is on until Resume');
   await bob.page.screenshot({ path: `${out}/duet-bob-paused.png` });
-  check(await carol.page.locator('.show-note', { hasText: 'Paused by the host' }).isVisible(), 'the show view shows the pause');
+  check(Boolean(await until(async () => (await carol.page.locator('.show-note', { hasText: 'Paused by the host' }).isVisible()) || null, 10000)), 'the show view shows the pause');
   // Resume: cued 4 s ahead.
   await alice.page.getByRole('button', { name: /Resume for everyone/ }).click();
   await wait(6500);
@@ -1098,6 +1104,15 @@ try {
     const audioS = Number(probe(['-select_streams', 'a:0', '-show_entries', 'packet=pts_time', '-of', 'csv=p=0']).split('\n').filter(Boolean).pop() ?? 0);
     console.log('the film:', { packets, lastVideoS, audioS });
     check(packets > 200 && lastVideoS >= 200 && lastVideoS > audioS * 0.8, `the film's picture runs the whole meet (${packets} frames, picture to ${lastVideoS.toFixed(1)} s of ${audioS.toFixed(1)} s)`);
+    // PUBLISH MODE in the meet's film: the song (the stage minute, both singers singing, filmAt on) as broadcast measures it
+    // (ffmpeg's EBU R128) — a record's loudness with the voices in front (mixBus.ts MIX_TARGETS), nothing near full scale.
+    {
+      const ebu = spawnSync('ffmpeg', ['-nostats', '-ss', String(Math.max(0, filmAt)), '-t', '40', '-i', `${out}/film-alice.webm`, '-af', 'ebur128=peak=true', '-f', 'null', '-'], { encoding: 'utf8' }).stderr ?? '';
+        const songLufs = Number(/\n\s+I:\s+(-?[\d.]+) LUFS/.exec(ebu)?.[1]);
+      const filmPeak = Number(/\n\s+Peak:\s+(-?[\d.]+) dBFS/.exec(ebu)?.[1]);
+      check(Number.isFinite(songLufs) && songLufs >= -12.5 && songLufs <= -6, `PUBLISH MODE — the film's song plays at a record's loudness with the voices in front: ${songLufs} LUFS over 40 s from ${Math.max(0, filmAt).toFixed(1)} s (true peak ${filmPeak} dBFS)`);
+      check(filmPeak <= -0.8, `nothing near full scale in the film (true peak ${filmPeak} dBFS)`);
+    }
   } else check(false, 'the film of the meet can be played from Performances');
   await alice.page.keyboard.press('Escape');
   await alice.page.locator('.sheet').waitFor({ state: 'detached', timeout: 5000 }).catch(() => undefined);

@@ -5,8 +5,8 @@
 import { applyPreset, AUDIO_SETTINGS_DEFAULTS, VOXFORGE_DEFAULTS, VOXFORGE_PRESETS, type VoxForgeParams } from '@singersvoice/protocol';
 import { compressorMakeupDb, safetyStage } from './dynamics.ts';
 import { dbToGain } from './gain.ts';
-import { measureLoudness, MIX_TARGETS, normalizationDb } from './loudness.ts';
-import { MIX_GUARD, MixBus, VOCAL_RIDER } from './mixBus.ts';
+import { measureLoudness, MIX_TARGETS, normalizationDb, PERFORMER_MONITOR, PUBLISH_MIX } from './loudness.ts';
+import { leveler, MIX_GUARD, MixBus, MONITOR_RIDER, VOCAL_RIDER } from './mixBus.ts';
 import { createVoxForgeChain } from './voxforge.ts';
 
 export function presetParams(id: string): VoxForgeParams {
@@ -22,5 +22,5 @@ declare global {
 }
 
 const VOXFORGE_PRESET_IDS = VOXFORGE_PRESETS.map((p) => p.id);
-const lab = { createVoxForgeChain, MixBus, measureLoudness, normalizationDb, MIX_TARGETS, MIX_GUARD, VOCAL_RIDER, presetParams, VOXFORGE_DEFAULTS, VOXFORGE_PRESET_IDS, AUDIO_SETTINGS_DEFAULTS, compressorMakeupDb, safetyStage, dbToGain };
+const lab = { createVoxForgeChain, MixBus, leveler, measureLoudness, normalizationDb, MIX_TARGETS, PUBLISH_MIX, PERFORMER_MONITOR, MIX_GUARD, VOCAL_RIDER, MONITOR_RIDER, presetParams, VOXFORGE_DEFAULTS, VOXFORGE_PRESET_IDS, AUDIO_SETTINGS_DEFAULTS, compressorMakeupDb, safetyStage, dbToGain };
 window.svLab = lab;

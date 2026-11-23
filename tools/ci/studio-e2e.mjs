@@ -296,10 +296,11 @@ try {
   check(Math.abs(Number(stored?.app?.trackDb)) < 0.01 && Math.abs(Number(stored?.app?.vocalDb)) < 0.01, `the saved Track / Vocal volume is the default (0 / 0 dB — the mix itself puts the voice in front): ${stored?.app?.trackDb} / ${stored?.app?.vocalDb}`);
   await page.screenshot({ path: path.join(out, 'studio-03-sound.png') });
   await page.keyboard.press('Escape');
-  // Back to the natural voice for the take (the preview's last preset was a character one).
+  // Back to the natural voice for the take (the preview's last preset was a character one), with Hear myself on: the
+  // two listening modes are measured side by side during the song (the monitor's rider against the mix's).
   await page.evaluate(() => {
     const a = JSON.parse(localStorage.getItem('sv.settings.audio'));
-    localStorage.setItem('sv.settings.audio', JSON.stringify({ ...a, activePresetId: 'natural' }));
+    localStorage.setItem('sv.settings.audio', JSON.stringify({ ...a, activePresetId: 'natural', monitor: true }));
   });
   await page.reload({ waitUntil: 'networkidle' });
   await page.getByRole('button', { name: 'Start singing' }).waitFor({ timeout: 60000 });
@@ -314,10 +315,14 @@ try {
   const gumAtStart = await gumCalls(page);
   check(gumAtStart.length === 2 && gumAtStart[1] === 'audio', `Start opens the microphone (${gumAtStart.join(', ')})`);
   const samples = [];
+  const modes = [];
   const t0 = Date.now();
   while (Date.now() - t0 < 15000) {
     const s = await stageNow(page);
     samples.push({ t: Date.now() - t0, heard: s.heard, head: s.head ? s.head.w : 0, songMs: s.songMs });
+    // The two modes on the real pipeline: what the monitor's rider puts out (PERFORMER, K-weighted) and what the mix bus
+    // has of the voice after its rider (PUBLISH, plain RMS of the last 43 ms) — read while the singer is heard.
+    if (s.heard) modes.push(await page.evaluate(() => ({ ears: window.__svEngine ? window.__svEngine.monitorOutDb : null, mix: window.__svShow && window.__svShow.mixLevels() ? window.__svShow.mixLevels().vocals.me ?? null : null, duck: window.__svShow && window.__svShow.mixLevels() ? window.__svShow.mixLevels().duckDb : null })));
     await wait(100);
   }
   const heardAt = samples.filter((s) => s.heard);
@@ -336,6 +341,17 @@ try {
   const zoomRatio = median(inHeads) / Math.max(1, median(outHeads));
   check(inHeads.length > 0 && outHeads.length > 0 && zoomRatio > 1.3 && zoomRatio < 1.75, `the push-in: the head is ${zoomRatio.toFixed(2)}× as wide while heard as when quiet (${median(inHeads)} px against ${median(outHeads)} px; expected ×1.5)`);
   console.log(`info the camera during the song: ${await page.evaluate(() => window.__svFeed.cameraLine)}`);
+  // PERFORMER against PUBLISH, measured on the stage (the second half of the sung samples: both riders have landed).
+  {
+    const late = modes.slice(Math.floor(modes.length / 2)).filter((m) => typeof m.ears === 'number' && typeof m.mix === 'number' && m.mix > -40);
+    const med = (xs) => (xs.length ? [...xs].sort((a, b) => a - b)[xs.length >> 1] : NaN);
+    const ears = med(late.map((m) => m.ears));
+    const mix = med(late.map((m) => m.mix));
+    const duck = med(late.map((m) => m.duck));
+    check(late.length >= 10 && Math.abs(ears - -15) < 3, `PERFORMER MODE on the stage: the singer's own voice reaches their ears at ${ears.toFixed(1)} dB (K-weighted; the mode's level −15, half as loud as the recording's) — ${late.length} readings`);
+    check(late.length >= 10 && mix > -13 && mix < -7, `PUBLISH MODE on the same stage: the mix bus holds the voice at ${mix.toFixed(1)} dBFS RMS after its rider (about −10 for a voice at −9 K-weighted), the music ducked ${duck.toFixed(1)} dB under it`);
+    check(late.length >= 10 && mix - ears >= 3.5, `…the two modes are set apart: the recording's voice ${(mix - ears).toFixed(1)} dB over the ears' (6 wanted, less the measures' own difference)`);
+  }
   await page.screenshot({ path: path.join(out, 'studio-04-singing.png') });
 
   // ---- 2. The Camera & zoom button during the song ----
@@ -440,8 +456,8 @@ try {
     const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
     const sung = mean(shortTerm.filter((x) => (x.t > 3 && x.t < 7) || (x.t > 15 && x.t < 19)).map((x) => x.s));
     const between = mean(shortTerm.filter((x) => (x.t > 9 && x.t < 12.5) || (x.t > 21 && x.t < 23.5)).map((x) => x.s));
-    check(Number.isFinite(integrated) && integrated >= -14 && integrated <= -8, `the saved file plays at a record's loudness: ${integrated} LUFS integrated (true peak ${peak} dBFS)`);
-    check(sung - between >= 4 && sung >= -13, `the voice is in front in the file: the sung phrases at ${sung.toFixed(1)} LUFS short-term, the breaks between them at ${between.toFixed(1)} (${(sung - between).toFixed(1)} LU apart)`);
+    check(Number.isFinite(integrated) && integrated >= -13 && integrated <= -7, `PUBLISH MODE — the saved file plays at a record's loudness: ${integrated} LUFS integrated (true peak ${peak} dBFS)`);
+    check(sung - between >= 5.5 && sung >= -11, `the voice is in front in the file: the sung phrases at ${sung.toFixed(1)} LUFS short-term, the breaks between them at ${between.toFixed(1)} (${(sung - between).toFixed(1)} LU apart)`);
     check(peak <= -0.8, `nothing near full scale in the file (true peak ${peak} dBFS)`);
   }
   check(Boolean(quietFrame?.shown) && quietFrame.shown.h >= quietFrame.win.h * 0.45 && quietFrame.shown.bottom <= quietFrame.win.h, `the Performances player uses the window: ${quietFrame?.shown?.w}×${quietFrame?.shown?.h} shown in a ${quietFrame?.win?.w}×${quietFrame?.win?.h} window, inside it`);

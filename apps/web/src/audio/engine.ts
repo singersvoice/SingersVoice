@@ -5,7 +5,7 @@
 import { signal } from '@preact/signals';
 import type { VoxForgeParams } from '@singersvoice/protocol';
 import { hasAudioWorklet, isIOS } from '../lib/platform.ts';
-import { leveler, VOCAL_RIDER } from './mixBus.ts';
+import { leveler, MONITOR_RIDER } from './mixBus.ts';
 import { BackingPlayer } from './player.ts';
 import { PcmRecorder } from './recorder.ts';
 import { createVoxForgeChain, type VoxForgeChain } from './voxforge.ts';
@@ -164,13 +164,19 @@ export class AudioEngine {
   }
 
   /**
-   * The singer's own ears hear their voice at the mix's vocal level: the same rider the mix bus puts on every voice
-   * (mixBus.ts VOCAL_RIDER, to MIX_TARGETS.vocalDb) sits between the voice and the monitor, so a quiet microphone
-   * is as far in front in the headphones as it will be in the recording and the broadcast — and over the backing
-   * track at its mix level (player.ts), the balance in the ears is the balance of the mix.
+   * PERFORMER MODE — the singer's own ears: the same rider the mix bus puts on every voice sits between the voice
+   * and the monitor, but to the performer level (mixBus.ts MONITOR_RIDER: loudness.ts PERFORMER_MONITOR, half as
+   * loud as the published voice, plus the singer's own "Your voice in your ears" offset — `setMonitorLevel`), over
+   * the backing track at their own listening level (player.ts `gain`). A quiet microphone is as present in the
+   * headphones as a loud one; what the recording and the audience get (PUBLISH MODE, the bus) is set apart.
    */
+  private monitorRider: AudioWorkletNode | null = null;
+  private monitorDb = 0;
+  /** What the monitor's rider puts out right now (K-weighted dB: its input's level plus its gain), four times a second; null without the rider. Support, the e2e. */
+  monitorOutDb: number | null = null;
+
   private rideMonitor(): void {
-    const rider = leveler(this.ctx, VOCAL_RIDER);
+    const rider = leveler(this.ctx, MONITOR_RIDER);
     if (!rider) return;
     try {
       this.voice.disconnect(this.monitor);
@@ -178,6 +184,18 @@ export class AudioEngine {
       /* not connected */
     }
     this.voice.connect(rider).connect(this.monitor);
+    rider.port.onmessage = (e: MessageEvent) => {
+      const m = e.data as { type?: string; levelDb?: number; gainDb?: number };
+      if (m.type === 'level' && typeof m.levelDb === 'number' && typeof m.gainDb === 'number') this.monitorOutDb = m.levelDb + m.gainDb;
+    };
+    this.monitorRider = rider;
+    this.setMonitorLevel(this.monitorDb);
+  }
+
+  /** The singer's own voice in their ears, relative to the performer level (dB; 0 is the mode's own: half as loud as in the recording). */
+  setMonitorLevel(db: number): void {
+    this.monitorDb = Math.max(-24, Math.min(24, Number.isFinite(db) ? db : 0));
+    this.monitorRider?.parameters.get('target')?.setTargetAtTime(Math.min(0, MONITOR_RIDER.target + this.monitorDb), this.ctx.currentTime, 0.05);
   }
 
   /** Must be called from a user gesture. */

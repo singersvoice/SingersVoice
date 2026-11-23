@@ -47,6 +47,8 @@ export interface AppSettings {
   mixV2: boolean;
   /** The Track / Vocal balance set back to 0 / 0 once (the mix of 23 Nov is right on its own). */
   mixV3: boolean;
+  /** …and once more for every stored balance, with the two listening modes of 23 Nov (PUBLISH / PERFORMER). */
+  mixV4: boolean;
   /** Host: the whole meet is filmed on this device (the show picture with the stage mix) straight into Drive, as one video. */
   recordMeet: boolean;
   /**
@@ -93,6 +95,7 @@ export const APP_DEFAULTS: AppSettings = {
   vocalDb: MIX_VOCAL_DEFAULT_DB,
   mixV2: true,
   mixV3: true,
+  mixV4: true,
   recordMeet: true,
   youtubePrivacy: 'unlisted',
   tvLook: 'both',
@@ -137,6 +140,10 @@ function migrateApp(v: AppSettings): AppSettings {
   // The mix of 23 Nov is right on its own (the voice in front, the music full): a balance still at the earlier build's
   // start of +1.6 / +4.6 dB — set to make up for the old mix — goes back to 0 / 0 once; a singer's own setting is kept.
   if (stored.mixV3 !== true) v = { ...v, mixV3: true, ...(Math.abs(Number(v.trackDb) - 1.6) < 0.01 && Math.abs(Number(v.vocalDb) - 4.6) < 0.01 ? { trackDb: MIX_TRACK_DEFAULT_DB, vocalDb: MIX_VOCAL_DEFAULT_DB } : {}) };
+  // The publish mix of 23 Nov (PUBLISH MODE, loudness.ts) is right on its own, and a Track / Vocal balance set on an
+  // earlier build to make up for the old mix (the track pushed up over a voice that could not rise) now works against
+  // it: every stored balance goes back to 0 / 0 once; the controls stay for the singer's own taste from here on.
+  if (stored.mixV4 !== true) v = { ...v, mixV4: true, trackDb: MIX_TRACK_DEFAULT_DB, vocalDb: MIX_VOCAL_DEFAULT_DB };
   if (!Number.isFinite(Number(v.trackDb))) v = { ...v, trackDb: MIX_TRACK_DEFAULT_DB };
   if (!Number.isFinite(Number(v.vocalDb))) v = { ...v, vocalDb: MIX_VOCAL_DEFAULT_DB };
   if (!TV_LOOKS.includes(v.tvLook)) v = { ...v, tvLook: 'both' };
@@ -159,6 +166,7 @@ function sanitizeAudio(a: AudioPluginSettings): AudioPluginSettings {
     tempo: Math.min(1.5, Math.max(0.5, Number(a.tempo) || 1)),
     keyShift: Math.min(6, Math.max(-6, Math.round(Number(a.keyShift) || 0))),
     backingGain: Math.min(1, Math.max(0, Number(a.backingGain) ?? 0.85)),
+    monitorDb: Math.min(24, Math.max(-24, Number.isFinite(Number(a.monitorDb)) ? Number(a.monitorDb) : 0)),
   };
 }
 

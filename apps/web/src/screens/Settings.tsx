@@ -3,7 +3,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { BackgroundPicker, pickBackground } from '../components/BackgroundPicker.tsx';
 import { FxPanel } from '../components/FxPanel.tsx';
 import { PermissionLine } from '../components/PermissionLine.tsx';
-import { MixBalance } from '../components/MixBalance.tsx';
+import { EarsLevel, MixBalance } from '../components/MixBalance.tsx';
 import { SaveSoundButton, VoicePreview } from '../components/SoundPreview.tsx';
 import { IcDrive } from '../components/icons.tsx';
 import { dbLabel, INSTRUMENT_LEVELS } from '../components/MicStatus.tsx';
@@ -278,6 +278,9 @@ export function Settings() {
             </Field>
           )}
           <Switch checked={audio.monitor} onChange={(v) => updateAudio({ monitor: v })} label="Hear myself while singing" hint="Headphones only." />
+          <Field label="Your voice in your ears (performer mode)" hint="Only what you hear of yourself while singing, with Hear myself on — half as loud as in the recording to start, so you sing to your own voice at a natural level. The recording, the film and the audience (publish mode) are set apart, below.">
+            <EarsLevel />
+          </Field>
           <Field label="Sync: your voice on the beat" hint="Your speakers and microphone add a delay the browser cannot see — Bluetooth adds a lot. Turn the speakers up a little, keep quiet, and tap: four clicks go out and the microphone times them; the figure puts your voice on the beat in every recording and live mix on this device. With headphones on nothing is heard, and the browser's own figure is kept (it is good for wired headphones). Each take also measures it from what the microphone heard of the track.">
             <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
               <button class="btn" disabled={syncBusy} data-sync-check onClick={() => void syncCheck()}>
@@ -296,7 +299,7 @@ export function Settings() {
           <Field label={`Backing level in your ears ${Math.round(audio.backingGain * 100)}%`} hint="Only what you hear while singing. The show, the recording and the audience get the track at its own balance (Track / Vocal volume, below).">
             <input type="range" min={0} max={1} step={0.01} value={audio.backingGain} onInput={(e) => updateAudio({ backingGain: Number((e.currentTarget as HTMLInputElement).value) })} />
           </Field>
-          <Field label="Track / Vocal volume in the recording, the mix and the broadcast" hint="The balance everyone else gets — the saved performance, the audience, the stream. At 0 / 0 the mix already has your voice in front of the music (the music steps back a little under it while you sing); the limiter behind the controls keeps the whole clear of distortion whatever they are set to. The same controls sit on every stage's Sound sheet.">
+          <Field label="Track / Vocal volume in the recording, the mix and the broadcast (publish mode)" hint="The balance everyone else gets — the saved performance, the audience, the stream. At 0 / 0 the mix already has your voice well in front of the music (the music steps back under it while you sing); the limiter behind the controls keeps the whole clear of distortion whatever they are set to. The same controls sit on every stage's Sound sheet.">
             <MixBalance />
           </Field>
         </section>

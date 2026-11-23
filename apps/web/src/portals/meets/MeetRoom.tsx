@@ -22,7 +22,7 @@ import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, I
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
-import { MixBalance } from '../../components/MixBalance.tsx';
+import { EarsLevel, MixBalance } from '../../components/MixBalance.tsx';
 import { audienceLine } from './audience.ts';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
 import { SaveSoundButton } from '../../components/SoundPreview.tsx';
@@ -1065,6 +1065,7 @@ function LiveStage(props: {
   useEffect(() => {
     engine.applyFx(audio.params);
     engine.setMonitor(audio.monitor);
+    engine.setMonitorLevel(audio.monitorDb);
     engine.player?.setGain(audio.backingGain);
   }, [audio]);
 
@@ -1331,6 +1332,7 @@ function LiveStage(props: {
             <PresetChips value={audio} onChange={updateAudio} />
             <MicStatus engine={engine} onChange={() => void reopenMic(engine, camera)} />
             <MixBalance />
+            <EarsLevel compact />
             <details class="tweaks">
               <summary>Tweak the voice FX — every control of the vocal chain, live on your voice</summary>
               <FxPanel value={audio} onChange={updateAudio} compact />

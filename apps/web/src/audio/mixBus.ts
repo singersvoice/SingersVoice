@@ -21,12 +21,12 @@
  */
 import { dbToGain } from './gain.ts';
 import { makeCompressor, safetyStage, type Compressor, type SafetyStage, LIMITER_LOOKAHEAD_S, LIMITER_RATIO } from './dynamics.ts';
-import { kWeighting, MIX_TARGETS } from './loudness.ts';
+import { kWeighting, MIX_TARGETS, PERFORMER_MONITOR } from './loudness.ts';
 
 /** The buses' ceiling (dBFS): an AAC encoder overshoots a dense mix by about a dB; this keeps the decoded file under full scale. */
 export const MIX_CEILING_DB = -2;
-/** Each vocal's own ceiling in the mix (dBFS), after its rider: its loudest peak is held here before the sum. */
-export const VOCAL_CEILING_DB = -3;
+/** Each vocal's own ceiling in the mix (dBFS), after its rider: its loudest peak is held here before the sum (the density of a record's vocal: a voice at −9 K-weighted needs it). */
+export const VOCAL_CEILING_DB = -1.5;
 /**
  * The music's pocket: a shade off the low end (a bass-heavy backing masks a voice and eats the limiter) and off
  * the presence region (2–5 kHz, where a voice lives), and the rumble under 30 Hz gone — static, gentle, on every
@@ -62,14 +62,16 @@ export interface LevelerConfig {
 }
 
 /**
- * The per-vocal rider: a slow level that brings each voice to the vocal target — a two-second view,
- * 1.5 dB/s (a singer's offset, not their phrasing), four times faster until it is within 6 dB (a quiet
- * microphone is up front within the first lines, not the first minute) — and holds still between phrases
- * (the gate is above breath and room noise). A voice is what stands 8 dB above the microphone's own
- * floor; the floor is kept 12 dB under the vocal target, whatever that costs a quiet singer on a noisy
- * microphone. It measures K-weighted, as the ear does: the target is LUFS-like.
+ * The per-vocal rider (PUBLISH MODE): a slow level that brings each voice to the publish vocal target — a
+ * two-second view, 1.5 dB/s (a singer's offset, not their phrasing), four times faster until it is within
+ * 6 dB (a quiet microphone is up front within the first lines, not the first minute) — and holds still
+ * between phrases (the gate is above breath and room noise). A voice is what stands 8 dB above the
+ * microphone's own floor; the floor is kept 12 dB under the vocal target, whatever that costs a quiet singer
+ * on a noisy microphone. It measures K-weighted, as the ear does: the target is LUFS-like.
  */
-export const VOCAL_RIDER: LevelerConfig = { target: MIX_TARGETS.vocalDb, minDb: -12, maxDb: 24, gate: -45, up: 1.5, down: 2, windowMs: 2000, farDb: 6, farMul: 4, floorMargin: 8, floorKeep: 12, floorSeconds: 8, kWeighted: true };
+export const VOCAL_RIDER: LevelerConfig = { target: MIX_TARGETS.vocalDb, minDb: -12, maxDb: 26, gate: -45, up: 1.5, down: 2, windowMs: 2000, farDb: 6, farMul: 4, floorMargin: 8, floorKeep: 12, floorSeconds: 8, kWeighted: true };
+/** The monitor's rider (PERFORMER MODE): the same rider, to the singer's own level in their ears — half as loud as the published voice (loudness.ts PERFORMER_MONITOR). */
+export const MONITOR_RIDER: LevelerConfig = { ...VOCAL_RIDER, target: PERFORMER_MONITOR.vocalDb };
 /** The guard on the sum: turns down (never up) when the mix runs hotter than the mix target on average — K-weighted, so a bass-heavy track is judged by its loudness. */
 export const MIX_GUARD: LevelerConfig = { target: MIX_TARGETS.mixDb, minDb: -36, maxDb: 0, gate: -40, up: 1, down: 2, windowMs: 600, farDb: 6, farMul: 3, kWeighted: true };
 

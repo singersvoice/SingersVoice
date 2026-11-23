@@ -2,11 +2,12 @@
 export const MIX_DB_MIN = -30;
 export const MIX_DB_MAX = 30;
 /**
- * Where the two controls start: at 0 / 0 — the mix itself is right (loudness.ts MIX_TARGETS: the music full at
- * −16 LUFS, the voice in front at −11, ducked under, the whole near a record's −10 LUFS); the controls are the
- * singer's own balance on top of it, in 1.5 dB steps, in every recording, mix and broadcast. (An earlier build
- * started them at +1.6 / +4.6 dB to make up for a mix that was not right; a save still on those takes the new
- * start once — settings.ts.)
+ * Where the two controls start: at 0 / 0 — the mix itself is right (loudness.ts PUBLISH_MIX: the music full at
+ * −16 LUFS, the voice in front at −9, ducked under, the whole near a record's −10 LUFS); the controls are the
+ * singer's own PUBLISH MODE balance on top of it, in 1.5 dB steps, in every recording, mix and broadcast — what
+ * the singer hears of themselves (PERFORMER MODE) is a setting of its own (audio settings `monitorDb`). (Earlier
+ * builds started them elsewhere, or had balances set to make up for a mix that was not right; every stored
+ * balance took the 0 / 0 start once on 23 Nov — settings.ts `mixV4`.)
  */
 export const MIX_TRACK_DEFAULT_DB = 0;
 export const MIX_VOCAL_DEFAULT_DB = 0;

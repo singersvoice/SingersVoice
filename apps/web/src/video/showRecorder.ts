@@ -405,8 +405,8 @@ export class ShowRecorder {
   }
 
   /** What each source brings to this device's mix right now (the track, every voice by id — 'me' is this singer), or null without a bus. */
-  mixLevels(): { track: number; vocals: Record<string, number> } | null {
-    return this.audio?.bus.levels() ?? null;
+  mixLevels(): { track: number; vocals: Record<string, number>; duckDb: number } | null {
+    return this.audio ? { ...this.audio.bus.levels(), duckDb: this.audio.bus.duckDb } : null;
   }
 
   /**

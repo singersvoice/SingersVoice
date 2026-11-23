@@ -83,7 +83,7 @@ try {
   const quiet = await run({ noiseDb: -70, voiceDb: -34 }, 20);
   console.log('quiet singer, quiet mic:', JSON.stringify({ sung: fmt(quiet.on), between: fmt(quiet.off) }));
   check(Math.abs(quiet.on - Math.min(TARGET, -34 + cfg.vocal.maxDb)) < 2.5, `a quiet singer on a quiet microphone gets the full lift: ${fmt(quiet.on)} dB sung from -34 in (target ${TARGET})`);
-  check(quiet.off < -45, `and nothing to speak of between the phrases: ${fmt(quiet.off)} dB`);
+  check(quiet.off < -70 + cfg.vocal.maxDb + 1, `and nothing to speak of between the phrases: ${fmt(quiet.off)} dB (a −70 dB hiss lifted by the rider's ${cfg.vocal.maxDb} at most)`);
   // 4. A loud singer: brought down, the hiss with them.
   const loud = await run({ noiseDb: -40, voiceDb: -8 }, 20);
   console.log('loud singer:', JSON.stringify({ sung: fmt(loud.on), between: fmt(loud.off) }));

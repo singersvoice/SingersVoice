@@ -1,13 +1,14 @@
 /**
- * Track volume and Vocal volume, up and down in 1.5 dB steps over ±30 dB: the balance this device mixes at — what
- * a singer's device records and relays to the audience, what the publisher's show view broadcasts. They start at
- * the track a fifth up and the vocal seven tenths up (audio/gain.ts: the voice in front of the music); Default
+ * PUBLISH MODE's two controls — Track volume and Vocal volume, up and down in 1.5 dB steps over ±30 dB: the balance
+ * this device mixes at — what a singer's device records and relays to the audience, what the publisher's show view
+ * broadcasts. They start at 0 / 0 (audio/gain.ts: the mix itself has the voice in front of the music); Default
  * brings them back there. Kept on the device (app settings) and in the Config folder until changed. The singer's
- * own monitor ("Hear myself") and the backing level they listen to are separate: these two shape what everyone
- * else gets. The guard and the limiter behind them keep the whole mix under the ceiling whatever they are set to.
+ * own ears are PERFORMER MODE and separate (`EarsLevel` below, and the backing level they listen to): these two
+ * shape what everyone else gets. The guard and the limiter behind them keep the whole under the ceiling whatever
+ * they are set to.
  */
 import { MIX_DB_MAX, MIX_DB_MIN, MIX_STEP_DB, MIX_TRACK_DEFAULT_DB, MIX_VOCAL_DEFAULT_DB } from '../audio/gain.ts';
-import { appSettings, updateApp } from '../state/settings.ts';
+import { appSettings, audioSettings, updateApp, updateAudio } from '../state/settings.ts';
 
 /** +1.6 dB, −3 dB, 0 dB: one decimal where there is one. */
 const fmt = (db: number): string => `${db > 0 ? '+' : ''}${Number.isInteger(db) ? db : db.toFixed(1)} dB`;
@@ -42,6 +43,43 @@ export function MixBalance(props: { compact?: boolean }) {
       {control('vocalDb', 'Vocal volume')}
       {!atDefault && (
         <button class="btn ghost sm" title={`Back to the defaults: track ${fmt(MIX_TRACK_DEFAULT_DB)}, vocal ${fmt(MIX_VOCAL_DEFAULT_DB)}`} onClick={() => updateApp({ trackDb: MIX_TRACK_DEFAULT_DB, vocalDb: MIX_VOCAL_DEFAULT_DB })} data-mix-default>
+          Default
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The ears' own range (dB) and its default: the performer level (loudness.ts PERFORMER_MONITOR, half as loud as the published voice). */
+export const EARS_DB_MIN = -24;
+export const EARS_DB_MAX = 24;
+export const EARS_DEFAULT_DB = 0;
+
+/**
+ * PERFORMER MODE's control — Your voice in your ears: how loud a singer hears themselves (Hear myself) relative to the
+ * performer level, in 1.5 dB steps over ±24 dB; 0 is the mode's own level, half as loud as the published voice. Kept
+ * in the audio settings (the device, the Config folder). It never touches the recording, the film or the broadcast.
+ */
+export function EarsLevel(props: { compact?: boolean }) {
+  const audio = audioSettings.value;
+  const db = audio.monitorDb;
+  const set = (v: number) => updateAudio({ monitorDb: Math.round(Math.max(EARS_DB_MIN, Math.min(EARS_DB_MAX, v)) * 10) / 10 });
+  return (
+    <div class={`mixbalance ${props.compact ? 'compact' : ''}`} role="group" aria-label="Your voice in your ears">
+      <div class="mixctl" data-mix="monitorDb" data-db={db}>
+        <span class="small">Your voice in your ears</span>
+        <button class="btn icon sm" aria-label="Your voice in your ears down" title={`Down ${MIX_STEP_DB} dB`} disabled={db <= EARS_DB_MIN} onClick={() => set(db - MIX_STEP_DB)}>
+          −
+        </button>
+        <span class="mono small" style="min-width:6.5ch;text-align:center" title={db === 0 ? 'half as loud as in the recording' : dbNote(db)}>
+          {fmt(db)}
+        </span>
+        <button class="btn icon sm" aria-label="Your voice in your ears up" title={`Up ${MIX_STEP_DB} dB`} disabled={db >= EARS_DB_MAX} onClick={() => set(db + MIX_STEP_DB)}>
+          +
+        </button>
+      </div>
+      {db !== EARS_DEFAULT_DB && (
+        <button class="btn ghost sm" title="Back to the performer level: half as loud as in the recording" onClick={() => set(EARS_DEFAULT_DB)} data-ears-default>
           Default
         </button>
       )}

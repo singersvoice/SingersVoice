@@ -41,7 +41,8 @@ const dB = (v: number) => Math.pow(10, v / 20);
 const BUTTERWORTH_Q_DB = 20 * Math.log10(Math.SQRT1_2);
 /**
  * Where a sung vocal leaves the chain (RMS): the rider steers every phrase toward this — hot enough that the mix
- * bus's own rider (to −11 K-weighted) has a few dB to add rather than a dozen, under the chain's −3 dBFS ceiling.
+ * bus's own rider (to the publish voice, −9 K-weighted) has a few dB to add rather than a dozen, under the chain's
+ * −3 dBFS ceiling.
  */
 const RIDER_TARGET_DB = -16;
 /** Below this the rider holds still — room noise and breaths are not phrases. */

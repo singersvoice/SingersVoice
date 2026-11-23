@@ -250,7 +250,7 @@ export const VOXFORGE_PRESETS: VoxForgePreset[] = [
     id: 'ballad',
     name: 'Warm Ballad',
     blurb: 'Big hall, soft top end.',
-    params: { eqLow: 2, eqLm: -1, eqMid: 1.5, eqHi: -1, eqPres: 1.5, rvSz: 0.75, rvDc: 4.2, rvMx: 0.34, rvPd: 0.04, cThr: -18, cRat: 2.5, cMk: 4, rdOn: true, rdAmt: 0.4 },
+    params: { eqLow: 2, eqLm: -1.5, eqMid: 2, eqHi: -1, eqPres: 2, rvSz: 0.75, rvDc: 4.2, rvMx: 0.34, rvPd: 0.04, cThr: -18, cRat: 2.5, cMk: 4, rdOn: true, rdAmt: 0.4 },
   },
   {
     id: 'stadium',
@@ -319,6 +319,8 @@ export interface AudioPluginSettings {
   userPresets: VoxForgePreset[];
   monitor: boolean;
   backingGain: number;
+  /** PERFORMER MODE: the singer's own voice in their ears, relative to the mode's level (dB, ±24; 0 = half as loud as the published voice). */
+  monitorDb: number;
   tempo: number; // 0.5..1.5
   keyShift: number; // -6..6 semitones
 }
@@ -332,6 +334,7 @@ export const AUDIO_SETTINGS_DEFAULTS: AudioPluginSettings = {
   userPresets: [],
   monitor: false,
   backingGain: 0.85,
+  monitorDb: 0,
   tempo: 1,
   keyShift: 0,
 };

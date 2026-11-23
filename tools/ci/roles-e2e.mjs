@@ -307,9 +307,16 @@ try {
   for (let i = 0; i < 20 && (await asUser('erin', 'POST', `/meets/${clubMeetId}/join`, { role: 'audience' })).status !== 200; i++) await wait(500);
   check((await asUser('erin', 'POST', `/meets/${clubMeetId}/join`, { role: 'audience' })).status === 200, 'the owner opens the meet in the room: anyone with the link comes in');
   // Blocking: the host blocks erin from the room (⛔) — out now, on his list in Settings, never into any meet of his; unblocked there.
-  await bob.page.locator('.audience-chip', { hasText: 'erin' }).waitFor({ timeout: 20000 });
+  const erinChip = bob.page.locator('.audience-chip', { hasText: 'erin' });
+  await erinChip.waitFor({ timeout: 20000 });
   bob.page.once('dialog', (d) => void d.accept());
-  await bob.page.locator('.audience-chip', { hasText: 'erin' }).locator('[data-block]').click();
+  try {
+    await erinChip.locator('[data-block]').click();
+  } catch (e) {
+    // The chip was there a moment ago: say what the host's audience list holds now before failing.
+    console.log('audience list at the failure:', await bob.page.locator('.audience-list').evaluate((n) => n.outerHTML).catch(() => '(no audience list in the DOM)'));
+    throw e;
+  }
   await bob.page.locator('.audience-chip', { hasText: 'erin' }).waitFor({ state: 'detached', timeout: 20000 });
   const shut = await asUser('erin', 'POST', `/meets/${clubMeetId}/join`, { role: 'audience' });
   check(shut.status === 403 && shut.json?.code === 'blocked_by_host', `blocked from the room: out at once and refused (${shut.json?.code})`);

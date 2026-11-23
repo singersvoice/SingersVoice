@@ -53,6 +53,7 @@ stage, under the header in the show view).
 ## Repository layout
 
 ```
+AGENT_MEMORY/          the project's standing memory: requirements, the two listening modes, defaults, decisions, corrections, verification — read before changing code, update with the change
 apps/web/              Preact + Vite + TypeScript PWA (the iOS / Android / web client)
   src/portals/         tracks · studio · meets · publishing — independent portals, shared only via lib/ and the protocol
   public/brand/        logo kit (from SVOld/assets/Logo), PWA icons, welcome loop

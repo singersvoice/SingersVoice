@@ -59,12 +59,14 @@ decibel of the others (its makeup gives back what its compressor takes), a −30
 after them stays silent, the mix at 0 / 0 sits still, and at +30 / +30 the guard brings it back under
 its line with no sample over the ceiling; **the finished mix, every preset** (section 6): on a
 bass-heavy mastered song normalised to the track target, a −15 dBFS voice sung in phrases through each
-of the sixteen presets — the music lands at −16 LUFS, the voice stands 4–6 LU over it (vocal-only and
-track-only renders of the same bus), a sung phrase lands at −10…−12 LUFS, the limiter takes under
-2 LU off it on average and nothing passes −1.3 dBFS, the chain leaves the voice mid-forward (its 1–5 kHz
-against its 100–400 Hz, a decibel or more over the raw voice's; Octave Down is excused), and the duck
-steps the music back 2.5 dB under a phrase and has it back within a second (the track's own path
-rendered beside the output); the noise gate turns a −52 dBFS room down by over 10 dB between two sung phrases and
+of the sixteen presets — the music lands at −16 LUFS, the voice stands 5–7 LU over it (vocal-only and
+track-only renders of the same bus; at least 5, Octave Down 3), a sung phrase lands at −7.5…−12 LUFS, the
+limiter takes under 2.5 LU off it on average and nothing passes −1.3 dBFS, the chain leaves the voice
+mid-forward (its 1–5 kHz against its 100–400 Hz, a decibel or more over the raw voice's; Octave Down is
+excused), and the duck steps the music back 3 dB under a phrase and has it back within a second (the
+track's own path rendered beside the output); **PERFORMER MODE** (section 7): the same voice through the
+monitor's rider alone (`MONITOR_RIDER`) lands at the performer level, 6 dB under the publish rider's —
+half as loud in the singer's ears as in the recording; the noise gate turns a −52 dBFS room down by over 10 dB between two sung phrases and
 leaves the phrases themselves alone (the first 30 ms of one included); the pitch stage puts a tone a
 semitone up or down, and an octave up, to within a few cents, with under 2 dB of ripple on the steady
 tone and its level kept, pulls a tone 46 cents sharp onto its note at full strength and 60 % of the
@@ -249,6 +251,12 @@ file (frame by frame, through the Performances player):
 - **The saved performance** (`video/stage.ts` 'solo'): the singer's head half as big again in the file as on the live
   strip's show stage (×1.5, measured), the head's top in the upper half; the Performances player as tall as the window
   allows, at the file's own aspect; *Play mix* in the review plays the take through the mix bus.
+- **The two listening modes on the stage**: with *Hear myself* on, the monitor's rider (PERFORMER MODE,
+  `__svEngine.monitorOutDb`) is read beside the mix bus's voice meter (PUBLISH MODE, `__svShow.mixLevels()`)
+  while the fake microphone sings — the ears within 3 dB of −15 (K-weighted), the bus's voice −13…−7 dBFS RMS
+  with the music ducked, the two at least 3.5 dB apart.
+- **The saved take's sound** (ffmpeg's EBU R128 on the file): −13…−7 LUFS integrated, the sung phrases at
+  least −11 LUFS short-term and 5.5 LU over the breaks, true peak under −0.8 dBFS.
 - **The permissions** (`lib/permissions.ts`, `video/capture.ts`): a phone that says it is an iPhone makes ONE
   getUserMedia for camera + microphone at the stage's entry, none at Start (the engine takes the camera's microphone),
   none for the next song (the microphone parked between songs); a computer opens the camera alone at entry and the
@@ -488,6 +496,9 @@ each harmonic a line ±1.2 % wide), and `voice` in `tools/ci/audio-measure.mjs` 
 those harmonics against the bands between them, against the same figure for the song alone at the
 same position — a mix with the voice stands many dB above; a mix without it reads like the song.
 The same figure is checked live on the host's mix, the audience's sound and the publisher bus.
+**PUBLISH MODE in the film**: ffmpeg's EBU R128 over 40 s of the film from the first song's mark
+must read −12.5…−6 LUFS integrated (a record's loudness, the voice over the track) with a true peak
+under −0.8 dBFS — the same level set the Studio's saved take is held to.
 
 ### Instant changes and the footage
 

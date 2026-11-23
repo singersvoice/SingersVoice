@@ -11,7 +11,7 @@ import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPau
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
-import { MixBalance } from '../../components/MixBalance.tsx';
+import { EarsLevel, MixBalance } from '../../components/MixBalance.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { SaveSoundButton, VoicePreview } from '../../components/SoundPreview.tsx';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
@@ -334,6 +334,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
     if (!e) return;
     e.applyFx(audio.params);
     e.setMonitor(audio.monitor);
+    e.setMonitorLevel(audio.monitorDb);
     e.player?.setGain(audio.backingGain);
     e.player?.setTempo(join ? 1 : audio.tempo); // a join sings the show as it was sung: no tempo, no key shift
     e.player?.setKeyShift(join ? 0 : audio.keyShift);
@@ -375,6 +376,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
     try {
       const engine = engineRef.current ?? getEngine();
       engineRef.current = engine;
+      (window as unknown as { __svEngine?: AudioEngine }).__svEngine = engine; // support / e2e hook
       await engine.resume(); // inside the tap gesture
       await openMicWithCamera(engine, camera); // on iOS the camera comes with it: one capture per page there
       const player = engine.player!;
@@ -748,6 +750,9 @@ export function Sing(props: { id?: string; joinId?: string }) {
               <input type="range" min={-6} max={6} step={1} value={join ? 0 : audio.keyShift} disabled={join !== null} data-key-shift onInput={(e) => updateAudio({ keyShift: Number((e.currentTarget as HTMLInputElement).value) })} />
             </Field>
             <Switch checked={audio.monitor} onChange={(v) => updateAudio({ monitor: v })} label="Hear myself" hint="Only with headphones — speakers will feed back." />
+            <Field label="Your voice in your ears" hint="Performer mode: only what you hear of yourself. The recording gets its own, stronger balance (Track / Vocal volume above).">
+              <EarsLevel compact />
+            </Field>
           </div>
           {!live && <VoicePreview engine={engineRef.current} compact />}
           <FxPanel value={audio} onChange={updateAudio} />

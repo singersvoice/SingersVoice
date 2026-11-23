@@ -8,31 +8,49 @@
  */
 
 /**
- * The levels every mix is built to — the voice in front, the music full, the whole as loud as a record:
+ * SingersVoice has two modes of listening, with their own levels (AGENT_MEMORY/audio-modes.md):
+ *
+ * PUBLISH MODE — everything that leaves the stage: the saved take, the meet's film in Drive › Performances,
+ * the broadcast, the audience's stage mix, Performances playback. Mixed by the mix bus (mixBus.ts) to
+ * `PUBLISH_MIX` — the voice in front, the music full, the whole as loud as a record:
  *
  *   track   −16 LUFS   the backing, normalised from whatever its file was mastered at;
- *   vocal   −11 LK     each voice, held there by its rider (K-weighted, so the ear's measure, not the bass's);
- *   mix     −7.5 LK    the guard's line: the sum is turned down only past it (the controls pushed to +30);
- *   duck    2.5 dB     the music steps back under the voice while it is sung, and comes back between phrases.
+ *   vocal   −9 LK      each voice, held there by its rider (K-weighted: the ear's measure, not the bass's)
+ *                      and its own limiter — the density of a record's vocal;
+ *   duck    3 dB       the music steps back under the voice while it is sung, back between phrases;
+ *   mix     −6.5 LK    the guard's line: the sum is turned down only past it (the controls pushed to +30).
  *
- * So a sung phrase lands near −10 LUFS, the voice some 5 LU over the music (and a shade more with the duck),
- * the breaks at the track's −16: a record's loudness with the vocal unmistakably in front. Before (track −19,
- * vocal −17 dBFS plain RMS, guard −15 dBFS plain RMS) a bass-heavy backing alone reached the guard's line on
- * its unweighted RMS, and the guard then gave every vocal entry back by turning the whole mix down: the
- * voice sat at the music's level, the mix pinned at −15.5 dBFS whatever was sung (the 22 Nov recording).
+ * So a sung phrase lands near −10 LUFS with the voice some 6 LU over the music (9 with the duck), the breaks
+ * at the track's −16. Before 23 Nov (track −19, vocal −17 dBFS plain RMS, guard −15 dBFS plain RMS) a
+ * bass-heavy backing alone reached the guard's line on its unweighted RMS and the guard gave every vocal
+ * entry back by turning the whole mix down: the voice at the music's level, the mix pinned whatever was sung.
+ *
+ * PERFORMER MODE — what a singer hears of themselves on stage while singing (Hear myself: the monitor in
+ * their headphones), beside the track at their own listening level (Backing level in your ears). Its voice
+ * is half as loud as the published one (`PERFORMER_MONITOR`, 6 dB under): a singer sings to their own
+ * voice at a natural level and is not shouted at by it, while the recording and the audience get it in
+ * front. The two never share a setting: the monitor's rider takes `PERFORMER_MONITOR`, every bus `PUBLISH_MIX`.
  */
-export const MIX_TARGETS = {
+export const PUBLISH_MIX = {
   /** The backing track's integrated loudness in the mix (LUFS) — the music, under the voices. */
   trackLufs: -16,
   /** Each vocal's level in the mix: a K-weighted short-term level the rider steers toward (dB, LUFS-like). */
-  vocalDb: -11,
+  vocalDb: -9,
   /** The whole mix must not run hotter than this on average (K-weighted, dB): the guard turns down, never up. */
-  mixDb: -7.5,
+  mixDb: -6.5,
   /** How far the music steps back while a voice is sung (dB). */
-  duckDb: 2.5,
+  duckDb: 3,
   /** The furthest a track may be lifted or lowered to reach its target (dB). */
   trackRangeDb: 18,
 } as const;
+
+/** PERFORMER MODE: the singer's own voice in their ears (K-weighted, dB) — 6 dB under the published voice: half as loud. */
+export const PERFORMER_MONITOR = {
+  vocalDb: PUBLISH_MIX.vocalDb - 6,
+} as const;
+
+/** The mix bus's name for the publish levels (every bus mixes to these). */
+export const MIX_TARGETS = PUBLISH_MIX;
 
 /** How far to move a signal measured at `lufs` to land at `target` (dB), within ±range. */
 export function normalizationDb(lufs: number, target: number, range = MIX_TARGETS.trackRangeDb): number {

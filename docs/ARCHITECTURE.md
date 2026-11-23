@@ -1076,12 +1076,19 @@ vocal₁ ─ rider ─ limiter ─┐              ▲               ├─ sum 
 vocal₂ ─ rider ─ limiter ─┴─ Vocal offset ┴───────────────┘
 ```
 
-**The levels it mixes to** (`MIX_TARGETS`): the track at **−16 LUFS**, each voice at **−11** (K-weighted,
-the ear's measure), the music ducked **2.5 dB** under a voice while it is sung, the guard's line at **−7.5**
-— a sung phrase lands near −10.5 LUFS with the voice some 5 LU over the music (and the duck on top), the
-breaks at the track's −16: a record's loudness with the vocal unmistakably in front, on every preset
-(`tools/ci/audio-lab.mjs` measures all sixteen on a bass-heavy song: the voice 4–6 LU over the music, the
-sung phrase −10.3…−11.9 LUFS, the limiter taking under a decibel, nothing over −1.9 dBFS). Before 23 Nov
+**Two listening modes, two level sets** (`audio/loudness.ts`; `AGENT_MEMORY/audio-modes.md`). **PUBLISH
+MODE** is everything that leaves the stage — the saved take, the meet's film, the broadcast, the audience's
+mix, Performances playback — mixed by this bus to `PUBLISH_MIX` (= `MIX_TARGETS`): the track at **−16 LUFS**,
+each voice at **−9** (K-weighted, the ear's measure; held by its rider and its own limiter under −1.5 dBFS),
+the music ducked **3 dB** under a voice while it is sung, the guard's line at **−6.5** — a sung phrase lands
+near −10 LUFS with the voice some 6 LU over the music (and the duck on top), the breaks at the track's −16: a
+record's loudness with the vocal unmistakably in front, on every preset (`tools/ci/audio-lab.mjs` measures
+all sixteen on a bass-heavy song: the voice 5–7 LU over the music, the sung phrase −9.8…−11.5 LUFS, the
+limiter taking 1.5–1.8 LU, nothing over −1.9 dBFS). **PERFORMER MODE** is what a singer hears of themselves
+on stage (Hear myself): the same kind of rider on the monitor, to `PERFORMER_MONITOR` — **6 dB under the
+published voice, half as loud** — plus their own "Your voice in your ears" offset; it never touches the bus
+and the bus never touches it (the owner's rule of 23 Nov: stronger vocals are for the recordings, never for
+the ears). Before 23 Nov
 the targets were track −19 LUFS, voice −17 dBFS *plain* RMS and a guard at −15 dBFS plain RMS: a bass-heavy
 backing alone reached the guard's line on its unweighted RMS (the bass counts in full there, for nothing to
 the ear), the guard then gave every vocal entry back by turning the whole mix down, and the voice sat at the
@@ -1100,7 +1107,7 @@ voice's band, the voice adding 8 dB to the mids and nothing to the whole.
   band at 3 kHz — a shade of the bass that masks a voice and eats the limiter, and of the presence
   region a voice lives in, with a decibel of makeup so the track still lands at its target — and
   **the duck** (`sv-ducker`, keyed by the voices after their riders and the Vocal offset): the music
-  steps back `duckDb` (2.5 dB) within 40 ms of a phrase's first word and comes back over 350 ms
+  steps back `duckDb` (3 dB) within 40 ms of a phrase's first word and comes back over 350 ms
   after its last — the voice in front without either having to be louder than it is.
 - **The voice leaves the engine through one node** (`AudioEngine.voice`): the FX chain's output (through
   the take recorder, which passes it on) feeds it, and the mesh (`vocalStream`), the stage mix
@@ -1116,9 +1123,9 @@ voice's band, the voice adding 8 dB to the mids and nothing to the whole.
   does not reach the mix is seen on the spot, never found in a file afterwards.
 - **Each vocal has a rider** (the `sv-leveler` worklet, measuring through the K-weighting): a
   two-second view of what is *sung* (a 50 ms gate at −45 dB stops it the moment the singer stops and
-  keeps the pause out of the average), steered toward **−11** at 1.5 dB/s up, 2 dB/s down, four
-  times faster until within 6 dB — a singer's offset, not their phrasing; +24 dB lift at most, −12 dB
-  cut — **and a limiter of its own** under −3 dBFS (2 ms lookahead), so a voice's loudest peak after
+  keeps the pause out of the average), steered toward **−9** at 1.5 dB/s up, 2 dB/s down, four
+  times faster until within 6 dB — a singer's offset, not their phrasing; +26 dB lift at most, −12 dB
+  cut — **and a limiter of its own** under −1.5 dBFS (2 ms lookahead), so a voice's loudest peak after
   the rider never reaches the sum: the density of a record's vocal, from a microphone. **It knows the
   microphone's floor**: the quietest 50 ms of the last eight seconds (two buckets' minimum — a
   phrase's own breath dips keep it under the voice, a louder floor is followed within a bucket, the
@@ -1130,9 +1137,10 @@ voice's band, the voice adding 8 dB to the mids and nothing to the whole.
   −22 dBFS (its −40 raised by the full +18) and the guard then held the whole mix — the track, the
   voices — under it. `tools/ci/rider-lab.mjs` measures all of it on the real worklet.
 - **Track volume / Vocal volume** (±30 dB, 1.5 dB steps, kept per device and in the Config folder)
-  are offsets on top of that balance: 0 / 0 is already right (a save still on the 22 Nov build's +1.6 /
-  +4.6 — set to make up for the old mix — goes back to 0 / 0 once, `mixV3`; a singer's own setting is kept).
-- **The guard** (another `sv-leveler`, K-weighted, on the sum) only ever turns *down*, past −7.5:
+  are offsets on top of that balance: 0 / 0 is already right (every stored balance went back to 0 / 0 once
+  with the two modes of 23 Nov, `mixV4` — balances set to make up for an older mix pushed the new one into
+  the guard; from then on a singer's own setting is kept).
+- **The guard** (another `sv-leveler`, K-weighted, on the sum) only ever turns *down*, past −6.5:
   push both controls to +30 and the mix comes back under that line in a few seconds instead of
   living in the limiter; a mix at its own loudness never meets it.
 - **The safety stage** (`audio/dynamics.ts`): a limiter at **−2 dBFS** (the `sv-dynamics`
@@ -1222,7 +1230,7 @@ bypass wait for it) →
 **exciter** (harmonics made from the voice above 3 kHz, blended in — air, not a treble boost; the
 dry side waits for the oversampled shaper) → saturation (same) → chorus/doubler → ping-pong delay →
 convolution reverb → **vocal rider** (an RMS meter every 50 ms; below −50 dBFS it holds, otherwise
-it steers toward −20 dBFS: up to +12 dB lift, −6 dB cut, a few dB a second at most — every phrase up
+it steers toward −16 dBFS: up to +12 dB lift, −6 dB cut, a few dB a second at most — every phrase up
 front) → **safety** (limiter at −3 dBFS + soft clip: the voice never clips on its way to the mesh or
 the recorder, whatever the preset and the singer do) → out. Every dynamics stage is our own
 `sv-dynamics` worklet (see the mix bus above for why), every parallel path is delay-matched — the
@@ -1271,9 +1279,11 @@ performance agree: the review's *Play mix* plays the take through the mix bus
 (`audio/takePlayback.ts`) exactly as the show recorder mixed it, and the device's Track / Vocal
 volume starts at 0 / 0 (`MIX_TRACK_DEFAULT_DB`, `MIX_VOCAL_DEFAULT_DB`, 1.5 dB steps, a *Default*
 button back): the mix itself has the voice in front of the music (`MIX_TARGETS`, the mix bus above),
-under the same guard and ceiling. **The singer's own ears** hear the same balance: the voice goes to
-the monitor through the mix bus's rider (`AudioEngine.rideMonitor`, to the mix's vocal level) over the
-track at its mix level, so what the headphones have is what the recording and the broadcast have.
+under the same guard and ceiling. **The singer's own ears are PERFORMER MODE**: the voice goes to the
+monitor through a rider of its own (`AudioEngine.rideMonitor`, `MONITOR_RIDER` to `PERFORMER_MONITOR`: half
+as loud as the published voice, plus the singer's *Your voice in your ears* offset — `setMonitorLevel`,
+`AudioPluginSettings.monitorDb`) over the track at their Backing level; the recording and the broadcast
+(PUBLISH MODE) are set apart from it, and a stronger published voice never reaches the ears.
 
 ## Data formats
 
