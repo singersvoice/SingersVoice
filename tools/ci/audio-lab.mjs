@@ -272,6 +272,23 @@ const results = await page.evaluate(async () => {
     out.studio_gain = { rmsDb: +rmsDb(d, 1, 2).toFixed(2), peakDb: +db(peakOf(d, 1, 2)).toFixed(2) };
   }
 
+  // 3c. Every factory preset at one level: a voice at −12 dBFS peaks (where the leveller holds a singer) comes out of each
+  // preset within a few dB of the others — the makeup gives back what the compressor takes — so switching presets changes
+  // the character, never the loudness (the rider in the mix and the singer's ears both start from the same place).
+  {
+    const presets = {};
+    for (const id of L.VOXFORGE_PRESET_IDS) {
+      const ctx = await offline(3, 1, true);
+      const chain = L.createVoxForgeChain(ctx, true);
+      chain.apply({ ...L.presetParams(id), rdOn: false, rvOn: false, dlOn: false });
+      voice(ctx, -15, 3).connect(chain.input);
+      chain.output.connect(ctx.destination);
+      const d = (await ctx.startRendering()).getChannelData(0);
+      presets[id] = +rmsDb(d, 1.5, 3).toFixed(1);
+    }
+    out.presets = presets;
+  }
+
   // 4. The mix bus: a quiet track to the track target, a hot and a quiet vocal to the vocal target.
   {
     const ctx = await offline(8, 2, true);
@@ -350,6 +367,14 @@ for (const k of ['deesser_worklet', 'deesser_native']) {
 }
 for (const k of ['ceiling_worklet', 'ceiling_native']) check(results[k].peakDb <= -1.5 && results[k].peakDb > -8, `${k}: a voice 10 dB over full scale leaves at ${results[k].peakDb} dBFS (under the −3 dB ceiling, nothing clipped)`);
 check(Math.abs(results.studio_gain.rmsDb + 20) < 4, `studio preset: a −20 dBFS voice comes out at ${results.studio_gain.rmsDb} dBFS (no hidden makeup)`);
+{
+  const levels = Object.values(results.presets);
+  const lo = Math.min(...levels);
+  const hi = Math.max(...levels);
+  console.log('presets at one level (dBFS RMS of a −15 dBFS voice):', JSON.stringify(results.presets));
+  check(hi - lo <= 5, `every factory preset comes out within 5 dB of the others (${lo} … ${hi} dBFS: a spread of ${(hi - lo).toFixed(1)} dB)`);
+  for (const [id, v] of Object.entries(results.presets)) check(Math.abs(v + 15) <= 5, `${id}: a −15 dBFS voice comes out at ${v} dBFS (within 5 dB of where it went in)`);
+}
 check(Math.abs(results.track_norm.mixLufs - results.track_norm.target) < 1, `track normalised from ${results.track_norm.fileLufs} to ${results.track_norm.mixLufs} LUFS (target ${results.track_norm.target})`);
 for (const k of ['vocal_rider_-5', 'vocal_rider_-33']) {
   const r = results[k];

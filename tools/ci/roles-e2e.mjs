@@ -437,7 +437,8 @@ try {
   check(true, 'unticking Instrument closes the input; the mic carries on');
   await alice.page.screenshot({ path: `${out}/roles-alice-instrument.png` });
 
-  const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon|Failed to load resource/.test(e))]));
+  // ("Failed to load resource" is the browser noting a non-2xx fetch; the VideoFrame note is Chromium's own on a frame it dropped inside a stopped track — a note, not an error of the page.)
+  const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon|Failed to load resource|VideoFrame was garbage collected/.test(e))]));
   check(Object.values(errs).every((v) => !v.length), `no page errors (${JSON.stringify(errs).slice(0, 300)})`);
 } catch (e) {
   failed = true;

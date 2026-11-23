@@ -924,7 +924,8 @@ try {
   await bob.page.locator('.sing [data-mix="trackDb"] button[aria-label="Track volume up"]').click();
   await bob.page.locator('.sing [data-mix="vocalDb"] button[aria-label="Vocal volume down"]').click();
   const balance = await bob.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}'));
-  check(balance.trackDb === 6 && balance.vocalDb === -3, `Track / Vocal volume move in 3 dB steps (±30 dB) and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
+  // (from the defaults — the track +1.6 dB, the vocal +4.6 dB: the voice in front of the music — in 1.5 dB steps)
+  check(Math.abs(balance.trackDb - 4.6) < 0.01 && Math.abs(balance.vocalDb - 3.1) < 0.01, `Track / Vocal volume start at +1.6 / +4.6 dB, move in 1.5 dB steps (±30 dB) and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
   check((await bob.page.locator('.sing .drawer.sound .micstatus').count()) === 1 && (await bob.page.locator('.sing .drawer.sound .fxbar').count()) === 1, 'the Sound drawer holds the microphone and the voice presets too (the stage itself keeps one row of controls)');
   await bob.page.getByRole('button', { name: 'Close the sound settings' }).click();
   // A singer may leave the song alone (the song goes on for the host) and join back in…
@@ -1055,7 +1056,7 @@ try {
     return { rms: m.rms, song: m.song, voice: m.voice - voiceOfSong(songAt(48000), 48000, m.song.positionS, 6), seconds: pcm.length / 48000, atS };
   };
   /**
-   * Which way the picture faces: the fake person wears a MAGENTA badge on the camera's left of their head and a YELLOW one on
+   * Which way the picture faces: the fake person wears a MAGENTA badge on the camera's left of their face (a cheek) and a YELLOW one on
    * the camera's right (fake-person.mjs) — colours the stage never shows otherwise. In the frame at `atS`, magenta left of
    * yellow is the picture as the camera saw it ('left'); the other way round is a mirror ('right'). Both singers are the same
    * fake person, so the two centres move together.
@@ -1160,8 +1161,8 @@ try {
     check(footageSound.voice > 6, `the footage of the broadcast carries the singers' voices (${footageSound.voice.toFixed(1)} dB above the song alone)`);
   } else check(false, 'the footage of the broadcast can be played from Performances');
   await carolPerf.close();
-  // "Failed to load resource" is the browser noting any non-2xx fetch (a deleted meet's last heartbeat, say); real errors are the rest.
-  const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon|Failed to load resource/.test(e))]));
+  // "Failed to load resource" is the browser noting any non-2xx fetch (a deleted meet's last heartbeat, say); the VideoFrame note is Chromium's own on a frame it dropped inside a stopped track; real errors are the rest.
+  const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon|Failed to load resource|VideoFrame was garbage collected/.test(e))]));
   check(Object.values(errs).every((v) => !v.length), `no page errors (${JSON.stringify(errs).slice(0, 300)})`);
   console.log('the film and the footage reviewed');
 } catch (e) {

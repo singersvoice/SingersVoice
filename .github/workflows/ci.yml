@@ -99,6 +99,16 @@ jobs:
           BASE_PATH: /SingersVoice/
         run: node tools/ci/roles-e2e.mjs screenshots
 
+      - name: The Studio's stage (the voice zoom live and in the saved file, eased; the Camera & zoom sheet during the song; the Sound sheet's preview and Save; the NONE background; the saved performance half as big again as the show stage; one capture per visit on an iPhone, the setup's one question, a blocked camera told)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/studio-e2e.mjs screenshots
+
+      - name: Every screen fits a phone (320→820 px at every text size: nothing wider than the window; the stage keeps its Start button and readable lyrics on screen)
+        env:
+          BASE_PATH: /SingersVoice/
+        run: node tools/ci/fit-e2e.mjs screenshots
+
       - name: Joining a performance (a Studio take with the singer's cut-out beside the show, opened for others; a free account joins it from the link with the camera on, a third joins the second's, three on one stage; the owner sees who joined; closing)
         env:
           BASE_PATH: /SingersVoice/

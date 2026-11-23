@@ -63,7 +63,9 @@ and the notice asks you to sit back, because the stage can only show what the ca
 camera's bottom edge fades out rather than cutting across you). Every stage draws that frame
 whole, in slots of one size: so the host on a laptop a foot from the webcam and a friend across the
 room from a phone come out as two performers of one size, heads level, on one line. There is no
-framing setting any more — nobody is bigger than anybody. Ten singers make one even row across the
+framing setting that makes anyone bigger than anybody; what each singer chooses (Settings → Camera,
+the live stage's **My picture** drawer, the Studio's **Camera & zoom** button — during the song too)
+is how their frame behaves: **Zoom with my voice** (the default), **Still**, or **Follow me**. Ten singers make one even row across the
 stage, two stand big in the middle; the names sit on the riser under each singer.
 
 **What reaches the mix, in numbers.** While you are on stage the strip (and the live stage's bar)
@@ -78,9 +80,15 @@ off — your voice goes out plain* on the mic line; reopening the mic tries the 
 seated performer and left alone: a second and a half after your cut-out appears your device settles
 on your frame (one smooth glide from the whole camera picture) and keeps it. Swaying, singing,
 gesturing, a hand near your face, the cut-out's edge wobbling — none of it moves the picture; it
-never breathes or zooms with you. Only when you have really moved — leaned well in or back, slid to
+never breathes with every syllable. Only when you have really moved — leaned well in or back, slid to
 one side, stood up — and stayed there for a couple of seconds does the frame follow, in one glide,
-and hold again.
+and hold again. **The zoom with your voice** is the one thing that moves on purpose: while you are
+heard the picture pushes in on your face — a close-up for the phrase, eased in over half a second —
+and when you stop (a real break: longer than a breath, the gap between two words or a rest of a bar)
+it eases back out to the held, chest-up frame. A phrase sung softly keeps the close-up; the room
+between phrases never brings it. Everyone sees it as you see it: the stage, the show, the film and
+a Studio take all carry the close-up. *Still* keeps the held frame whatever you sing; *Follow me*
+lets the frame follow you when you move, without the push-in.
 
 ### The camera, watched
 

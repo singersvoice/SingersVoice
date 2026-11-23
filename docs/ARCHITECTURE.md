@@ -294,7 +294,14 @@ mounted until it wraps up, even once the meet is back in the lobby. The full wal
 
 ## The virtual stage
 
-Nobody is shown as a boxed camera tile. `video/segmenter.ts` cuts the singer out of their camera with
+Nobody is shown as a boxed camera tile — unless the singer asks for it: **NONE — my camera as it is**
+(`components/BackgroundPicker.tsx`, `NONE_BACKGROUND`, the first tile of every Stage background
+picker: Settings, the Studio, the meet) turns the virtual background off — the picture is the camera
+picture, room and all (`picture: 'camera'`: no cut-out, no feathering, no backdrop drawn behind it
+on the stage, in the show or in the saved file — the model still measures the head, so the stage
+frame and the voice zoom work as before); it switches at once, it is
+the saved choice like any background (`backgroundId: 'none'`, `pickBackground`), and picking a
+background again brings the cut-out back. `video/segmenter.ts` cuts the singer out of their camera with
 MediaPipe Selfie Segmentation (bundled under `/mediapipe`, ~6 MB, cached by the service worker after
 the first use; CDN fallback). **The whole camera pipeline runs in a worker** wherever it can
 (`video/feed.worker.ts`, its page end `video/feedWorker.ts`): the camera's frames go to the worker
@@ -337,7 +344,20 @@ picture (16×21, once a second) and marks `still` after `STILL_AFTER_MS` of the 
 **Reconnect** (`PerformerMesh.remake`: the link to that performer dropped and made again);
 `video/capture.ts` is the one place the mic is opened: on iOS always together with the camera
 (one capture per page there — a second getUserMedia ends the first), so a mic re-opened for another
-setting never leaves the camera dark. `video/stage.ts` places every
+setting never leaves the camera dark. **The permissions** are the browser's: a page cannot grant
+itself a camera, and nothing saved by the app stands in for the browser's own record
+(`lib/permissions.ts`). What the app does is ask once, for both, in ONE getUserMedia (the setup's
+*Allow both*, `requestMediaAccess`; the time it was asked kept in `app_settings.mediaAskedAt`), keep
+one capture per visit to a stage on an iPhone or iPad (`openCamera` opens the camera WITH the
+microphone the moment the stage wants it, the engine adopts that microphone at Start — `openMic
+{ adopt }` — and parks it between songs, `parkMic`, rather than closing it: no second prompt, no
+camera gone dark), read the browser's own permission state where it offers one (the Permissions
+API — `checkMediaPermissions`; Settings → Audio / Camera say what it holds, `PermissionLine`), and,
+when a device is blocked, say so on the stage with the way back in that browser's own words
+(`permissionHelp`: where Safari, Chrome, Android and the desktop browsers keep the switch) instead of
+a prompt that never comes — the song still runs with whatever was allowed. The saved device choices
+(`audioInputId`, `cameraDeviceId`, `cameraFacing`, `echoCancellation`) are preferences; a saved
+choice never assumes the browser still allows the device. `video/stage.ts` places every
 performer in **one straight row**, as performers stand in a line across a stage: slots of one size,
 evenly spaced by stage slot, all on one floor (`ARC_LIFT` is 0 — no curve; `arcLift` remains the one
 place a curve would come from), every head at the same height, each behind a **riser** drawn in
@@ -372,14 +392,31 @@ moves the picture. A distance note (`distanceNote`: *sit back* past 1.3×, *come
 follows the frame the seat holds. So every frame carries a head of one size at one place, every
 slot is one size, and every singer comes out one size — the stage never finds a person and zooms in
 on its own, nothing steers the camera picture (the FaceDetector auto-frame is gone), and nobody
-chooses a framing (the Chest / Wide / Mid / Close / Auto presets are gone). `tools/ci` has no lab for
-this; the measurement and the seat were tuned on the real model's masks of real singers (the show
-recording's cut-outs played back as a fake camera) — the old crop re-targeted on 45 of 58 frames
-and zoomed between 0.85× and 1.19× in 16 s; the seat glides once and holds. The two modes differ in the slots
-alone: **Publisher mode** ('show': Publishing, the lobby stage, the saved performance) — slots
-taller than the picture (1.2×, width permitting), their lower part behind the riser and below the
-picture, the heads from a tenth down, the riser band bounded to 9–40 % of the picture so ten small
-slots sit lower rather than behind a wall; **Performer mode** ('stage', kept for a stage that wants
+chooses a framing (the Chest / Wide / Mid / Close / Auto presets are gone). What the singer does
+choose (Settings → Camera, the live stage's **My picture** drawer, the Studio's **Camera & zoom**
+sheet — during the song too) is how the frame behaves: **Zoom with my voice** (the default), **Still**, or **Follow me** (`Framing`). The
+voice zoom (`VOICE_ZOOM`) is two frames and never a frame that breathes with every syllable: the
+held frame is the chest-up stage frame; while the singer is heard — their meter (the engine's, 0..1
+over −60..0 dBFS of the voice after its effects) past 0.56 for 150 ms — the crop pushes in to ×1.5 on
+the face (centred 19 % down the frame), eased over 0.6 s; when they stop — the meter under 0.44 for
+1.4 s, longer than a breath, the gap between two words or a rest of a bar — it eases back out over
+1.1 s. Between the two thresholds nothing changes (hysteresis); the clocks run on the frame clock as
+well as on the meter's readings (`settle`), so a meter that reads 0 and stays there still lets the
+close-up go on time, and a meter gone silent for 3 s (the microphone closed) is a singer gone quiet.
+The seat never re-seats for the voice: the push-in is a crop of the held frame, and the frame goes
+out to everyone as the seat holds it (the stage, the show, the saved performance all carry the
+close-up). `tools/ci/studio-e2e.mjs` measures it: the fake person's head on the live strip and in
+the saved file, half as big again while a phrased fake microphone sings, the glide caught on the
+way in and out. The measurement and the seat were tuned on the real model's masks of real singers
+(the show recording's cut-outs played back as a fake camera) — the old crop re-targeted on 45 of 58
+frames and zoomed between 0.85× and 1.19× in 16 s; the seat glides once and holds. The modes differ
+in the slots alone: **Publisher mode** ('show': Publishing, the lobby stage, the meet's film) —
+slots taller than the picture (1.2×, width permitting), their lower part behind the riser and below
+the picture, the heads from a tenth down, the riser band bounded to 9–40 % of the picture so ten
+small slots sit lower rather than behind a wall; **'solo'** (the Studio's saved performance, one
+singer with no lyrics to share the picture) — the 'show' slot half as big again (1.8× the picture,
+`SOLO_SCALE`), its top pinned at the row top, the chest behind a slim riser: a medium close-up that
+uses the picture, the live strip untouched; **Performer mode** ('stage', kept for a stage that wants
 the lyrics drawn over the performers) — each frame sits small in the lower part over a slim riser.
 The live stage and the Studio draw the singers in 'show' mode in **a strip of their own under the
 lyrics** (`.sing`: the status strip · the lyrics, large, the words up from the count-in · the stage
@@ -1195,7 +1232,24 @@ short, low plate behind the voice — 1.3 s, 10 % mix, 30 ms pre-delay — so th
 of the room rather than in it); Natural Tune (the same with a gentle, slow correction: 0.6, speed
 0.25), Punch, Up Front, Radio-Ready and Vibrant are the other finished-vocal presets. A singer's preset
 choice is kept on their device (`audio_plugin_settings`, localStorage, mirrored to
-`SingersVoice/Config/` in Drive) until they change it.
+`SingersVoice/Config/` in Drive) until they change it. Every preset is **level-matched**: its
+makeup gain is set so a −15 dBFS voice leaves each chain within 2.5 dB of the others
+(`tools/ci/audio-lab.mjs` measures all 16 and fails past a 5 dB spread), so a preset tap changes the
+colour of the voice, never its loudness. **Preview my voice** (`components/SoundPreview.tsx`, in
+Settings → Voice, the Studio's and the live stage's Sound sheets) opens the microphone through the
+very chain the stage and the recording use and the same mix bus (its rider, guard and limiter, the
+device's Vocal volume) into the ears, live — a preset tap or a tweak re-tunes the running chain in
+place (`applyFx`), nothing restarts — and **Save my sound** writes both Config files now
+(`saveSettingsNow`) with the word on when and where; the settings are saved by themselves 2.5 s after
+every change as well, restored from localStorage at once at the start, and, signed in to Drive, from
+the Config folder at every start with the newer copy winning file by file (`restoreSettingsAtStart`,
+`pullSettings`: `updatedAt` on both files — a change made here is never undone by an older copy in
+the folder; a copy saved from another device comes across) and re-applied on every stage (the chain
+is built from the settings as the microphone opens). The recording, the review and the saved
+performance agree: the review's *Play mix* plays the take through the mix bus
+(`audio/takePlayback.ts`) exactly as the show recorder mixed it, and the device's Track / Vocal
+volume starts at +1.6 / +4.6 dB (`MIX_TRACK_DEFAULT_DB`, `MIX_VOCAL_DEFAULT_DB`, 1.5 dB steps, a
+*Default* button back) — the voice in front of the music, under the same guard and ceiling.
 
 ## Data formats
 

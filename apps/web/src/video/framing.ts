@@ -300,8 +300,8 @@ export function visiblePart(r: FrameRect, srcW: number, srcH: number): FrameRect
  * the new frame, held again. Nothing moves with the singer frame by frame.
  */
 export const SEAT = {
-  /** The first frame is set from this long a window of measurements (at least `minSamples` of them). */
-  settleMs: 1500,
+  /** The first frame is set from this long a window of measurements (at least `minSamples` of them) — quick: the singer is framed within the first second, not left as the camera sees them. */
+  settleMs: 700,
   /** A move has to hold this long — `sustained` of the window's measurements beyond the margins — before the seat follows it. */
   reseatAfterMs: 2500,
   sustained: 0.8,
@@ -330,10 +330,10 @@ export type SeatState = 'settling' | 'gliding' | 'held';
 
 /**
  * How a singer's frame behaves once set — their choice (Settings → Camera, the stage's Picture sheet):
- * 'still' (the default): framed once and left alone — it follows only a singer who has plainly moved
- * somewhere else and stayed there; 'follow': re-framed with a glide when they have shifted in their
- * chair; 'voice': still, and pushed in on the singer while they sing — the louder, the closer — and
- * eased back out in the breaks (a director's push-in on the soloist).
+ * 'voice' (the default): still, and pushed in on the singer's face while they sing — a close-up for the
+ * phrase, back out to head and shoulders in the break (a director's push-in on the soloist); 'still':
+ * framed once and left alone — it follows only a singer who has plainly moved somewhere else and stayed
+ * there; 'follow': re-framed with a glide when they have shifted in their chair.
  */
 export type Framing = 'still' | 'follow' | 'voice';
 export const FRAMINGS: readonly Framing[] = ['still', 'follow', 'voice'];
@@ -345,8 +345,16 @@ export const PICTURES: readonly Picture[] = ['cutout', 'camera'];
 /** 'still': the margins a singer has to leave, and for how long, before the frame follows them at all. */
 export const STILL = { reseatAfterMs: 6000, driftX: 0.3, driftUp: 0.16, driftDown: 0.34, sizeMin: 0.5, sizeMax: 2 } as const;
 
-/** The push-in on the voice: up to this much closer, in this long, out again in this long; the frame zooms about the face. */
-export const VOICE_ZOOM = { max: 1.32, inMs: 350, outMs: 1400, about: 0.19 } as const;
+/**
+ * The push-in on the voice — two frames, never a frame that breathes with every syllable: the singer heard
+ * (the meter past `on` for `onMs`) brings the frame in to `max` on the face (`about`: the zoom is centred
+ * this far down the frame, where the face is), eased over `inMs`; the singer quiet (the meter under `off`
+ * for `holdMs` — a breath, the gap between two words, a rest of a bar are all shorter) lets it back out to
+ * the held frame, eased over `outMs`. Between `off` and `on` nothing changes (hysteresis). The meter is the
+ * engine's (0..1 over −60..0 dBFS of the voice after its effects): a sung phrase sits well over `on`, the
+ * room between phrases well under `off`.
+ */
+export const VOICE_ZOOM = { max: 1.5, inMs: 600, outMs: 1100, about: 0.19, on: 0.56, off: 0.44, onMs: 150, holdMs: 1400, staleMs: 3000 } as const;
 
 interface HeadSample {
   cx: number;
@@ -386,10 +394,18 @@ export class Seat {
   private from: FrameRect | null = null;
   private glideStart = 0;
   private samples: HeadSample[] = [];
-  /** The voice's push-in: the level last told (0..1), the zoom now (1 = the held frame) and when it was last stepped. */
-  private voiceLevel = 0;
-  private zoom = 1;
-  private zoomAt = 0;
+  /**
+   * The voice's push-in: whether the singer is heard right now (the meter's say, with its thresholds and hold),
+   * when the meter last spoke, and the zoom (1 = the held frame) on its way from `zoomFrom` to `zoomTo`.
+   */
+  private singing = false;
+  private loudSince = 0;
+  private quietSince = 0;
+  private voiceAt = 0;
+  private zoomFrom = 1;
+  private zoomTo = 1;
+  private zoomStart = 0;
+  private zoomNow = 1;
 
   constructor(
     private readonly srcW: number,
@@ -405,20 +421,61 @@ export class Seat {
   /** Whether the crop is changing from frame to frame right now (a glide, or the voice's push-in on its way): the picture has to be redrawn. */
   moving(now: number): boolean {
     if (this.state(now) === 'gliding') return true;
-    if (this.framing !== 'voice') return this.zoom !== 1;
-    return Math.abs(this.zoomTarget() - this.zoom) > 0.002;
+    return this.zoomTarget(now) !== this.zoomTo || this.zoomNow !== this.zoomTo;
   }
 
-  /** How loud the singer is now (0..1 of the meter) — the push-in follows it while the framing is 'voice'. */
-  voice(level: number): void {
-    this.voiceLevel = Math.max(0, Math.min(1, level));
+  /**
+   * How loud the singer is now (0..1 of the meter), told whenever the meter moves while the microphone is open:
+   * past `on` for `onMs` they are singing; under `off` for `holdMs` they have stopped. A level in between changes
+   * nothing — a phrase sung softly keeps the close-up, a breath never lets it go. The clocks run on their own
+   * (`settle`): a meter that reads 0 and stays there is told once, and the hold still runs out.
+   */
+  voice(level: number, now = performance.now()): void {
+    const l = Math.max(0, Math.min(1, level));
+    this.voiceAt = now;
+    if (l >= VOICE_ZOOM.on) {
+      this.quietSince = 0;
+      if (!this.loudSince) this.loudSince = now;
+    } else if (l <= VOICE_ZOOM.off) {
+      this.loudSince = 0;
+      if (!this.quietSince) this.quietSince = now;
+    } else {
+      this.loudSince = 0;
+      this.quietSince = 0;
+    }
+    this.settle(now);
   }
 
-  /** The zoom the voice asks for: nothing under the quiet of a room, the whole push-in from a full voice. */
-  private zoomTarget(): number {
+  /**
+   * The voice's clocks: loud for `onMs` → singing; quiet for `holdMs` → not; a meter silent for `staleMs` (the
+   * microphone closed, the song over) → not. Run with every meter reading and every frame drawn, so the hold ends
+   * on time whether or not the meter speaks again.
+   */
+  private settle(now: number): void {
+    if (!this.singing && this.loudSince && now - this.loudSince >= VOICE_ZOOM.onMs) this.singing = true;
+    if (this.singing && this.quietSince && now - this.quietSince >= VOICE_ZOOM.holdMs) this.singing = false;
+    if (this.voiceAt && now - this.voiceAt > VOICE_ZOOM.staleMs) {
+      this.singing = false;
+      this.loudSince = 0;
+    }
+  }
+
+  /** Whether the singer is heard, as last settled (the tests, which keep their own clock). */
+  get heard(): boolean {
+    return this.singing;
+  }
+
+  /** Whether the singer is heard right now (the meter's say, its clocks run to `now`): support, the e2e. */
+  heardAt(now = performance.now()): boolean {
+    this.settle(now);
+    return this.singing;
+  }
+
+  /** The zoom the voice asks for: the close-up while the singer is heard (the framing 'voice', a frame held, the meter alive), the held frame otherwise. */
+  private zoomTarget(now: number): number {
     if (this.framing !== 'voice' || !this.target) return 1;
-    const sing = Math.max(0, Math.min(1, (this.voiceLevel - 0.45) / 0.4));
-    return 1 + (VOICE_ZOOM.max - 1) * sing;
+    this.settle(now);
+    return this.singing ? VOICE_ZOOM.max : 1;
   }
 
   /** The margins and the hold for the framing chosen: 'follow' takes the seat's own, 'still' and 'voice' the wide ones. */
@@ -503,17 +560,24 @@ export class Seat {
     return this.pushIn(r, now);
   }
 
-  /** The voice's push-in applied to a crop: the zoom stepped toward its target (fast in, slow out), the crop shrunk about the face. */
+  /**
+   * The voice's push-in applied to a crop: the zoom on its way to what the voice asks (in over `inMs`, out over
+   * `outMs`, starting and ending at rest — a new ask on the way starts a new glide from where the zoom is), the
+   * crop shrunk about the face.
+   */
   private pushIn(r: FrameRect, now: number): FrameRect {
-    const target = this.zoomTarget();
-    const dt = this.zoomAt ? Math.min(200, Math.max(0, now - this.zoomAt)) : 0;
-    this.zoomAt = now;
-    const tau = target > this.zoom ? VOICE_ZOOM.inMs : VOICE_ZOOM.outMs;
-    this.zoom += (target - this.zoom) * (1 - Math.exp(-dt / tau));
-    if (Math.abs(this.zoom - 1) < 0.001) this.zoom = 1;
-    if (this.zoom === 1) return r;
-    const sw = r.sw / this.zoom;
-    const sh = r.sh / this.zoom;
+    const target = this.zoomTarget(now);
+    if (target !== this.zoomTo) {
+      this.zoomFrom = this.zoomNow;
+      this.zoomTo = target;
+      this.zoomStart = now;
+    }
+    const dur = this.zoomTo > this.zoomFrom ? VOICE_ZOOM.inMs : VOICE_ZOOM.outMs;
+    const k = Math.min(1, Math.max(0, (now - this.zoomStart) / dur));
+    this.zoomNow = this.zoomFrom + (this.zoomTo - this.zoomFrom) * smooth(k);
+    if (this.zoomNow === 1) return r;
+    const sw = r.sw / this.zoomNow;
+    const sh = r.sh / this.zoomNow;
     return { ...r, sx: r.sx + (r.sw - sw) / 2, sy: r.sy + (r.sh - sh) * VOICE_ZOOM.about, sw, sh };
   }
 }

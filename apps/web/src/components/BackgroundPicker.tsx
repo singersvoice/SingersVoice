@@ -2,9 +2,33 @@ import { signal } from '@preact/signals';
 import type { BackgroundItem, BackgroundsIndex } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
 import { asset } from '../lib/nav.ts';
+import { appSettings, updateApp, type AppSettings } from '../state/settings.ts';
+import { IcCamera } from './icons.tsx';
 
 export const backgrounds = signal<BackgroundItem[]>([]);
 let loading: Promise<void> | null = null;
+
+/**
+ * No stage behind the singer: their camera picture as it is, room and all — the virtual background off. A
+ * choice like any other in the picker (first), remembered like any other; the stage and the show draw a
+ * plain dark backdrop behind the pictures, and the singer's own picture switches to "my camera as it is".
+ */
+export const NONE_BACKGROUND_ID = 'none';
+export const NONE_BACKGROUND: BackgroundItem = { id: NONE_BACKGROUND_ID, kind: 'image', src: '', thumb: '', label: 'None — my camera as it is' };
+export const isNoneBackground = (id: string): boolean => id === NONE_BACKGROUND_ID;
+
+/**
+ * The singer's own background chosen (Settings, the Studio, the stage a meet starts on): none switches their
+ * picture to their camera as it is (that is the point of it); a stage chosen after none puts them back on it,
+ * cut out. Either way the choice is kept with the app settings (this device, and the Config folder in Drive).
+ */
+export function pickBackground(id: string): void {
+  const app = appSettings.peek();
+  const patch: Partial<AppSettings> = { backgroundId: id };
+  if (isNoneBackground(id)) patch.picture = 'camera';
+  else if (isNoneBackground(app.backgroundId)) patch.picture = 'cutout';
+  updateApp(patch);
+}
 
 export function loadBackgrounds(): Promise<void> {
   if (loading) return loading;
@@ -20,11 +44,13 @@ export function loadBackgrounds(): Promise<void> {
 }
 
 export function backgroundById(id: string): BackgroundItem | undefined {
+  if (isNoneBackground(id)) return NONE_BACKGROUND;
   return backgrounds.value.find((b) => b.id === id) ?? backgrounds.value[0];
 }
 
+/** The background's file (''): none for the plain backdrop — the stage and the show then draw nothing behind the singers. */
 export function backgroundSrc(b: BackgroundItem | undefined): string {
-  return b ? asset(`backgrounds/${b.src}`) : '';
+  return b && b.src ? asset(`backgrounds/${b.src}`) : '';
 }
 
 export function BackgroundPicker(props: { value: string; onChange: (id: string) => void }) {
@@ -33,6 +59,12 @@ export function BackgroundPicker(props: { value: string; onChange: (id: string) 
   if (!items.length) return <div class="muted small">Loading backgrounds…</div>;
   return (
     <div class="bg-grid" role="listbox" aria-label="Stage background">
+      <button type="button" role="option" aria-selected={isNoneBackground(props.value)} class={`none ${isNoneBackground(props.value) ? 'on' : ''}`} data-bg-none onClick={() => props.onChange(NONE_BACKGROUND_ID)} title="No virtual background: your camera picture as it is, your room and all">
+        <span class="nonebg" aria-hidden="true">
+          <IcCamera size={28} />
+        </span>
+        <span>{NONE_BACKGROUND.label}</span>
+      </button>
       {items.map((b) => (
         <button key={b.id} type="button" role="option" aria-selected={props.value === b.id} class={props.value === b.id ? 'on' : ''} onClick={() => props.onChange(b.id)}>
           <img src={asset(`backgrounds/${b.thumb}`)} alt={b.label} loading="lazy" width="320" height="180" />
@@ -73,7 +105,7 @@ export function StageBackgroundChoice(props: { value: string; onPick: (id: strin
 export function StageBackground(props: { id: string }) {
   useEffect(() => void loadBackgrounds(), []);
   const b = backgroundById(props.id);
-  if (!b) return <div class="bg" data-bg="" />;
+  if (!b || isNoneBackground(b.id)) return <div class="bg" data-bg={b ? b.id : ''} />;
   if (b.kind === 'video') {
     return (
       <div class="bg" data-bg={b.id}>

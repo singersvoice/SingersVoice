@@ -1,7 +1,10 @@
 import { hoursLabel, roleTitle, type BlockedUser, type TvLook } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
-import { BackgroundPicker } from '../components/BackgroundPicker.tsx';
+import { BackgroundPicker, pickBackground } from '../components/BackgroundPicker.tsx';
 import { FxPanel } from '../components/FxPanel.tsx';
+import { PermissionLine } from '../components/PermissionLine.tsx';
+import { MixBalance } from '../components/MixBalance.tsx';
+import { SaveSoundButton, VoicePreview } from '../components/SoundPreview.tsx';
 import { IcDrive } from '../components/icons.tsx';
 import { dbLabel, INSTRUMENT_LEVELS } from '../components/MicStatus.tsx';
 import { PictureChoices } from '../components/PictureChoices.tsx';
@@ -238,6 +241,7 @@ export function Settings() {
 
         <section class="card stack" id="audio">
           <h2>Audio</h2>
+          <PermissionLine what="microphone" />
           <Field label="Microphone">
             <select class="input" value={app.audioInputId} onChange={(e) => updateApp({ audioInputId: (e.currentTarget as HTMLSelectElement).value })}>
               <option value="">System default</option>
@@ -289,19 +293,25 @@ export function Settings() {
               )}
             </div>
           </Field>
-          <Field label={`Backing level in your ears ${Math.round(audio.backingGain * 100)}%`} hint="Only what you hear while singing. The show, the recording and the audience get the track at its own balance (Track / Vocal volume on the stage).">
+          <Field label={`Backing level in your ears ${Math.round(audio.backingGain * 100)}%`} hint="Only what you hear while singing. The show, the recording and the audience get the track at its own balance (Track / Vocal volume, below).">
             <input type="range" min={0} max={1} step={0.01} value={audio.backingGain} onInput={(e) => updateAudio({ backingGain: Number((e.currentTarget as HTMLInputElement).value) })} />
+          </Field>
+          <Field label="Track / Vocal volume in the recording, the mix and the broadcast" hint="The balance everyone else gets — the saved performance, the audience, the stream. They start with the voice in front of the music (track +1.6 dB, vocal +4.6 dB); the limiter behind them keeps the whole clear of distortion whatever they are set to. The same controls sit on every stage's Sound sheet.">
+            <MixBalance />
           </Field>
         </section>
 
         <section class="card stack" id="voice">
           <h2>VoxForge voice</h2>
-          <p class="small muted">Saved automatically to {isDrive.value ? 'Drive › SingersVoice › Config › audio_plugin_settings.json' : 'this device'}.</p>
+          <p class="small muted">Every preset and every tweak can be heard on your own voice before a song: Preview opens the microphone through the chain as it stands. Saved automatically to {isDrive.value ? 'Drive › SingersVoice › Config › audio_plugin_settings.json' : 'this device'} — and now, with Save.</p>
+          <VoicePreview />
+          <SaveSoundButton />
           <FxPanel value={audio} onChange={updateAudio} />
         </section>
 
         <section class="card stack" id="camera">
           <h2>Camera</h2>
+          <PermissionLine what="camera" />
           <Switch checked={app.cameraOn && role.value !== 'audio'} onChange={(v) => updateApp({ cameraOn: v })} label={role.value === 'audio' ? 'Camera on stage (your account is audio only — the SingersVoice admin can change that)' : entitlement.value && !entitlement.value.video && role.value !== 'super_admin' ? 'Camera on stage (in live meets your plan gives the voice alone — the Studio keeps the camera; see Plans)' : 'Camera on stage'} disabled={role.value === 'audio'} />
           <Field label="Camera device">
             <select class="input" value={app.cameraDeviceId} onChange={(e) => updateApp({ cameraDeviceId: (e.currentTarget as HTMLSelectElement).value })}>
@@ -339,7 +349,7 @@ export function Settings() {
 
         <section class="card stack" id="backgrounds">
           <h2>Stage & publishing backgrounds</h2>
-          <BackgroundPicker value={app.backgroundId} onChange={(id) => updateApp({ backgroundId: id })} />
+          <BackgroundPicker value={app.backgroundId} onChange={pickBackground} />
         </section>
 
         <section class="card stack" id="about">

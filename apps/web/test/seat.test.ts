@@ -132,7 +132,7 @@ describe('the seat', () => {
     expect(seat.state(t)).toBe('gliding');
   });
 
-  it("'voice': the held frame is pushed in on the face while the singer is loud — eased in, eased out, never past the push-in's most — and the frame itself stays where it was", () => {
+  it("'voice': the held frame is pushed in on the face once the singer is heard — a close-up for the phrase, eased in; out again, eased, only after a real break — and the frame itself stays where it was", () => {
     const seat = new Seat(W, H);
     seat.framing = 'voice';
     let t = feed(seat, 0, SEAT.settleMs + 300, jitter(STANDARD));
@@ -140,36 +140,74 @@ describe('the seat', () => {
     const held = seat.target!;
     expect(seat.crop(t)).toEqual(held); // quiet: the held frame as it is
     expect(seat.moving(t)).toBe(false);
-    // Singing, full voice: the crop shrinks toward the most of the push-in, about the face (the top moves down less than the bottom moves up).
-    seat.voice(1);
-    expect(seat.moving(t)).toBe(true);
-    let last = seat.crop(t);
-    for (let k = 1; k <= 20; k++) {
-      const c = seat.crop(t + k * 50);
+    /** The meter speaking every 50 ms from `from` for `ms` at `level`; the crop asked for on the way, as the pipeline does. */
+    const meter = (from: number, ms: number, level: number) => {
+      let c = seat.crop(from);
+      for (let x = from; x <= from + ms; x += 50) {
+        seat.voice(level, x);
+        c = seat.crop(x);
+      }
+      return c;
+    };
+    // One loud reading is not singing (a cough, a door): nothing moves until the voice has been there for `onMs`.
+    seat.voice(1, t);
+    expect(seat.crop(t)).toEqual(held);
+    expect(seat.heard).toBe(false);
+    // Singing: heard after `onMs`, then the crop shrinks — never back — to the close-up about the face (the top moves down less than the bottom moves up).
+    let c = meter(t, VOICE_ZOOM.onMs, 1);
+    expect(seat.heard).toBe(true);
+    expect(seat.moving(t + VOICE_ZOOM.onMs)).toBe(true);
+    let last = c;
+    for (let k = 1; k <= 12; k++) {
+      c = seat.crop(t + VOICE_ZOOM.onMs + k * 50);
       expect(c.sh).toBeLessThanOrEqual(last.sh + 1e-9);
       last = c;
     }
-    const tight = run(seat, t + 1000, t + 3000);
+    const tight = meter(t + 1000, 2000, 1);
     expect(tight.sh).toBeCloseTo(held.sh / VOICE_ZOOM.max, 0);
     expect(tight.sw / tight.sh).toBeCloseTo(held.sw / held.sh, 6); // the frame's proportions kept
     expect(tight.sy - held.sy).toBeCloseTo((held.sh - tight.sh) * VOICE_ZOOM.about, 0);
     expect(seat.moving(t + 3000)).toBe(false);
     expect(seat.target).toBe(held); // the voice never re-seats
-    // A breath: the crop eases back out, slower than it went in, to the held frame.
-    seat.voice(0);
-    const quarter = run(seat, t + 3000, t + 3000 + VOICE_ZOOM.outMs / 4);
+    // A breath, the gap between two words (quiet for less than `holdMs`): the close-up holds.
+    const breath = t + 3000;
+    expect(meter(breath, VOICE_ZOOM.holdMs - 300, 0)).toEqual(tight);
+    expect(seat.heard).toBe(true);
+    // Singing on, softly (a level between the thresholds), straight after the breath: still heard, still the close-up.
+    const soft = breath + VOICE_ZOOM.holdMs - 300 + 50;
+    expect(meter(soft, 2000, (VOICE_ZOOM.on + VOICE_ZOOM.off) / 2)).toEqual(tight);
+    expect(seat.heard).toBe(true);
+    // A real break (quiet for `holdMs`): the crop eases back out — slower than it went in — to the held frame.
+    const t2 = soft + 2050;
+    meter(t2, VOICE_ZOOM.holdMs, 0);
+    expect(seat.heard).toBe(false);
+    const quarter = meter(t2 + VOICE_ZOOM.holdMs, VOICE_ZOOM.outMs / 4, 0);
     expect(quarter.sh).toBeGreaterThan(tight.sh);
     expect(quarter.sh).toBeLessThan(held.sh);
-    expect(run(seat, t + 3000 + VOICE_ZOOM.outMs / 4, t + 3000 + VOICE_ZOOM.outMs * 8)).toEqual(held);
+    expect(meter(t2 + VOICE_ZOOM.holdMs + VOICE_ZOOM.outMs / 4, VOICE_ZOOM.outMs * 2, 0)).toEqual(held);
     // Room noise is not singing: no push-in from a meter sitting low.
-    seat.voice(0.3);
-    expect(run(seat, t + 20_000, t + 30_000)).toEqual(held);
+    expect(meter(t + 20_000, 5000, 0.3)).toEqual(held);
+    expect(seat.heard).toBe(false);
+    // A meter that reads 0 once and does not move again (digital silence: nothing new to tell) is quiet from then on: the
+    // hold runs out on the frame clock and the close-up lets go, in time, without another reading.
+    meter(t + 26_000, 1000, 1);
+    expect(seat.heard).toBe(true);
+    seat.voice(0, t + 27_050);
+    expect(seat.heardAt(t + 27_050 + VOICE_ZOOM.holdMs - 50)).toBe(true);
+    expect(seat.heardAt(t + 27_050 + VOICE_ZOOM.holdMs + 50)).toBe(false);
+    expect(run(seat, t + 27_050, t + 27_050 + VOICE_ZOOM.holdMs + VOICE_ZOOM.outMs * 2)).toEqual(held);
     // Framing switched back to 'still' mid-push: the push-in eases out and stays out.
-    seat.voice(1);
-    expect(run(seat, t + 40_000, t + 41_000).sh).toBeLessThan(held.sh);
+    meter(t + 40_000, 1000, 1);
+    expect(seat.crop(t + 41_000).sh).toBeLessThan(held.sh);
     seat.framing = 'still';
     expect(seat.moving(t + 41_000)).toBe(true);
     expect(run(seat, t + 41_000, t + 60_000)).toEqual(held);
+    // A meter that fell silent (the microphone closed mid-phrase) is a singer gone quiet: the close-up lets go by itself.
+    seat.framing = 'voice';
+    meter(t + 70_000, 1000, 1);
+    expect(seat.heard).toBe(true);
+    expect(run(seat, t + 71_000, t + 71_000 + VOICE_ZOOM.staleMs + VOICE_ZOOM.outMs * 2)).toEqual(held);
+    expect(seat.heard).toBe(false);
   });
 
   it('never settles on measurements that disagree', () => {

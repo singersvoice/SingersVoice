@@ -25,6 +25,7 @@ import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/Li
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { audienceLine } from './audience.ts';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
+import { SaveSoundButton } from '../../components/SoundPreview.tsx';
 import { TvPanel } from '../../components/TvPanel.tsx';
 import { tvLink } from '../../lib/tv.ts';
 import { Page } from '../../components/Shell.tsx';
@@ -39,7 +40,7 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { canPublish as canPublishSignal } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
-import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
+import { openMicWithCamera, restartCamera, releaseMicAfterSong } from '../../video/capture.ts';
 import { filmSound, type MeetRecorder } from '../../video/meetRecorder.ts';
 import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
 import { SaveStatus } from '../../components/SaveStatus.tsx';
@@ -122,11 +123,15 @@ export function MeetRoom(props: { id: string }) {
   useEffect(() => {
     if ((track?.source === 'catalog' || track?.source === 'registry') && you?.slot != null) keepMeetTrack(track);
   }, [track, you?.slot]);
-  // The mic is a stage thing: open while on stage (talk-back between songs, the vocal in the song), closed on stepping off or when the meet is over.
+  // The mic is a stage thing: open while on stage (talk-back between songs, the vocal in the song), let go on stepping off
+  // (parked on iOS, muted, so stepping back on asks nothing — capture.ts) and closed for good when the meet is over.
   const onStageNow = you?.slot != null;
   const meetOver = meet?.state === 'ended' || meet?.state === 'expired';
   useEffect(() => {
-    if ((!onStageNow || meetOver) && engineRef.current?.micOpen.value) engineRef.current.closeMic();
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (meetOver) engine.closeMic();
+    else if (!onStageNow && engine.micOpen.value) releaseMicAfterSong(engine);
   }, [onStageNow, meetOver]);
 
   /**
@@ -1330,6 +1335,7 @@ function LiveStage(props: {
               <summary>Tweak the voice FX — every control of the vocal chain, live on your voice</summary>
               <FxPanel value={audio} onChange={updateAudio} compact />
             </details>
+            <SaveSoundButton compact />
           </div>
         )}
         <section class="controls compact">

@@ -42,7 +42,7 @@
 }
 .step {
   display: grid;
-  grid-template-columns: 36px 1fr auto;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
   padding: 12px;
@@ -184,7 +184,7 @@
 }
 .wizard-steps {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
 .wizard-steps button {
@@ -224,7 +224,7 @@
 }
 .lyric-row {
   display: grid;
-  grid-template-columns: 34px 1fr auto;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
@@ -303,6 +303,12 @@
 @media (min-width: 900px) and (min-height: 700px) {
   .sing {
     --stage-h: clamp(200px, 34vh, 440px);
+  }
+}
+/* A short screen (a small phone): a slimmer strip — the words of the song keep their room whatever the text size. */
+@media (max-height: 620px) {
+  .sing {
+    --stage-h: clamp(100px, 22vh, 260px);
   }
 }
 @media (orientation: landscape) and (max-height: 520px) {
@@ -508,9 +514,45 @@
 .controls.compact .main .btn.big {
   min-height: 48px;
 }
+/* A phone's stage: the six icon buttons on one row (40 px, 6 px apart — 270 px on a 320 px screen), the status row one line. */
+@media (max-width: 420px) {
+  .controls.compact .main {
+    gap: 6px;
+  }
+  .controls.compact .btn.icon {
+    width: 40px;
+    min-height: 40px;
+  }
+  .controls.compact > .row.between {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+  .controls.compact > .row.between > * {
+    min-width: 0;
+    overflow: hidden;
+  }
+  .controls.compact > .row.between .chip,
+  .controls.compact > .row.between .pitch-pill {
+    white-space: nowrap;
+    max-width: 100%;
+  }
+}
+/* A short screen: tighter controls, a smaller clock, the Start button no taller than it must be. */
+@media (max-height: 620px) {
+  .controls.compact {
+    gap: 4px;
+    padding-top: 4px;
+  }
+  .controls.compact .timeline {
+    font-size: 0.7em;
+  }
+  .controls.compact .main .btn.big {
+    min-height: 44px;
+  }
+}
 .controls .timeline {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   font-size: 0.8em;
@@ -687,19 +729,25 @@
   display: grid;
   gap: 10px;
 }
-.perf-player video {
+/* The saved performance's video: the performer is the picture (no lyrics here), so the video takes the width it can and up to most of the window's height, never cropped, never distorted */
+.perf-player video,
+.perf-video {
   width: 100%;
   border-radius: var(--radius);
   background: #000;
-  max-height: 40dvh;
+  max-height: 72dvh;
   object-fit: contain;
 }
 
 /* ---------- Backgrounds ---------- */
 .bg-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 120px), 1fr));
   gap: 8px;
+  min-width: 0;
+}
+.bg-grid > * {
+  min-width: 0;
 }
 .bg-grid button {
   position: relative;
@@ -718,6 +766,20 @@
 }
 .bg-grid button.on {
   border-color: var(--accent);
+}
+/* No virtual background: a plain dark tile with a camera on it (the singer's own room is the background then) */
+.bg-grid button.none .nonebg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: linear-gradient(135deg, #1a0d2e, #2a1a44);
+  padding: 0;
+  font-size: inherit;
+}
+.bg-grid button.none.on .nonebg {
+  color: var(--accent);
 }
 .bg-grid button span {
   position: absolute;
@@ -799,7 +861,7 @@
 }
 .param {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 2px 8px;
   font-size: 0.85em;
 }
@@ -812,14 +874,17 @@
 }
 .preset-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 120px), 1fr));
   gap: 8px;
+  min-width: 0;
 }
 .preset-grid button {
   display: grid;
   gap: 2px;
   text-align: left;
   padding: 10px 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--surface);
@@ -847,8 +912,12 @@
 }
 .stage-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 140px), 1fr));
   gap: 8px;
+  min-width: 0;
+}
+.stage-grid > * {
+  min-width: 0;
 }
 .slot-card {
   position: relative;
@@ -1726,7 +1795,7 @@
 }
 .notice {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   padding: 6px 0;

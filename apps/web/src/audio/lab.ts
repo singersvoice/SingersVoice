@@ -21,5 +21,6 @@ declare global {
   }
 }
 
-const lab = { createVoxForgeChain, MixBus, measureLoudness, normalizationDb, MIX_TARGETS, MIX_GUARD, VOCAL_RIDER, presetParams, VOXFORGE_DEFAULTS, AUDIO_SETTINGS_DEFAULTS, compressorMakeupDb, safetyStage, dbToGain };
+const VOXFORGE_PRESET_IDS = VOXFORGE_PRESETS.map((p) => p.id);
+const lab = { createVoxForgeChain, MixBus, measureLoudness, normalizationDb, MIX_TARGETS, MIX_GUARD, VOCAL_RIDER, presetParams, VOXFORGE_DEFAULTS, VOXFORGE_PRESET_IDS, AUDIO_SETTINGS_DEFAULTS, compressorMakeupDb, safetyStage, dbToGain };
 window.svLab = lab;

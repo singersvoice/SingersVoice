@@ -5,7 +5,7 @@
  */
 import { MAX_OPEN_MEETS, MAX_PERFORMERS, meetIsOpen, type CatalogTrack, type Meet } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
-import { BackgroundPicker } from '../../components/BackgroundPicker.tsx';
+import { BackgroundPicker, pickBackground } from '../../components/BackgroundPicker.tsx';
 import { IcChat, IcPlus, IcStop, IcTrash, IcUsers } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Sheet, Spinner, Switch } from '../../components/ui.tsx';
@@ -272,7 +272,7 @@ export function MeetsHome() {
         </section>
       </div>
       <Sheet open={bgOpen} onClose={() => setBgOpen(false)} title="Stage background">
-        <BackgroundPicker value={app.backgroundId} onChange={(id) => updateApp({ backgroundId: id })} />
+        <BackgroundPicker value={app.backgroundId} onChange={pickBackground} />
       </Sheet>
     </Page>
   );

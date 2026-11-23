@@ -17,7 +17,7 @@ import { meetIsOpen, participantMedia, SLOT_COLORS, type Meet, type Participant,
 import { effect } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { AudioEngine } from '../../audio/engine.ts';
-import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds } from '../../components/BackgroundPicker.tsx';
+import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, isNoneBackground } from '../../components/BackgroundPicker.tsx';
 import { showSize, SINGER_LINK_WIDTH } from '../../video/enhance.ts';
 import { serverNow } from '../../lib/api.ts';
 import type { PerformanceSummary } from '../../lib/storage/types.ts';
@@ -27,6 +27,8 @@ import { chapterCue } from '../../video/chapters.ts';
 import { alignLine, alignPlan, delayFor, type AlignPlan, type PeerArrival } from '../../video/align.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
+import { openCamera as captureCamera } from '../../video/capture.ts';
+import { isPermissionDenied, permissionHelp } from '../../lib/permissions.ts';
 import { LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
 import { MeetRecorder, stageSound } from '../../video/meetRecorder.ts';
 import { PerformerMesh, type LinkHealth, type PeerState } from '../../video/peers.ts';
@@ -115,10 +117,10 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     holdUntil.current = Date.now() + 8000;
     opening.current = (async () => {
       try {
-        await camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined });
+        await captureCamera(camera);
         setCamError(null);
       } catch (e) {
-        setCamError(e instanceof Error ? e.message : String(e));
+        setCamError(isPermissionDenied(e) ? `The camera is blocked in this browser. ${permissionHelp('camera')}` : e instanceof Error ? e.message : String(e));
       } finally {
         opening.current = null;
       }
@@ -162,7 +164,9 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     };
   }, [camStream, camOn, onStage]);
   // My picture and framing choices (Settings → Camera, the Picture sheet) reach the feed live; the voice's push-in follows my meter.
-  useEffect(() => feed.setLook(app.picture, app.framing), [app.picture, app.framing]);
+  // A meet with no stage background (the host chose none) shows every singer's camera as it is: nobody is cut out onto nothing.
+  const noneBackground = isNoneBackground(meet.backgroundId);
+  useEffect(() => feed.setLook(noneBackground ? 'camera' : app.picture, app.framing), [app.picture, app.framing, noneBackground]);
   const micForVoice = opts.engine?.micOpen.value ?? false;
   useEffect(() => {
     const level = opts.engine?.recorder?.level;

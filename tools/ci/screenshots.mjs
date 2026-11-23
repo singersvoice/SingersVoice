@@ -134,8 +134,10 @@ for (const m of matrix) {
       await page.goto(url('/studio/performances'), { waitUntil: 'networkidle' });
       await wait(800);
       await shot('17-performances');
-      await page.goto(url('/tracks'), { waitUntil: 'networkidle' });
-      await page.getByRole('button', { name: 'More' }).first().click();
+      // The library's own tab (the All tab lists the singer's songs only under a search): its row's More menu.
+      await page.goto(url('/tracks#mine'), { waitUntil: 'networkidle' });
+      await page.locator('[data-my-track]').first().waitFor({ timeout: 15000 });
+      await page.locator('[data-my-track]').first().getByRole('button', { name: 'More' }).click();
       await page.getByRole('button', { name: /Edit lyrics/ }).click();
       await page.waitForURL(/\/trackmaker\//);
       await wait(1000);

@@ -68,6 +68,13 @@ export function writeMeasuredLatency(m: MeasuredLatency | null): void {
   }
 }
 
+/** The microphone's constraints, the same wherever it is captured (here, or with the camera on iOS — capture.ts): no browser processing but the echo cancellation asked for. */
+export function micConstraints(deviceId: string | undefined, echoCancellation: boolean): MediaTrackConstraints {
+  return { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+}
+
+const hasLiveAudio = (s: MediaStream): boolean => s.getAudioTracks().some((t) => t.readyState === 'live');
+
 export class AudioEngine {
   readonly ctx: AudioContext;
   readonly master: GainNode;
@@ -215,32 +222,41 @@ export class AudioEngine {
   /**
    * Open the microphone. With `video` constraints the audio and video are requested in ONE
    * getUserMedia call (iOS Safari drops an earlier capture when a second one starts); the video
-   * tracks are returned as their own MediaStream for the camera tile / recorder.
+   * tracks are returned as their own MediaStream for the camera tile / recorder. With `adopt`, a
+   * stream captured elsewhere that carries a live microphone track (the camera's, captured with the
+   * microphone — capture.ts) is used as it is: no new capture, so no new prompt (the video stays the
+   * caller's: null is returned for it). A microphone parked between songs (`parkMic`) is taken back
+   * the same way when the same microphone with the same processing is asked for.
    */
-  async openMic(opts: { deviceId?: string; echoCancellation?: boolean; video?: MediaTrackConstraints | false } = {}): Promise<MediaStream | null> {
+  async openMic(opts: { deviceId?: string; echoCancellation?: boolean; video?: MediaTrackConstraints | false; adopt?: MediaStream | null } = {}): Promise<MediaStream | null> {
     await this.resume();
+    const parked = this.parked;
+    this.parked = null;
     this.closeMic();
     this.aecBase = opts.echoCancellation ?? false;
     this.micDeviceId = opts.deviceId;
-    const constraints: MediaStreamConstraints = {
-      audio: {
-        deviceId: opts.deviceId ? { exact: opts.deviceId } : undefined,
-        echoCancellation: this.aecBase || this.talkback,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1,
-      },
-      video: opts.video ?? false,
-    };
+    const constraints: MediaStreamConstraints = { audio: micConstraints(opts.deviceId, this.aecBase || this.talkback), video: opts.video ?? false };
     let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
-    } catch (e) {
-      if (!opts.video) throw e;
-      // Camera busy/denied: fall back to audio only so the take still happens.
-      stream = await navigator.mediaDevices.getUserMedia({ ...constraints, video: false });
+    let adopted = false;
+    if (opts.adopt && hasLiveAudio(opts.adopt)) {
+      stream = opts.adopt;
+      adopted = true;
+      if (parked && parked.stream !== stream) parked.stream.getAudioTracks().forEach((t) => t.stop());
+    } else if (parked && hasLiveAudio(parked.stream) && parked.deviceId === opts.deviceId && parked.aec === (this.aecBase || this.talkback)) {
+      stream = parked.stream;
+      adopted = true;
+    } else {
+      parked?.stream.getAudioTracks().forEach((t) => t.stop());
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (e) {
+        if (!opts.video) throw e;
+        // Camera busy/denied: fall back to audio only so the take still happens.
+        stream = await navigator.mediaDevices.getUserMedia({ ...constraints, video: false });
+      }
     }
-    const videoTracks = stream.getVideoTracks();
+    stream.getAudioTracks().forEach((t) => (t.enabled = true)); // a parked track is muted while it waits
+    const videoTracks = adopted ? [] : stream.getVideoTracks();
     const videoStream = videoTracks.length ? new MediaStream(videoTracks) : null;
     this.micStream = new MediaStream(stream.getAudioTracks());
     const audioTrack = stream.getAudioTracks()[0];
@@ -274,13 +290,44 @@ export class AudioEngine {
   }
 
   closeMic(): void {
+    this.leaveMic();
+    this.micStream?.getTracks().forEach((t) => t.stop());
+    this.micStream = null;
+    this.parked?.stream.getAudioTracks().forEach((t) => t.stop());
+    this.parked = null;
+  }
+
+  /** A microphone parked between songs (`parkMic`), waiting for the next opening. */
+  private parked: { stream: MediaStream; deviceId: string | undefined; aec: boolean } | null = null;
+
+  /**
+   * The microphone between songs, on a device that keeps one capture per page (iPhone, iPad — a new capture
+   * would ask again, and end the camera): the capture stays, muted, nothing processed, and the next `openMic`
+   * for the same microphone takes it back without a prompt. `closeMic` lets it go for good (leaving the stage).
+   */
+  parkMic(): void {
+    const stream = this.micStream;
+    const deviceId = this.micDeviceId;
+    const aec = this.aecBase || this.talkback;
+    this.leaveMic();
+    this.micStream = null;
+    if (!stream) return;
+    stream.getAudioTracks().forEach((t) => (t.enabled = false));
+    this.parked = { stream, deviceId, aec };
+  }
+
+  /** Whether a microphone waits parked (support, the stage's word). */
+  get micParked(): boolean {
+    return this.parked !== null && hasLiveAudio(this.parked.stream);
+  }
+
+  /** The graph side of closing the microphone: the source off the chain, the leveller and the instrument stopped, the signals cleared. */
+  private leaveMic(): void {
     this.stopLeveller();
     this.closeInstrument();
     this.micSource?.disconnect();
     this.micSource = null;
     this.trim.disconnect();
-    this.micStream?.getTracks().forEach((t) => t.stop());
-    this.micStream = null;
     this.micOpen.value = false;
     this.inputInfo.value = null;
     this.pitch.value = null;
@@ -495,7 +542,7 @@ export class AudioEngine {
     // A fresh capture with the setting, swapped in: connected first, then the old one let go.
     let fresh: MediaStream;
     try {
-      fresh = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: this.micDeviceId ? { exact: this.micDeviceId } : undefined, echoCancellation: want, noiseSuppression: false, autoGainControl: false, channelCount: 1 }, video: false });
+      fresh = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(this.micDeviceId, want), video: false });
     } catch {
       return; // the device would not open again: the voice goes on as it was
     }

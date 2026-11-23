@@ -545,7 +545,7 @@ try {
   check((await asUser('carol', 'GET', `/meets/${meet.meetId}/bookmarks`)).status === 403, 'an account that is not in the meet gets nothing');
   // bob's Recommended, while in the meet (the room stays mounted as he browses): the stage section first, both bookmarks.
   await bob.page.locator('.topbar a[aria-label="Settings"]').click();
-  await bob.page.getByRole('link', { name: 'Tracks', exact: true }).click();
+  await bob.page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Tracks', exact: true }).click(); // the menu's (Settings lists the Drive folder of that name too)
   await bob.page.getByRole('radio', { name: 'Recommended' }).click();
   const stageSec = bob.page.locator('[data-rec-stage]');
   await stageSec.locator('[data-bookmark-row]').first().waitFor({ timeout: 20000 });

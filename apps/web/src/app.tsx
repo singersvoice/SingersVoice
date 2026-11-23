@@ -2,6 +2,7 @@ import { ErrorBoundary, LocationProvider, Route, Router, useLocation } from 'pre
 import { useEffect } from 'preact/hooks';
 import { Toasts } from './components/ui.tsx';
 import { bindRouter, href, relPath } from './lib/nav.ts';
+import { checkMediaPermissions } from './lib/permissions.ts';
 import { activeMeetId, activeRoomInfo, enterRoom, leaveRoom } from './portals/meets/activeRoom.ts';
 import { MeetRoom } from './portals/meets/MeetRoom.tsx';
 import { MeetsHome } from './portals/meets/MeetsHome.tsx';
@@ -25,12 +26,19 @@ import { Admin } from './screens/Admin.tsx';
 import { TvCodeLink, TvScreen } from './screens/Tv.tsx';
 import { Setup, Welcome } from './screens/Welcome.tsx';
 import { blockedAccount, couponNeeded, signedIn } from './state/session.ts';
-import { appSettings } from './state/settings.ts';
+import { appSettings, restoreSettingsAtStart } from './state/settings.ts';
 
 /** Signed-in area. A deep link (e.g. a meet invite) is remembered and resumed after sign-in. */
 function Guard(props: { children: preact.ComponentChildren }) {
   const loc = useLocation();
   const ok = signedIn.value;
+  // Signed in: the settings saved in the Config folder come back at the start (the newer copy wins), and the browser's
+  // word on the camera and the microphone is read (lib/permissions.ts) — a saved choice never stands in for it.
+  useEffect(() => {
+    if (!ok) return;
+    restoreSettingsAtStart();
+    void checkMediaPermissions();
+  }, [ok]);
   useEffect(() => {
     if (!ok) {
       try {

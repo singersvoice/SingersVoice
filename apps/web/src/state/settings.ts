@@ -5,6 +5,7 @@
  */
 import { effect, signal } from '@preact/signals';
 import { applyPreset, AUDIO_SETTINGS_DEFAULTS, CONFIG_FILES, clampParams, TV_LOOKS, VOXFORGE_PRESETS, type AudioPluginSettings, type TvLook } from '@singersvoice/protocol';
+import { MIX_TRACK_DEFAULT_DB, MIX_VOCAL_DEFAULT_DB } from '../audio/gain.ts';
 import { FRAMINGS, PICTURES, type Framing, type Picture } from '../video/framing.ts';
 import { provider } from './session.ts';
 
@@ -19,11 +20,13 @@ export interface AppSettings {
   cutout: boolean;
   /** My picture on every stage: me cut out of my room ('cutout'), or my camera picture as it is, room and all ('camera'). video/framing.ts. */
   picture: Picture;
-  /** How my frame behaves: still (the default), following me when I move, or pushed in on me by my voice. video/framing.ts. */
+  /** How my frame behaves: pushed in on my face while I sing (the default), still, or following me when I move. video/framing.ts. */
   framing: Framing;
   /** One-time migration markers for the virtual-stage defaults. */
   stageV3: boolean;
   stageV4: boolean;
+  /** One-time migration marker: the framing's default became the voice zoom (a save from before keeps nothing else). */
+  framingV2: boolean;
   singerSlot: number;
   countIn: boolean;
   showCueDeck: boolean;
@@ -35,9 +38,13 @@ export interface AppSettings {
   instrumentDb: number;
   highContrastLyrics: boolean;
   onboarded: boolean;
-  /** The mix balance on this device (dB): the backing track and the vocals in what is recorded, relayed and broadcast from here. */
+  /** When the camera and the microphone were asked for at the setup (ISO; '' never): the browser keeps the answer itself — this only says the question was put. */
+  mediaAskedAt: string;
+  /** The mix balance on this device (dB): the backing track and the vocals in what is recorded, relayed and broadcast from here (audio/gain.ts has where they start). */
   trackDb: number;
   vocalDb: number;
+  /** One-time migration marker: the balance's defaults rose (the voice in front); a save still at the old 0 / 0 takes them once. */
+  mixV2: boolean;
   /** Host: the whole meet is filmed on this device (the show picture with the stage mix) straight into Drive, as one video. */
   recordMeet: boolean;
   /**
@@ -52,6 +59,8 @@ export interface AppSettings {
   socialOffer: boolean;
   /** The length a clip starts out with (seconds; the picker moves it). */
   clipSeconds: number;
+  /** When these were last changed (ISO; '' never): the newer of this device's copy and the Config folder's wins at the start. */
+  updatedAt: string;
 }
 
 export const APP_DEFAULTS: AppSettings = {
@@ -63,9 +72,10 @@ export const APP_DEFAULTS: AppSettings = {
   cameraDeviceId: '',
   cutout: true,
   picture: 'cutout',
-  framing: 'still',
+  framing: 'voice',
   stageV3: true,
   stageV4: true,
+  framingV2: true,
   singerSlot: 1,
   countIn: true,
   showCueDeck: true,
@@ -76,13 +86,16 @@ export const APP_DEFAULTS: AppSettings = {
   instrumentDb: 0,
   highContrastLyrics: false,
   onboarded: false,
-  trackDb: 0,
-  vocalDb: 0,
+  mediaAskedAt: '',
+  trackDb: MIX_TRACK_DEFAULT_DB,
+  vocalDb: MIX_VOCAL_DEFAULT_DB,
+  mixV2: true,
   recordMeet: true,
   youtubePrivacy: 'unlisted',
   tvLook: 'both',
   socialOffer: true,
   clipSeconds: 60,
+  updatedAt: '',
 };
 
 const APP_KEY = 'sv.settings.app';
@@ -113,7 +126,13 @@ function migrateApp(v: AppSettings): AppSettings {
   delete (v as Partial<Record<'zoomPreset' | 'autoZoom', unknown>>).autoZoom;
   // The picture and framing choices: a save from before them keeps what its cut-out switch said; anything odd is the default.
   if (!PICTURES.includes(v.picture)) v = { ...v, picture: v.cutout === false ? 'camera' : 'cutout' };
-  if (!FRAMINGS.includes(v.framing)) v = { ...v, framing: 'still' };
+  if (!FRAMINGS.includes(v.framing)) v = { ...v, framing: 'voice' };
+  // The voice zoom became the default framing: a save from before starts on it once (the choice is the singer's from then on).
+  if (stored.framingV2 !== true) v = { ...v, framing: 'voice', framingV2: true };
+  // The balance's defaults rose (the voice in front of the music): a save never moved off the old 0 / 0 takes the new ones once; a balance the singer set stays theirs.
+  if (stored.mixV2 !== true) v = { ...v, mixV2: true, ...(Number(v.trackDb) === 0 && Number(v.vocalDb) === 0 ? { trackDb: MIX_TRACK_DEFAULT_DB, vocalDb: MIX_VOCAL_DEFAULT_DB } : {}) };
+  if (!Number.isFinite(Number(v.trackDb))) v = { ...v, trackDb: MIX_TRACK_DEFAULT_DB };
+  if (!Number.isFinite(Number(v.vocalDb))) v = { ...v, vocalDb: MIX_VOCAL_DEFAULT_DB };
   if (!TV_LOOKS.includes(v.tvLook)) v = { ...v, tvLook: 'both' };
   if (typeof v.socialOffer !== 'boolean') v = { ...v, socialOffer: true };
   if (!Number.isFinite(v.clipSeconds) || v.clipSeconds < 15 || v.clipSeconds > 180) v = { ...v, clipSeconds: 60 };
@@ -138,7 +157,7 @@ function sanitizeAudio(a: AudioPluginSettings): AudioPluginSettings {
 }
 
 export function updateApp(patch: Partial<AppSettings>): void {
-  appSettings.value = { ...appSettings.value, ...patch };
+  appSettings.value = { ...appSettings.value, ...patch, updatedAt: new Date().toISOString() };
 }
 
 export function updateAudio(patch: Partial<AudioPluginSettings>): void {
@@ -173,15 +192,52 @@ effect(() => {
   audioTimer = setTimeout(() => void provider.peek().setConfig(CONFIG_FILES.audioPlugin, v).catch(() => undefined), 2500);
 });
 
-/** Pull the provider's copies (e.g. after linking Drive on a new device). Newer `updatedAt` wins for audio. */
+/**
+ * Saved now, by hand (the Save button beside the sound settings): both files to the Config folder at once, the
+ * debounced copies cancelled — and the word on how it went (`settingsSaved`: when and where, or why not), for the
+ * button to show. The automatic saves go on as before; this one is for the singer who wants to see it done.
+ */
+export const settingsSaved = signal<{ at: string; error: null } | { at: string; error: string } | null>(null);
+export async function saveSettingsNow(): Promise<void> {
+  clearTimeout(appTimer);
+  clearTimeout(audioTimer);
+  const p = provider.peek();
+  try {
+    await p.setConfig(CONFIG_FILES.audioPlugin, audioSettings.peek());
+    await p.setConfig(CONFIG_FILES.app, appSettings.peek());
+    settingsSaved.value = { at: new Date().toISOString(), error: null };
+  } catch (e) {
+    settingsSaved.value = { at: new Date().toISOString(), error: e instanceof Error ? e.message : String(e) };
+    throw e;
+  }
+}
+
+/**
+ * Pull the Config folder's copies (after linking Drive on a new device, at every start, from Settings): the newer
+ * copy wins, file by file — a change made here a moment ago (or offline, before it could be saved) is never undone
+ * by an older copy in the folder; a copy saved from another device comes to this one.
+ */
 export async function pullSettings(): Promise<void> {
   const p = provider.peek();
   try {
     const remoteAudio = await p.getConfig<AudioPluginSettings>(CONFIG_FILES.audioPlugin);
-    if (remoteAudio && (remoteAudio.updatedAt ?? '') > (audioSettings.peek().updatedAt ?? '')) audioSettings.value = sanitizeAudio(remoteAudio);
+    const localAudio = audioSettings.peek();
+    if (remoteAudio && (remoteAudio.updatedAt ?? '') > (localAudio.updatedAt ?? '')) audioSettings.value = sanitizeAudio(remoteAudio);
+    else if ((remoteAudio?.updatedAt ?? '') < (localAudio.updatedAt ?? '')) void p.setConfig(CONFIG_FILES.audioPlugin, localAudio).catch(() => undefined); // this device's is the newer: the folder takes it
     const remoteApp = await p.getConfig<AppSettings>(CONFIG_FILES.app);
-    if (remoteApp) appSettings.value = migrateApp({ ...APP_DEFAULTS, ...remoteApp, onboarded: appSettings.peek().onboarded || remoteApp.onboarded });
+    const local = appSettings.peek();
+    if (remoteApp && (remoteApp.updatedAt ?? '') >= (local.updatedAt ?? '')) appSettings.value = migrateApp({ ...APP_DEFAULTS, ...remoteApp, onboarded: local.onboarded || remoteApp.onboarded });
+    else if ((remoteApp?.updatedAt ?? '') < (local.updatedAt ?? '')) void p.setConfig(CONFIG_FILES.app, local).catch(() => undefined);
   } catch {
     /* offline or not linked yet */
   }
+}
+
+/**
+ * The settings at the start of the app: this device's copy is up at once (localStorage); signed in to Drive, the
+ * Config folder's copy is read as well and the newer wins (`pullSettings`) — the sound set up on one device is the
+ * sound on the next, and a device whose browser let its storage go gets its settings back.
+ */
+export function restoreSettingsAtStart(): void {
+  if (provider.peek().kind === 'drive') void pullSettings();
 }

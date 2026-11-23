@@ -1,9 +1,11 @@
 // Writes a short Y4M clip of a synthetic "person" (skin-tone head, dark torso, bright wall) that
 // Chromium can play as a fake camera (--use-file-for-fake-video-capture), so the browser tests
 // exercise the real segmentation model and the real cut-out instead of a colour test pattern.
-// The person wears two badges on the torso: MAGENTA on the camera's left of the head (their right
-// shoulder), YELLOW on the camera's right — colours the stage never shows otherwise. A frame with the
-// magenta one left of the yellow one is as the camera saw it; mirrored, they swap sides.
+// The person wears two badges on the cheeks: MAGENTA on the camera's left of the face (their right
+// cheek), YELLOW on the camera's right — colours the stage never shows otherwise. A frame with the
+// magenta one left of the yellow one is as the camera saw it; mirrored, they swap sides. (On the
+// cheeks, not the torso: the stage's close-up on the face while the singer is heard — the zoom with the
+// voice — and the riser in front of the chest never hide them.)
 //   node tools/ci/fake-person.mjs out.y4m
 import { writeFileSync } from 'node:fs';
 
@@ -18,12 +20,12 @@ function rgb(x, y, t) {
   const head = ((x - cx) / 80) ** 2 + ((y - 230) / 105) ** 2 <= 1;
   const torso = ((x - cx) / 175) ** 2 + ((y - 540) / 190) ** 2 <= 1;
   const neck = Math.abs(x - cx) < 34 && y > 300 && y < 380;
-  const badgeL = ((x - (cx - 100)) / 48) ** 2 + ((y - 470) / 42) ** 2 <= 1; // on the torso, camera-left of the head
-  const badgeR = ((x - (cx + 100)) / 48) ** 2 + ((y - 470) / 42) ** 2 <= 1; // and camera-right
-  if (head) return [0x8d, 0x55, 0x24];
-  if (neck) return [0x8d, 0x55, 0x24];
+  const badgeL = ((x - (cx - 45)) / 22) ** 2 + ((y - 260) / 20) ** 2 <= 1; // on the cheek, camera-left of the face's middle
+  const badgeR = ((x - (cx + 45)) / 22) ** 2 + ((y - 260) / 20) ** 2 <= 1; // and camera-right
   if (badgeL) return [0xff, 0x00, 0xff];
   if (badgeR) return [0xff, 0xe8, 0x00];
+  if (head) return [0x8d, 0x55, 0x24];
+  if (neck) return [0x8d, 0x55, 0x24];
   if (torso) return [0x1e, 0x22, 0x35];
   return [0xf2, 0xf2, 0xf2];
 }

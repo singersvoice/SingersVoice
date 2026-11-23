@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import { inAppBrowser, openInBrowserUrl } from '../lib/browserEnv.ts';
 import { DRIVE_TICK, DriveScopeMissingError, googleConfigured, loadGis } from '../lib/google.ts';
 import { asset, go } from '../lib/nav.ts';
-import { persistStorage, platformName } from '../lib/platform.ts';
+import { isIOS, isStandalone, persistStorage, platformName } from '../lib/platform.ts';
+import { checkMediaPermissions, permissionHelp, requestMediaAccess } from '../lib/permissions.ts';
 import { errorText, toast } from '../lib/toast.ts';
 import { busy, continueOnDevice, isDrive, profile, provider, signInWithGoogle, signedIn, staleDeviceSession } from '../state/session.ts';
 import { appSettings, pullSettings, updateApp } from '../state/settings.ts';
@@ -135,8 +136,9 @@ export function Welcome() {
 type Check = 'idle' | 'ok' | 'warn' | 'busy';
 
 export function Setup() {
-  const [mic, setMic] = useState<Check>('idle');
-  const [cam, setCam] = useState<Check>('idle');
+  /** The camera and the microphone, asked for together — one prompt — and what the browser said. */
+  const [media, setMedia] = useState<Check>('idle');
+  const [mediaNote, setMediaNote] = useState<string>('');
   const [store, setStore] = useState<Check>('idle');
   const [links, setLinks] = useState<{ root?: string; tracks?: string }>({});
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -162,25 +164,32 @@ export function Setup() {
     })();
   }, []);
 
-  const testMic = async () => {
-    setMic('busy');
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-      s.getTracks().forEach((t) => t.stop());
-      setMic('ok');
-    } catch {
-      setMic('warn');
-      toast('Microphone permission was denied — allow it in the browser site settings', 'warn', 6000);
-    }
-  };
-  const testCam = async () => {
-    setCam('busy');
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
-      s.getTracks().forEach((t) => t.stop());
-      setCam('ok');
-    } catch {
-      setCam('warn');
+  // The browser's own word on the two, where it gives one: already allowed is shown as done — nothing is asked twice.
+  useEffect(() => {
+    void checkMediaPermissions().then((p) => {
+      if (p.camera === 'granted' && p.microphone === 'granted') {
+        setMedia('ok');
+        setMediaNote('Already allowed in this browser.');
+      } else if (p.microphone === 'denied' || p.camera === 'denied') {
+        setMedia('warn');
+        setMediaNote(`${p.microphone === 'denied' ? 'The microphone' : 'The camera'} is blocked in this browser. ${permissionHelp(p.microphone === 'denied' ? 'microphone' : 'camera')}`);
+      }
+    });
+  }, []);
+  const allow = async (withCamera: boolean) => {
+    setMedia('busy');
+    const r = await requestMediaAccess({ camera: withCamera });
+    updateApp({ mediaAskedAt: new Date().toISOString() });
+    if (r.microphone === 'granted' && (r.camera === 'granted' || r.camera === 'skipped')) {
+      setMedia('ok');
+      setMediaNote(`${r.microphoneLabel || 'Microphone'}${r.camera === 'granted' ? ` · ${r.cameraLabel || 'camera'}` : ' (no camera asked)'} — allowed. ${isIOS && !isStandalone ? 'On iPhone, Safari asks once per visit unless SingersVoice is added to the Home Screen or its Website Settings say Allow.' : 'This browser remembers the answer.'}`);
+    } else if (r.microphone === 'granted') {
+      setMedia('ok');
+      setMediaNote(r.camera === 'none' ? 'Microphone allowed · no camera on this device (singing with the voice alone).' : `Microphone allowed · the camera was refused — singing without video until it is allowed. ${permissionHelp('camera')}`);
+    } else {
+      setMedia('warn');
+      setMediaNote(r.microphone === 'none' ? 'No microphone was found on this device.' : `The microphone was refused — SingersVoice cannot hear you until it is allowed. ${permissionHelp('microphone')}`);
+      toast('Microphone permission was denied', 'warn', 6000);
     }
   };
   const finish = () => {
@@ -228,25 +237,22 @@ export function Setup() {
               </button>
             )}
           </div>
-          <div class={`step ${mic}`}>
-            <div class="n">{mic === 'ok' ? <IcCheck size={18} /> : '3'}</div>
+          <div class={`step ${media}`} data-media-step={media}>
+            <div class="n">{media === 'ok' ? <IcCheck size={18} /> : '3'}</div>
             <div>
-              <b>Microphone</b>
-              <div class="small muted">Needed to sing. Echo cancellation stays off for a clean vocal.</div>
+              <b>Camera &amp; microphone</b>
+              <div class="small muted">{mediaNote || 'One tap, one question from the browser — for both at once. The microphone is needed to sing; the camera puts you on the stage. Allowed once, the browser remembers.'}</div>
             </div>
-            <button class="btn sm" onClick={() => void testMic()} disabled={mic === 'busy'}>
-              {mic === 'busy' ? <Spinner /> : <IcMic size={18} />} Test
-            </button>
-          </div>
-          <div class={`step ${cam}`}>
-            <div class="n">{cam === 'ok' ? <IcCheck size={18} /> : '4'}</div>
-            <div>
-              <b>Camera (optional)</b>
-              <div class="small muted">Small self-view tile; lyrics keep the stage.</div>
+            <div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">
+              <button class="btn sm primary" onClick={() => void allow(true)} disabled={media === 'busy'} data-allow-media>
+                {media === 'busy' ? <Spinner /> : <IcCamera size={18} />} {media === 'ok' ? 'Ask again' : 'Allow both'}
+              </button>
+              {media !== 'ok' && (
+                <button class="btn sm" onClick={() => void allow(false)} disabled={media === 'busy'} data-allow-mic>
+                  <IcMic size={18} /> Mic only
+                </button>
+              )}
             </div>
-            <button class="btn sm" onClick={() => void testCam()} disabled={cam === 'busy'}>
-              {cam === 'busy' ? <Spinner /> : <IcCamera size={18} />} Test
-            </button>
           </div>
           <div class="step">
             <div class="n">
@@ -258,7 +264,7 @@ export function Setup() {
             </div>
           </div>
           <div class={`step ${store}`}>
-            <div class="n">{store === 'ok' ? <IcCheck size={18} /> : '6'}</div>
+            <div class="n">{store === 'ok' ? <IcCheck size={18} /> : '5'}</div>
             <div>
               <b>Local storage protected</b>
               <div class="small muted">{store === 'ok' ? 'The browser will keep your in-progress takes.' : store === 'warn' ? 'Not granted — install the app to your home screen for durable storage.' : 'Checking…'}</div>

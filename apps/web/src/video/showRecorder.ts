@@ -128,7 +128,7 @@ class DelayedCanvas {
 export class ShowRecorder {
   readonly canvas: HTMLCanvasElement;
   private readonly c2d: CanvasRenderingContext2D;
-  private readonly compositor = new StageCompositor('show');
+  private readonly compositor: StageCompositor;
   /** The brand's mark over every frame (the recording, the film, the broadcast carry it). */
   readonly mark = new BrandMark();
   private performers: StagePerformer[] = [];
@@ -209,10 +209,11 @@ export class ShowRecorder {
   /** Frames a second the picture is drawn and recorded at. */
   readonly fps: number;
 
-  constructor(width = SHOW_WIDTH, height = SHOW_HEIGHT, fps = SHOW_FPS) {
+  constructor(width = SHOW_WIDTH, height = SHOW_HEIGHT, fps = SHOW_FPS, /** The row's size: 'show' (a meet, the broadcast), 'solo' (the Studio's saved performance: the singers half as big again, no empty stage under them — stage.ts). */ mode: 'show' | 'solo' = 'show') {
     this.width = width;
     this.height = height;
     this.fps = fps;
+    this.compositor = new StageCompositor(mode);
     this.canvas = document.createElement('canvas');
     this.canvas.width = width;
     this.canvas.height = height;

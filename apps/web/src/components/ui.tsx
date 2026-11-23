@@ -37,7 +37,7 @@ export function Field(props: { label: string; children: ComponentChildren; hint?
   );
 }
 
-export function Sheet(props: { open: boolean; onClose: () => void; title?: string; children: ComponentChildren }) {
+export function Sheet(props: { open: boolean; onClose: () => void; title?: string; children: ComponentChildren; /** A wide sheet (a performance's video): as wide as the window allows on a computer. */ wide?: boolean }) {
   useEffect(() => {
     if (!props.open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && props.onClose();
@@ -47,7 +47,7 @@ export function Sheet(props: { open: boolean; onClose: () => void; title?: strin
   if (!props.open) return null;
   return (
     <div class="sheet-back" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div class="sheet" role="dialog" aria-modal="true" aria-label={props.title}>
+      <div class={`sheet ${props.wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={props.title}>
         <div class="grab" />
         {props.title && (
           <div class="row between" style="margin-bottom:10px">

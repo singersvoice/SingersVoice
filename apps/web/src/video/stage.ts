@@ -9,10 +9,13 @@
  * the same place), so the slots can be one size and the singers come out one size. The frame a
  * device sends is drawn whole — the same crop, the same proportions — on the live stage under the
  * lyrics, on the lobby stage, in the show view, in the broadcast and in the saved performance.
- * Nothing here finds a person and zooms in on its own. Two modes differ in the slot size alone:
+ * Nothing here finds a person and zooms in on its own. The modes differ in the slot size alone:
  *
- * - 'show' (Publisher mode: the broadcast picture, the lobby stage, the saved performance): the
+ * - 'show' (Publisher mode: the broadcast picture, the lobby stage, a meet's saved performance): the
  *   singers are the picture — slots as tall as the frame allows, one even row of ten at most.
+ * - 'solo' (the Studio's saved performance): no lyrics, nobody else's row to match — the singers half
+ *   as big again as 'show' (a medium close-up: head and shoulders), the riser a slim band at the
+ *   bottom, no empty stage under them.
  * - 'stage' (Performer mode: the live stage, Studio): the lyrics are the picture — small 3:4 slots
  *   in the lower part under the lyrics.
  *
@@ -63,7 +66,7 @@ const FPS = 24;
  * every slot on the same floor, the same size, evenly spaced — no curve (the lift of the ends is 0;
  * `arcLift` stays as the one place a curve would come from, should a stage ever want one).
  */
-export const ARC_LIFT: Record<StageMode, number> = { show: 0, stage: 0 };
+export const ARC_LIFT: Record<StageMode, number> = { show: 0, solo: 0, stage: 0 };
 /**
  * The riser in front of the row hides this much of every frame from the bottom: the singers show
  * head and shoulders above its edge, whatever their camera's bottom edge cut — the way a chair's
@@ -74,8 +77,10 @@ export const RISER_COVER = 0.4;
 const RISER_MIN = 0.09;
 /** …and never taller than this in 'show' mode (small slots, a crowd of ten, sit lower rather than behind a wall). */
 const RISER_MAX = 0.4;
-/** 'show': the row's slots start about here from the top when they are big (one or two singers): the heads a little under. */
+/** 'show' and 'solo': the row's slots start about here from the top when they are big (one or two singers): the heads a little under. */
 const ROW_TOP = 0.08;
+/** 'solo': the slots this much taller than 'show' gives them — the singer half as big again. */
+const SOLO_SCALE = 1.5;
 /**
  * A stage with nobody's picture on it (the audience's view: no video reaches them; a lobby before the
  * cameras are on) is a still: it is redrawn only now and then, to catch a change — a frame arriving, an
@@ -104,7 +109,7 @@ export const STILL_AFTER_MS = 15_000;
 const STILL_SAMPLE_W = 16;
 const STILL_SAMPLE_H = 21;
 
-export type StageMode = 'stage' | 'show';
+export type StageMode = 'stage' | 'show' | 'solo';
 
 /** How far up the picture the row's floor is at `x` (0 in the middle, `ARC_LIFT` at the ends — 0: a straight line). */
 export function arcLift(width: number, height: number, x: number, mode: StageMode): number {
@@ -145,10 +150,11 @@ export function layoutStage(width: number, height: number, count: number, mode: 
   const slotW = width / n;
   let h: number;
   let w: number;
-  if (mode === 'show') {
+  if (mode === 'show' || mode === 'solo') {
     // The singers are the picture: a slot taller than it (its lower part hides behind the riser and runs on below the
-    // picture), so one or two singers stand big; a fuller row is as wide as its slots allow.
-    h = height * 1.2;
+    // picture), so one or two singers stand big; a fuller row is as wide as its slots allow. 'solo' (the Studio's saved
+    // performance) has them half as big again: a medium close-up, the frame's top at the row top, the chest behind the riser.
+    h = height * 1.2 * (mode === 'solo' ? SOLO_SCALE : 1);
     w = h * 0.75;
     if (w > slotW * FILL_W) {
       w = slotW * FILL_W;
@@ -165,7 +171,9 @@ export function layoutStage(width: number, height: number, count: number, mode: 
   }
   return Array.from({ length: n }, (_, i) => {
     const cx = slotW * (i + 0.5);
-    return { id: String(i), x: cx - w / 2, y: floorAt(width, height, cx, h, mode) - h, w, h };
+    const y = floorAt(width, height, cx, h, mode) - h;
+    // 'solo': a slot taller than the picture keeps its top (the head) at the row top rather than standing on the riser's floor.
+    return { id: String(i), x: cx - w / 2, y: mode === 'solo' ? Math.max(height * ROW_TOP, y) : y, w, h };
   });
 }
 
@@ -193,7 +201,7 @@ export function fitPerson(t: StageTile, srcW: number, srcH: number, mode: StageM
   const floor = t.y + t.h;
   const top = t.y + t.h * HEADROOM;
   const room = Math.max(1, floor - top);
-  const scale = Math.min(t.w / fw, room / fh, mode === 'show' ? MAX_UPSCALE * Math.max(0.5, canvasH / 720) : Infinity);
+  const scale = Math.min(t.w / fw, room / fh, mode !== 'stage' ? MAX_UPSCALE * Math.max(0.5, canvasH / 720) : Infinity);
   const w = fw * scale;
   const h = fh * scale;
   return { scale, x: t.x + (t.w - w) / 2, y: floor - h, w, h };
@@ -507,7 +515,7 @@ export class StageCompositor {
 
   /** The singer's name on the riser, under their spot. */
   private drawTag(c: CanvasRenderingContext2D, p: StagePerformer, t: StageTile, W: number, H: number): void {
-    const fontPx = this.mode === 'show' ? Math.max(14, Math.min(26, t.w * 0.1)) : Math.max(11, Math.min(16, t.w * 0.09));
+    const fontPx = this.mode !== 'stage' ? Math.max(14, Math.min(26, t.w * 0.1)) : Math.max(11, Math.min(16, t.w * 0.09));
     c.save();
     c.font = `600 ${fontPx}px system-ui, -apple-system, sans-serif`;
     c.textBaseline = 'middle';

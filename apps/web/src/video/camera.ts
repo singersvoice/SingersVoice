@@ -12,23 +12,38 @@ export class Camera {
   readonly on = signal(false);
   readonly facing = signal<'user' | 'environment'>('user');
   readonly deviceLabel = signal('');
+  /** The microphone this camera was captured with (iOS: one capture per page — capture.ts), for the engine to adopt. */
+  private audio: MediaTrackConstraints | null = null;
 
-  async open(opts: { deviceId?: string; facing?: 'user' | 'environment' } = {}): Promise<MediaStream> {
+  /**
+   * Open the camera — and, with `audio`, the microphone in the same call (one prompt, one capture: what iPhone
+   * and iPad need, where a second capture ends the first and every capture asks). The audio track rides in
+   * `stream` for the engine to adopt (`engine.openMic({ adopt })`); a camera refused or missing never costs it.
+   */
+  async open(opts: { deviceId?: string; facing?: 'user' | 'environment'; audio?: MediaTrackConstraints | null } = {}): Promise<MediaStream> {
     this.close();
     const facing = opts.facing ?? this.facing.value;
     const size = cameraSize(); // 1080p on a computer, 720p on a phone (enhance.ts)
-    const constraints: MediaStreamConstraints = {
-      video: opts.deviceId
-        ? { deviceId: { exact: opts.deviceId }, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } }
-        : { facingMode: facing, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } },
-      audio: false,
-    };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    const video: MediaTrackConstraints = opts.deviceId
+      ? { deviceId: { exact: opts.deviceId }, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } }
+      : { facingMode: facing, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } };
+    const stream = await navigator.mediaDevices.getUserMedia({ video, audio: opts.audio ?? false });
     this.stream = stream;
+    this.audio = opts.audio ?? null;
     this.facing.value = facing;
     this.deviceLabel.value = stream.getVideoTracks()[0]?.label ?? 'Camera';
     this.on.value = true;
     return stream;
+  }
+
+  /** The microphone captured with the camera, live (the engine adopts it instead of capturing again); null when there is none. */
+  get micStream(): MediaStream | null {
+    return this.stream && this.stream.getAudioTracks().some((t) => t.readyState === 'live') ? this.stream : null;
+  }
+
+  /** How the microphone was captured with the camera (the engine checks it is the one wanted). */
+  get micConstraints(): MediaTrackConstraints | null {
+    return this.audio;
   }
 
   /** Use a stream captured elsewhere (combined audio+video getUserMedia on iOS). */
@@ -41,7 +56,7 @@ export class Camera {
   }
 
   async flip(): Promise<void> {
-    await this.open({ facing: this.facing.value === 'user' ? 'environment' : 'user' });
+    await this.open({ facing: this.facing.value === 'user' ? 'environment' : 'user', audio: this.audio }); // the microphone along, where it came along
   }
 
   async listCameras(): Promise<MediaDeviceInfo[]> {
@@ -52,6 +67,7 @@ export class Camera {
   close(): void {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
+    this.audio = null;
     this.on.value = false;
   }
 }

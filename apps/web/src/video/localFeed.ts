@@ -268,8 +268,8 @@ export class LocalFeed {
       this.streamed = false;
       this.inflight = 0;
       if (this.packedStreamRemote && this.packer) {
-        // The outgoing track was the worker's: it ends, and the next packedStream() makes the page's own (the stage asks again).
-        this.packer.stop();
+        // The outgoing track was the worker's: it ends (a moment after the worker, so nothing on its way is dropped unclosed), and the next packedStream() makes the page's own (the stage asks again).
+        this.packer.stopLater();
         this.packedStreamRemote = null;
         this.onPackedLost?.();
       }
@@ -615,11 +615,12 @@ export class LocalFeed {
     return this.link ? this.link.peek() : Promise.resolve(null);
   }
 
-  /** The outgoing stream is no longer wanted (off stage, camera off): the packing stops (the worker's too). */
+  /** The outgoing stream is no longer wanted (off stage, camera off): the packing stops (the worker's too — its writer closed first, its track a moment later, so no frame on its way is dropped unclosed). */
   stopPacking(): void {
     this.link?.pack(false);
     this.link?.sink(null);
-    this.packer?.stop();
+    if (this.packedStreamRemote) this.packer?.stopLater();
+    else this.packer?.stop();
     this.packedStreamRemote = null;
   }
 
@@ -630,7 +631,9 @@ export class LocalFeed {
     this.own.stop();
     this.link?.stop();
     this.link = null;
-    this.packer?.stop();
+    if (this.packedStreamRemote) this.packer?.stopLater();
+    else this.packer?.stop();
+    this.packedStreamRemote = null;
     this.packer = null;
     this.video.onpause = null;
     this.video.srcObject = null;

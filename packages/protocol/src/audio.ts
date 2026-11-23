@@ -176,6 +176,13 @@ export interface VoxForgePreset {
  * Factory presets — one click, applied live to the captured voice (the web counterparts of VoxForge's
  * templates). The first six are the finished-vocal treatments: Studio, Natural Tune, Punch, Up Front,
  * Radio-Ready and Vibrant; the rest are characters and effects.
+ *
+ * One level for all of them: each preset's compressor makeup (`cMk`) is set so that a voice at −15 dBFS
+ * comes out of every preset within a couple of dB of the others (measured through the real chain in
+ * tools/ci/audio-lab.mjs: the makeup gives back what the compressor takes, less what the saturation and
+ * the doubling add) — so switching presets changes the character of the voice, never how loud it comes
+ * out (in the singer's ears, the preview, and the mix, where the rider then sets the final level). Every
+ * preset leaves the input and output trims to the singer (`applyPreset`).
  */
 export const VOXFORGE_PRESETS: VoxForgePreset[] = [
   { id: 'natural', name: 'Natural', blurb: 'Clean, present vocal, light room.', params: {} },
@@ -195,67 +202,67 @@ export const VOXFORGE_PRESETS: VoxForgePreset[] = [
     id: 'punch',
     name: 'Punch',
     blurb: 'Punch without over-compression: light main compressor, a crushed copy blended under.',
-    params: { eqPres: 3, eqHi: 2, cThr: -16, cRat: 2, cAtk: 12, cRel: 150, cMk: 3, pcOn: true, pcMx: 0.55, dsOn: true, dsAmt: 0.5, exOn: true, exAmt: 0.2, rdOn: true, rdAmt: 0.4, rvMx: 0.14 },
+    params: { eqPres: 3, eqHi: 2, cThr: -16, cRat: 2, cAtk: 12, cRel: 150, cMk: 0.5, pcOn: true, pcMx: 0.55, dsOn: true, dsAmt: 0.5, exOn: true, exAmt: 0.2, rdOn: true, rdAmt: 0.4, rvMx: 0.14 },
   },
   {
     id: 'upfront',
     name: 'Up Front',
     blurb: 'Perfect placement: sits on top of the track, every phrase at one level, short pre-delayed room.',
-    params: { hpfHz: 110, eqLow: -2, eqMid: 1.5, eqPres: 3, eqHi: 2, cThr: -22, cRat: 3.5, cMk: 6, pcOn: true, pcMx: 0.3, dsOn: true, dsAmt: 0.55, exOn: true, exAmt: 0.3, rdOn: true, rdAmt: 0.85, rvSz: 0.3, rvDc: 1.4, rvPd: 0.045, rvMx: 0.14 },
+    params: { hpfHz: 110, eqLow: -2, eqMid: 1.5, eqPres: 3, eqHi: 2, cThr: -22, cRat: 3.5, cMk: 7, pcOn: true, pcMx: 0.3, dsOn: true, dsAmt: 0.55, exOn: true, exAmt: 0.3, rdOn: true, rdAmt: 0.85, rvSz: 0.3, rvDc: 1.4, rvPd: 0.045, rvMx: 0.14 },
   },
   {
     id: 'radio',
     name: 'Radio-Ready',
     blurb: 'Radio-ready: bright, dense and loud, a hint of grit, the softest line comes out strong.',
-    params: { hpfHz: 100, eqLow: -1.5, eqMid: 1, eqPres: 3.5, eqHi: 3, cThr: -24, cRat: 4, cAtk: 4, cRel: 110, cMk: 7, pcOn: true, pcMx: 0.35, dsOn: true, dsAmt: 0.6, exOn: true, exAmt: 0.4, rdOn: true, rdAmt: 0.8, satOn: true, satDr: 0.15, satMx: 0.2, rvMx: 0.12, rvDc: 1.6, dlOn: true, dlTm: 0.22, dlFb: 0.12, dlMx: 0.08 },
+    params: { hpfHz: 100, eqLow: -1.5, eqMid: 1, eqPres: 3.5, eqHi: 3, cThr: -24, cRat: 4, cAtk: 4, cRel: 110, cMk: 4.5, pcOn: true, pcMx: 0.35, dsOn: true, dsAmt: 0.6, exOn: true, exAmt: 0.4, rdOn: true, rdAmt: 0.8, satOn: true, satDr: 0.15, satMx: 0.2, rvMx: 0.12, rvDc: 1.6, dlOn: true, dlTm: 0.22, dlFb: 0.12, dlMx: 0.08 },
   },
   {
     id: 'vibrant',
     name: 'Vibrant',
     blurb: 'More vibrant: maximum air and presence, the rider all the way — even a whisper fills the stage.',
-    params: { hpfHz: 100, eqLow: -1, eqMid: 1.5, eqPres: 4, eqHi: 3.5, cThr: -26, cRat: 5, cAtk: 3, cRel: 100, cMk: 8, pcOn: true, pcMx: 0.45, dsOn: true, dsAmt: 0.7, exOn: true, exAmt: 0.5, rdOn: true, rdAmt: 1, chOn: true, chRt: 0.4, chDp: 0.25, chMx: 0.15, rvSz: 0.45, rvDc: 2.2, rvMx: 0.2 },
+    params: { hpfHz: 100, eqLow: -1, eqMid: 1.5, eqPres: 4, eqHi: 3.5, cThr: -26, cRat: 5, cAtk: 3, cRel: 100, cMk: 10.5, pcOn: true, pcMx: 0.45, dsOn: true, dsAmt: 0.7, exOn: true, exAmt: 0.5, rdOn: true, rdAmt: 1, chOn: true, chRt: 0.4, chDp: 0.25, chMx: 0.15, rvSz: 0.45, rvDc: 2.2, rvMx: 0.2 },
   },
   {
     id: 'popstar',
     name: 'Pop Star',
     blurb: 'Bright, tight, modern tune.',
-    params: { autoStr: 0.7, autoSpeed: 0.55, eqHi: 3, eqPres: 2, eqLow: -1.5, cThr: -22, cRat: 4, cMk: 5, dsOn: true, dsAmt: 0.5, exOn: true, exAmt: 0.25, rdOn: true, rdAmt: 0.5, rvMx: 0.18, dlOn: true, dlTm: 0.25, dlMx: 0.14 },
+    params: { autoStr: 0.7, autoSpeed: 0.55, eqHi: 3, eqPres: 2, eqLow: -1.5, cThr: -22, cRat: 4, cMk: 7, dsOn: true, dsAmt: 0.5, exOn: true, exAmt: 0.25, rdOn: true, rdAmt: 0.5, rvMx: 0.18, dlOn: true, dlTm: 0.25, dlMx: 0.14 },
   },
   {
     id: 'warm',
     name: 'Warm',
     blurb: 'Round and close: fuller low end, softer top, a little tape.',
-    params: { eqLow: 2, eqPres: 0.5, eqHi: -1, satOn: true, satDr: 0.15, satMx: 0.2, cThr: -18, cRat: 3, rdOn: true, rdAmt: 0.5, rvMx: 0.18 },
+    params: { eqLow: 2, eqPres: 0.5, eqHi: -1, satOn: true, satDr: 0.15, satMx: 0.2, cThr: -18, cRat: 3, cMk: 0, rdOn: true, rdAmt: 0.5, rvMx: 0.18 },
   },
   {
     id: 'bright',
     name: 'Bright',
     blurb: 'Sharp and forward: presence and air up, every consonant clear.',
-    params: { eqLow: -2, eqPres: 4, eqHi: 4.5, exOn: true, exAmt: 0.45, dsOn: true, dsAmt: 0.75, cThr: -20, cRat: 3.5, rdOn: true, rdAmt: 0.5, rvMx: 0.16 },
+    params: { eqLow: -2, eqPres: 4, eqHi: 4.5, exOn: true, exAmt: 0.45, dsOn: true, dsAmt: 0.75, cThr: -20, cRat: 3.5, cMk: 5.5, rdOn: true, rdAmt: 0.5, rvMx: 0.16 },
   },
   {
     id: 'ballad',
     name: 'Warm Ballad',
     blurb: 'Big hall, soft top end.',
-    params: { eqLow: 2, eqHi: -1, eqPres: 0, rvSz: 0.75, rvDc: 4.2, rvMx: 0.34, rvPd: 0.04, cThr: -16, cRat: 2.5, rdOn: true, rdAmt: 0.4 },
+    params: { eqLow: 2, eqHi: -1, eqPres: 0, rvSz: 0.75, rvDc: 4.2, rvMx: 0.34, rvPd: 0.04, cThr: -16, cRat: 2.5, cMk: 2, rdOn: true, rdAmt: 0.4 },
   },
   {
     id: 'stadium',
     name: 'Stadium',
     blurb: 'Huge slap-back and long tail.',
-    params: { dlOn: true, dlTm: 0.42, dlFb: 0.4, dlMx: 0.3, rvSz: 0.9, rvDc: 6, rvMx: 0.4, cMk: 4, eqPres: 2 },
+    params: { dlOn: true, dlTm: 0.42, dlFb: 0.4, dlMx: 0.3, rvSz: 0.9, rvDc: 6, rvMx: 0.4, cMk: 5, eqPres: 2 },
   },
   {
     id: 'telephone',
     name: 'Telephone',
     blurb: 'Narrow band, saturated, dry — the old radio effect.',
-    params: { hpfHz: 260, eqMid: 5, eqPres: 2, eqHi: -4, eqLow: -6, satOn: true, satDr: 0.5, satMx: 0.6, rvOn: false, cThr: -26, cRat: 6, dsOn: false },
+    params: { hpfHz: 260, eqMid: 4, eqPres: 2, eqHi: -4, eqLow: -6, satOn: true, satDr: 0.35, satMx: 0.5, rvOn: false, cThr: -26, cRat: 6, cMk: 1, dsOn: false },
   },
   {
     id: 'doubler',
     name: 'Doubler',
     blurb: 'Chorus thickening for choruses.',
-    params: { chOn: true, chRt: 0.35, chDp: 0.55, chMx: 0.45, rvMx: 0.2 },
+    params: { chOn: true, chRt: 0.35, chDp: 0.55, chMx: 0.45, cMk: 7, rvMx: 0.2 },
   },
   {
     id: 'robot',
@@ -267,7 +274,7 @@ export const VOXFORGE_PRESETS: VoxForgePreset[] = [
     id: 'octave-down',
     name: 'Octave Down',
     blurb: 'Sub-octave for harmonies.',
-    params: { octave: -1, rvMx: 0.2 },
+    params: { octave: -1, cMk: 6, rvMx: 0.2 },
   },
 ];
 

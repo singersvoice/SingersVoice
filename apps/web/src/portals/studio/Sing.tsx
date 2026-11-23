@@ -3,7 +3,7 @@ import { effect, useSignal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { bleedOffset, lagIsStrong, monoOf } from '../../audio/sync.ts';
-import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker } from '../../components/BackgroundPicker.tsx';
+import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker, pickBackground } from '../../components/BackgroundPicker.tsx';
 import { ClipSheet } from '../../components/ClipSheet.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
@@ -13,6 +13,7 @@ import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
 import { MixBalance } from '../../components/MixBalance.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
+import { SaveSoundButton, VoicePreview } from '../../components/SoundPreview.tsx';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
 import { TvPanel } from '../../components/TvPanel.tsx';
 import { tvLink } from '../../lib/tv.ts';
@@ -30,9 +31,11 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { accountUserId, isDrive, profile, role, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
-import { openMicWithCamera, restartCamera } from '../../video/capture.ts';
+import { openCamera, openMicWithCamera, releaseMicAfterSong, restartCamera } from '../../video/capture.ts';
+import { isPermissionDenied, mediaPermissions, permissionHelp } from '../../lib/permissions.ts';
 import { LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
+import { TakePlayback } from '../../audio/takePlayback.ts';
 import { StageCompositor } from '../../video/stage.ts';
 
 type Phase = 'loading' | 'ready' | 'starting' | 'countdown' | 'playing' | 'paused' | 'finishing' | 'review';
@@ -170,8 +173,8 @@ export function Sing(props: { id?: string; joinId?: string }) {
   const camera = useMemo(() => new Camera(), []);
   const feed = useMemo(() => new LocalFeed(), []);
   const compositor = useMemo(() => new StageCompositor('show'), []); // the singers fill their strip under the lyrics
-  /** The take's video is the show: my cut-out on the stage background, as Publisher mode would show it, with the mix. */
-  const show = useMemo(() => new ShowRecorder(), []);
+  /** The take's video is the show: my cut-out on the stage background with the mix — the singers half as big again as a meet's show (no lyrics to share the picture with), no empty stage under them. */
+  const show = useMemo(() => new ShowRecorder(undefined, undefined, undefined, 'solo'), []);
   useEffect(() => {
     (window as unknown as { __svFeed?: LocalFeed; __svShow?: ShowRecorder }).__svFeed = feed; // support / e2e hooks
     (window as unknown as { __svShow?: ShowRecorder }).__svShow = show;
@@ -278,6 +281,8 @@ export function Sing(props: { id?: string; joinId?: string }) {
   const camOn = camera.on.value;
   // The camera's health: a camera the browser muted or ended, or one frozen on a picture, is restarted — once by itself, then from a tap.
   const [camHealth, setCamHealth] = useState<FeedHealth>('ok');
+  /** The browser said no to the camera (its own setting): said on the stage, with the way back. */
+  const [camBlocked, setCamBlocked] = useState(false);
   const autoRestartAt = useRef(0);
   const restartCam = () => restartCamera(engineRef.current, camera).catch((e) => toast(errorText(e), 'warn'));
   useEffect(() => {
@@ -336,12 +341,22 @@ export function Sing(props: { id?: string; joinId?: string }) {
 
   // Camera on/off follows settings while on stage — never for an audio-only account (roles.ts): its takes carry the voice alone.
   const videoAllowed = role.value !== 'audio'; // a solo take with a picture is everyone's; only an audio-only role has none
+  // The browser's word on the camera (lib/permissions.ts): a camera it blocked and then allowed again (its own switch) is opened again without a reload.
+  const cameraAllowedAgain = camBlocked && mediaPermissions.value.camera === 'granted';
   useEffect(() => {
     if (phase === 'loading' || phase === 'review') return;
     if (app.cameraOn && videoAllowed && !camera.on.value) {
-      camera.open({ facing: app.cameraFacing, deviceId: app.cameraDeviceId || undefined }).catch(() => toast('Camera unavailable — singing without video', 'warn'));
+      // (on iOS the microphone comes with it: one prompt, one capture for the whole visit — capture.ts)
+      openCamera(camera)
+        .then(() => setCamBlocked(false))
+        .catch((e) => {
+          if (isPermissionDenied(e)) {
+            setCamBlocked(true);
+            toast(`The camera is blocked in this browser — singing without video. ${permissionHelp('camera')}`, 'warn', 12000);
+          } else toast('Camera unavailable — singing without video', 'warn');
+        });
     } else if ((!app.cameraOn || !videoAllowed) && camera.on.value) camera.close();
-  }, [app.cameraOn, app.cameraFacing, app.cameraDeviceId, phase, videoAllowed]);
+  }, [app.cameraOn, app.cameraFacing, app.cameraDeviceId, phase, videoAllowed, cameraAllowedAgain]);
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => {
@@ -401,7 +416,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
       raf.current = requestAnimationFrame(tick);
     } catch (e) {
       setPhase('ready');
-      toast(errorText(e), 'error', 8000);
+      toast(isPermissionDenied(e) ? `The microphone is blocked in this browser. ${permissionHelp('microphone')}` : errorText(e), 'error', isPermissionDenied(e) ? 14000 : 8000);
     }
   };
 
@@ -506,7 +521,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
       const cutout = rec?.cutout?.video ?? null;
       const cutoutOffsetMs = rec?.cutout ? Math.round((rec.cutout.startCtxTime - origin) * 1000) : null;
       layers?.sync(0, 0, false);
-      engine.closeMic();
+      releaseMicAfterSong(engine); // iOS: parked for the next song (no second prompt); elsewhere closed
       await keepAwake(false);
       let latencyCompMs = Math.round(engine.roundTripMs);
       // What the microphone heard of the track (speakers), and the singer's own phrasing, laid against the track: a clear
@@ -631,7 +646,12 @@ export function Sing(props: { id?: string; joinId?: string }) {
               {camHealth === 'frozen' ? 'Your camera froze — restart it' : camHealth === 'muted' ? 'Your camera was muted — restart it' : 'Your camera stopped — restart it'}
             </button>
           )}
-          {!camOn && <span class="chip">{videoAllowed ? 'camera off' : 'audio only · no camera'}</span>}
+          {!camOn && <span class="chip">{videoAllowed ? (camBlocked && app.cameraOn ? 'camera blocked by the browser' : 'camera off') : 'audio only · no camera'}</span>}
+          {!camOn && camBlocked && app.cameraOn && videoAllowed && (
+            <span class="small muted" data-cam-blocked title={permissionHelp('camera')}>
+              {permissionHelp('camera')}
+            </span>
+          )}
         </section>
         {track.video ? (
           <KaraokeVideo track={track} tMs={tMs} playing={phase === 'playing'} rate={audio.tempo} countdown={phase === 'countdown' ? countdown : null} />
@@ -651,7 +671,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
             <button class="btn icon" aria-label="Sound" title="Sound: the voice preset and its tweaks, the microphone, the track and vocal volumes" onClick={() => setFxOpen(true)}>
               <IcSliders />
             </button>
-            <button class="btn icon" aria-label="Stage setup" title="Stage setup: my part, my picture and framing, the count-in" onClick={() => setSetupOpen(true)} disabled={live}>
+            <button class={`btn icon ${setupOpen ? 'on' : ''}`} aria-label="Camera & zoom" title="Camera & zoom: my picture, how the zoom follows my voice, flip the camera — and my part and the count-in before the song" aria-pressed={setupOpen} data-camera-zoom onClick={() => setSetupOpen(true)}>
               <IcZoom />
             </button>
             <button class="btn icon" aria-label="Stage background" title="Stage background" onClick={() => setBgOpen(true)}>
@@ -729,7 +749,9 @@ export function Sing(props: { id?: string; joinId?: string }) {
             </Field>
             <Switch checked={audio.monitor} onChange={(v) => updateAudio({ monitor: v })} label="Hear myself" hint="Only with headphones — speakers will feed back." />
           </div>
+          {!live && <VoicePreview engine={engineRef.current} compact />}
           <FxPanel value={audio} onChange={updateAudio} />
+          <SaveSoundButton compact />
         </div>
       </Sheet>
 
@@ -737,26 +759,27 @@ export function Sing(props: { id?: string; joinId?: string }) {
         <TvPanel />
       </Sheet>
 
-      <Sheet open={setupOpen} onClose={() => setSetupOpen(false)} title="Stage setup">
-        <div class="stack">
-          <Field label="I'm singing as">
+      <Sheet open={setupOpen} onClose={() => setSetupOpen(false)} title="Camera & zoom">
+        <div class="stack" data-camera-zoom-sheet>
+          <PictureChoices compact />
+          <Field label="Camera" hint="You are framed the same way as every singer on every stage — head the same size, at the same place — however near or far you sit; the zoom works on top of that.">
+            <div class="row">
+              <button class="btn sm" disabled={!camOn} onClick={() => void camera.flip().then(() => updateApp({ cameraFacing: camera.facing.value })).catch(() => toast('Only one camera here', 'warn'))}>
+                <IcFlip size={18} /> Flip
+              </button>
+              {!camOn && <span class="small muted">{videoAllowed ? 'The camera is off (the camera button turns it on).' : 'Your account is audio only.'}</span>}
+            </div>
+          </Field>
+          <Field label="I'm singing as" hint={live ? 'The part is chosen before the song starts.' : undefined}>
             <div class="row" style="gap:6px">
               {Array.from({ length: track.singerCount }, (_, i) => (i + 1) as SingerSlot).map((s) => (
-                <button key={s} class={`btn sm ${mySlot === s ? 'accent' : ''}`} onClick={() => (join ? setJoinPart(s) : updateApp({ singerSlot: s }))}>
+                <button key={s} class={`btn sm ${mySlot === s ? 'accent' : ''}`} disabled={live} onClick={() => (join ? setJoinPart(s) : updateApp({ singerSlot: s }))}>
                   <span class="dot" style={{ background: SLOT_COLORS[s] }} /> Singer {s}
                 </button>
               ))}
             </div>
           </Field>
-          <Field label="Camera" hint="You are framed the same way as every singer on every stage — head the same size, at the same place — however near or far you sit.">
-            <div class="row">
-              <button class="btn sm" onClick={() => void camera.flip().then(() => updateApp({ cameraFacing: camera.facing.value })).catch(() => toast('Only one camera here', 'warn'))}>
-                <IcFlip size={18} /> Flip
-              </button>
-            </div>
-          </Field>
-          <PictureChoices compact />
-          <Switch checked={app.countIn} onChange={(v) => updateApp({ countIn: v })} label="3-2-1 count-in" />
+          <Switch checked={app.countIn} onChange={(v) => updateApp({ countIn: v })} label="3-2-1 count-in" disabled={live} />
           <Switch checked={app.showCueDeck} onChange={(v) => updateApp({ showCueDeck: v })} label="Cue deck (my next lines)" />
           <Field label="Stage background">
             <button class="btn" onClick={() => (setSetupOpen(false), setBgOpen(true))}>
@@ -768,7 +791,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
       </Sheet>
 
       <Sheet open={bgOpen} onClose={() => setBgOpen(false)} title="Stage background">
-        <BackgroundPicker value={app.backgroundId} onChange={(id) => updateApp({ backgroundId: id })} />
+        <BackgroundPicker value={app.backgroundId} onChange={pickBackground} />
       </Sheet>
     </Page>
   );
@@ -804,8 +827,8 @@ export function Review(props: {
   /** Post a clip (components/ClipSheet.tsx): opened by the button, or by itself once the take is kept when Settings → Social says so. */
   const [clipping, setClipping] = useState(false);
   const [savedLink, setSavedLink] = useState<string | null>(null);
-  const ctxRef = useRef<AudioContext | null>(null);
-  const nodes = useRef<AudioBufferSourceNode[]>([]);
+  /** The take through the mix bus, as the saved show mixes it (audio/takePlayback.ts): the review sounds like the file. */
+  const player = useRef<TakePlayback | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoUrl = useMemo(() => (take.video && take.video.size > 0 ? URL.createObjectURL(take.video) : ''), [take.video]);
   useEffect(() => () => videoUrl && URL.revokeObjectURL(videoUrl), [videoUrl]);
@@ -815,48 +838,28 @@ export function Review(props: {
   // Auto-save to Temp as soon as the take exists (nothing is lost if the tab closes).
   useEffect(() => {
     void saveTake('temp');
-    return () => stop();
+    return () => {
+      stop();
+      player.current?.close();
+      player.current = null;
+    };
   }, []);
+  // The Track / Vocal volume moved while the review plays: heard on the spot.
+  const balance = appSettings.value;
+  useEffect(() => player.current?.setBalance(balance.trackDb, balance.vocalDb), [balance.trackDb, balance.vocalDb]);
 
   const stop = () => {
-    for (const n of nodes.current) {
-      try {
-        n.stop();
-      } catch {
-        /* not started */
-      }
-    }
-    nodes.current = [];
+    player.current?.stop();
     setPlaying(false);
     videoRef.current?.pause();
   };
 
   const play = async () => {
     stop();
-    const ctx = ctxRef.current ?? new AudioContext();
-    ctxRef.current = ctx;
-    await ctx.resume();
-    const [backing, vocal] = await Promise.all([
-      loaded.audio.arrayBuffer().then((b) => ctx.decodeAudioData(b)),
-      take.vocal.size ? take.vocal.arrayBuffer().then((b) => ctx.decodeAudioData(b)) : Promise.resolve(null),
-    ]);
-    const at = ctx.currentTime + 0.2;
-    const b = ctx.createBufferSource();
-    b.buffer = backing;
-    const bg = ctx.createGain();
-    bg.gain.value = audioSettings.peek().backingGain;
-    b.connect(bg).connect(ctx.destination);
-    b.start(at);
-    nodes.current.push(b);
-    if (vocal) {
-      const v = ctx.createBufferSource();
-      v.buffer = vocal;
-      v.connect(ctx.destination);
-      if (alignMs >= 0) v.start(at + alignMs / 1000);
-      else v.start(at, -alignMs / 1000);
-      nodes.current.push(v);
-    }
-    b.onended = () => setPlaying(false);
+    const p = player.current ?? new TakePlayback();
+    player.current = p;
+    const a = appSettings.peek();
+    await p.play({ backing: loaded.audio, trackId: props.join ? undefined : loaded.track.trackId, vocal: take.vocal, vocalAtMs: alignMs, trackDb: a.trackDb, vocalDb: a.vocalDb, onEnded: () => setPlaying(false) });
     if (videoRef.current && take.videoOffsetMs !== null) {
       const vo = take.videoOffsetMs / 1000;
       videoRef.current.currentTime = Math.max(0, -vo);
@@ -951,11 +954,12 @@ export function Review(props: {
         </div>
         <div class="perf-player">
           {videoUrl && <video ref={videoRef} src={videoUrl} muted playsInline />}
-          {videoUrl && <div class="small faint">The video is the show itself — your cut-out on the stage, as Publisher mode shows it, with the mix as its sound.</div>}
+          {videoUrl && <div class="small faint">The video is the show itself — your cut-out on the stage, with the mix as its sound. Play mix plays the take through the same mix (the track, your voice at the Track / Vocal volume), so what you hear here is what is saved.</div>}
           <div class="row">
             <button class="btn primary" onClick={() => (playing ? stop() : void play())}>
               {playing ? <IcStop /> : <IcPlay />} {playing ? 'Stop' : 'Play mix'}
             </button>
+            <MixBalance compact />
             <div style="flex:1">
               <div class="label">Vocal alignment {nudge >= 0 ? '+' : ''}{nudge} ms</div>
               <input type="range" min={-300} max={300} step={10} value={nudge} onInput={(e) => setNudge(Number((e.currentTarget as HTMLInputElement).value))} />

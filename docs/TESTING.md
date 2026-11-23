@@ -21,13 +21,13 @@ Live build: **https://www.singersvoice.com/** (and, while the move is on, https:
 ## 10-minute smoke test
 
 1. **Welcome** → *Continue with Google* (needs the OAuth client, see GOOGLE_OAUTH.md) or *Try it on this device*. On Google's screen tick the Drive box (none is ticked beforehand); left unticked, the app shows **One more tick** — a step, not an error — and the next tap with the box ticked signs you in. With the coupon gate on (Admin › Coupons, on by default), the **Coupon screen** comes first: enter the coupon the admin issued to your email address; super admins are never asked.
-2. **Setup** → Test microphone, Test camera, *Go to my stage*.
+2. **Setup** → *Allow both* (the browser's one question for the camera and the microphone; a browser that already allows them shows the step ticked), *Go to my stage*.
 3. **Track Maker** → pick an mp3/m4a → paste lyrics (one line each) → choose singers + pattern → *Apply* → Timing:
    play and tap **Mark** on each line → *Review & save* → *Sing it now*.
    - Or **Library → Import** with an SVOld `*.trackmaker.json` + its mp3.
 4. **Sing** → *Start singing* (3-2-1) → sing → *Finish take* → *Play mix* → **Keep**.
 5. **Performances** → the take is listed (Temp/Kept); open → play / download.
-6. **Settings** → VoxForge presets (try *Hard Tune* with auto-tune), text size A++ / Max, backgrounds.
+6. **Settings** → VoxForge presets (try *Hard Tune* with auto-tune) — *Preview my voice* hears each one live, every tweak applied as it is made, *Save my sound* writes the Config files now; text size A++ / Max; backgrounds (**NONE** shows the camera picture as it is). Audio → the Track / Vocal volume in the recording, the mix and the broadcast (+1.6 / +4.6 dB to start; *Default* brings them back). Camera → the zoom: *Zoom with my voice* (the default: the picture pushes in on the face while you sing, back out to the chest when you stop), *Still*, *Follow me*.
 7. Turn the phone off-line (airplane mode) and reopen the app: the shell loads; device-mode tracks still play.
 
 ## Viewport matrix (automated)
@@ -218,6 +218,51 @@ one; in production it starts on.
 
 ```bash
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/coupons-e2e.mjs screenshots
+```
+
+## The Studio's stage (`tools/ci/studio-e2e.mjs`)
+
+The singer's own stage, device mode, the synthetic person as the camera and a fake microphone that sings in
+**phrases** (six seconds of voice, five of silence, on a loop — a breath is shorter than the zoom's hold, a break
+is not). Measured on the live stage strip (the fake person's skin-tone head, found by colour) and in the saved
+file (frame by frame, through the Performances player):
+
+- **The voice zoom** (`video/framing.ts`): the seat frames the singer and holds; while they are heard the picture
+  pushes in on the face (the head ×1.5), eased over 0.6 s; after a real break (1.4 s under the threshold) it eases
+  back out over 1.1 s. The e2e sees the singer heard and not heard with the phrases, the head half as big again
+  while heard, and the glide caught between the two sizes on the way in and on the way out in the 30 fps file.
+- **The Camera & zoom button during the song**: the sheet opens, *Still* / *Zoom with my voice* reach the feed live.
+- **The Sound sheet**: *Preview my voice* opens the microphone through the preset into the ears; three presets tried
+  with the preview on — it stays on, nothing restarts, no new capture; *Stop preview*; *Save my sound* writes
+  `audio_plugin_settings.json` and `app_settings.json` to the device's Config store (checked in IndexedDB), the
+  balance at its defaults (+1.6 / +4.6 dB).
+- **NONE** (Stage background): the stage shows the camera picture as it is at once (the room's wall on the strip, no
+  backdrop behind), survives a reload, is shown chosen in the picker; another background brings the cut-out back.
+- **The saved performance** (`video/stage.ts` 'solo'): the singer's head half as big again in the file as on the live
+  strip's show stage (×1.5, measured), the head's top in the upper half; the Performances player as tall as the window
+  allows, at the file's own aspect; *Play mix* in the review plays the take through the mix bus.
+- **The permissions** (`lib/permissions.ts`, `video/capture.ts`): a phone that says it is an iPhone makes ONE
+  getUserMedia for camera + microphone at the stage's entry, none at Start (the engine takes the camera's microphone),
+  none for the next song (the microphone parked between songs); a computer opens the camera alone at entry and the
+  microphone at Start. The setup's *Allow both* is one question for both and the step is ticked; Settings says what
+  the browser holds; a browser that blocks the camera is told so on the stage, with the way back, and the song still
+  runs with the microphone. ~5 minutes.
+
+```bash
+BASE_PATH=/SingersVoice/ npm run build && node tools/ci/studio-e2e.mjs screenshots
+```
+
+## Every screen fits a phone (`tools/ci/fit-e2e.mjs`)
+
+Every portal and settings page, the pickers and the Studio's stage with a song open, on four phone widths (320,
+360, 390, 412) and a tablet, at every text size the Display setting offers (1×, 1.3×, 1.6×, 2×): nothing wider than
+the window (the root's `clientWidth` — in a phone emulation, as on a phone, a layout wider than the screen widens
+`window.innerWidth` instead of scrolling, so that counts too), and the stage keeps its Start button on screen without
+scrolling with the lyrics readable (two lines' room at a 24 px+ font). One line per screen and size; the widest
+elements named and pictured when a screen fails. 480 combinations, ~12 minutes.
+
+```bash
+BASE_PATH=/SingersVoice/ npm run build && node tools/ci/fit-e2e.mjs screenshots
 ```
 
 ## Joining a performance (`tools/ci/join-e2e.mjs`)

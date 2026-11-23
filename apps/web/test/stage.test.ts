@@ -49,6 +49,24 @@ describe('virtual stage layout — one straight row of equal slots, like perform
     expect(riserBand(1080, 10_000, 'show')).toBeCloseTo(1080 * 0.09, 5); // never slimmer than the names need
   });
 
+  it("solo mode (the Studio's saved performance): the singer half as big again as the show has them, the head still in the picture, a slim riser and no empty stage under them", () => {
+    const [show] = layoutStage(1280, 720, 1, 'show') as [StageTile];
+    const [solo] = layoutStage(1280, 720, 1, 'solo') as [StageTile];
+    expect(solo.h / show.h).toBeCloseTo(1.5, 5);
+    expect(solo.w / solo.h).toBeCloseTo(0.75, 5);
+    expect(solo.x + solo.w / 2).toBeCloseTo(640, 5); // centred
+    expect(solo.y).toBeCloseTo(720 * 0.08, 5); // the frame's top at the row top: the head (8 % into the frame) well inside the picture
+    expect(solo.y + solo.h * 0.08 + solo.h * 0.22).toBeLessThan(720 * 0.7); // the whole head (the standard frame's 22 %) within the upper two thirds
+    expect(riserBand(720, solo.h, 'solo')).toBeCloseTo(720 * 0.09, 5); // the slim band for the name — no wall, no empty stage
+    expect(fitPerson(solo, 720, 960, 'solo', 720).h).toBeGreaterThan(fitPerson(show, 720, 960, 'show', 720).h * 1.4); // the picture drawn bigger with it
+    // A full row (a join of many) is width-limited, as in show mode: the same row, standing on the riser.
+    const tenShow = layoutStage(1280, 720, 10, 'show');
+    const tenSolo = layoutStage(1280, 720, 10, 'solo');
+    expect(tenSolo[0]!.w).toBeCloseTo(tenShow[0]!.w, 5);
+    expect(tenSolo[3]!.y).toBeGreaterThan(720 * 0.08);
+    expect(ARC_LIFT.solo).toBe(0);
+  });
+
   it('user mode leaves the top of the frame to the lyrics; show mode fills it with the performers', () => {
     const stage = layoutStage(1600, 900, 2);
     const show = layoutStage(1600, 900, 2, 'show');

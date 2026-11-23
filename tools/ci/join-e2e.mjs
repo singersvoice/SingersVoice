@@ -384,15 +384,15 @@ try {
   writeFileSync(`${out}/bob-stage-canvas.png`, Buffer.from((await bob.page.evaluate(() => document.querySelector('.sing canvas.stagecanvas').toDataURL('image/png'))).split(',')[1], 'base64')); // what the stage drew (support)
   check(bobStage.performers === '2' && bobStage.headLeft > 200 && bobStage.headRight > 200, `two performers on bob's stage before a note is sung: alice's picture on the left (${bobStage.headLeft} px of her), bob's on the right (${bobStage.headRight} px) — layers ${JSON.stringify(bobLayers0)}, canvas ${bobStage.w}×${bobStage.h}`);
   check(!/audio only/.test(bobStage.text), 'nothing about audio only on a join');
-  await bob.page.getByRole('button', { name: 'Stage setup' }).click();
+  await bob.page.getByRole('button', { name: 'Camera & zoom' }).click();
   await bob.page.locator('.sheet').waitFor();
   check(/Singer 2/.test(await bob.page.locator('.sheet .btn.accent').first().innerText()), "bob sings the song's second part by default — the one alice did not");
   // The picture choices, right in the sheet: 'My camera as it is' makes the whole camera picture go out (the mask white to its corners —
   // nothing cut away); 'Me on the stage' cuts bob out again (the corner, where nobody is, dark). The framing choice sits beside it.
   const maskCorner = () => bob.page.evaluate(() => { const f = window.__svFeed; if (!f) return -1; const d = f.maskCanvas.getContext('2d').getImageData(4, 4, 1, 1).data; return d[0]; });
   const maskAfter = async (want) => { for (let i = 0; i < 40; i++) { const v = await maskCorner(); if (want(v)) return v; await wait(250); } return maskCorner(); };
-  check((await bob.page.locator('.sheet [role=radiogroup][aria-label="My picture"] button').allInnerTexts()).join('|') === 'Me on the stage|My camera as it is' && (await bob.page.locator('.sheet [role=radiogroup][aria-label="Framing"] button').allInnerTexts()).join('|') === 'Still|Follow me|Zoom with my voice', 'the sheet offers the picture (me on the stage / my camera as it is) and the framing (still / follow me / zoom with my voice)');
-  check((await bob.page.locator('.sheet [role=radiogroup][aria-label="Framing"] button.on').innerText()) === 'Still', "the framing is 'Still' by default: nothing zooms");
+  check((await bob.page.locator('.sheet [role=radiogroup][aria-label="My picture"] button').allInnerTexts()).join('|') === 'Me on the stage|My camera as it is' && (await bob.page.locator('.sheet [role=radiogroup][aria-label="Zoom"] button').allInnerTexts()).join('|') === 'Zoom with my voice|Still|Follow me', 'the sheet offers the picture (me on the stage / my camera as it is) and the framing (still / follow me / zoom with my voice)');
+  check((await bob.page.locator('.sheet [role=radiogroup][aria-label="Zoom"] button.on').innerText()) === 'Zoom with my voice', "the zoom follows the voice by default: head and shoulders, a close-up while singing");
   await bob.page.locator('.sheet').getByRole('radio', { name: 'My camera as it is' }).click();
   const cornerCamera = await maskAfter((v) => v > 200);
   check(cornerCamera > 200, `'My camera as it is': the picture goes out whole, room and all (mask corner ${cornerCamera})`);

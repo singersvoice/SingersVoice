@@ -28,6 +28,8 @@ import { chapterGlyph, marksLine, markTitle } from '../../video/chapters.ts';
 import { errorText, toast } from '../../lib/toast.ts';
 import { saveJobs } from '../../lib/saveQueue.ts';
 import { accountUserId, isDrive, withProvider } from '../../state/session.ts';
+import { appSettings } from '../../state/settings.ts';
+import { TakePlayback } from '../../audio/takePlayback.ts';
 
 export function Performances() {
   const [list, setList] = useState<PerformanceSummary[] | null>(null);
@@ -363,7 +365,7 @@ export function Performances() {
           </div>
         </section>
       </div>
-      <Sheet open={open !== null} onClose={() => setOpen(null)} title={open ? `${open.meetTitle ? `${open.meetTitle} · ` : ''}${open.chapter ? `${open.chapter.eventTitle} ${String(open.chapter.index).padStart(2, '0')} · ` : ''}${open.trackTitle}` : ''}>
+      <Sheet open={open !== null} onClose={() => setOpen(null)} wide={Boolean(open?.hasVideo)} title={open ? `${open.meetTitle ? `${open.meetTitle} · ` : ''}${open.chapter ? `${open.chapter.eventTitle} ${String(open.chapter.index).padStart(2, '0')} · ` : ''}${open.trackTitle}` : ''}>
         {open && <PerformanceDetail summary={open} show={(shows ?? []).find((s) => s.performanceId === open.performanceId) ?? null} onChanged={() => (setOpen(null), void reload())} />}
       </Sheet>
     </Page>
@@ -384,8 +386,8 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
   const [busy, setBusy] = useState(false);
   const [shared, setShared] = useState<{ link: string; videoLink: string | null } | null>(props.summary.shared && props.summary.link ? { link: props.summary.link, videoLink: props.summary.videoLink ?? null } : null);
   const [clipping, setClipping] = useState(false);
-  const ctxRef = useRef<AudioContext | null>(null);
-  const nodes = useRef<AudioBufferSourceNode[]>([]);
+  /** A take (no show): the vocal over the track through the mix bus, as a saved show mixes them (audio/takePlayback.ts). */
+  const player = useRef<TakePlayback | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoUrl, setVideoUrl] = useState('');
   const isShow = (props.summary.kind ?? loaded?.manifest.kind) === 'show';
@@ -401,19 +403,14 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
     }).catch((e) => toast(errorText(e), 'error'));
     return () => {
       stop();
+      player.current?.close();
+      player.current = null;
       if (videoUrl) URL.revokeObjectURL(videoUrl);
     };
   }, [props.summary.performanceId]);
 
   const stop = () => {
-    for (const n of nodes.current) {
-      try {
-        n.stop();
-      } catch {
-        /* noop */
-      }
-    }
-    nodes.current = [];
+    player.current?.stop();
     videoRef.current?.pause();
     setPlaying(false);
   };
@@ -430,31 +427,11 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
       setPlaying(true);
       return;
     }
-    const ctx = ctxRef.current ?? new AudioContext();
-    ctxRef.current = ctx;
-    await ctx.resume();
-    const at = ctx.currentTime + 0.2;
     const m = loaded.manifest;
-    if (backing) {
-      const b = ctx.createBufferSource();
-      b.buffer = await ctx.decodeAudioData(await backing.arrayBuffer());
-      const g = ctx.createGain();
-      g.gain.value = m.playback.backingGain;
-      b.connect(g).connect(ctx.destination);
-      b.start(at);
-      b.onended = () => setPlaying(false);
-      nodes.current.push(b);
-    }
-    if (loaded.vocal.size) {
-      const v = ctx.createBufferSource();
-      v.buffer = await ctx.decodeAudioData(await loaded.vocal.arrayBuffer());
-      v.connect(ctx.destination);
-      const off = m.timeline.vocalOffsetMs;
-      if (off >= 0) v.start(at + off / 1000);
-      else v.start(at, -off / 1000);
-      if (!backing) v.onended = () => setPlaying(false);
-      nodes.current.push(v);
-    }
+    const p = player.current ?? new TakePlayback();
+    player.current = p;
+    const a = appSettings.peek();
+    await p.play({ backing, trackId: m.trackId, vocal: loaded.vocal, vocalAtMs: m.timeline.vocalOffsetMs, trackDb: a.trackDb, vocalDb: a.vocalDb, onEnded: () => setPlaying(false) });
     if (videoRef.current && m.timeline.videoOffsetMs !== null) {
       videoRef.current.muted = true;
       const vo = m.timeline.videoOffsetMs / 1000;
@@ -527,7 +504,7 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
           <Spinner /> Loading files…
         </div>
       )}
-      {videoUrl && <video ref={videoRef} src={videoUrl} muted={!isShow} controls={isShow} playsInline style="width:100%;border-radius:12px;background:#000;max-height:40dvh" />}
+      {videoUrl && <video ref={videoRef} src={videoUrl} muted={!isShow} controls={isShow} playsInline class="perf-video" data-perf-video />}
       {videoUrl && (s.chapters?.length ?? 0) > 0 && (
         <div class="row wrap" style="gap:6px" data-film-marks-row>
           {s.chapters!.map((c) => (

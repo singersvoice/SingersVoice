@@ -91,6 +91,27 @@ export class AlphaPacker {
     this.stream?.getTracks().forEach((t) => t.stop());
     this.stream = null;
   }
+
+  /**
+   * The outgoing stream let go while the worker feeds its track (`startRemote`): the track is stopped a moment
+   * later, not now — the worker's writer is closed first (feedWorker `sink(null)`), and the frames still on their
+   * way through the transferred stream land in a live track, which closes them; a frame reaching a track already
+   * stopped is dropped by the browser without being closed (a stall warning in the console, a leak). Nothing is
+   * drawn or sent meanwhile; a new `start`/`startRemote` in between makes a track of its own.
+   */
+  stopLater(ms = 500): void {
+    clearInterval(this.timer);
+    this.timer = undefined;
+    const { track, remote, stream } = this;
+    this.track = null;
+    this.remote = null;
+    this.stream = null;
+    setTimeout(() => {
+      track?.stop();
+      remote?.stop();
+      stream?.getTracks().forEach((t) => t.stop());
+    }, ms);
+  }
 }
 
 const VS = `attribute vec2 p; varying vec2 v; void main(){ v = vec2((p.x+1.0)*0.5, (1.0-p.y)*0.5); gl_Position = vec4(p,0.0,1.0); }`;
