@@ -62,35 +62,42 @@ async function run(opts, fromS) {
   return { on: median(late.filter((w) => w.voice === 'on').map((w) => w.rms)), off: median(late.filter((w) => w.voice === 'off').map((w) => w.rms)), all: median(late.map((w) => w.rms)), max: Math.max(...late.map((w) => w.rms)), windows: r.windows };
 }
 
-const TARGET = -17; // MIX_TARGETS.vocalDb
+// The riders measure K-weighted (the ear's weighting, BS.1770): the test voice (harmonics on 180 Hz) reads about as its plain
+// RMS, a white hiss about 3 dB louder than its RMS (its energy is up where the weighting lifts) — so a hissy microphone is
+// held back a little more than before, which is what the ear would want.
+const cfg = await page.evaluate(() => window.svRiderConfig);
+const TARGET = cfg.vocal.target; // MIX_TARGETS.vocalDb, K-weighted
+const K_HISS = 3; // a white hiss, K-weighted, over its plain RMS (dB)
 try {
   // 1. A microphone that only hisses (a laptop's fan, a dead-quiet room at a built-in mic's floor): left alone.
   const hiss = await run({ noiseDb: -40, voiceDb: null }, 10);
   console.log('hiss alone:', JSON.stringify({ median: fmt(hiss.all), loudest: fmt(hiss.max) }));
   check(hiss.max < -38, `a microphone's hiss alone is never riden up: -40 dB in, ${fmt(hiss.max)} dB out at the loudest (the old rider made it ${fmt(-40 + 18)})`);
-  // 2. A voice over that hiss: brought to the target; the hiss between phrases 12 dB under the target at most.
+  // 2. A voice over that hiss: brought up as far as the floor rule allows (the hiss kept floorKeep dB under the target).
   const over = await run({ noiseDb: -40, voiceDb: -28 }, 20);
-  console.log('voice over hiss:', JSON.stringify({ sung: fmt(over.on), between: fmt(over.off) }));
-  check(Math.abs(over.on - TARGET) < 2.5, `a voice 12 dB over the hiss is brought to the vocal target: ${fmt(over.on)} dB sung (target ${TARGET})`);
-  check(over.off <= TARGET - 12 + 1, `the hiss between its phrases stays 12 dB under the target: ${fmt(over.off)} dB`);
+  const overReach = Math.min(TARGET, -28 + Math.min(cfg.vocal.maxDb, TARGET - cfg.vocal.floorKeep - (-40 + K_HISS)));
+  console.log('voice over hiss:', JSON.stringify({ sung: fmt(over.on), between: fmt(over.off), reachable: fmt(overReach) }));
+  check(Math.abs(over.on - overReach) < 2.5, `a voice 12 dB over the hiss is brought up as far as its hiss allows: ${fmt(over.on)} dB sung (target ${TARGET}, reachable ${fmt(overReach)})`);
+  check(over.off <= TARGET - cfg.vocal.floorKeep + 1, `the hiss between its phrases stays ${cfg.vocal.floorKeep} dB under the target: ${fmt(over.off)} dB`);
   // 3. A quiet singer on a quiet microphone: the full lift.
   const quiet = await run({ noiseDb: -70, voiceDb: -34 }, 20);
   console.log('quiet singer, quiet mic:', JSON.stringify({ sung: fmt(quiet.on), between: fmt(quiet.off) }));
-  check(Math.abs(quiet.on - TARGET) < 2.5, `a quiet singer on a quiet microphone gets the full lift: ${fmt(quiet.on)} dB sung from -34 in`);
+  check(Math.abs(quiet.on - Math.min(TARGET, -34 + cfg.vocal.maxDb)) < 2.5, `a quiet singer on a quiet microphone gets the full lift: ${fmt(quiet.on)} dB sung from -34 in (target ${TARGET})`);
   check(quiet.off < -45, `and nothing to speak of between the phrases: ${fmt(quiet.off)} dB`);
   // 4. A loud singer: brought down, the hiss with them.
   const loud = await run({ noiseDb: -40, voiceDb: -8 }, 20);
   console.log('loud singer:', JSON.stringify({ sung: fmt(loud.on), between: fmt(loud.off) }));
   check(Math.abs(loud.on - TARGET) < 2.5, `a loud singer is brought down to the target: ${fmt(loud.on)} dB sung from -8 in`);
-  check(loud.off < -45, `the hiss goes down with them: ${fmt(loud.off)} dB between phrases`);
+  check(loud.off < -40 + (TARGET - -8) + 1, `the hiss goes down with them: ${fmt(loud.off)} dB between phrases (the voice's -8 brought to ${TARGET})`);
   // 5. A voice that barely stands over the hiss (5 dB): not a voice to the rider — the rider holds, nothing is riden up.
   const buried = await run({ noiseDb: -40, voiceDb: -35 }, 20);
   console.log('voice barely over the hiss:', JSON.stringify({ sung: fmt(buried.on), between: fmt(buried.off) }));
   check(buried.off < -38, `a voice only 5 dB over the hiss does not open the rider: the hiss stays put at ${fmt(buried.off)} dB`);
-  // 6. The guard is as it was: a hot mix (no floor rule) is held at the mix target.
+  // 6. The guard: a hot mix (no floor rule) is held at the mix target — a white hiss at -8 dBFS reads about -5 K-weighted, so it
+  // goes down to the target's line (the plain RMS out is the target less the hiss's K-weighted excess).
   const guard = await run({ noiseDb: -8, voiceDb: null, config: 'guard' }, 10);
   console.log('guard:', JSON.stringify({ median: fmt(guard.all) }));
-  check(Math.abs(guard.all - -15) < 1.5, `the guard holds a hot mix at the mix target: -8 dB in, ${fmt(guard.all)} dB out (target -15)`);
+  check(Math.abs(guard.all - (cfg.guard.target - K_HISS)) < 1.5, `the guard holds a hot mix at the mix target: -8 dB in, ${fmt(guard.all)} dB out (target ${cfg.guard.target} K-weighted, about ${fmt(cfg.guard.target - K_HISS)} dBFS for a hiss)`);
 } catch (e) {
   console.log('rider lab error', e);
   failed = true;

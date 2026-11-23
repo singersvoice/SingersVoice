@@ -16,7 +16,13 @@
 // `floorKeep` dB under the target (the gain is capped by the floor: a noisy microphone gets a quieter
 // voice rather than a loud hiss between the phrases).
 //
-// processorOptions: { windowMs = 300, farDb = 6, farMul = 3, floorMargin = 0, floorKeep = 12, floorSeconds = 8 }
+// K-weighting (an option): with `kWeight` — the two BS.1770 biquads, {b0, b1, b2, a1, a2} each (loudness.ts
+// derives them for the context's rate) — the level is measured through them, the way loudness is: the bass
+// counts for less, the presence region for a little more, as the ear hears it. A bass-heavy backing track
+// then reads at its loudness, not at its unweighted RMS (which ran 3–5 dB hotter and had the guard holding the
+// whole mix down under a track that was not loud). The gain is applied to the signal itself, unweighted.
+//
+// processorOptions: { windowMs = 300, farDb = 6, farMul = 3, floorMargin = 0, floorKeep = 12, floorSeconds = 8, kWeight = null }
 // Parameters (k-rate): target dB, minDb, maxDb, gate dB, up dB/s, down dB/s.
 
 class SvLevelerProcessor extends AudioWorkletProcessor {
@@ -52,6 +58,38 @@ class SvLevelerProcessor extends AudioWorkletProcessor {
     this.gainDb = 0;
     this.reportEvery = Math.max(1, Math.round(sampleRate / 128 / 4)); // 4 readings a second
     this.blocks = 0;
+    this.k = Array.isArray(o.kWeight) && o.kWeight.length === 2 ? o.kWeight : null;
+    this.kState = []; // per channel: [x1, x2, y1, y2] of stage 1, then of stage 2
+  }
+
+  /** The block's mean square through the K-weighting (per channel state kept across blocks). */
+  weightedMeanSquare(input, channels, frames) {
+    const [s1, s2] = this.k;
+    let sum = 0;
+    for (let ch = 0; ch < channels; ch++) {
+      let st = this.kState[ch];
+      if (!st) st = this.kState[ch] = new Float64Array(8);
+      const d = input[ch];
+      let x1 = st[0], x2 = st[1], y1 = st[2], y2 = st[3];
+      let u1 = st[4], u2 = st[5], v1 = st[6], v2 = st[7];
+      for (let i = 0; i < frames; i++) {
+        const x0 = d[i];
+        const y0 = s1.b0 * x0 + s1.b1 * x1 + s1.b2 * x2 - s1.a1 * y1 - s1.a2 * y2;
+        x2 = x1;
+        x1 = x0;
+        y2 = y1;
+        y1 = y0;
+        const v0 = s2.b0 * y0 + s2.b1 * u1 + s2.b2 * u2 - s2.a1 * v1 - s2.a2 * v2;
+        u2 = u1;
+        u1 = y0;
+        v2 = v1;
+        v1 = v0;
+        sum += v0 * v0;
+      }
+      st[0] = x1; st[1] = x2; st[2] = y1; st[3] = y2;
+      st[4] = u1; st[5] = u2; st[6] = v1; st[7] = v2;
+    }
+    return sum / (channels * frames);
   }
 
   process(inputs, outputs, parameters) {
@@ -64,13 +102,17 @@ class SvLevelerProcessor extends AudioWorkletProcessor {
       for (let ch = 0; ch < output.length; ch++) output[ch].fill(0);
       return true;
     }
-    // Level of this block: the mean square over channels and frames.
-    let sum = 0;
-    for (let ch = 0; ch < channels; ch++) {
-      const d = input[ch];
-      for (let i = 0; i < frames; i++) sum += d[i] * d[i];
+    // Level of this block: the mean square over channels and frames (through the K-weighting when asked).
+    let blockMs;
+    if (this.k) blockMs = this.weightedMeanSquare(input, channels, frames);
+    else {
+      let sum = 0;
+      for (let ch = 0; ch < channels; ch++) {
+        const d = input[ch];
+        for (let i = 0; i < frames; i++) sum += d[i] * d[i];
+      }
+      blockMs = sum / (channels * frames);
     }
-    const blockMs = sum / (channels * frames);
     this.fast += (blockMs - this.fast) * this.alphaFast;
     const target = parameters.target[0];
     const minDb = parameters.minDb[0];

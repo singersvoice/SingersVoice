@@ -48,7 +48,7 @@ const results = await page.evaluate(async () => {
   const db = (x) => 20 * Math.log10(Math.max(x, 1e-9));
   async function offline(seconds, channels = 1, worklets = true) {
     const ctx = new OfflineAudioContext(channels, Math.round(seconds * RATE), RATE);
-    if (worklets) for (const m of ['dynamics.js', 'leveler.js', 'pitch-shifter.js', 'gate.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+    if (worklets) for (const m of ['dynamics.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
     return ctx;
   }
   function tone(ctx, hz, dbfs, seconds, from = 0, channels = 1) {
@@ -327,6 +327,201 @@ const results = await page.evaluate(async () => {
     const d = r.getChannelData(0);
     out[`mix_${push}`] = { at1s: +rmsDb(d, 0.5, 1).toFixed(1), at5s: +rmsDb(d, 4.5, 5.5).toFixed(1), at10s: +rmsDb(d, 9, 10).toFixed(1), peakDb: +db(peakOf(d)).toFixed(2), target: L.MIX_TARGETS.mixDb, ceiling: -1.5 };
   }
+  // 6. The finished mix, every preset, on a song like the ones people sing to — a mastered backing track whose low end
+  // carries most of its energy (bass and kick ten dB over the mids, hats on top), normalised to the track target — with a
+  // −15 dBFS voice through the preset's chain sung in phrases: how loud the whole lands, how far the voice stands over the
+  // track (vocal-only and track-only renders of the same bus: the riders see the same input either way), whether the
+  // chain leaves the voice mid-forward (its 1–5 kHz against its 100–400 Hz, more than the raw voice's), and that nothing
+  // clips. The user's own recording (22 Nov) had the mix pinned at −15.5 dBFS RMS whatever was sung, the lows 10 dB over
+  // the voice's band, and the voice adding 8 dB to the mids and nothing to the whole: these are the numbers that must move.
+  {
+    /** A mastered, bass-heavy backing track: 120 BPM, a pulsing bass on 55/110 Hz, a kick each beat, a chord pad, hats. */
+    function song(ctx, seconds) {
+      const n = Math.round(seconds * RATE);
+      const buf = ctx.createBuffer(2, n, RATE);
+      const L = buf.getChannelData(0);
+      const R = buf.getChannelData(1);
+      let seed = 7;
+      const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+      let hp = 0;
+      for (let i = 0; i < n; i++) {
+        const t = i / RATE;
+        const beat = (t * 2) % 1; // 120 BPM
+        const half = (t * 4) % 1;
+        const bassEnv = 0.6 + 0.4 * Math.exp(-beat * 6);
+        const bass = (Math.sin(2 * Math.PI * 55 * t) + 0.6 * Math.sin(2 * Math.PI * 110 * t)) * bassEnv * 0.42;
+        const kick = Math.sin(2 * Math.PI * (50 + 90 * Math.exp(-beat * 30)) * t) * Math.exp(-beat * 18) * 0.5;
+        const pad = (Math.sin(2 * Math.PI * 330 * t) + Math.sin(2 * Math.PI * 440 * t + 1) + Math.sin(2 * Math.PI * 554 * t + 2) + 0.5 * Math.sin(2 * Math.PI * 1320 * t)) * 0.06;
+        const white = rnd();
+        hp += (white - hp) * 0.6; // a bright hiss for the hats
+        const hat = (white - hp) * Math.exp(-half * 40) * 0.12;
+        const m = bass + kick + pad;
+        L[i] = Math.tanh((m + hat + 0.02 * Math.sin(2 * Math.PI * 660 * t)) * 1.4) * 0.9;
+        R[i] = Math.tanh((m + 0.8 * hat + 0.02 * Math.sin(2 * Math.PI * 880 * t + 1)) * 1.4) * 0.9;
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.start(0);
+      return src;
+    }
+    /** The voice in phrases: sung 1–5 s and 6–11 s of a 12 s render (the breaks are what a rider must not lift). */
+    function phrased(ctx, dbfs) {
+      const a = voice(ctx, dbfs, 4, 1);
+      const b = voice(ctx, dbfs, 5, 6);
+      const sum = ctx.createGain();
+      a.connect(sum);
+      b.connect(sum);
+      return sum;
+    }
+    const bandDb = (d, lo, hi, from, to) => {
+      // Energy of d in [lo, hi) Hz over [from, to) s: a Goertzel sweep is too slow — an FFT of 32768 points, averaged over hops.
+      const N = 32768;
+      const a = Math.round(from * RATE);
+      const b = Math.round(to * RATE) - N;
+      let e = 0;
+      let hops = 0;
+      for (let start = a; start < b; start += N) {
+        const re = new Float64Array(N);
+        const im = new Float64Array(N);
+        for (let i = 0; i < N; i++) re[i] = d[start + i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N));
+        // in-place radix-2 FFT
+        for (let i = 1, j = 0; i < N; i++) {
+          let bit = N >> 1;
+          for (; j & bit; bit >>= 1) j ^= bit;
+          j ^= bit;
+          if (i < j) {
+            [re[i], re[j]] = [re[j], re[i]];
+            [im[i], im[j]] = [im[j], im[i]];
+          }
+        }
+        for (let len = 2; len <= N; len <<= 1) {
+          const ang = (-2 * Math.PI) / len;
+          const wr = Math.cos(ang);
+          const wi = Math.sin(ang);
+          for (let i = 0; i < N; i += len) {
+            let cr = 1;
+            let ci = 0;
+            for (let k = 0; k < len / 2; k++) {
+              const ur = re[i + k];
+              const ui = im[i + k];
+              const vr = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
+              const vi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+              re[i + k] = ur + vr;
+              im[i + k] = ui + vi;
+              re[i + k + len / 2] = ur - vr;
+              im[i + k + len / 2] = ui - vi;
+              const nr = cr * wr - ci * wi;
+              ci = cr * wi + ci * wr;
+              cr = nr;
+            }
+          }
+        }
+        const k0 = Math.floor((lo * N) / RATE);
+        const k1 = Math.ceil((hi * N) / RATE);
+        for (let k = k0; k < k1; k++) e += re[k] * re[k] + im[k] * im[k];
+        hops++;
+      }
+      return 10 * Math.log10(e / Math.max(1, hops) / N + 1e-12);
+    };
+    const SECONDS = 12;
+    const trackLufs = (() => {
+      const ctx = new OfflineAudioContext(2, 48000, RATE);
+      const s = song(ctx, SECONDS);
+      return L.measureLoudness([s.buffer.getChannelData(0), s.buffer.getChannelData(1)], RATE).lufs;
+    })();
+    /** The bus rendered: channels 0–1 its output, 2–3 its sum before the guard and the safety stage (what the limiter is given). */
+    async function render(presetId, what) {
+      const ctx = new OfflineAudioContext(4, Math.round(SECONDS * RATE), RATE);
+      for (const m of ['dynamics.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+      const bus = new L.MixBus(ctx, true);
+      bus.setBackingNormalization(L.normalizationDb(trackLufs, L.MIX_TARGETS.trackLufs));
+      if (what !== 'vocal') song(ctx, SECONDS).connect(bus.backingIn);
+      if (what !== 'track') {
+        const chain = L.createVoxForgeChain(ctx, true);
+        chain.apply(L.presetParams(presetId));
+        phrased(ctx, -15).connect(chain.input);
+        bus.addVocal('v', chain.output);
+      }
+      const merger = ctx.createChannelMerger(4);
+      const outSplit = ctx.createChannelSplitter(2);
+      const sumSplit = ctx.createChannelSplitter(2);
+      bus.output.connect(outSplit);
+      bus.sum.connect(sumSplit);
+      outSplit.connect(merger, 0, 0);
+      outSplit.connect(merger, 1, 1);
+      sumSplit.connect(merger, 0, 2);
+      sumSplit.connect(merger, 1, 3);
+      merger.connect(ctx.destination);
+      const r = await ctx.startRendering();
+      return [r.getChannelData(0), r.getChannelData(1), r.getChannelData(2), r.getChannelData(3)];
+    }
+    const lufsOf = (ch, from, to) => L.measureLoudness([ch[0].subarray(Math.round(from * RATE), Math.round(to * RATE)), ch[1].subarray(Math.round(from * RATE), Math.round(to * RATE))], RATE).lufs;
+    // The raw voice's own balance (its 1–5 kHz against its 100–400 Hz), the reference for "mid-forward".
+    const rawVoice = (() => {
+      const ctx = new OfflineAudioContext(1, 48000, RATE);
+      const v = voice(ctx, -15, 4);
+      const d = v.buffer.getChannelData(0);
+      return +(bandDb(d, 1000, 5000, 0.2, 3.8) - bandDb(d, 100, 400, 0.2, 3.8)).toFixed(1);
+    })();
+    const track = await render('natural', 'track');
+    const mixes = { trackLufs: +lufsOf(track, 2, 11).toFixed(1), trackRmsDb: +rmsDb(track[0], 2, 11).toFixed(1), trackTarget: L.MIX_TARGETS.trackLufs, rawVoiceBalanceDb: rawVoice, presets: {} };
+    for (const id of L.VOXFORGE_PRESET_IDS) {
+      const mix = await render(id, 'mix');
+      const vocal = await render(id, 'vocal');
+      const sung = lufsOf(mix, 6, 11);
+      const quiet = lufsOf(mix, 11.3, 12); // after the last phrase: the track alone (with whatever the guard did)
+      const vocalLufs = lufsOf(vocal, 6, 11);
+      const balance = bandDb(vocal[0], 1000, 5000, 6.5, 10.5) - bandDb(vocal[0], 100, 400, 6.5, 10.5);
+      const sumSung = L.measureLoudness([mix[2].subarray(6 * RATE, 11 * RATE), mix[3].subarray(6 * RATE, 11 * RATE)], RATE).lufs;
+      mixes.presets[id] = {
+        mixLufs: +lufsOf(mix, 1, 11).toFixed(1),
+        sungLufs: +sung.toFixed(1),
+        betweenLufs: +quiet.toFixed(1),
+        vocalLufs: +vocalLufs.toFixed(1),
+        prominenceLu: +(vocalLufs - mixes.trackLufs).toFixed(1),
+        voiceBalanceDb: +balance.toFixed(1),
+        midForwardDb: +(balance - rawVoice).toFixed(1),
+        peakDb: +db(Math.max(peakOf(mix[0]), peakOf(mix[1]))).toFixed(2),
+        /** What the guard and the limiter took off the sung part on average (LU), and the sum's own peak (dBFS) they were given. */
+        limitedLu: +(sumSung - sung).toFixed(1),
+        sumPeakDb: +db(Math.max(peakOf(mix[2], 6, 11), peakOf(mix[3], 6, 11))).toFixed(1),
+      };
+    }
+    out.finished = mixes;
+    // The duck itself: the music's own path (bus.backingOut, after the duck and the Track offset) rendered beside the output,
+    // with and without a voice in the bus — how far the music steps back while a phrase is sung, and whether it is back a
+    // moment after it (the same windows of the same song either way, so only the duck differs).
+    {
+      const run = async (keyed) => {
+        const ctx = new OfflineAudioContext(4, Math.round(SECONDS * RATE), RATE);
+        for (const m of ['dynamics.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+        const bus = new L.MixBus(ctx, true);
+        bus.setBackingNormalization(L.normalizationDb(trackLufs, L.MIX_TARGETS.trackLufs));
+        song(ctx, SECONDS).connect(bus.backingIn);
+        if (keyed) {
+          const chain = L.createVoxForgeChain(ctx, true);
+          chain.apply(L.presetParams('studio'));
+          phrased(ctx, -15).connect(chain.input);
+          bus.addVocal('v', chain.output);
+        }
+        const merger = ctx.createChannelMerger(4);
+        const outSplit = ctx.createChannelSplitter(2);
+        const trackSplit = ctx.createChannelSplitter(2);
+        bus.output.connect(outSplit);
+        bus.backingOut.connect(trackSplit);
+        outSplit.connect(merger, 0, 0);
+        outSplit.connect(merger, 1, 1);
+        trackSplit.connect(merger, 0, 2);
+        trackSplit.connect(merger, 1, 3);
+        merger.connect(ctx.destination);
+        const r = await ctx.startRendering();
+        return [r.getChannelData(2), r.getChannelData(3)];
+      };
+      const plain = await run(false);
+      const keyed = await run(true);
+      out.duck = { depthDb: L.MIX_TARGETS.duckDb, whileSungDb: +(lufsOf(keyed, 7, 10.5) - lufsOf(plain, 7, 10.5)).toFixed(2), afterDb: +(lufsOf(keyed, 11.6, 12) - lufsOf(plain, 11.6, 12)).toFixed(2) };
+    }
+  }
   return out;
 });
 await browser.close();
@@ -382,9 +577,25 @@ for (const k of ['vocal_rider_-5', 'vocal_rider_-33']) {
   check(Math.abs(r.at10s - reachable) < 2, `${k}: a ${r.inDb} dBFS voice rides to ${r.at10s} dBFS by 10 s (target ${r.target}, reachable ${reachable}; 2 s ${r.at2s}, 4 s ${r.at4s})`);
   check(r.tailPeakDb < -60, `${k}: silence after the singing stays silent (${r.tailPeakDb} dBFS)`);
 }
-check(Math.abs(results.mix_0.at10s - results.mix_0.at5s) < 1.5 && results.mix_0.at10s < -11 && results.mix_0.at10s > -19, `mix at 0/0: steady at ${results.mix_0.at10s} dBFS once the vocal rider has settled (guard idle; ${results.mix_0.at1s} at 1 s, ${results.mix_0.at5s} at 5 s)`);
-check(results.mix_30.at10s < results.mix_30.target + 2, `mix at +30/+30: guard brings it to ${results.mix_30.at10s} dBFS by 10 s (target ${results.mix_30.target})`);
+check(Math.abs(results.mix_0.at10s - results.mix_0.at5s) < 1.5 && results.mix_0.at10s < -8 && results.mix_0.at10s > -16, `mix at 0/0: steady at ${results.mix_0.at10s} dBFS once the vocal rider has settled (guard idle; ${results.mix_0.at1s} at 1 s, ${results.mix_0.at5s} at 5 s)`);
+check(results.mix_30.at10s < results.mix_30.target + 2, `mix at +30/+30: guard brings it to ${results.mix_30.at10s} dBFS by 10 s (target ${results.mix_30.target} K-weighted)`);
 check(results.mix_30.peakDb <= -1.3, `mix at +30/+30: peak ${results.mix_30.peakDb} dBFS never over the ceiling`);
 check(results.mix_0.peakDb <= -1.3, `mix at 0/0: peak ${results.mix_0.peakDb} dBFS`);
+// 6. The finished mix on a bass-heavy song, every preset: the voice in front, the whole at a record's loudness, nothing clipped.
+{
+  const f = results.finished;
+  console.log(`the finished mix (every preset on a bass-heavy song): track ${f.trackLufs} LUFS (${f.trackRmsDb} dBFS RMS)`, JSON.stringify(f.presets));
+  check(Math.abs(f.trackLufs - f.trackTarget) <= 1, `the music in the mix at its target: ${f.trackLufs} LUFS (target ${f.trackTarget}; a bass-heavy track reads ${f.trackRmsDb} dBFS RMS — the old guard's measure)`);
+  for (const [id, v] of Object.entries(f.presets)) {
+    const octave = id === 'octave-down';
+    check(v.prominenceLu >= (octave ? 2 : 3.5) && v.prominenceLu <= 8, `${id}: the voice stands ${v.prominenceLu} LU over the music (${v.vocalLufs} against ${f.trackLufs} LUFS; and the music steps back ${results.duck?.depthDb ?? 2.5} dB more under it)`);
+    check(v.sungLufs >= -13 && v.sungLufs <= -9, `${id}: a sung phrase lands at ${v.sungLufs} LUFS (the whole ${v.mixLufs}, the break after it ${v.betweenLufs}: a record's loudness, the voice in front)`);
+    check(v.peakDb <= -1.3, `${id}: the mix peaks at ${v.peakDb} dBFS — under the ceiling, nothing clipped (the limiter took ${v.limitedLu} LU off the sung part on average, from a sum peaking at ${v.sumPeakDb} dBFS)`);
+    check(v.limitedLu <= 2, `${id}: the limiter works lightly (${v.limitedLu} LU on average while sung: density, not distortion)`);
+    if (!octave) check(v.midForwardDb >= 1, `${id}: the chain leaves the voice mid-forward — its 1–5 kHz against its 100–400 Hz ${v.midForwardDb} dB more than the raw voice's (${v.voiceBalanceDb} against ${f.rawVoiceBalanceDb} dB)`);
+  }
+  const d = results.duck;
+  check(d.whileSungDb <= -(d.depthDb - 0.5) && d.afterDb >= -0.5, `the duck: the music steps back ${d.whileSungDb} dB under a sung phrase (depth ${d.depthDb}) and is back within a second after it (${d.afterDb} dB)`);
+}
 console.log(failed ? 'AUDIO LAB FAILED' : 'AUDIO LAB OK');
 process.exit(failed ? 1 : 0);

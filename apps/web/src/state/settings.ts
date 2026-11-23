@@ -45,6 +45,8 @@ export interface AppSettings {
   vocalDb: number;
   /** One-time migration marker: the balance's defaults rose (the voice in front); a save still at the old 0 / 0 takes them once. */
   mixV2: boolean;
+  /** The Track / Vocal balance set back to 0 / 0 once (the mix of 23 Nov is right on its own). */
+  mixV3: boolean;
   /** Host: the whole meet is filmed on this device (the show picture with the stage mix) straight into Drive, as one video. */
   recordMeet: boolean;
   /**
@@ -90,6 +92,7 @@ export const APP_DEFAULTS: AppSettings = {
   trackDb: MIX_TRACK_DEFAULT_DB,
   vocalDb: MIX_VOCAL_DEFAULT_DB,
   mixV2: true,
+  mixV3: true,
   recordMeet: true,
   youtubePrivacy: 'unlisted',
   tvLook: 'both',
@@ -130,7 +133,10 @@ function migrateApp(v: AppSettings): AppSettings {
   // The voice zoom became the default framing: a save from before starts on it once (the choice is the singer's from then on).
   if (stored.framingV2 !== true) v = { ...v, framing: 'voice', framingV2: true };
   // The balance's defaults rose (the voice in front of the music): a save never moved off the old 0 / 0 takes the new ones once; a balance the singer set stays theirs.
-  if (stored.mixV2 !== true) v = { ...v, mixV2: true, ...(Number(v.trackDb) === 0 && Number(v.vocalDb) === 0 ? { trackDb: MIX_TRACK_DEFAULT_DB, vocalDb: MIX_VOCAL_DEFAULT_DB } : {}) };
+  if (stored.mixV2 !== true) v = { ...v, mixV2: true };
+  // The mix of 23 Nov is right on its own (the voice in front, the music full): a balance still at the earlier build's
+  // start of +1.6 / +4.6 dB — set to make up for the old mix — goes back to 0 / 0 once; a singer's own setting is kept.
+  if (stored.mixV3 !== true) v = { ...v, mixV3: true, ...(Math.abs(Number(v.trackDb) - 1.6) < 0.01 && Math.abs(Number(v.vocalDb) - 4.6) < 0.01 ? { trackDb: MIX_TRACK_DEFAULT_DB, vocalDb: MIX_VOCAL_DEFAULT_DB } : {}) };
   if (!Number.isFinite(Number(v.trackDb))) v = { ...v, trackDb: MIX_TRACK_DEFAULT_DB };
   if (!Number.isFinite(Number(v.vocalDb))) v = { ...v, vocalDb: MIX_VOCAL_DEFAULT_DB };
   if (!TV_LOOKS.includes(v.tvLook)) v = { ...v, tvLook: 'both' };

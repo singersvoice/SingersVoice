@@ -41,6 +41,7 @@ export function VoicePreview(props: { /** The stage's engine (its microphone, wh
       /* gone */
     }
     if (r.openedHere) r.engine.closeMic();
+    r.engine.muteMonitor(false);
   };
 
   const start = async () => {
@@ -56,6 +57,7 @@ export function VoicePreview(props: { /** The stage's engine (its microphone, wh
         openedHere = true;
       }
       engine.applyFx(audioSettings.peek().params);
+      engine.muteMonitor(true); // the engine's own monitor steps aside: the preview is the one way the voice reaches the ears
       // The voice as it leaves the chain, through the mix bus (its rider and limiter) at the device's Vocal volume, into the ears.
       const bus = new MixBus(engine.ctx, engine.workletAvailable);
       bus.addVocal('preview', engine.voice);

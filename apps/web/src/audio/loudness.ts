@@ -7,13 +7,29 @@
  * whole at what YouTube and the others play back without turning it down (−14 LUFS).
  */
 
+/**
+ * The levels every mix is built to — the voice in front, the music full, the whole as loud as a record:
+ *
+ *   track   −16 LUFS   the backing, normalised from whatever its file was mastered at;
+ *   vocal   −11 LK     each voice, held there by its rider (K-weighted, so the ear's measure, not the bass's);
+ *   mix     −7.5 LK    the guard's line: the sum is turned down only past it (the controls pushed to +30);
+ *   duck    2.5 dB     the music steps back under the voice while it is sung, and comes back between phrases.
+ *
+ * So a sung phrase lands near −10 LUFS, the voice some 5 LU over the music (and a shade more with the duck),
+ * the breaks at the track's −16: a record's loudness with the vocal unmistakably in front. Before (track −19,
+ * vocal −17 dBFS plain RMS, guard −15 dBFS plain RMS) a bass-heavy backing alone reached the guard's line on
+ * its unweighted RMS, and the guard then gave every vocal entry back by turning the whole mix down: the
+ * voice sat at the music's level, the mix pinned at −15.5 dBFS whatever was sung (the 22 Nov recording).
+ */
 export const MIX_TARGETS = {
   /** The backing track's integrated loudness in the mix (LUFS) — the music, under the voices. */
-  trackLufs: -19,
-  /** Each vocal's level in the mix, as a short-term RMS the rider steers toward (dBFS). */
-  vocalDb: -17,
-  /** The whole mix must not run hotter than this on average (RMS, dBFS; about −13 LUFS for a bright mix): the guard turns down, never up. */
-  mixDb: -15,
+  trackLufs: -16,
+  /** Each vocal's level in the mix: a K-weighted short-term level the rider steers toward (dB, LUFS-like). */
+  vocalDb: -11,
+  /** The whole mix must not run hotter than this on average (K-weighted, dB): the guard turns down, never up. */
+  mixDb: -7.5,
+  /** How far the music steps back while a voice is sung (dB). */
+  duckDb: 2.5,
   /** The furthest a track may be lifted or lowered to reach its target (dB). */
   trackRangeDb: 18,
 } as const;

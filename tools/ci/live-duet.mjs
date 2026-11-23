@@ -924,8 +924,8 @@ try {
   await bob.page.locator('.sing [data-mix="trackDb"] button[aria-label="Track volume up"]').click();
   await bob.page.locator('.sing [data-mix="vocalDb"] button[aria-label="Vocal volume down"]').click();
   const balance = await bob.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}'));
-  // (from the defaults — the track +1.6 dB, the vocal +4.6 dB: the voice in front of the music — in 1.5 dB steps)
-  check(Math.abs(balance.trackDb - 4.6) < 0.01 && Math.abs(balance.vocalDb - 3.1) < 0.01, `Track / Vocal volume start at +1.6 / +4.6 dB, move in 1.5 dB steps (±30 dB) and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
+  // (from the defaults — 0 / 0: the mix itself has the voice in front of the music — in 1.5 dB steps)
+  check(Math.abs(balance.trackDb - 3) < 0.01 && Math.abs(balance.vocalDb - -1.5) < 0.01, `Track / Vocal volume start at 0 / 0 dB, move in 1.5 dB steps (±30 dB) and stay on the device (track ${balance.trackDb} dB, vocal ${balance.vocalDb} dB)`);
   check((await bob.page.locator('.sing .drawer.sound .micstatus').count()) === 1 && (await bob.page.locator('.sing .drawer.sound .fxbar').count()) === 1, 'the Sound drawer holds the microphone and the voice presets too (the stage itself keeps one row of controls)');
   await bob.page.getByRole('button', { name: 'Close the sound settings' }).click();
   // A singer may leave the song alone (the song goes on for the host) and join back in…

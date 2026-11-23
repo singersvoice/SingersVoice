@@ -296,7 +296,7 @@ export function Settings() {
           <Field label={`Backing level in your ears ${Math.round(audio.backingGain * 100)}%`} hint="Only what you hear while singing. The show, the recording and the audience get the track at its own balance (Track / Vocal volume, below).">
             <input type="range" min={0} max={1} step={0.01} value={audio.backingGain} onInput={(e) => updateAudio({ backingGain: Number((e.currentTarget as HTMLInputElement).value) })} />
           </Field>
-          <Field label="Track / Vocal volume in the recording, the mix and the broadcast" hint="The balance everyone else gets — the saved performance, the audience, the stream. They start with the voice in front of the music (track +1.6 dB, vocal +4.6 dB); the limiter behind them keeps the whole clear of distortion whatever they are set to. The same controls sit on every stage's Sound sheet.">
+          <Field label="Track / Vocal volume in the recording, the mix and the broadcast" hint="The balance everyone else gets — the saved performance, the audience, the stream. At 0 / 0 the mix already has your voice in front of the music (the music steps back a little under it while you sing); the limiter behind the controls keeps the whole clear of distortion whatever they are set to. The same controls sit on every stage's Sound sheet.">
             <MixBalance />
           </Field>
         </section>

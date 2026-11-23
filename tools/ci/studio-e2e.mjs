@@ -20,7 +20,7 @@
 //
 //   npm run build (BASE_PATH=/SingersVoice/) && node tools/ci/studio-e2e.mjs [outDir]
 // Exits 1 when any assertion fails. Needs playwright (local install or /opt/npm-tools) and ffmpeg.
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -293,7 +293,7 @@ try {
       }),
   );
   check(stored?.audio?.activePresetId === chosen && stored.app?.schema === 'singersvoice.app-settings.v2', `the Config store holds audio_plugin_settings.json (preset ${stored?.audio?.activePresetId}) and app_settings.json`);
-  check(Math.abs(Number(stored?.app?.trackDb) - 1.6) < 0.01 && Math.abs(Number(stored?.app?.vocalDb) - 4.6) < 0.01, `the saved Track / Vocal volume is the default (+1.6 / +4.6 dB): ${stored?.app?.trackDb} / ${stored?.app?.vocalDb}`);
+  check(Math.abs(Number(stored?.app?.trackDb)) < 0.01 && Math.abs(Number(stored?.app?.vocalDb)) < 0.01, `the saved Track / Vocal volume is the default (0 / 0 dB — the mix itself puts the voice in front): ${stored?.app?.trackDb} / ${stored?.app?.vocalDb}`);
   await page.screenshot({ path: path.join(out, 'studio-03-sound.png') });
   await page.keyboard.press('Escape');
   // Back to the natural voice for the take (the preview's last preset was a character one).
@@ -427,7 +427,22 @@ try {
       for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
       return { type: blob.type, data: btoa(bin) };
     });
-    writeFileSync(path.join(out, `take.${/mp4/.test(b64.type) ? 'mp4' : 'webm'}`), Buffer.from(b64.data, 'base64'));
+    const takeFile = path.join(out, `take.${/mp4/.test(b64.type) ? 'mp4' : 'webm'}`);
+    writeFileSync(takeFile, Buffer.from(b64.data, 'base64'));
+    // The saved file's sound, measured as broadcast measures it (ffmpeg's EBU R128): the whole at a record's loudness, the
+    // sung phrases (1–7 s and 13–19 s of the fake microphone's loop, from Start) well over the breaks between them — the
+    // voice in front of the music — and no sample near full scale (mixBus.ts MIX_TARGETS; the 22 Nov recording sat at
+    // −13 LUFS with the voice adding nothing to the whole).
+    const ebu = spawnSync('ffmpeg', ['-nostats', '-i', takeFile, '-af', 'ebur128=peak=true', '-f', 'null', '-'], { encoding: 'utf8' }).stderr; // (ffmpeg reports on stderr)
+    const integrated = Number(/\n\s+I:\s+(-?[\d.]+) LUFS/.exec(ebu)?.[1]);
+    const peak = Number(/\n\s+Peak:\s+(-?[\d.]+) dBFS/.exec(ebu)?.[1]);
+    const shortTerm = [...ebu.matchAll(/t:\s*([\d.]+)\s+TARGET:[^\n]*?S:\s*(-?[\d.]+)/g)].map((m) => ({ t: Number(m[1]), s: Number(m[2]) }));
+    const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
+    const sung = mean(shortTerm.filter((x) => (x.t > 3 && x.t < 7) || (x.t > 15 && x.t < 19)).map((x) => x.s));
+    const between = mean(shortTerm.filter((x) => (x.t > 9 && x.t < 12.5) || (x.t > 21 && x.t < 23.5)).map((x) => x.s));
+    check(Number.isFinite(integrated) && integrated >= -14 && integrated <= -8, `the saved file plays at a record's loudness: ${integrated} LUFS integrated (true peak ${peak} dBFS)`);
+    check(sung - between >= 4 && sung >= -13, `the voice is in front in the file: the sung phrases at ${sung.toFixed(1)} LUFS short-term, the breaks between them at ${between.toFixed(1)} (${(sung - between).toFixed(1)} LU apart)`);
+    check(peak <= -0.8, `nothing near full scale in the file (true peak ${peak} dBFS)`);
   }
   check(Boolean(quietFrame?.shown) && quietFrame.shown.h >= quietFrame.win.h * 0.45 && quietFrame.shown.bottom <= quietFrame.win.h, `the Performances player uses the window: ${quietFrame?.shown?.w}×${quietFrame?.shown?.h} shown in a ${quietFrame?.win?.w}×${quietFrame?.win?.h} window, inside it`);
   check(Boolean(quietFrame) && Math.abs(quietFrame.shown.w / quietFrame.shown.h - quietFrame.w / quietFrame.h) < 0.05, `…at the file's own aspect (${quietFrame?.w}:${quietFrame?.h})`);

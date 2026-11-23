@@ -5,6 +5,7 @@
 import { signal } from '@preact/signals';
 import type { VoxForgeParams } from '@singersvoice/protocol';
 import { hasAudioWorklet, isIOS } from '../lib/platform.ts';
+import { leveler, VOCAL_RIDER } from './mixBus.ts';
 import { BackingPlayer } from './player.ts';
 import { PcmRecorder } from './recorder.ts';
 import { createVoxForgeChain, type VoxForgeChain } from './voxforge.ts';
@@ -23,7 +24,7 @@ export function noteName(midi: number): string {
 }
 
 /** Every AudioWorklet module the engine's context runs (the mix buses load the same files on theirs). */
-export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'mix-out.js', 'dynamics.js', 'leveler.js', 'gate.js'] as const;
+export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'mix-out.js', 'dynamics.js', 'leveler.js', 'gate.js', 'ducker.js'] as const;
 
 /** Every stream in the app runs at 48 kHz (Opus, AAC, the mix): the context asks for it, so nothing is resampled block by block on the way. */
 export const ENGINE_RATE = 48000;
@@ -155,10 +156,28 @@ export class AudioEngine {
     const base = import.meta.env.BASE_URL;
     try {
       await Promise.all(WORKLET_MODULES.map((m) => this.ctx.audioWorklet.addModule(`${base}worklets/${m}`)));
+      this.rideMonitor();
     } catch (e) {
       console.warn('AudioWorklet modules failed to load; falling back to plain chain', e);
       (this as { workletAvailable: boolean }).workletAvailable = false;
     }
+  }
+
+  /**
+   * The singer's own ears hear their voice at the mix's vocal level: the same rider the mix bus puts on every voice
+   * (mixBus.ts VOCAL_RIDER, to MIX_TARGETS.vocalDb) sits between the voice and the monitor, so a quiet microphone
+   * is as far in front in the headphones as it will be in the recording and the broadcast — and over the backing
+   * track at its mix level (player.ts), the balance in the ears is the balance of the mix.
+   */
+  private rideMonitor(): void {
+    const rider = leveler(this.ctx, VOCAL_RIDER);
+    if (!rider) return;
+    try {
+      this.voice.disconnect(this.monitor);
+    } catch {
+      /* not connected */
+    }
+    this.voice.connect(rider).connect(this.monitor);
   }
 
   /** Must be called from a user gesture. */
@@ -497,9 +516,19 @@ export class AudioEngine {
     return this.vocalOut.stream;
   }
 
-  /** Hear yourself (with FX). Off by default on phones to avoid speaker feedback. */
-  setMonitor(on: boolean, gain = 0.9): void {
-    this.monitor.gain.setTargetAtTime(on ? gain : 0, this.ctx.currentTime, 0.03);
+  private monitorWanted = { on: false, gain: 1 };
+  private monitorMuted = false;
+
+  /** Hear yourself (with FX, at the mix's vocal level — `rideMonitor`). Off by default on phones to avoid speaker feedback. */
+  setMonitor(on: boolean, gain = 1): void {
+    this.monitorWanted = { on, gain };
+    this.monitor.gain.setTargetAtTime(on && !this.monitorMuted ? gain : 0, this.ctx.currentTime, 0.03);
+  }
+
+  /** The monitor held off while something else carries the voice to the ears (the sound preview, through its own bus); `setMonitor` is remembered meanwhile and back when released. */
+  muteMonitor(muted: boolean): void {
+    this.monitorMuted = muted;
+    this.setMonitor(this.monitorWanted.on, this.monitorWanted.gain);
   }
 
   /** The singer's own choice of echo cancellation ("I'm on speakers"): on for the whole time the mic is open. */

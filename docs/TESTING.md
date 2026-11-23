@@ -27,7 +27,7 @@ Live build: **https://www.singersvoice.com/** (and, while the move is on, https:
    - Or **Library → Import** with an SVOld `*.trackmaker.json` + its mp3.
 4. **Sing** → *Start singing* (3-2-1) → sing → *Finish take* → *Play mix* → **Keep**.
 5. **Performances** → the take is listed (Temp/Kept); open → play / download.
-6. **Settings** → VoxForge presets (try *Hard Tune* with auto-tune) — *Preview my voice* hears each one live, every tweak applied as it is made, *Save my sound* writes the Config files now; text size A++ / Max; backgrounds (**NONE** shows the camera picture as it is). Audio → the Track / Vocal volume in the recording, the mix and the broadcast (+1.6 / +4.6 dB to start; *Default* brings them back). Camera → the zoom: *Zoom with my voice* (the default: the picture pushes in on the face while you sing, back out to the chest when you stop), *Still*, *Follow me*.
+6. **Settings** → VoxForge presets (try *Hard Tune* with auto-tune) — *Preview my voice* hears each one live, every tweak applied as it is made, *Save my sound* writes the Config files now; text size A++ / Max; backgrounds (**NONE** shows the camera picture as it is). Audio → the Track / Vocal volume in the recording, the mix and the broadcast (0 / 0 to start — the mix itself puts the voice in front; *Default* brings them back). Camera → the zoom: *Zoom with my voice* (the default: the picture pushes in on the face while you sing, back out to the chest when you stop), *Still*, *Follow me*.
 7. Turn the phone off-line (airplane mode) and reopen the app: the shell loads; device-mode tracks still play.
 
 ## Viewport matrix (automated)
@@ -53,10 +53,18 @@ CI uploads the screenshots as an artifact on every PR.
 measures them with synthetic signals — what a listener would hear, in numbers: the chain's impulse
 response has one arrival (every parallel path delay-matched, no comb filter), the de-esser passes a
 quiet 8 kHz at unity and ducks a loud one, a voice 10 dB over full scale leaves under the −3 dB
-ceiling, the Studio preset adds no hidden gain, a −30 LUFS track lands at −19, a −5 dBFS and a
-−33 dBFS voice both ride to −17 within ten seconds and the silence after them stays silent, the mix
-at 0 / 0 sits still, and at +30 / +30 the guard brings it back under the target with no sample over
-the ceiling; the noise gate turns a −52 dBFS room down by over 10 dB between two sung phrases and
+ceiling, the Studio preset adds no hidden gain, every factory preset leaves a −15 dBFS voice within a
+decibel of the others (its makeup gives back what its compressor takes), a −30 LUFS track lands at
+−16, a −5 dBFS and a −33 dBFS voice both ride to the vocal target within ten seconds and the silence
+after them stays silent, the mix at 0 / 0 sits still, and at +30 / +30 the guard brings it back under
+its line with no sample over the ceiling; **the finished mix, every preset** (section 6): on a
+bass-heavy mastered song normalised to the track target, a −15 dBFS voice sung in phrases through each
+of the sixteen presets — the music lands at −16 LUFS, the voice stands 4–6 LU over it (vocal-only and
+track-only renders of the same bus), a sung phrase lands at −10…−12 LUFS, the limiter takes under
+2 LU off it on average and nothing passes −1.3 dBFS, the chain leaves the voice mid-forward (its 1–5 kHz
+against its 100–400 Hz, a decibel or more over the raw voice's; Octave Down is excused), and the duck
+steps the music back 2.5 dB under a phrase and has it back within a second (the track's own path
+rendered beside the output); the noise gate turns a −52 dBFS room down by over 10 dB between two sung phrases and
 leaves the phrases themselves alone (the first 30 ms of one included); the pitch stage puts a tone a
 semitone up or down, and an octave up, to within a few cents, with under 2 dB of ripple on the steady
 tone and its level kept, pulls a tone 46 cents sharp onto its note at full strength and 60 % of the
@@ -235,7 +243,7 @@ file (frame by frame, through the Performances player):
 - **The Sound sheet**: *Preview my voice* opens the microphone through the preset into the ears; three presets tried
   with the preview on — it stays on, nothing restarts, no new capture; *Stop preview*; *Save my sound* writes
   `audio_plugin_settings.json` and `app_settings.json` to the device's Config store (checked in IndexedDB), the
-  balance at its defaults (+1.6 / +4.6 dB).
+  balance at its defaults (0 / 0 dB).
 - **NONE** (Stage background): the stage shows the camera picture as it is at once (the room's wall on the strip, no
   backdrop behind), survives a reload, is shown chosen in the picker; another background brings the cut-out back.
 - **The saved performance** (`video/stage.ts` 'solo'): the singer's head half as big again in the file as on the live
@@ -370,10 +378,12 @@ vocal level: the real `sv-leveler` worklet with the real `VOCAL_RIDER` settings 
 OfflineAudioContext, fed a synthetic microphone (`apps/web/src/audio/riderLab.ts`: a steady hiss at
 one level and, over it, the e2e's voice sung in two-second phrases) — a microphone that only hisses
 at −40 dBFS comes out at −40 (never riden up; the old rider made it −22), a voice 12 dB over the
-hiss comes out at the vocal target with the hiss between its phrases 12 dB under the target, a
-quiet singer on a quiet microphone gets the full lift, a loud singer is brought down (the hiss with
-them), a voice only 5 dB over the hiss leaves the rider shut, and the guard (`MIX_GUARD`, no floor
-rule) holds a hot mix at the mix target.
+hiss comes up as far as its hiss allows (the hiss between its phrases kept 12 dB under the target —
+the riders measure K-weighted now, and a white hiss reads about 3 dB louder that way, as the ear
+hears it), a quiet singer on a quiet microphone gets the full lift to the vocal target, a loud
+singer is brought down to it (the hiss with them), a voice only 5 dB over the hiss leaves the rider
+shut, and the guard (`MIX_GUARD`, no floor rule) holds a hot mix at its line. The targets are read
+from the bundle (`window.svRiderConfig`), never written into the lab.
 
 **The live e2e** then measures the real pipeline, with the synthetic singing voice as every
 microphone (a smooth harmonic voice, in phrases) and the test song (`tools/ci/e2e-song.mjs`: the

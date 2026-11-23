@@ -117,3 +117,4 @@ export async function riderLab(o: RiderLabOptions): Promise<{ windows: RiderLabW
 }
 
 (window as unknown as { svRiderLab: typeof riderLab }).svRiderLab = riderLab;
+(window as unknown as { svRiderConfig: { vocal: typeof VOCAL_RIDER; guard: typeof MIX_GUARD } }).svRiderConfig = { vocal: VOCAL_RIDER, guard: MIX_GUARD };
