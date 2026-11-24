@@ -1,4 +1,4 @@
-import { bufferLoudnessAsync, cachedLoudness, MIX_TARGETS, normalizationDb, rememberLoudness, type Loudness } from './loudness.ts';
+import { bufferLoudnessAsync, cachedLoudness, EARS_TRACK_TRIM_DB, MIX_TARGETS, normalizationDb, rememberLoudness, type Loudness } from './loudness.ts';
 
 /**
  * Backing-track player anchored to the AudioContext clock. `play(at)` schedules the start at an
@@ -7,9 +7,11 @@ import { bufferLoudnessAsync, cachedLoudness, MIX_TARGETS, normalizationDb, reme
  * the pitch worklet; key shift (±6 st) goes through the same worklet.
  *
  * Two levels, on purpose: `out` carries the track normalised to the mix target (every track the same
- * loudness, whatever file it came from) — that is what the recording and the audience mix take; the
- * singer's own listening level ("Backing level") sits after it on `gain`, so turning the music down in
- * your ears never turns it down in the show.
+ * loudness, whatever file it came from) — that is what the recording and the audience mix take (PUBLISH
+ * MODE); the singer's own listening level ("Backing level") sits after it on `gain`, so turning the music
+ * down in your ears never turns it down in the show (PERFORMER MODE). The ears' track is held at the
+ * performer level whatever the published track is raised to: `gain` carries the Backing level times the
+ * difference between the two (loudness.ts `EARS_TRACK_TRIM_DB`) — a louder record, the same ears.
  */
 export class BackingPlayer {
   buffer: AudioBuffer | null = null;
@@ -39,6 +41,7 @@ export class BackingPlayer {
     this.norm = ctx.createGain();
     this.out = ctx.createGain();
     this.gain = ctx.createGain();
+    this.gain.gain.value = Math.pow(10, EARS_TRACK_TRIM_DB / 20); // the ears at the performer level from the first frame (the Backing level follows: setGain)
     if (workletAvailable) {
       try {
         this.pitch = new AudioWorkletNode(ctx, 'sv-pitch-shifter', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
@@ -79,8 +82,9 @@ export class BackingPlayer {
     return this.loudness ? normalizationDb(this.loudness.lufs, MIX_TARGETS.trackLufs) : 0;
   }
 
+  /** The singer's Backing level (0..1 of the performer track level) in their ears — never the recording's. */
   setGain(v: number): void {
-    this.gain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
+    this.gain.gain.setTargetAtTime(v * Math.pow(10, EARS_TRACK_TRIM_DB / 20), this.ctx.currentTime, 0.02);
   }
 
   /** The playback rate (1 = as recorded). */

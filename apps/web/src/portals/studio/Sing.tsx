@@ -11,7 +11,7 @@ import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPau
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
-import { EarsLevel, MixBalance } from '../../components/MixBalance.tsx';
+import { EarsDelayNote, EarsLevel, MixBalance } from '../../components/MixBalance.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
 import { SaveSoundButton, VoicePreview } from '../../components/SoundPreview.tsx';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
@@ -300,13 +300,13 @@ export function Sing(props: { id?: string; joinId?: string }) {
     feed.onMode = (m) => setBlend(m);
     feed.attach(camOn ? camStream : null, true);
   }, [camStream, camOn]);
-  // My picture and framing choices reach the feed live; the voice's push-in follows my meter once the take runs.
+  // My picture and AUTOZOOM choices reach the feed live; my meter reaches the seat once the take runs (the push-in follows it only with AUTOZOOM on).
   useEffect(() => feed.setLook(app.picture, app.framing), [app.picture, app.framing]);
   useEffect(() => {
     const level = engineRef.current?.recorder?.level;
-    if (app.framing !== 'voice' || !level || !(phase === 'playing' || phase === 'countdown' || phase === 'paused')) return;
+    if (!level || !(phase === 'playing' || phase === 'countdown' || phase === 'paused')) return;
     return effect(() => feed.voice(level.value));
-  }, [app.framing, phase]);
+  }, [phase]);
   // The Track / Vocal volume of the recorded mix (the same controls as the live stage; kept on the device).
   useEffect(() => show.setBalance(app.trackDb, app.vocalDb), [app.trackDb, app.vocalDb]);
   const facing = camera.facing.value;
@@ -673,7 +673,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
             <button class="btn icon" aria-label="Sound" title="Sound: the voice preset and its tweaks, the microphone, the track and vocal volumes" onClick={() => setFxOpen(true)}>
               <IcSliders />
             </button>
-            <button class={`btn icon ${setupOpen ? 'on' : ''}`} aria-label="Camera & zoom" title="Camera & zoom: my picture, how the zoom follows my voice, flip the camera — and my part and the count-in before the song" aria-pressed={setupOpen} data-camera-zoom onClick={() => setSetupOpen(true)}>
+            <button class={`btn icon ${setupOpen ? 'on' : ''}`} aria-label="Camera & zoom" title="Camera & zoom: my picture, Auto zoom on or off, flip the camera — and my part and the count-in before the song" aria-pressed={setupOpen} data-camera-zoom onClick={() => setSetupOpen(true)}>
               <IcZoom />
             </button>
             <button class="btn icon" aria-label="Stage background" title="Stage background" onClick={() => setBgOpen(true)}>
@@ -752,6 +752,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
             <Switch checked={audio.monitor} onChange={(v) => updateAudio({ monitor: v })} label="Hear myself" hint="Only with headphones — speakers will feed back." />
             <Field label="Your voice in your ears" hint="Performer mode: only what you hear of yourself. The recording gets its own, stronger balance (Track / Vocal volume above).">
               <EarsLevel compact />
+              {audio.monitor && <EarsDelayNote engine={engineRef.current} />}
             </Field>
           </div>
           {!live && <VoicePreview engine={engineRef.current} compact />}

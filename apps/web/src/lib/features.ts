@@ -46,7 +46,7 @@ export const FEATURES: Feature[] = [
   { title: 'Audio & microphone', where: 'Settings → Audio', keywords: ['microphone', 'mic', 'input', 'echo', 'echo cancellation', 'headphones', 'instrument', 'latency', 'sync', 'check the sync', 'lag', 'delay', 'audio'], path: '/settings#audio' },
   { title: 'Check the sync (lag)', where: 'Settings → Audio', keywords: ['sync', 'lag', 'delay', 'latency', 'out of time', 'alignment', 'clicks'], path: '/settings#audio' },
   { title: 'VoxForge voice', where: 'Settings → VoxForge voice', keywords: ['voice', 'effects', 'fx', 'presets', 'autotune', 'auto-tune', 'pitch', 'reverb', 'noise gate', 'hiss', 'compressor', 'eq', 'de-esser', 'voxforge'], path: '/settings#voice' },
-  { title: 'Camera & picture', where: 'Settings → Camera', keywords: ['camera', 'picture', 'cut-out', 'background', 'my camera as it is', 'framing', 'zoom', 'still', 'follow me', 'zoom with my voice', 'video'], path: '/settings#camera' },
+  { title: 'Camera & picture', where: 'Settings → Camera', keywords: ['camera', 'picture', 'cut-out', 'background', 'my camera as it is', 'framing', 'zoom', 'auto zoom', 'autozoom', 'still', 'close-up', 'video'], path: '/settings#camera' },
   { title: 'TV in the room', where: 'Settings → TV', keywords: ['tv', 'television', 'big screen', 'cast', 'project', 'qr', 'code', 'smart tv', 'second screen'], path: '/settings#tv' },
   { title: 'Social networks', where: 'Settings → Social', keywords: ['social', 'x', 'twitter', 'facebook', 'instagram', 'post', 'share', 'clip', 'connect', 'handle', 'reel'], path: '/settings#social' },
   { title: 'Stage & publishing backgrounds', where: 'Settings → Backgrounds', keywords: ['background', 'stage background', 'backdrop', 'scene'], path: '/settings#backgrounds' },

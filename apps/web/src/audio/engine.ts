@@ -24,7 +24,7 @@ export function noteName(midi: number): string {
 }
 
 /** Every AudioWorklet module the engine's context runs (the mix buses load the same files on theirs). */
-export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'mix-out.js', 'dynamics.js', 'leveler.js', 'gate.js', 'ducker.js'] as const;
+export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'mix-out.js', 'dynamics.js', 'shaper.js', 'leveler.js', 'gate.js', 'ducker.js'] as const;
 
 /** Every stream in the app runs at 48 kHz (Opus, AAC, the mix): the context asks for it, so nothing is resampled block by block on the way. */
 export const ENGINE_RATE = 48000;
@@ -69,10 +69,18 @@ export function writeMeasuredLatency(m: MeasuredLatency | null): void {
   }
 }
 
-/** The microphone's constraints, the same wherever it is captured (here, or with the camera on iOS — capture.ts): no browser processing but the echo cancellation asked for. */
+/**
+ * The microphone's constraints, the same wherever it is captured (here, or with the camera on iOS — capture.ts): no
+ * browser processing but the echo cancellation asked for, and the shortest capture buffer the device can do
+ * (`latency`: an ideal, never a refusal — a browser that can run its capture in 128-frame blocks instead of 10 ms
+ * ones does, and the singer hears themselves that much sooner; PERFORMER MODE).
+ */
 export function micConstraints(deviceId: string | undefined, echoCancellation: boolean): MediaTrackConstraints {
-  return { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+  // `latency` is in the Media Capture spec and honoured by Chrome and Safari; TypeScript's DOM types leave it out.
+  return { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation, noiseSuppression: false, autoGainControl: false, channelCount: 1, latency: { ideal: MIC_LATENCY_IDEAL_S } } as MediaTrackConstraints;
 }
+/** The capture buffer asked for (s): 128 frames at 48 kHz. */
+export const MIC_LATENCY_IDEAL_S = 128 / ENGINE_RATE;
 
 const hasLiveAudio = (s: MediaStream): boolean => s.getAudioTracks().some((t) => t.readyState === 'live');
 
@@ -165,7 +173,7 @@ export class AudioEngine {
 
   /**
    * PERFORMER MODE — the singer's own ears: the same rider the mix bus puts on every voice sits between the voice
-   * and the monitor, but to the performer level (mixBus.ts MONITOR_RIDER: loudness.ts PERFORMER_MONITOR, half as
+   * and the monitor, but to the performer level (mixBus.ts MONITOR_RIDER: loudness.ts PERFORMER_MONITOR, about half as
    * loud as the published voice, plus the singer's own "Your voice in your ears" offset — `setMonitorLevel`), over
    * the backing track at their own listening level (player.ts `gain`). A quiet microphone is as present in the
    * headphones as a loud one; what the recording and the audience get (PUBLISH MODE, the bus) is set apart.
@@ -192,7 +200,7 @@ export class AudioEngine {
     this.setMonitorLevel(this.monitorDb);
   }
 
-  /** The singer's own voice in their ears, relative to the performer level (dB; 0 is the mode's own: half as loud as in the recording). */
+  /** The singer's own voice in their ears, relative to the performer level (dB; 0 is the mode's own: about half as loud as in the recording). */
   setMonitorLevel(db: number): void {
     this.monitorDb = Math.max(-24, Math.min(24, Number.isFinite(db) ? db : 0));
     this.monitorRider?.parameters.get('target')?.setTargetAtTime(Math.min(0, MONITOR_RIDER.target + this.monitorDb), this.ctx.currentTime, 0.05);

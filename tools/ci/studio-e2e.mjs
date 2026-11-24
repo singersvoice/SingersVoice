@@ -2,10 +2,11 @@
 // camera is a synthetic person (fake-person.mjs: the real segmentation model cuts them out), the fake microphone
 // sings in phrases (6 s of voice, 5 s of silence, on a loop), so what is measured is the real pipeline:
 //
-//   1. The voice zoom (video/framing.ts): the seat frames the singer; while they are heard the picture pushes in on
-//      the face and goes back out to the chest when they stop — the fake person's head on the stage strip grows by
-//      half and shrinks back, with the phrases, and never jumps.
-//   2. The Camera & zoom button works during the song: the sheet opens, the zoom choice changes the frame live.
+//   1. AUTOZOOM (video/framing.ts): off by default — the seat frames the singer once and the picture stays put, sung or
+//      not; switched on in the Camera & zoom sheet during the song, the picture pushes in on the face while they are
+//      heard and goes back out to the chest when they stop — the fake person's head on the stage strip grows by half
+//      and shrinks back, with the phrases, and never jumps. Both are in the saved file too.
+//   2. The Camera & zoom button works during the song: the sheet opens, the Auto zoom switch changes the frame live.
 //   3. The Sound sheet: Preview my voice / Stop preview — the microphone through the preset, live, a preset change
 //      applied without a restart; Save my sound — both config files in the device's Config store, with the word on it.
 //   4. The NONE background: the stage shows the camera picture as it is (the room's wall, no cut-out), at once; the
@@ -62,7 +63,7 @@ const control = `control=${servers.controlUrl}`;
 const url = (p) => `${base}${p.replace(/^\//, '')}${p.includes('?') ? '&' : '?'}${control}`;
 
 // ---- The song (24 s: a take ends on its own), the fake camera (a synthetic person), the fake microphone (phrases) ----
-const SONG_S = 24;
+const SONG_S = 34; // two phrases and two breaks after the Auto zoom switch goes on at ~14 s: two push-ins and two push-outs in the file
 const song = makeSong(path.join(work, 'song.mp3'), SONG_S);
 const trackJson = path.join(work, 'song.track.json');
 {
@@ -205,7 +206,7 @@ try {
   }, 40000);
   check(Boolean(settled?.head), `the singer is framed on the live stage strip before the song (head ${settled?.head ? `${settled.head.w}×${settled.head.h} of ${settled.w}×${settled.h}` : 'not found'})`);
   const strip = settled;
-  check(strip?.framing === 'voice' && strip.picture === 'cutout', `the defaults: the frame zooms with the voice, the picture is the cut-out (${strip?.framing}, ${strip?.picture})`);
+  check(strip?.framing === 'still' && strip.picture === 'cutout', `the defaults: AUTOZOOM off (the frame set once and still), the picture is the cut-out (${strip?.framing}, ${strip?.picture})`);
   check(strip?.heard === false, 'before the song nobody is heard: no push-in');
   // The live strip is the show stage (the meet's size for a singer): the saved file is measured against it below — by the
   // head's WIDTH against the picture's height (the fake person stands close: their chin can meet the riser, their width never).
@@ -309,37 +310,45 @@ try {
   const gumAtEntry = await gumCalls(page);
   check(gumAtEntry.length === 1 && gumAtEntry[0] === 'video', `a computer's Studio opens the camera alone at entry (${gumAtEntry.join(', ')})`);
 
-  // ---- 1. The voice zoom, while the song runs ----
+  // ---- 1. AUTOZOOM off (the default), while the song runs: the picture stays put, sung or not ----
   await page.getByRole('button', { name: 'Start singing' }).click();
   await page.locator('button', { hasText: 'Finish' }).waitFor({ timeout: 30000 });
   const gumAtStart = await gumCalls(page);
   check(gumAtStart.length === 2 && gumAtStart[1] === 'audio', `Start opens the microphone (${gumAtStart.join(', ')})`);
-  const samples = [];
   const modes = [];
-  const t0 = Date.now();
-  while (Date.now() - t0 < 15000) {
-    const s = await stageNow(page);
-    samples.push({ t: Date.now() - t0, heard: s.heard, head: s.head ? s.head.w : 0, songMs: s.songMs });
-    // The two modes on the real pipeline: what the monitor's rider puts out (PERFORMER, K-weighted) and what the mix bus
-    // has of the voice after its rider (PUBLISH, plain RMS of the last 43 ms) — read while the singer is heard.
-    if (s.heard) modes.push(await page.evaluate(() => ({ ears: window.__svEngine ? window.__svEngine.monitorOutDb : null, mix: window.__svShow && window.__svShow.mixLevels() ? window.__svShow.mixLevels().vocals.me ?? null : null, duck: window.__svShow && window.__svShow.mixLevels() ? window.__svShow.mixLevels().duckDb : null })));
-    await wait(100);
-  }
+  const median = (a) => (a.length ? [...a].sort((x, y) => x - y)[a.length >> 1] : 0);
+  /** The stage sampled every 100 ms for `ms`: whether the singer is heard and how wide the fake person's head is on the strip. */
+  const sampleStage = async (ms) => {
+    const samples = [];
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      const s = await stageNow(page);
+      samples.push({ t: Date.now() - t0, heard: s.heard, head: s.head ? s.head.w : 0, songMs: s.songMs });
+      // The two modes on the real pipeline: what the monitor's rider puts out (PERFORMER, K-weighted) and what the mix bus
+      // has of the voice after its rider (PUBLISH, plain RMS of the last 43 ms) — read while the singer is heard.
+      if (s.heard) modes.push(await page.evaluate(() => ({ ears: window.__svEngine ? window.__svEngine.monitorOutDb : null, mix: window.__svShow && window.__svShow.mixLevels() ? window.__svShow.mixLevels().vocals.me ?? null : null, duck: window.__svShow && window.__svShow.mixLevels() ? window.__svShow.mixLevels().duckDb : null })));
+      await wait(100);
+    }
+    return samples;
+  };
+  /** The head while heard for ≥ 0.7 s (a push-in would have landed) against the head while quiet for ≥ 1.6 s (a push-out would have). */
+  const headsOf = (samples) => {
+    const sinceChange = (i) => {
+      let j = i;
+      while (j > 0 && samples[j - 1].heard === samples[i].heard) j--;
+      return samples[i].t - samples[j].t;
+    };
+    const inHeads = samples.filter((s, i) => s.heard && sinceChange(i) >= 700 && s.head).map((s) => s.head);
+    const outHeads = samples.filter((s, i) => !s.heard && sinceChange(i) >= 1600 && s.head && samples.slice(0, i).some((x) => x.heard)).map((s) => s.head);
+    return { inHeads, outHeads, ratio: median(inHeads) / Math.max(1, median(outHeads)) };
+  };
+  const samples = await sampleStage(12500);
   const heardAt = samples.filter((s) => s.heard);
   const quietAfter = samples.filter((s, i) => !s.heard && samples.slice(0, i).some((x) => x.heard));
   check(heardAt.length > 0, `the singer is heard while the microphone sings (${heardAt.length} of ${samples.length} samples)`);
   check(quietAfter.length > 0, `…and not heard again when the phrase ends (${quietAfter.length} samples after a phrase)`);
-  // The head while heard for ≥ 0.7 s (the push-in has landed) against the head while quiet for ≥ 1.6 s (the push-out has).
-  const sinceChange = (i) => {
-    let j = i;
-    while (j > 0 && samples[j - 1].heard === samples[i].heard) j--;
-    return samples[i].t - samples[j].t;
-  };
-  const inHeads = samples.filter((s, i) => s.heard && sinceChange(i) >= 700 && s.head).map((s) => s.head);
-  const outHeads = samples.filter((s, i) => !s.heard && sinceChange(i) >= 1600 && s.head && samples.slice(0, i).some((x) => x.heard)).map((s) => s.head);
-  const median = (a) => (a.length ? [...a].sort((x, y) => x - y)[a.length >> 1] : 0);
-  const zoomRatio = median(inHeads) / Math.max(1, median(outHeads));
-  check(inHeads.length > 0 && outHeads.length > 0 && zoomRatio > 1.3 && zoomRatio < 1.75, `the push-in: the head is ${zoomRatio.toFixed(2)}× as wide while heard as when quiet (${median(inHeads)} px against ${median(outHeads)} px; expected ×1.5)`);
+  const still = headsOf(samples);
+  check(still.inHeads.length > 0 && still.outHeads.length > 0 && still.ratio > 0.92 && still.ratio < 1.08, `AUTOZOOM off: the picture stays put — the head is ${still.ratio.toFixed(2)}× as wide while heard as when quiet (${median(still.inHeads)} px against ${median(still.outHeads)} px; no push-in, nothing unintended)`);
   console.log(`info the camera during the song: ${await page.evaluate(() => window.__svFeed.cameraLine)}`);
   // PERFORMER against PUBLISH, measured on the stage (the second half of the sung samples: both riders have landed).
   {
@@ -354,21 +363,24 @@ try {
   }
   await page.screenshot({ path: path.join(out, 'studio-04-singing.png') });
 
-  // ---- 2. The Camera & zoom button during the song ----
+  // ---- 2. The Camera & zoom button during the song: AUTOZOOM switched on, live ----
   const zoomBtn = page.getByRole('button', { name: 'Camera & zoom' });
   check((await zoomBtn.isEnabled()) === true, 'the Camera & zoom button is enabled during the song');
   await zoomBtn.click();
   const zoomSheet = page.locator('[data-camera-zoom-sheet]');
   await zoomSheet.waitFor({ timeout: 10000 });
-  const zoomGroup = zoomSheet.getByRole('radiogroup', { name: 'Zoom' });
-  check((await zoomGroup.count()) === 1, 'the Camera & zoom sheet opens during the song with the zoom choice');
-  await zoomGroup.getByRole('radio', { name: 'Still' }).click();
-  check((await until(async () => ((await stageNow(page)).framing === 'still' ? true : null), 5000)) !== null, 'Still: the frame holds still from now (the feed follows the choice live)');
-  await zoomGroup.getByRole('radio', { name: 'Zoom with my voice' }).click();
-  check((await until(async () => ((await stageNow(page)).framing === 'voice' ? true : null), 5000)) !== null, 'Zoom with my voice: back on, live');
+  const autozoom = zoomSheet.getByRole('checkbox', { name: 'Auto zoom' });
+  check((await autozoom.count()) === 1 && (await autozoom.isChecked()) === false, 'the Camera & zoom sheet opens during the song with the Auto zoom switch, off');
+  await autozoom.check();
+  check((await until(async () => ((await stageNow(page)).framing === 'voice' ? true : null), 5000)) !== null, 'Auto zoom on: the frame follows the voice from now (the feed follows the switch live)');
+  check((await zoomSheet.locator('[data-autozoom="on"]').count()) === 1, 'the switch shows on');
   await page.screenshot({ path: path.join(out, 'studio-05-camera-zoom-sheet.png') });
   await page.keyboard.press('Escape');
   await zoomSheet.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => undefined);
+  // ---- 3. AUTOZOOM on, the rest of the song: the push-in with the voice ----
+  const zoomed = headsOf(await sampleStage(16000));
+  check(zoomed.inHeads.length > 0 && zoomed.outHeads.length > 0 && zoomed.ratio > 1.3 && zoomed.ratio < 1.75, `AUTOZOOM on: the push-in — the head is ${zoomed.ratio.toFixed(2)}× as wide while heard as when quiet (${median(zoomed.inHeads)} px against ${median(zoomed.outHeads)} px; expected ×1.5)`);
+  const autozoomOnAtS = (samples[samples.length - 1]?.songMs ?? 12500) / 1000 + 2; // the song's time when the switch went on, for the file's checks below
 
   // ---- 5. The take: the review plays through the mix; the saved file has the singer half as big again ----
   await page.locator('[data-review]').waitFor({ timeout: (SONG_S + 40) * 1000 });
@@ -407,9 +419,17 @@ try {
   console.log(`info the saved file's head widths: ${withHead.map((f) => `${f.at}s:${f.head.w}`).join(' ')}`);
   const soloRatio = liveHeadFrac ? savedHeadFrac / liveHeadFrac : 0;
   check(soloRatio > 1.3 && soloRatio < 1.7, `the saved performance draws the singer half as big again as the live show stage: the head is ${quietFrame?.head?.w} px wide on the ${quietFrame?.h} px frame (at ${quietFrame?.at} s, quiet) against ${strip?.head?.w} px on the strip's ${strip?.h} px (×${soloRatio.toFixed(2)}, expected ×1.5)`);
-  check(Boolean(quietFrame?.head) && quietFrame.head.y > quietFrame.h * 0.05 && quietFrame.head.y < quietFrame.h * 0.5, `the head's top sits in the upper half of the saved frame, under the top edge (row ${quietFrame?.head?.y} of ${quietFrame?.h})`);
+  check(Boolean(quietFrame?.head) && quietFrame.head.y > quietFrame.h * 0.015 && quietFrame.head.y < quietFrame.h * 0.4, `the head's crown sits near the top edge of the saved frame, inside it (row ${quietFrame?.head?.y} of ${quietFrame?.h}: the singer from the crown to the chest)`);
+  // The fake person's skin runs from the crown down the neck (fake-person.mjs: the head 210 tall for 160 wide, the neck under it): the chin is about 1.3 head widths under the crown.
+  const chinRow = quietFrame?.head ? Math.round(quietFrame.head.y + quietFrame.head.w * 1.31) : null;
+  check(chinRow !== null && chinRow < quietFrame.h * 0.75, `…the whole head in the upper three quarters, the chest below it (the chin about row ${chinRow} of ${quietFrame?.h})`);
+  // AUTOZOOM was off until the switch: in the file, from 2 s to then, the head stays one size, sung or not.
+  const offFrames = withHead.filter((f) => f.at >= 2 && f.at < autozoomOnAtS - 1);
+  const offMedian = median(offFrames.map((f) => f.head.w));
+  const offSpread = offFrames.length ? Math.max(...offFrames.map((f) => Math.abs(f.head.w - offMedian) / offMedian)) : 1;
+  check(offFrames.length >= 10 && offSpread < 0.1, `AUTOZOOM off in the saved file: ${offFrames.length} frames before the switch (${autozoomOnAtS.toFixed(1)} s) keep the head one size (${offMedian} px, within ${(offSpread * 100).toFixed(0)} %)`);
   const savedZoom = largest?.head && quietFrame?.head ? largest.head.w / quietFrame.head.w : 0;
-  check(savedZoom > 1.3 && savedZoom < 1.75, `the push-in is in the saved file too: the head ${savedZoom.toFixed(2)}× as wide at ${largest?.at} s (sung) as at ${quietFrame?.at} s (quiet)`);
+  check(savedZoom > 1.3 && savedZoom < 1.75 && largest.at > autozoomOnAtS - 1, `AUTOZOOM on in the saved file too: the head ${savedZoom.toFixed(2)}× as wide at ${largest?.at} s (sung, after the switch) as at ${quietFrame?.at} s (quiet)`);
   // Smooth: the push-in takes 0.45 s and the push-out 1.1 s, eased — in the file (30 fps of the same picture) the head
   // passes through sizes between the two around each change, never the whole way in one step. (The way out is the
   // slower: with the test machine's camera rate — see the camera line above — the way in may land in one or two frames.)
@@ -457,8 +477,9 @@ try {
     const sung = mean(shortTerm.filter((x) => (x.t > 3 && x.t < 7) || (x.t > 15 && x.t < 19)).map((x) => x.s));
     const between = mean(shortTerm.filter((x) => (x.t > 9 && x.t < 12.5) || (x.t > 21 && x.t < 23.5)).map((x) => x.s));
     check(Number.isFinite(integrated) && integrated >= -13 && integrated <= -7, `PUBLISH MODE — the saved file plays at a record's loudness: ${integrated} LUFS integrated (true peak ${peak} dBFS)`);
-    check(sung - between >= 5.5 && sung >= -11, `the voice is in front in the file: the sung phrases at ${sung.toFixed(1)} LUFS short-term, the breaks between them at ${between.toFixed(1)} (${(sung - between).toFixed(1)} LU apart)`);
-    check(peak <= -0.8, `nothing near full scale in the file (true peak ${peak} dBFS)`);
+    // 24 Nov: the music a quarter louder (−14 LUFS) at the owner's word, the voice at its ceiling: the phrases stand 4 LU and more over the breaks (plus the duck's 3 while sung).
+    check(sung - between >= 4 && sung >= -11, `the voice is in front in the file: the sung phrases at ${sung.toFixed(1)} LUFS short-term, the breaks between them at ${between.toFixed(1)} (${(sung - between).toFixed(1)} LU apart)`);
+    check(peak <= -0.5, `nothing near full scale in the file (true peak ${peak} dBFS: the bus's −1.5 ceiling and the AAC encoder's overshoot)`);
   }
   check(Boolean(quietFrame?.shown) && quietFrame.shown.h >= quietFrame.win.h * 0.45 && quietFrame.shown.bottom <= quietFrame.win.h, `the Performances player uses the window: ${quietFrame?.shown?.w}×${quietFrame?.shown?.h} shown in a ${quietFrame?.win?.w}×${quietFrame?.win?.h} window, inside it`);
   check(Boolean(quietFrame) && Math.abs(quietFrame.shown.w / quietFrame.shown.h - quietFrame.w / quietFrame.h) < 0.05, `…at the file's own aspect (${quietFrame?.w}:${quietFrame?.h})`);
@@ -481,7 +502,7 @@ try {
   const iStart = await gumCalls(iphone.page);
   check(iStart.length === 1, `iPhone: Start asked for nothing — the engine took the camera's microphone (${iStart.length} capture in all)`);
   const iMeter = await until(async () => ((await stageNow(iphone.page)).heard ? true : null), 12000);
-  check(iMeter !== null, 'iPhone: the adopted microphone is heard (the meter runs, the voice zoom follows)');
+  check(iMeter !== null, 'iPhone: the adopted microphone is heard (the meter runs and the seat hears the singer)');
   await iphone.page.getByRole('button', { name: 'Finish' }).click();
   await iphone.page.locator('[data-review]').waitFor({ timeout: 60000 });
   await iphone.page.getByRole('button', { name: 'Sing again' }).click();

@@ -1,6 +1,6 @@
 # Defaults and preferences
 
-Updated 23 Nov 2026. Read before changing any default. A default is what a new singer gets; a singer's own
+Updated 24 Nov 2026. Read before changing any default. A default is what a new singer gets; a singer's own
 setting replaces it and is kept (device localStorage + the Config folder in Drive), except where a dated
 migration below says otherwise.
 
@@ -10,27 +10,29 @@ migration below says otherwise.
 |---|---|---|
 | Preset | Studio | `AUDIO_SETTINGS_DEFAULTS.activePresetId` |
 | Hear myself (monitor) | off (headphones only; speakers feed back) | `audioSettings.monitor` |
-| Your voice in your ears (PERFORMER MODE) | 0 dB = half as loud as the published voice (−15 K-weighted) | `audioSettings.monitorDb` |
-| Backing level in your ears | 85 % | `audioSettings.backingGain` (never touches the recording) |
+| Your voice in your ears (PERFORMER MODE) | 0 dB = about half as loud as the published voice (−15 K-weighted; its own number, untouched on 24 Nov) | `audioSettings.monitorDb` |
+| Backing level in your ears | 85 % of the performer track level (−16 LUFS — held there when the published track rose to −14 on 24 Nov: `EARS_TRACK_TRIM_DB`) | `audioSettings.backingGain` (never touches the recording) |
 | Track / Vocal volume (PUBLISH MODE) | 0 / 0 dB (reset once for everyone on 23 Nov, `mixV4`) | `appSettings.trackDb / vocalDb` |
 | Tempo / key shift | 1.00× / 0 st (a join sings the show as it was sung) | `audioSettings` |
 | Echo cancellation ("I'm on speakers") | off | `appSettings.echoCancellation` |
 | Count-in | on | `appSettings.countIn` |
 | Instrument input | off (not on iOS: one capture per page) | `appSettings.instrumentOn` |
 
-The publish mix targets (`PUBLISH_MIX`): track −16 LUFS, vocal −9 K, duck 3 dB, guard −6.5 K, ceiling −2 dBFS.
-The performer monitor (`PERFORMER_MONITOR`): vocal −15 K.
+The publish mix targets (`PUBLISH_MIX`, 24 Nov): track −14 LUFS (its own ceiling −4 dBFS), vocal −7.8 K (ceiling −1 dBFS),
+duck 3 dB, guard −5 K, mix ceiling −1.5 dBFS. The performer monitor (`PERFORMER_MONITOR`): vocal −15 K, track −16 LUFS.
 
 ## Picture and stage
 
 | Setting | Default |
 |---|---|
-| Framing ("Zoom") | **Zoom with my voice** (`'voice'`; options Still, Follow me). A save from before 22 Nov was moved onto it once (`framingV2`). |
+| AUTOZOOM (framing) | **off** (`framing: 'still'`: framed once, still and centred). On = `'voice'`: a close-up on the face while singing, and the frame follows a move. Every save went to off once on 24 Nov (`autozoomV1`); the switch is the singer's from then on. One switch, the same in Settings → Camera, the Studio's Camera & zoom sheet and the meet's My picture drawer. |
+| Performer image size | 24 Nov: a fifth bigger in every stage mode (`SHOW_SCALE` 1.44, `SOLO_SCALE` ×1.5 of it, `STAGE_SLOT_FRAC` 0.6 for one singer); the crown 5 % down the saved take's frame, 8 % down the show's — the singer from the crown to the chest |
+| Row order | the first singer in the middle, the others to the right and left in turn (`rowOrder`) — offline joins and live meets alike |
 | Picture | cut-out (the virtual stage); **NONE — my camera as it is** is a valid background choice (`backgroundId: 'none'`, picture 'camera') |
 | Background | the first stage background; the choice is saved (`appSettings.backgroundId`) |
 | Camera | on, facing user; device choices saved (`cameraDeviceId`, `audioInputId`) |
 | Text size (Display) | 1× (1.3 / 1.6 / 2 offered; every screen must fit a 320 px phone at 2×) |
-| Studio saved take stage | 'solo' (the singer 1.5× the show stage's size); the live strip unchanged |
+| Studio saved take stage | 'solo' (the singer 1.5× the show stage's size, both a fifth bigger since 24 Nov); the live strip is the show stage |
 
 ## Permissions
 
@@ -45,7 +47,7 @@ browser still allows the device; a blocked device is said so on the stage with t
   change (`SingersVoice/Config/app_settings.json`, `audio_plugin_settings.json`), "Save my sound" writes now.
 - At start: localStorage at once; signed in to Drive the Config copy is pulled and the **newer copy wins, file by
   file** (`updatedAt` on both files; `restoreSettingsAtStart`, `pullSettings`); a newer local copy is pushed up.
-- Migrations live in `settings.ts` `migrateApp` (`framingV2`, `mixV2`, `mixV3`, `mixV4`): each runs once per device.
+- Migrations live in `settings.ts` `migrateApp` (`framingV2`, `autozoomV1`, `mixV2`, `mixV3`, `mixV4`): each runs once per device.
 
 ## The owner's working preferences (apply always)
 

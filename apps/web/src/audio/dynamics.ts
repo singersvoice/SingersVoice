@@ -22,6 +22,59 @@ export const LIMITER_LOOKAHEAD_S = 0.002;
 export const compressorLatencyFrames = (sampleRate: number): number => Math.floor(COMPRESSOR_LOOKAHEAD_S * sampleRate);
 /** A WaveShaperNode's latency by oversampling mode, in frames (any sample rate). */
 export const SHAPER_LATENCY_FRAMES: Record<OverSampleType, number> = { none: 0, '2x': 128, '4x': 192 };
+/** The 'sv-shaper' worklet's latency (frames, any sample rate): its two 31-tap half-band filters (public/worklets/shaper.js). */
+export const SHAPER_WORKLET_LATENCY_FRAMES = 15;
+
+export interface Shaper {
+  input: AudioNode;
+  output: AudioNode;
+  /** Frames the signal is delayed by (align any parallel path with a DelayNode of this length). */
+  latencyFrames: number;
+  /** A new transfer curve (as WaveShaperNode takes it), applied at once. */
+  setCurve(curve: Float32Array<ArrayBuffer>): void;
+  disconnect(): void;
+}
+
+/**
+ * A waveshaper oversampled twice: the 'sv-shaper' worklet (short half-band filters: 15 frames of latency) when
+ * worklets are loaded, else the browser's WaveShaperNode at '2x' (128 frames) — the same curve, the same sound,
+ * eight milliseconds sooner in the singer's ears.
+ */
+export function makeShaper(ctx: BaseAudioContext, workletAvailable: boolean, curve: Float32Array<ArrayBuffer>): Shaper {
+  if (workletAvailable) {
+    try {
+      const node = new AudioWorkletNode(ctx, 'sv-shaper', { numberOfInputs: 1, numberOfOutputs: 1 });
+      node.port.postMessage({ type: 'curve', curve });
+      return {
+        input: node,
+        output: node,
+        latencyFrames: SHAPER_WORKLET_LATENCY_FRAMES,
+        setCurve(c) {
+          node.port.postMessage({ type: 'curve', curve: c });
+        },
+        disconnect() {
+          node.disconnect();
+        },
+      };
+    } catch {
+      /* the worklet module is not loaded on this context: the browser's node below */
+    }
+  }
+  const node = ctx.createWaveShaper();
+  node.oversample = '2x';
+  node.curve = curve;
+  return {
+    input: node,
+    output: node,
+    latencyFrames: SHAPER_LATENCY_FRAMES['2x'],
+    setCurve(c) {
+      node.curve = c;
+    },
+    disconnect() {
+      node.disconnect();
+    },
+  };
+}
 
 const dbToLin = (db: number): number => Math.pow(10, db / 20);
 const linToDb = (x: number): number => 20 * Math.log10(x);
@@ -165,9 +218,7 @@ export interface SafetyStage {
 export function safetyStage(ctx: BaseAudioContext, workletAvailable = false, ceilingDb = -3): SafetyStage {
   const limiter = makeCompressor(ctx, workletAvailable, { lookaheadFrames: Math.round(LIMITER_LOOKAHEAD_S * ctx.sampleRate), ramp: 0.01 });
   limiter.set({ thresholdDb: ceilingDb, kneeDb: 0, ratio: LIMITER_RATIO, attackS: 0.0003, releaseS: 0.1, makeupDb: 0 }, 0);
-  const clip = ctx.createWaveShaper();
-  clip.curve = clipperCurve(0.85);
-  clip.oversample = '2x';
-  limiter.output.connect(clip);
-  return { input: limiter.input, output: clip, limiter, latencyFrames: limiter.latencyFrames + SHAPER_LATENCY_FRAMES['2x'] };
+  const clip = makeShaper(ctx, workletAvailable, clipperCurve(0.85));
+  limiter.output.connect(clip.input);
+  return { input: limiter.input, output: clip.output, limiter, latencyFrames: limiter.latencyFrames + clip.latencyFrames };
 }

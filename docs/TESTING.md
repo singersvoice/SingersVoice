@@ -27,7 +27,7 @@ Live build: **https://www.singersvoice.com/** (and, while the move is on, https:
    - Or **Library → Import** with an SVOld `*.trackmaker.json` + its mp3.
 4. **Sing** → *Start singing* (3-2-1) → sing → *Finish take* → *Play mix* → **Keep**.
 5. **Performances** → the take is listed (Temp/Kept); open → play / download.
-6. **Settings** → VoxForge presets (try *Hard Tune* with auto-tune) — *Preview my voice* hears each one live, every tweak applied as it is made, *Save my sound* writes the Config files now; text size A++ / Max; backgrounds (**NONE** shows the camera picture as it is). Audio → the Track / Vocal volume in the recording, the mix and the broadcast (0 / 0 to start — the mix itself puts the voice in front; *Default* brings them back). Camera → the zoom: *Zoom with my voice* (the default: the picture pushes in on the face while you sing, back out to the chest when you stop), *Still*, *Follow me*.
+6. **Settings** → VoxForge presets (try *Hard Tune* with auto-tune) — *Preview my voice* hears each one live, every tweak applied as it is made, *Save my sound* writes the Config files now; text size A++ / Max; backgrounds (**NONE** shows the camera picture as it is). Audio → the Track / Vocal volume in the recording, the mix and the broadcast (0 / 0 to start — the mix itself puts the voice in front; *Default* brings them back). Camera → *Auto zoom* (off to start with: your picture framed once, still and centred; on: the picture pushes in on the face while you sing, back out to the chest when you stop, and follows you when you move).
 7. Turn the phone off-line (airplane mode) and reopen the app: the shell loads; device-mode tracks still play.
 
 ## Viewport matrix (automated)
@@ -51,22 +51,25 @@ CI uploads the screenshots as an artifact on every PR.
 `node tools/ci/audio-lab.mjs` renders the real vocal chain and mix bus offline in Chromium
 (OfflineAudioContext with the AudioWorklets, esbuild-bundled from `apps/web/src/audio/lab.ts`) and
 measures them with synthetic signals — what a listener would hear, in numbers: the chain's impulse
-response has one arrival (every parallel path delay-matched, no comb filter), the de-esser passes a
+response has one arrival (every parallel path delay-matched, no comb filter) and the worklet chain holds
+the voice under 3.2 ms (PERFORMER MODE's share of what a singer hears late: the safety limiter's 2 ms and
+three `sv-shaper` stages of 15 frames), the de-esser passes a
 quiet 8 kHz at unity and ducks a loud one, a voice 10 dB over full scale leaves under the −3 dB
 ceiling, the Studio preset adds no hidden gain, every factory preset leaves a −15 dBFS voice within a
 decibel of the others (its makeup gives back what its compressor takes), a −30 LUFS track lands at
-−16, a −5 dBFS and a −33 dBFS voice both ride to the vocal target within ten seconds and the silence
-after them stays silent, the mix at 0 / 0 sits still, and at +30 / +30 the guard brings it back under
-its line with no sample over the ceiling; **the finished mix, every preset** (section 6): on a
+−14, a −5 dBFS and a −33 dBFS voice both ride to the vocal target within ten seconds (the bus's output
+measured after the voice's limiter, which holds up to 3 dB off a voice steered to −7.8 K-weighted) and the
+silence after them stays silent, the mix at 0 / 0 sits still, and at +30 / +30 the guard brings it back
+under its line with no sample over the ceiling; **the finished mix, every preset** (section 6): on a
 bass-heavy mastered song normalised to the track target, a −15 dBFS voice sung in phrases through each
-of the sixteen presets — the music lands at −16 LUFS, the voice stands 5–7 LU over it (vocal-only and
-track-only renders of the same bus; at least 5, Octave Down 3), a sung phrase lands at −7.5…−12 LUFS, the
-limiter takes under 2.5 LU off it on average and nothing passes −1.3 dBFS, the chain leaves the voice
+of the sixteen presets — the music lands at −14 LUFS, the voice stands 4–6 LU over it (vocal-only and
+track-only renders of the same bus; at least 3.5, Octave Down 2.3), a sung phrase lands at −7…−12.5 LUFS, the
+limiter takes under 2.5 LU off it on average and nothing passes −1.2 dBFS, the chain leaves the voice
 mid-forward (its 1–5 kHz against its 100–400 Hz, a decibel or more over the raw voice's; Octave Down is
 excused), and the duck steps the music back 3 dB under a phrase and has it back within a second (the
 track's own path rendered beside the output); **PERFORMER MODE** (section 7): the same voice through the
-monitor's rider alone (`MONITOR_RIDER`) lands at the performer level, 6 dB under the publish rider's —
-half as loud in the singer's ears as in the recording; the noise gate turns a −52 dBFS room down by over 10 dB between two sung phrases and
+monitor's rider alone (`MONITOR_RIDER`) lands at the performer level (−15), 7 dB under the publish rider's —
+about half as loud in the singer's ears as in the recording; the noise gate turns a −52 dBFS room down by over 10 dB between two sung phrases and
 leaves the phrases themselves alone (the first 30 ms of one included); the pitch stage puts a tone a
 semitone up or down, and an octave up, to within a few cents, with under 2 dB of ripple on the steady
 tone and its level kept, pulls a tone 46 cents sharp onto its note at full strength and 60 % of the
@@ -237,11 +240,13 @@ The singer's own stage, device mode, the synthetic person as the camera and a fa
 is not). Measured on the live stage strip (the fake person's skin-tone head, found by colour) and in the saved
 file (frame by frame, through the Performances player):
 
-- **The voice zoom** (`video/framing.ts`): the seat frames the singer and holds; while they are heard the picture
-  pushes in on the face (the head ×1.5), eased over 0.6 s; after a real break (1.4 s under the threshold) it eases
-  back out over 1.1 s. The e2e sees the singer heard and not heard with the phrases, the head half as big again
-  while heard, and the glide caught between the two sizes on the way in and on the way out in the 30 fps file.
-- **The Camera & zoom button during the song**: the sheet opens, *Still* / *Zoom with my voice* reach the feed live.
+- **AUTOZOOM** (`video/framing.ts`): off by default — the seat frames the singer and holds, and the head on the
+  strip stays one size (within 8 %) sung or not through the first stretch of the song; switched on in the Camera &
+  zoom sheet during the song, the picture pushes in on the face while they are heard (the head ×1.5), eased over
+  0.6 s, and after a real break (1.4 s under the threshold) eases back out over 1.1 s. The e2e sees the singer heard
+  and not heard with the phrases, the head half as big again while heard once the switch is on, and in the 30 fps
+  file both: one head size until the switch, then the glide caught between the two sizes on the way in and out.
+- **The Camera & zoom button during the song**: the sheet opens with the *Auto zoom* switch (off); on reaches the feed live.
 - **The Sound sheet**: *Preview my voice* opens the microphone through the preset into the ears; three presets tried
   with the preview on — it stays on, nothing restarts, no new capture; *Stop preview*; *Save my sound* writes
   `audio_plugin_settings.json` and `app_settings.json` to the device's Config store (checked in IndexedDB), the
@@ -249,14 +254,16 @@ file (frame by frame, through the Performances player):
 - **NONE** (Stage background): the stage shows the camera picture as it is at once (the room's wall on the strip, no
   backdrop behind), survives a reload, is shown chosen in the picker; another background brings the cut-out back.
 - **The saved performance** (`video/stage.ts` 'solo'): the singer's head half as big again in the file as on the live
-  strip's show stage (×1.5, measured), the head's top in the upper half; the Performances player as tall as the window
-  allows, at the file's own aspect; *Play mix* in the review plays the take through the mix bus.
+  strip's show stage (×1.5, measured), the crown near the top edge (from 1.5 % down, under 40 %) and the whole head in
+  the upper part with the chest below it; the Performances player as tall as the window allows, at the file's own
+  aspect; *Play mix* in the review plays the take through the mix bus.
 - **The two listening modes on the stage**: with *Hear myself* on, the monitor's rider (PERFORMER MODE,
   `__svEngine.monitorOutDb`) is read beside the mix bus's voice meter (PUBLISH MODE, `__svShow.mixLevels()`)
   while the fake microphone sings — the ears within 3 dB of −15 (K-weighted), the bus's voice −13…−7 dBFS RMS
   with the music ducked, the two at least 3.5 dB apart.
 - **The saved take's sound** (ffmpeg's EBU R128 on the file): −13…−7 LUFS integrated, the sung phrases at
-  least −11 LUFS short-term and 5.5 LU over the breaks, true peak under −0.8 dBFS.
+  least −11 LUFS short-term and 4 LU over the breaks (the music a quarter louder since 24 Nov), true peak under
+  −0.5 dBFS (measured −0.9…−1.1: the −1.5 ceiling and the AAC overshoot).
 - **The permissions** (`lib/permissions.ts`, `video/capture.ts`): a phone that says it is an iPhone makes ONE
   getUserMedia for camera + microphone at the stage's entry, none at Start (the engine takes the camera's microphone),
   none for the next song (the microphone parked between songs); a computer opens the camera alone at entry and the
@@ -299,7 +306,8 @@ and both singers in slot order, alice's layer moved onto his clock by the arithm
 his saved show has **two cut-outs** on it (the fake person's badge, once per singer, clustered by
 where it is in a frame) and sound. bob opens his: alice's invite counts one join; her Performances
 page lists *Joined yours* (Watch, Join too) and marks her take *open to join · 1 joined*. carol joins
-bob's: three performers, alice, bob, carol left to right in her saved show. alice closes hers: the
+bob's: three performers, the row from the middle out — carol, alice, bob left to right (the first singer in the
+centre) on her stage and in her saved show. alice closes hers: the
 link no longer opens it. ~6 minutes.
 
 ```bash
@@ -497,8 +505,8 @@ those harmonics against the bands between them, against the same figure for the 
 same position — a mix with the voice stands many dB above; a mix without it reads like the song.
 The same figure is checked live on the host's mix, the audience's sound and the publisher bus.
 **PUBLISH MODE in the film**: ffmpeg's EBU R128 over 40 s of the film from the first song's mark
-must read −12.5…−6 LUFS integrated (a record's loudness, the voice over the track) with a true peak
-under −0.8 dBFS — the same level set the Studio's saved take is held to.
+must read −12.5…−5 LUFS integrated (a record's loudness, the voices over the track) with a true peak
+under −0.5 dBFS — the same level set the Studio's saved take is held to.
 
 ### Instant changes and the footage
 

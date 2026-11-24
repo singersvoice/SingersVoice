@@ -8,6 +8,7 @@
  * they are set to.
  */
 import { MIX_DB_MAX, MIX_DB_MIN, MIX_STEP_DB, MIX_TRACK_DEFAULT_DB, MIX_VOCAL_DEFAULT_DB } from '../audio/gain.ts';
+import type { AudioEngine } from '../audio/engine.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../state/settings.ts';
 
 /** +1.6 dB, −3 dB, 0 dB: one decimal where there is one. */
@@ -50,14 +51,14 @@ export function MixBalance(props: { compact?: boolean }) {
   );
 }
 
-/** The ears' own range (dB) and its default: the performer level (loudness.ts PERFORMER_MONITOR, half as loud as the published voice). */
+/** The ears' own range (dB) and its default: the performer level (loudness.ts PERFORMER_MONITOR, about half as loud as the published voice). */
 export const EARS_DB_MIN = -24;
 export const EARS_DB_MAX = 24;
 export const EARS_DEFAULT_DB = 0;
 
 /**
  * PERFORMER MODE's control — Your voice in your ears: how loud a singer hears themselves (Hear myself) relative to the
- * performer level, in 1.5 dB steps over ±24 dB; 0 is the mode's own level, half as loud as the published voice. Kept
+ * performer level, in 1.5 dB steps over ±24 dB; 0 is the mode's own level, about half as loud as the published voice. Kept
  * in the audio settings (the device, the Config folder). It never touches the recording, the film or the broadcast.
  */
 export function EarsLevel(props: { compact?: boolean }) {
@@ -71,7 +72,7 @@ export function EarsLevel(props: { compact?: boolean }) {
         <button class="btn icon sm" aria-label="Your voice in your ears down" title={`Down ${MIX_STEP_DB} dB`} disabled={db <= EARS_DB_MIN} onClick={() => set(db - MIX_STEP_DB)}>
           −
         </button>
-        <span class="mono small" style="min-width:6.5ch;text-align:center" title={db === 0 ? 'half as loud as in the recording' : dbNote(db)}>
+        <span class="mono small" style="min-width:6.5ch;text-align:center" title={db === 0 ? 'about half as loud as in the recording' : dbNote(db)}>
           {fmt(db)}
         </span>
         <button class="btn icon sm" aria-label="Your voice in your ears up" title={`Up ${MIX_STEP_DB} dB`} disabled={db >= EARS_DB_MAX} onClick={() => set(db + MIX_STEP_DB)}>
@@ -79,10 +80,30 @@ export function EarsLevel(props: { compact?: boolean }) {
         </button>
       </div>
       {db !== EARS_DEFAULT_DB && (
-        <button class="btn ghost sm" title="Back to the performer level: half as loud as in the recording" onClick={() => set(EARS_DEFAULT_DB)} data-ears-default>
+        <button class="btn ghost sm" title="Back to the performer level: about half as loud as in the recording" onClick={() => set(EARS_DEFAULT_DB)} data-ears-default>
           Default
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * PERFORMER MODE's delay, said plainly for the singer who hears their own voice a moment late: how long the voice takes
+ * from the microphone to their ears (the app's part — the chain's few milliseconds — and the device's: its microphone
+ * in and speakers out, measured by the sync check or a take where it has been, else the browser's figures) and the one
+ * thing that shortens it. Nothing here is a setting: the app's part is already the least the chain can do.
+ */
+export function EarsDelayNote(props: { engine: AudioEngine | null }) {
+  const e = props.engine;
+  if (!e) return null;
+  const chain = Math.round(e.chainLatencyMs);
+  const device = Math.round(e.deviceLatencyMs);
+  const total = chain + device;
+  const measured = e.measuredDeviceMs !== null;
+  return (
+    <p class="small muted" data-ears-delay={`${total}:${chain}:${device}:${measured ? 'measured' : 'reported'}`}>
+      You hear yourself about {total} ms after you sing: {chain} ms is the app, {device} ms is this device ({measured ? 'measured' : "the browser's figure"}). Wired headphones are the quickest; Bluetooth adds 100–200 ms of its own.
+    </p>
   );
 }

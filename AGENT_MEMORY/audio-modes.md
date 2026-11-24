@@ -1,6 +1,6 @@
 # Audio: the two listening modes, their levels and the vocal-loudness requirement
 
-Updated 23 Nov 2026. Read this before touching `apps/web/src/audio/*`, `packages/protocol/src/audio.ts`,
+Updated 24 Nov 2026. Read this before touching `apps/web/src/audio/*`, `packages/protocol/src/audio.ts`,
 `apps/web/public/worklets/*`, `apps/web/src/video/showRecorder.ts`, `apps/web/src/broadcast/*`.
 
 ## The two modes (the owner's words, 23 Nov 2026)
@@ -18,33 +18,63 @@ What each mode is in the code (the agent's reading, 23 Nov; the owner has not co
 | **PERFORMER** | The singer's own voice in their own ears while singing ("Hear myself", headphones), beside the backing track at their listening level ("Backing level in your ears"). In a live meet during a song every singer hears only themselves (Solo foldback) — the same path. | `AudioEngine.rideMonitor` / `setMonitorLevel` (`audio/engine.ts`), `MONITOR_RIDER` (`audio/mixBus.ts`), `PERFORMER_MONITOR` (`audio/loudness.ts`), `BackingPlayer.gain` (`audio/player.ts`), `components/MixBalance.tsx` `EarsLevel` |
 | **PUBLISH** | Everything that leaves the stage: the Studio's saved take, a join's take, the live meet's film (Drive › Performances), the broadcast (YouTube/RTMP), the audience's "Hear the stage" mix, Performances playback and the review's Play mix. | `MixBus` (`audio/mixBus.ts`) with `PUBLISH_MIX` = `MIX_TARGETS` (`audio/loudness.ts`); used by `video/showRecorder.ts`, `audio/takePlayback.ts`, `broadcast/publisherBus.ts`, `portals/publishing/broadcast.ts`, `components/SoundPreview.tsx` ("Preview my voice" is PUBLISH MODE on purpose: the voice through a bus of its own, at the Vocal volume — what the recording gets, into the ears; the engine's monitor is muted meanwhile) |
 
-The two never share a setting: the monitor's rider takes `PERFORMER_MONITOR`, every bus `PUBLISH_MIX`. The
-Track / Vocal volume controls belong to PUBLISH MODE; "Your voice in your ears" belongs to PERFORMER MODE.
+The two never share a setting: the monitor's rider and the player's ears gain take `PERFORMER_MONITOR`, every bus
+`PUBLISH_MIX`. The Track / Vocal volume controls belong to PUBLISH MODE; "Your voice in your ears" and "Backing level
+in your ears" belong to PERFORMER MODE. **A change to one mode is never a change to the other** (the owner, 24 Nov:
+"PERFORMER MODE vocals are already perfect — do not change them").
 
-## The levels (23 Nov 2026)
+## The levels (24 Nov 2026)
 
 PUBLISH MODE — `PUBLISH_MIX` in `audio/loudness.ts`:
 
 | | Value | Meaning |
 |---|---|---|
-| track | **−16 LUFS** | the backing, normalised from whatever its file was mastered at (±18 dB range) |
-| vocal | **−9** (K-weighted, LUFS-like) | each voice, held by its rider (`VOCAL_RIDER`, +26 dB lift / −12 cut, K-weighted, floor rule) and its own limiter at −1.5 dBFS |
+| track | **−14 LUFS** | the backing, normalised from whatever its file was mastered at (±18 dB range); 24 Nov: a quarter louder than the −16 of 23 Nov (the owner's "+25 %") |
+| track ceiling | −4 dBFS | `TRACK_CEILING_DB`: the music's own limiter (2 ms lookahead) after the pocket, so a mastered track brought to −14 does not drive the sum's limiter by itself |
+| vocal | **−7.8** (K-weighted, LUFS-like) | each voice's rider target (`VOCAL_RIDER`, +26 dB lift / −12 cut, K-weighted, floor rule); 24 Nov: +1.2 dB (the owner's "+15 %") — **but the ceiling binds** (below) |
+| vocal ceiling | −1 dBFS | each voice's own limiter (`VOCAL_CEILING_DB`, release 50 ms) |
 | duck | **3 dB** | the music steps back under a voice within 40 ms of a phrase, back over 350 ms after it (`sv-ducker`) |
-| guard | **−6.5** (K-weighted) | the sum is only ever turned *down* past this line (controls pushed to +30) |
-| ceiling | −2 dBFS | the limiter + soft clip at the end of every bus (AAC overshoots ~1 dB) |
+| guard | **−5** (K-weighted) | the sum is only ever turned *down* past this line (controls pushed to +30) |
+| ceiling | −1.5 dBFS | `MIX_CEILING_DB`: the limiter + soft clip at the end of every bus (AAC overshoots ~0.5 dB; the e2e measures the file's true peak) |
 | track pocket | HPF 30 Hz, −2 dB shelf < 100 Hz, −1.5 dB @ 3 kHz (Q 0.8), +1 dB makeup | static, on every track |
 
-Result on a bass-heavy mastered song (audio lab §6, the final run of 23 Nov): the voice **5.2–7.0 LU over the
-music** on every preset (Octave Down 3.8) plus the 3 dB duck; a sung phrase **−9.9…−11.6 LUFS** (Octave Down −12.5);
-limiter 1.5–1.8 LU; peaks ≤ −1.9 dBFS.
-In the real Studio recording path (studio e2e, ffmpeg R128, the final run): take −11.6 LUFS integrated, sung
-phrases −9.6 LUFS short-term, the breaks −15.2 (5.7 LU under), true peak −1.6 dBFS.
+Result on a bass-heavy mastered song (audio lab §6, 24 Nov): the music at −14.3 LUFS; the voice **3.9–6.0 LU over
+the music** on every preset (Octave Down 2.8) plus the 3 dB duck; the voice alone −8.3…−10.4 LUFS (Studio −9.5); a sung
+phrase **−9.4…−11.9 LUFS** (Octave Down −11.9); the breaks −15.4; limiter 1.7–2.1 LU; peaks ≤ −1.44 dBFS.
+Against 23 Nov: the music +1.7–1.9 dB (the quarter asked for), the voice **+0.3–0.6 dB** — the ceiling, not the
+target, decides the voice's loudness (next paragraph); the sung phrase +0.4–0.6.
 
-PERFORMER MODE — `PERFORMER_MONITOR.vocalDb = PUBLISH_MIX.vocalDb − 6 = −15` (K-weighted): the singer's own
-voice in their ears is **half as loud as the published voice**. Adjustable per singer: "Your voice in your ears"
-(`audioSettings.monitorDb`, ±24 dB, 1.5 dB steps, default 0). Audio lab §7: the ears at −15.2 against the published
-−9.2 (6.0 dB under). Measured on the stage (studio e2e): the monitor's rider output −15.0 dB while the mix bus held
-the same voice at −9.8 dBFS RMS with the music ducked 3.0 dB.
+**The physical limit, measured (24 Nov):** a voice whose peaks are held under −1 dBFS cannot be louder than about
+−9.5 K-weighted short-term through this chain (its crest factor after the presets' compression is 8–9 dB); the rider
+pushes to −7.8, the limiter takes 1.7–2 LU back, and pushing further turns into limiting (density, then pumping), not
+loudness. A density compressor between the rider and the limiter was tried and removed (a peak-detecting compressor
+with any release holds the gain down between a voice's peaks and *loses* loudness). What is left to make the voice
+stronger in the file: the balance (the track under it, the duck), the tone (mid-forward), and the ceilings (raised to
+−1 / −1.5 on 24 Nov). The owner's "+15 % vocal" is therefore delivered only in part (+0.3…+0.6 dB, ≈ +5 %), and said
+so in the 24 Nov report.
+
+PERFORMER MODE — `PERFORMER_MONITOR` in `audio/loudness.ts`, **its own numbers, independent of PUBLISH_MIX**:
+`vocalDb = −15` (K-weighted): the singer's own voice in their ears, about half as loud as the published voice (the
+monitor's rider `MONITOR_RIDER`); `trackLufs = −16`: the track under the Backing level — the player's ears gain
+carries `EARS_TRACK_TRIM_DB = −16 − (−14) = −2 dB` on top of the Backing level, so the ears' track stayed exactly
+where it was when the published track rose on 24 Nov. Adjustable per singer: "Your voice in your ears"
+(`audioSettings.monitorDb`, ±24 dB, 1.5 dB steps, default 0). Audio lab §7: the ears at −15.1 against the published
+rider's −8.0. Measured on the stage (studio e2e): the monitor's rider output −15 dB while the mix bus held the same
+voice near −9 dBFS RMS with the music ducked 3.0 dB.
+
+## PERFORMER MODE's latency (24 Nov 2026)
+
+The owner hears their own voice "a fraction of a second" late with Hear myself. What the app holds the voice for
+(the chain's lookaheads) was 10 ms with worklets — the browser's WaveShaperNode '2x' oversampling holds the signal
+128 frames (2.7 ms) at each of the chain's three shapers (exciter, saturation, the safety's soft clip) plus the
+safety limiter's 2 ms. 24 Nov: the three shapers run in our own `sv-shaper` worklet (2× oversampled through two
+31-tap half-band filters: 15 frames each, flat to 19 kHz, −54 dB stopband) — **the chain now holds the voice
+2.96 ms** (audio lab §1: measured = reported; the parallel paths still aligned, −43 dB). The capture asks for the
+shortest buffer (`latency: { ideal: 128/48000 }` in `micConstraints`; Chrome/Safari honour it where the device can).
+The rest of what the singer hears is the device: microphone in + speakers out, 20–60 ms on a wired computer, 100–200
+more on Bluetooth — not the app's to fix; the Sound sheet says the figures (`EarsDelayNote`: the app's part, the
+device's part, measured by the sync check where it has been) and that wired headphones are quickest. The pitch
+stage (tune / robot / octave-down / doubler presets) still holds the voice 10–25 ms while it works.
 
 The Track / Vocal volume controls (PUBLISH MODE) start at **0 / 0** (`MIX_TRACK_DEFAULT_DB`, `MIX_VOCAL_DEFAULT_DB`,
 `audio/gain.ts`), ±30 dB in 1.5 dB steps; a Default button appears when moved. Every stored balance was reset to
@@ -69,10 +99,14 @@ voice leaves each within 0.6 dB of the others (−16.2…−16.8 dBFS), so a pre
   monitor (PERFORMER MODE) was given the publish level (−11): the owner heard their own voice "boosted" on
   stage while the recordings (made with earlier balances still stored) stayed weak (PPD23Nov.mp4: −8.8 LUFS,
   flat, the track dominating — a stored Track offset pushing the sum into the guard).
-- 23 Nov (this change): the two modes separated. PERFORMER = half the published voice (−15 K); PUBLISH vocal
+- 23 Nov (commit cf04b4c): the two modes separated. PERFORMER = half the published voice (−15 K); PUBLISH vocal
   raised to −9 K with the limiter at −1.5 dBFS and the duck at 3 dB; every stored balance reset once.
+- 24 Nov: the owner — "the latest fixes are better" — asked for the default TRACK +25 %, the PUBLISH vocal +15 %,
+  PERFORMER vocals unchanged ("already perfect"), and the monitoring delay gone. Done: track −14 (+25 %), the vocal
+  target −7.8 with the ceilings at −1 / −1.5 (measured +0.3…+0.6 dB: the limit above), the guard −5, the track's own
+  ceiling −4; the ears untouched (their track held at −16 by `EARS_TRACK_TRIM_DB`); the chain's hold 10 → 3 ms.
 
-Physical limit to remember: a voice cannot be pushed past about −9 K-weighted under a −1.5 dBFS ceiling — the
+Physical limit to remember: a voice cannot be pushed past about −9.5 K-weighted under a −1 dBFS ceiling — the
 rider pushes, the limiter holds, and the energy goes into limiting (density, then pumping), not loudness. Vocal
 "strength" beyond that comes from the balance (the track under it, the duck) and the tone (mid-forward EQ).
 

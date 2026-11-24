@@ -319,7 +319,7 @@ export interface AudioPluginSettings {
   userPresets: VoxForgePreset[];
   monitor: boolean;
   backingGain: number;
-  /** PERFORMER MODE: the singer's own voice in their ears, relative to the mode's level (dB, ±24; 0 = half as loud as the published voice). */
+  /** PERFORMER MODE: the singer's own voice in their ears, relative to the mode's level (dB, ±24; 0 = about half as loud as the published voice). */
   monitorDb: number;
   tempo: number; // 0.5..1.5
   keyShift: number; // -6..6 semitones

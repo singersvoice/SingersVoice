@@ -14,40 +14,51 @@
  * the broadcast, the audience's stage mix, Performances playback. Mixed by the mix bus (mixBus.ts) to
  * `PUBLISH_MIX` — the voice in front, the music full, the whole as loud as a record:
  *
- *   track   −16 LUFS   the backing, normalised from whatever its file was mastered at;
- *   vocal   −9 LK      each voice, held there by its rider (K-weighted: the ear's measure, not the bass's)
- *                      and its own limiter — the density of a record's vocal;
+ *   track   −14 LUFS   the backing, normalised from whatever its file was mastered at (24 Nov: a quarter
+ *                      louder than the −16 of the day before, at the owner's word);
+ *   vocal   −7.8 LK    each voice, held there by its rider (K-weighted: the ear's measure, not the bass's)
+ *                      and its own limiter — the density of a record's vocal (24 Nov: 15 % over the −9);
  *   duck    3 dB       the music steps back under the voice while it is sung, back between phrases;
- *   mix     −6.5 LK    the guard's line: the sum is turned down only past it (the controls pushed to +30).
+ *   mix     −5 LK      the guard's line: the sum is turned down only past it (the controls pushed to +30).
  *
- * So a sung phrase lands near −10 LUFS with the voice some 6 LU over the music (9 with the duck), the breaks
- * at the track's −16. Before 23 Nov (track −19, vocal −17 dBFS plain RMS, guard −15 dBFS plain RMS) a
+ * So a sung phrase lands near −8 LUFS with the voice some 5 LU over the music (8 with the duck), the breaks
+ * at the track's −14. Before 23 Nov (track −19, vocal −17 dBFS plain RMS, guard −15 dBFS plain RMS) a
  * bass-heavy backing alone reached the guard's line on its unweighted RMS and the guard gave every vocal
  * entry back by turning the whole mix down: the voice at the music's level, the mix pinned whatever was sung.
  *
  * PERFORMER MODE — what a singer hears of themselves on stage while singing (Hear myself: the monitor in
- * their headphones), beside the track at their own listening level (Backing level in your ears). Its voice
- * is half as loud as the published one (`PERFORMER_MONITOR`, 6 dB under): a singer sings to their own
- * voice at a natural level and is not shouted at by it, while the recording and the audience get it in
- * front. The two never share a setting: the monitor's rider takes `PERFORMER_MONITOR`, every bus `PUBLISH_MIX`.
+ * their headphones), beside the track at their own listening level (Backing level in your ears). Its levels
+ * are its own (`PERFORMER_MONITOR`), and they stay where the owner found them right (24 Nov): the voice at
+ * −15 LK — a singer sings to their own voice at a natural level and is not shouted at by it — and the track
+ * at −16 LUFS under the Backing level, whatever the published track is raised to. The two never share a
+ * setting: the monitor's rider and the player's ears gain take `PERFORMER_MONITOR`, every bus `PUBLISH_MIX`;
+ * a change to one mode is never a change to the other.
  */
 export const PUBLISH_MIX = {
   /** The backing track's integrated loudness in the mix (LUFS) — the music, under the voices. */
-  trackLufs: -16,
+  trackLufs: -14,
   /** Each vocal's level in the mix: a K-weighted short-term level the rider steers toward (dB, LUFS-like). */
-  vocalDb: -9,
+  vocalDb: -7.8,
   /** The whole mix must not run hotter than this on average (K-weighted, dB): the guard turns down, never up. */
-  mixDb: -6.5,
+  mixDb: -5,
   /** How far the music steps back while a voice is sung (dB). */
   duckDb: 3,
   /** The furthest a track may be lifted or lowered to reach its target (dB). */
   trackRangeDb: 18,
 } as const;
 
-/** PERFORMER MODE: the singer's own voice in their ears (K-weighted, dB) — 6 dB under the published voice: half as loud. */
+/**
+ * PERFORMER MODE: the singer's own ears. `vocalDb`: their own voice (K-weighted, dB) — about half as loud as the
+ * published voice. `trackLufs`: the track under their Backing level (LUFS) — the level the ears were tuned to;
+ * the player's ears gain takes up the difference to the published track (player.ts).
+ */
 export const PERFORMER_MONITOR = {
-  vocalDb: PUBLISH_MIX.vocalDb - 6,
+  vocalDb: -15,
+  trackLufs: -16,
 } as const;
+
+/** The track in the singer's ears against the track in the mix (dB): what the ears gain adds on top of the Backing level. */
+export const EARS_TRACK_TRIM_DB = PERFORMER_MONITOR.trackLufs - PUBLISH_MIX.trackLufs;
 
 /** The mix bus's name for the publish levels (every bus mixes to these). */
 export const MIX_TARGETS = PUBLISH_MIX;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ARC_LIFT, arcLift, fitPerson, floorAt, HEADROOM, layoutStage, RISER_COVER, riserBand, riserTop, type StageTile } from '../src/video/stage.ts';
+import { ARC_LIFT, arcLift, fitPerson, floorAt, HEADROOM, layoutStage, RISER_COVER, riserBand, riserTop, rowOrder, rowTop, type StageTile } from '../src/video/stage.ts';
+import { STAGE_FRAME } from '../src/video/framing.ts';
 
 describe('virtual stage layout — one straight row of equal slots, like performers in a line across a stage', () => {
   it('spreads N performers evenly, 3:4 slots of one size, each on the row\'s floor behind the riser', () => {
@@ -38,10 +39,19 @@ describe('virtual stage layout — one straight row of equal slots, like perform
     expect(riserTop(1920, 1080, 0, 400, 'show')).toBeCloseTo(riserTop(1920, 1080, 960, 400, 'show'), 5); // the riser's edge level too
   });
 
-  it('show mode: the heads start near the top with one or two singers; a crowd of ten sits lower rather than behind a wall', () => {
+  /** Where a slot has the singer's crown: the slot's headroom, then the stage frame's (the head's top 8 % into the frame that fills the room). */
+  const crownOf = (t: StageTile) => t.y + t.h * (HEADROOM + STAGE_FRAME.headroom * (1 - HEADROOM));
+
+  it('show mode: the crowns sit near the top edge with one or two singers (the picture is the singer, not air over them); a crowd of ten sits lower rather than behind a wall', () => {
+    const [solo] = layoutStage(1920, 1080, 1, 'show') as [StageTile];
+    expect(crownOf(solo)).toBeCloseTo(1080 * 0.08, 3); // the crown 8 % down the picture: the slot's top above the edge
+    expect(solo.y).toBeLessThan(0);
+    expect(solo.h).toBeCloseTo(1080 * 1.44, 3); // a fifth taller than the 1.2 of before
     const [duo] = layoutStage(1920, 1080, 2, 'show') as [StageTile];
-    expect(duo.y).toBeCloseTo(1080 * 0.08, 3); // the slot (the head a little into it) from near the top
-    expect(riserBand(1080, duo.h, 'show')).toBeCloseTo(1080 - 1080 * 0.08 - duo.h * (1 - RISER_COVER), 5); // the riser takes the rest
+    expect(crownOf(duo)).toBeCloseTo(1080 * 0.08, 3);
+    expect(duo.y).toBeCloseTo(rowTop(1080, duo.h, 'show'), 3);
+    expect(riserBand(1080, duo.h, 'show')).toBeCloseTo(1080 - rowTop(1080, duo.h, 'show') - duo.h * (1 - RISER_COVER), 5); // the riser takes the rest
+    expect(riserTop(1920, 1080, 960, duo.h, 'show')).toBeGreaterThan(crownOf(duo) + duo.h * (1 - HEADROOM) * STAGE_FRAME.headHeight * 2.1); // over two heads of the singer show above the riser: the chest in the picture
     const ten = layoutStage(1920, 1080, 10, 'show');
     expect(riserBand(1080, ten[0]!.h, 'show')).toBeCloseTo(1080 * 0.4, 5); // capped: a riser, not a wall
     expect(ten[4]!.y).toBeGreaterThan(1080 * 0.3); // so the small slots sit lower
@@ -53,10 +63,13 @@ describe('virtual stage layout — one straight row of equal slots, like perform
     const [show] = layoutStage(1280, 720, 1, 'show') as [StageTile];
     const [solo] = layoutStage(1280, 720, 1, 'solo') as [StageTile];
     expect(solo.h / show.h).toBeCloseTo(1.5, 5);
+    expect(solo.h).toBeCloseTo(720 * 1.44 * 1.5, 3); // 24 Nov: a fifth taller than before (the singer a fifth bigger)
     expect(solo.w / solo.h).toBeCloseTo(0.75, 5);
     expect(solo.x + solo.w / 2).toBeCloseTo(640, 5); // centred
-    expect(solo.y).toBeCloseTo(720 * 0.08, 5); // the frame's top at the row top: the head (8 % into the frame) well inside the picture
-    expect(solo.y + solo.h * 0.08 + solo.h * 0.22).toBeLessThan(720 * 0.7); // the whole head (the standard frame's 22 %) within the upper two thirds
+    expect(crownOf(solo)).toBeCloseTo(720 * 0.05, 3); // the crown 5 % down the picture (the slot's top above the edge): the singer from the crown…
+    const chin = crownOf(solo) + solo.h * (1 - HEADROOM) * STAGE_FRAME.headHeight;
+    expect(720 - riserBand(720, solo.h, 'solo') - chin).toBeGreaterThan(solo.h * (1 - HEADROOM) * STAGE_FRAME.headHeight * 0.85); // …to the chest: most of a head's height under the chin before the riser
+    expect(chin).toBeLessThan(720 * 0.55); // the whole head within the upper half
     expect(riserBand(720, solo.h, 'solo')).toBeCloseTo(720 * 0.09, 5); // the slim band for the name — no wall, no empty stage
     expect(fitPerson(solo, 720, 960, 'solo', 720).h).toBeGreaterThan(fitPerson(show, 720, 960, 'show', 720).h * 1.4); // the picture drawn bigger with it
     // A full row (a join of many) is width-limited, as in show mode: the same row, standing on the riser.
@@ -65,6 +78,22 @@ describe('virtual stage layout — one straight row of equal slots, like perform
     expect(tenSolo[0]!.w).toBeCloseTo(tenShow[0]!.w, 5);
     expect(tenSolo[3]!.y).toBeGreaterThan(720 * 0.08);
     expect(ARC_LIFT.solo).toBe(0);
+  });
+
+  it('the row is ordered from the middle out: the first singer in the centre, the next to their right, the next to their left…', () => {
+    expect(rowOrder(1)).toEqual([0]);
+    expect(rowOrder(2)).toEqual([0, 1]); // two: the first on the left, the second to their right
+    expect(rowOrder(3)).toEqual([1, 2, 0]); // three: the first in the middle
+    expect(rowOrder(4)).toEqual([1, 2, 0, 3]);
+    expect(rowOrder(5)).toEqual([2, 3, 1, 4, 0]);
+    expect(rowOrder(10)).toEqual([4, 5, 3, 6, 2, 7, 1, 8, 0, 9]);
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) expect([...rowOrder(n)].sort((a, b) => a - b)).toEqual(Array.from({ length: n }, (_, i) => i)); // every place taken once
+  });
+
+  it("stage mode (the live stage under the lyrics): a fifth taller than before, the slot's top at the lyrics' edge", () => {
+    const [one] = layoutStage(1600, 900, 1) as [StageTile];
+    expect(one.h).toBeCloseTo(900 * 0.6, 3);
+    expect(one.y).toBeGreaterThanOrEqual(900 * 0.5); // the top half stays the lyrics'
   });
 
   it('user mode leaves the top of the frame to the lyrics; show mode fills it with the performers', () => {
@@ -154,8 +183,8 @@ describe('fitting a frame into its slot — the stage frame, drawn whole, everyw
 
   it('performer mode (lyrics above) draws the whole frame small in the lower slot — no zoom', () => {
     const [t] = layoutStage(1280, 720, 1) as [StageTile];
-    expect(t.h / 720).toBeLessThanOrEqual(0.5); // the lyrics own the top half and more
-    expect(t.y / 720).toBeGreaterThan(0.6); // the slot sits in the lower part
+    expect(t.h / 720).toBeLessThanOrEqual(0.6); // the lyrics own the top half
+    expect(t.y / 720).toBeGreaterThanOrEqual(0.5); // the slot sits in the lower part
     const fit = fitPerson(t, 480, 640, 'stage', 720);
     expect(fit.w / fit.h).toBeCloseTo(480 / 640, 5); // the frame as the singer's device framed it
     expect(fit.h).toBeLessThanOrEqual(t.h + 0.01);

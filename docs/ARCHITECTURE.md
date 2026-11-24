@@ -394,7 +394,9 @@ slot is one size, and every singer comes out one size — the stage never finds 
 on its own, nothing steers the camera picture (the FaceDetector auto-frame is gone), and nobody
 chooses a framing (the Chest / Wide / Mid / Close / Auto presets are gone). What the singer does
 choose (Settings → Camera, the live stage's **My picture** drawer, the Studio's **Camera & zoom**
-sheet — during the song too) is how the frame behaves: **Zoom with my voice** (the default), **Still**, or **Follow me** (`Framing`). The
+sheet — during the song too) is one switch, **Auto zoom** (`Framing`; 24 Nov: **off** by default — the frame
+is set once and stays still and centred; on, the push-in with the voice below, and the seat following a singer who
+has shifted in their chair — the same switch, the same component, on the live stage and in the Studio). The
 voice zoom (`VOICE_ZOOM`) is two frames and never a frame that breathes with every syllable: the
 held frame is the chest-up stage frame; while the singer is heard — their meter (the engine's, 0..1
 over −60..0 dBFS of the voice after its effects) past 0.56 for 150 ms — the crop pushes in to ×1.5 on
@@ -405,19 +407,24 @@ well as on the meter's readings (`settle`), so a meter that reads 0 and stays th
 close-up go on time, and a meter gone silent for 3 s (the microphone closed) is a singer gone quiet.
 The seat never re-seats for the voice: the push-in is a crop of the held frame, and the frame goes
 out to everyone as the seat holds it (the stage, the show, the saved performance all carry the
-close-up). `tools/ci/studio-e2e.mjs` measures it: the fake person's head on the live strip and in
-the saved file, half as big again while a phrased fake microphone sings, the glide caught on the
+close-up). `tools/ci/studio-e2e.mjs` measures it: with Auto zoom off (the default) the fake person's
+head on the live strip and in the saved file stays one size, sung or not; switched on in the Camera & zoom
+sheet during the song, it is half as big again while a phrased fake microphone sings, the glide caught on the
 way in and out. The measurement and the seat were tuned on the real model's masks of real singers
 (the show recording's cut-outs played back as a fake camera) — the old crop re-targeted on 45 of 58
 frames and zoomed between 0.85× and 1.19× in 16 s; the seat glides once and holds. The modes differ
-in the slots alone: **Publisher mode** ('show': Publishing, the lobby stage, the meet's film) —
-slots taller than the picture (1.2×, width permitting), their lower part behind the riser and below
-the picture, the heads from a tenth down, the riser band bounded to 9–40 % of the picture so ten
-small slots sit lower rather than behind a wall; **'solo'** (the Studio's saved performance, one
-singer with no lyrics to share the picture) — the 'show' slot half as big again (1.8× the picture,
-`SOLO_SCALE`), its top pinned at the row top, the chest behind a slim riser: a medium close-up that
-uses the picture, the live strip untouched; **Performer mode** ('stage', kept for a stage that wants
-the lyrics drawn over the performers) — each frame sits small in the lower part over a slim riser.
+in the slots alone (24 Nov: every mode's slots a fifth taller than before — the performer a fifth bigger —
+and the slot placed for the **crown**, `rowTop`: the top of the head a set way down the picture, so the picture is
+the singer from the crown to the chest and not air over their head): **Publisher mode** ('show': Publishing, the
+lobby stage, the meet's film) — slots taller than the picture (1.44×, `SHOW_SCALE`, width permitting), their lower
+part behind the riser and below the picture, the crown 8 % down, the riser band bounded to 9–40 % of the picture so
+ten small slots sit lower rather than behind a wall; **'solo'** (the Studio's saved performance, one singer with no
+lyrics to share the picture) — the 'show' slot half as big again (2.16× the picture, `SOLO_SCALE`), the crown 5 %
+down, the chest at the bottom over a slim riser: a medium close-up that uses the picture; **Performer mode**
+('stage', the live stage under the lyrics) — each frame sits in the lower half over a slim riser (`STAGE_SLOT_FRAC`).
+**The row's order** (`rowOrder`, 24 Nov): the first singer — the Studio's own, a meet's host — in the middle, the
+next to their right, the next to their left, and so on outward, so a join or a stage fills in around the primary
+performer, who stays where they were; the row stays one straight line of equal slots.
 The live stage and the Studio draw the singers in 'show' mode in **a strip of their own under the
 lyrics** (`.sing`: the status strip · the lyrics, large, the words up from the count-in · the stage
 strip, a quarter of a phone's screen, a third of a wide one, little in landscape · one row of
@@ -1078,24 +1085,29 @@ vocal₂ ─ rider ─ limiter ─┴─ Vocal offset ┴───────�
 
 **Two listening modes, two level sets** (`audio/loudness.ts`; `AGENT_MEMORY/audio-modes.md`). **PUBLISH
 MODE** is everything that leaves the stage — the saved take, the meet's film, the broadcast, the audience's
-mix, Performances playback — mixed by this bus to `PUBLISH_MIX` (= `MIX_TARGETS`): the track at **−16 LUFS**,
-each voice at **−9** (K-weighted, the ear's measure; held by its rider and its own limiter under −1.5 dBFS),
-the music ducked **3 dB** under a voice while it is sung, the guard's line at **−6.5** — a sung phrase lands
-near −10 LUFS with the voice some 6 LU over the music (and the duck on top), the breaks at the track's −16: a
-record's loudness with the vocal unmistakably in front, on every preset (`tools/ci/audio-lab.mjs` measures
-all sixteen on a bass-heavy song: the voice 5–7 LU over the music, the sung phrase −9.8…−11.5 LUFS, the
-limiter taking 1.5–1.8 LU, nothing over −1.9 dBFS). **PERFORMER MODE** is what a singer hears of themselves
-on stage (Hear myself): the same kind of rider on the monitor, to `PERFORMER_MONITOR` — **6 dB under the
-published voice, half as loud** — plus their own "Your voice in your ears" offset; it never touches the bus
-and the bus never touches it (the owner's rule of 23 Nov: stronger vocals are for the recordings, never for
-the ears). Before 23 Nov
+mix, Performances playback — mixed by this bus to `PUBLISH_MIX` (= `MIX_TARGETS`; 24 Nov): the track at
+**−14 LUFS** (a quarter louder than the −16 of 23 Nov, at the owner's word; its own limiter under −4 dBFS so a
+mastered track does not drive the sum's limiter by itself), each voice steered toward **−7.8** (K-weighted, the
+ear's measure) by its rider and held under its own limiter at −1 dBFS — **which is what decides the voice's
+loudness**: a voice through the presets' compression has a crest of 8–9 dB, so under that ceiling it stands at
+about −9.5 K-weighted however hard the rider pushes (the lab's limiter column shows the rest going into limiting,
+never loudness); the music ducked **3 dB** under a voice while it is sung, the guard's line at **−5** — a sung
+phrase lands near −10 LUFS with the voice 4–6 LU over the music (and the duck on top), the breaks at the track's
+−14: a record's loudness with the vocal in front, on every preset (`tools/ci/audio-lab.mjs` measures all sixteen on
+a bass-heavy song: the music −14.3, the voice 3.9–6.0 LU over it, the sung phrase −9.4…−11.9 LUFS, the limiter
+taking 1.7–2.1 LU, nothing over −1.44 dBFS). **PERFORMER MODE** is what a singer hears of themselves on stage
+(Hear myself): the same kind of rider on the monitor, to `PERFORMER_MONITOR` — **its own numbers** (the voice at
+−15, about half as loud as the published one; the track in the ears held at −16 under the Backing level by the
+player's ears gain, `EARS_TRACK_TRIM_DB`, whatever the published track is raised to) — plus their own "Your voice
+in your ears" offset; it never touches the bus and the bus never touches it (the owner's rule of 23 Nov: stronger
+vocals are for the recordings, never for the ears; of 24 Nov: the ears are right — do not change them). Before 23 Nov
 the targets were track −19 LUFS, voice −17 dBFS *plain* RMS and a guard at −15 dBFS plain RMS: a bass-heavy
 backing alone reached the guard's line on its unweighted RMS (the bass counts in full there, for nothing to
 the ear), the guard then gave every vocal entry back by turning the whole mix down, and the voice sat at the
 music's level — the 22 Nov recording was pinned at −15.5 dBFS whatever was sung, the lows 10 dB over the
 voice's band, the voice adding 8 dB to the mids and nothing to the whole.
 
-- **The track is normalised to −16 LUFS** (`audio/loudness.ts`: ITU-R BS.1770 / EBU R128 —
+- **The track is normalised to −14 LUFS** (`audio/loudness.ts`: ITU-R BS.1770 / EBU R128 —
   K-weighting re-derived for the device's sample rate, 400 ms blocks, the absolute and relative
   gates — unit-tested against the standard's 48 kHz table). A singer's device measures the decoded
   buffer in `BackingPlayer.load`; the show view decodes its blob once; both remember the result per
@@ -1123,10 +1135,10 @@ voice's band, the voice adding 8 dB to the mids and nothing to the whole.
   does not reach the mix is seen on the spot, never found in a file afterwards.
 - **Each vocal has a rider** (the `sv-leveler` worklet, measuring through the K-weighting): a
   two-second view of what is *sung* (a 50 ms gate at −45 dB stops it the moment the singer stops and
-  keeps the pause out of the average), steered toward **−9** at 1.5 dB/s up, 2 dB/s down, four
+  keeps the pause out of the average), steered toward **−7.8** at 1.5 dB/s up, 2 dB/s down, four
   times faster until within 6 dB — a singer's offset, not their phrasing; +26 dB lift at most, −12 dB
-  cut — **and a limiter of its own** under −1.5 dBFS (2 ms lookahead), so a voice's loudest peak after
-  the rider never reaches the sum: the density of a record's vocal, from a microphone. **It knows the
+  cut — **and a limiter of its own** under −1 dBFS (2 ms lookahead, 50 ms release), so a voice's loudest
+  peak after the rider never reaches the sum: the density of a record's vocal, from a microphone. **It knows the
   microphone's floor**: the quietest 50 ms of the last eight seconds (two buckets' minimum — a
   phrase's own breath dips keep it under the voice, a louder floor is followed within a bucket, the
   first 200 ms are the view filling up and never a floor). Only sound standing **8 dB above the
@@ -1140,10 +1152,10 @@ voice's band, the voice adding 8 dB to the mids and nothing to the whole.
   are offsets on top of that balance: 0 / 0 is already right (every stored balance went back to 0 / 0 once
   with the two modes of 23 Nov, `mixV4` — balances set to make up for an older mix pushed the new one into
   the guard; from then on a singer's own setting is kept).
-- **The guard** (another `sv-leveler`, K-weighted, on the sum) only ever turns *down*, past −6.5:
+- **The guard** (another `sv-leveler`, K-weighted, on the sum) only ever turns *down*, past −5:
   push both controls to +30 and the mix comes back under that line in a few seconds instead of
   living in the limiter; a mix at its own loudness never meets it.
-- **The safety stage** (`audio/dynamics.ts`): a limiter at **−2 dBFS** (the `sv-dynamics`
+- **The safety stage** (`audio/dynamics.ts`): a limiter at **−1.5 dBFS** (the `sv-dynamics`
   worklet, 2 ms lookahead over a sliding-max detector, 0.3 ms attack, a wall of a ratio) and a tanh
   soft clipper straight up to −1.4 dB behind it. Nothing above full scale reaches an encoder — an
   AAC encoder overshoots a dense mix by about a dB, which the ceiling leaves room for; a clipped
@@ -1233,9 +1245,15 @@ convolution reverb → **vocal rider** (an RMS meter every 50 ms; below −50 dB
 it steers toward −16 dBFS: up to +12 dB lift, −6 dB cut, a few dB a second at most — every phrase up
 front) → **safety** (limiter at −3 dBFS + soft clip: the voice never clips on its way to the mesh or
 the recorder, whatever the preset and the singer do) → out. Every dynamics stage is our own
-`sv-dynamics` worklet (see the mix bus above for why), every parallel path is delay-matched — the
-audio lab checks the chain's impulse response has one arrival and no echo — and the whole chain is
-**10 ms** (the limiter's 2 ms lookahead and three oversampled shapers; 32 ms on the native fallback);
+`sv-dynamics` worklet (see the mix bus above for why) and so are the three oversampled shapers (the
+exciter's, the saturation's, the safety's soft clip: `sv-shaper`, 24 Nov — the curve run at twice the
+rate between two 31-tap half-band filters, 15 frames of latency each where the browser's WaveShaperNode
+'2x' holds the signal 128), every parallel path is delay-matched — the audio lab checks the chain's
+impulse response has one arrival and no echo — and the whole chain holds the voice **under 3 ms** (the
+limiter's 2 ms lookahead and the shapers' 0.9; it was 10 ms with the browser's own oversampling, and is
+32 ms on the native fallback) — PERFORMER MODE's own share of the delay a singer hears; the device's
+(microphone in, speakers out: 20–60 ms wired, 100–200 more on Bluetooth) the Sound sheet states
+(`EarsDelayNote`) rather than hides, and the capture asks for its shortest buffer (`micConstraints`);
 the pitch stage alone holds the voice while it works — 3–25 ms, about 14 on average, said to the
 page every quarter second. **The pitch stage** (`worklets/pitch-shifter.js`) is a
 pitch-synchronous delay-line shifter, the time-domain idea behind PSOLA: one read head on a ring

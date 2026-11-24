@@ -247,9 +247,13 @@ const waitForModel = async (page) => {
   return false;
 };
 /** Sing the song that is open on the page through to its end; returns the Review page's saved id (Temp). */
-async function singThrough(p) {
+async function singThrough(p, during) {
   await p.page.getByRole('button', { name: 'Start singing' }).click();
   await p.page.locator('button', { hasText: 'Finish' }).waitFor({ timeout: 30000 });
+  if (during) {
+    await wait(4000); // the show is up and laid out
+    p.rowSeen = await during();
+  }
   await p.page.locator('[data-review]').waitFor({ timeout: (SONG_S + 40) * 1000 });
   for (let i = 0; i < 120; i++) {
     const id = await p.page.locator('[data-review]').getAttribute('data-saved-id');
@@ -301,7 +305,7 @@ const singersInFrame = (file, atS) => {
     } else clusters.push({ min: x, max: x, n: 1 });
   }
   const real = clusters.filter((c) => c.n >= 150);
-  return { singers: real.length, at: real.map((c) => Math.round((c.min + c.max) / 2)), pixels: xs.length };
+  return { singers: real.length, at: real.map((c) => Math.round((c.min + c.max) / 2)), pixels: xs.length, w: W };
 };
 const saveShow = (who, performanceId, name) => {
   const { show, cutout } = perfFiles(who, performanceId);
@@ -391,8 +395,8 @@ try {
   // nothing cut away); 'Me on the stage' cuts bob out again (the corner, where nobody is, dark). The framing choice sits beside it.
   const maskCorner = () => bob.page.evaluate(() => { const f = window.__svFeed; if (!f) return -1; const d = f.maskCanvas.getContext('2d').getImageData(4, 4, 1, 1).data; return d[0]; });
   const maskAfter = async (want) => { for (let i = 0; i < 40; i++) { const v = await maskCorner(); if (want(v)) return v; await wait(250); } return maskCorner(); };
-  check((await bob.page.locator('.sheet [role=radiogroup][aria-label="My picture"] button').allInnerTexts()).join('|') === 'Me on the stage|My camera as it is' && (await bob.page.locator('.sheet [role=radiogroup][aria-label="Zoom"] button').allInnerTexts()).join('|') === 'Zoom with my voice|Still|Follow me', 'the sheet offers the picture (me on the stage / my camera as it is) and the framing (still / follow me / zoom with my voice)');
-  check((await bob.page.locator('.sheet [role=radiogroup][aria-label="Zoom"] button.on').innerText()) === 'Zoom with my voice', "the zoom follows the voice by default: head and shoulders, a close-up while singing");
+  check((await bob.page.locator('.sheet [role=radiogroup][aria-label="My picture"] button').allInnerTexts()).join('|') === 'Me on the stage|My camera as it is' && (await bob.page.locator('.sheet').getByRole('checkbox', { name: 'Auto zoom' }).count()) === 1, 'the sheet offers the picture (me on the stage / my camera as it is) and the Auto zoom switch');
+  check((await bob.page.locator('.sheet').getByRole('checkbox', { name: 'Auto zoom' }).isChecked()) === false, 'Auto zoom is off by default: the picture framed once, still and centred — the same switch a live meet has');
   await bob.page.locator('.sheet').getByRole('radio', { name: 'My camera as it is' }).click();
   const cornerCamera = await maskAfter((v) => v > 200);
   check(cornerCamera > 200, `'My camera as it is': the picture goes out whole, room and all (mask corner ${cornerCamera})`);
@@ -455,7 +459,8 @@ try {
   const carolStage = await stageWithPictures(carol.page, 3);
   check(carolStage.performers === '3' && carolStage.headLeft > 400, `three performers on carol's stage, the earlier singers' pictures on it (${carolStage.performers}; ${carolStage.headLeft} px of them on the left)`);
   await carol.page.screenshot({ path: `${out}/carol-join-stage.png` });
-  const carolId = await singThrough(carol);
+  const carolId = await singThrough(carol, async () => (await carol.page.evaluate(() => (window.__svShow && window.__svShow.row ? window.__svShow.row.map((t) => t.label) : null))));
+  const carolOrder = carol.rowSeen?.map((l) => (/^You\b/.test(l) ? 'carol' : (l.match(/alice|bob|carol/i) || [l])[0].toLowerCase()));
   const carolLayers = await layerState(carol);
   console.log("carol's layers after the take:", JSON.stringify(carolLayers));
   check(Array.isArray(carolLayers) && carolLayers.length === 2 && carolLayers.every((l) => l.readyState >= 2 && !l.error && Number.isFinite(l.duration)), "alice's and bob's cut-outs played on carol's device");
@@ -466,7 +471,8 @@ try {
   const carolShow = saveShow('carol', carolId, 'show-carol');
   const carolFrame = carolShow ? singersInFrame(carolShow, 8) : { singers: 0 };
   check(carolFrame.singers === 3, `carol's saved show has three singers on it (${carolFrame.singers}, heads at x ${carolFrame.at?.join(',')})`);
-  check(carolFrame.at && carolFrame.at[0] < carolFrame.at[1] && carolFrame.at[1] < carolFrame.at[2], 'alice, bob, carol — left to right');
+  check(carolFrame.at && carolFrame.at[0] < carolFrame.at[1] && carolFrame.at[1] < carolFrame.at[2] && Math.abs(carolFrame.at[1] - carolFrame.w / 2) < carolFrame.w * 0.08, `three across, one in the middle of the picture (heads at x ${carolFrame.at?.join(',')} of ${carolFrame.w})`);
+  check(JSON.stringify(carolOrder) === JSON.stringify(['carol', 'alice', 'bob']), `the row from the middle out: alice (the first singer) in the centre, bob to her right, carol to her left — ${carolOrder?.join(' · ')} left to right on carol's stage`);
 
   // ---- 6. Closing ----
   await alice.page.locator(`[data-take="${aliceId}"] [data-join-close]`).click();

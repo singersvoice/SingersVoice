@@ -22,7 +22,7 @@ import { IcCamera, IcCameraOff, IcChat, IcCheck, IcHeadphones, IcImage, IcMic, I
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/LiveShow.tsx';
-import { EarsLevel, MixBalance } from '../../components/MixBalance.tsx';
+import { EarsDelayNote, EarsLevel, MixBalance } from '../../components/MixBalance.tsx';
 import { audienceLine } from './audience.ts';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
 import { SaveSoundButton } from '../../components/SoundPreview.tsx';
@@ -1333,6 +1333,7 @@ function LiveStage(props: {
             <MicStatus engine={engine} onChange={() => void reopenMic(engine, camera)} />
             <MixBalance />
             <EarsLevel compact />
+            {audio.monitor && <EarsDelayNote engine={engine} />}
             <details class="tweaks">
               <summary>Tweak the voice FX — every control of the vocal chain, live on your voice</summary>
               <FxPanel value={audio} onChange={updateAudio} compact />
@@ -1349,7 +1350,7 @@ function LiveStage(props: {
             <button class={`btn icon ${tvOpen || tvLink.state.value === 'on' ? 'on' : ''}`} aria-label="TV" title="TV: your stage on the TV in the room — type the code the TV shows" aria-pressed={tvOpen} data-tv-button onClick={() => setTvOpen((o) => !o)}>
               <IcTv />
             </button>
-            <button class={`btn icon ${pictureOpen ? 'on' : ''}`} aria-label="My picture" title="My picture: me on the stage or my camera as it is; still, following me, or zooming with my voice" aria-pressed={pictureOpen} disabled={!stage.videoAllowed} onClick={() => setPictureOpen((o) => !o)}>
+            <button class={`btn icon ${pictureOpen ? 'on' : ''}`} aria-label="My picture" title="My picture: me on the stage or my camera as it is; Auto zoom on or off — the same choices as in the Studio" aria-pressed={pictureOpen} disabled={!stage.videoAllowed} onClick={() => setPictureOpen((o) => !o)}>
               <IcZoom />
             </button>
             <button class={`btn icon ${audio.monitor ? 'on' : ''}`} aria-label="Hear myself" title="Hear myself (use headphones)" onClick={() => updateAudio({ monitor: !audio.monitor })}>

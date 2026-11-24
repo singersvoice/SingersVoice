@@ -278,7 +278,7 @@ export function Settings() {
             </Field>
           )}
           <Switch checked={audio.monitor} onChange={(v) => updateAudio({ monitor: v })} label="Hear myself while singing" hint="Headphones only." />
-          <Field label="Your voice in your ears (performer mode)" hint="Only what you hear of yourself while singing, with Hear myself on — half as loud as in the recording to start, so you sing to your own voice at a natural level. The recording, the film and the audience (publish mode) are set apart, below.">
+          <Field label="Your voice in your ears (performer mode)" hint="Only what you hear of yourself while singing, with Hear myself on — about half as loud as in the recording to start, so you sing to your own voice at a natural level. The recording, the film and the audience (publish mode) are set apart, below.">
             <EarsLevel />
           </Field>
           <Field label="Sync: your voice on the beat" hint="Your speakers and microphone add a delay the browser cannot see — Bluetooth adds a lot. Turn the speakers up a little, keep quiet, and tap: four clicks go out and the microphone times them; the figure puts your voice on the beat in every recording and live mix on this device. With headphones on nothing is heard, and the browser's own figure is kept (it is good for wired headphones). Each take also measures it from what the microphone heard of the track.">

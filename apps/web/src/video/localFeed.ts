@@ -304,9 +304,8 @@ export class LocalFeed {
     this.lastSeg = -1; // the next tick redraws, choice or no new frame
   }
 
-  /** How loud the singer is now (0..1 of the meter) — the frame's push-in while the framing is 'voice' (framing.ts). */
+  /** How loud the singer is now (0..1 of the meter): the seat always knows whether the singer is heard (support, the e2e); the frame's push-in follows it only while AUTOZOOM is on (framing 'voice', framing.ts). */
   voice(level: number): void {
-    if (this.seat.framing !== 'voice') return;
     this.seat.voice(level);
     this.link?.voice(level);
   }

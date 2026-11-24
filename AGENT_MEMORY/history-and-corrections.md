@@ -1,6 +1,29 @@
 # History: bugs, misunderstandings, corrections, outstanding
 
-Updated 23 Nov 2026. Newest first. Each entry: what was wrong → what was done → what proves it.
+Updated 24 Nov 2026. Newest first. Each entry: what was wrong → what was done → what proves it.
+
+## 24 Nov 2026 — refinement: latency, levels, the performer's picture, AUTOZOOM
+- The owner (23 Nov, 23:57): "the latest fixes are better"; then: the monitoring delay ("a fraction of a second") to
+  go; default TRACK +25 %; PERFORMER vocals untouched ("already perfect"); PUBLISH vocal +15 %; the performer image
+  +20 % and framed down to the chest; an explicit AUTOZOOM switch, off by default, the primary performer stable and
+  centred, joiners to the left and right; all of it the same in LIVE MEETS.
+- Done: `sv-shaper` (the chain 10 → 3 ms), the capture's `latency` ideal, the delay note in the Sound sheet; track
+  −14 with its own ceiling, vocal target −7.8 / ceilings −1 and −1.5 / guard −5, the ears held exactly where they
+  were (`PERFORMER_MONITOR` independent, `EARS_TRACK_TRIM_DB`); slots a fifth bigger, the crown near the top, the
+  row from the middle out; AUTOZOOM switch (`PictureChoices`, every stage), every save to off once (`autozoomV1`).
+- **Not fully deliverable, said so:** the PUBLISH vocal rose 0.3–0.6 dB, not 1.2 — a voice under a −1 dBFS ceiling
+  cannot be louder than ≈ −9.5 K-weighted (the lab's §6 limiter column shows where the rest goes). A density
+  compressor was tried and removed (it lost loudness). The device's own delay (20–60 ms wired, 100–200 more on
+  Bluetooth) remains; the app's part is now 3 ms.
+- Proof: audio lab 132 ok (§1 latency 2.96 ms; §6 the music −14.3, the voice 3.9–6.0 LU over it, limiter ≤ 2.1 LU,
+  peaks ≤ −1.44; §7 ears −15.1); the studio e2e (AUTOZOOM off: the head ×1.00 sung or not and one size in the file
+  until the switch; on: ×1.51 live and in the file; the crown at row 135 of 720, the chin about 491; the stage: ears
+  −15.0 / the bus's voice −9.0 dBFS RMS, duck −3; the take −10.7 LUFS, sung −9.1, breaks −13.5, true peak −0.9); join
+  e2e 58 ok (the row carol · alice · bob); live e2e 184 ok (the same switch and seat on the live stage; the film
+  −7.9 LUFS, true peak −1.1).
+- The live e2e under the sandbox's stalls: the playlist is read again when a read lands mid-rewrite; a held segment
+  (the picture stalled through it) is passed over for an earlier whole one; the show view is given 20 s to follow a
+  song change. The Studio e2e's song is 34 s so two push-outs land in the file after the Auto zoom switch.
 
 ## 23 Nov 2026 — the two listening modes (PERFORMER / PUBLISH)
 - **Misunderstanding corrected:** "stronger vocals" was always meant for PUBLISH MODE (the saved recordings),
@@ -44,8 +67,9 @@ Updated 23 Nov 2026. Newest first. Each entry: what was wrong → what was done 
 
 ## Outstanding / known limitations
 - Real iOS Safari not available in the sandbox: the one-capture flow is verified in Chromium with an iPhone UA.
-- The vocal cannot be pushed past ≈ −9 K-weighted under the −1.5 dBFS ceiling (the energy goes into limiting);
-  further "strength" must come from balance (track level, duck) and tone.
+- The vocal cannot be pushed past ≈ −9.5 K-weighted under the −1 dBFS ceiling (the energy goes into limiting);
+  further "strength" must come from balance (track level, duck) and tone. The owner's "+15 %" of 24 Nov is only
+  partly delivered for this reason — if more is wanted, the levers are a deeper duck or a lower track, not the target.
 - YouTube normalises playback to −14 LUFS; only the balance survives there.
 - Chromium's intermittent "VideoFrame was garbage collected" note on a stage (cosmetic; listed, not counted — in
   `screenshots.mjs` too since 23 Nov).

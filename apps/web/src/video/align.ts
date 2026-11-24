@@ -34,7 +34,7 @@ export interface AlignPlan {
 }
 
 export function alignPlan(roundTripMs: number, peers: PeerArrival[], lagMinMs = LAG_MIN_MS): AlignPlan {
-  const rt = Math.max(0, roundTripMs || 0);
+  const rt = Math.round(Math.max(0, roundTripMs || 0)); // whole milliseconds: the plan is read by people and compared by tests; a chain of 141 frames is 2.9375 ms
   const latest = peers.reduce((m, p) => (p.arrivalMs === null ? m : Math.max(m, p.arrivalMs)), 0);
   const lagMs = Math.round(Math.min(LAG_MAX_MS, Math.max(lagMinMs, latest - rt + ALIGN_MARGIN_MS)));
   const trackDelayMs = lagMs + rt;

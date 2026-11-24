@@ -3,14 +3,15 @@
  * built the same way everywhere, so it never depends on what file the track came from, which
  * microphone a singer has or how they set their effects:
  *
- *   track ─ normalisation ─ pocket EQ ─ duck ─ Track offset ─┐
- *   vocal₁ ─ rider ─ limiter ─┐              ▲               ├─ sum ─ guard ─ limiter ─ soft clip ─ out
- *   vocal₂ ─ rider ─ limiter ─┴─ Vocal offset ┴───────────────┘
+ *   track ─ normalisation ─ pocket EQ ─ limiter ─ duck ─ Track offset ─┐
+ *   vocal₁ ─ rider ─ limiter ─┐                        ▲               ├─ sum ─ guard ─ limiter ─ soft clip ─ out
+ *   vocal₂ ─ rider ─ limiter ─┴─ Vocal offset ─────────┴───────────────┘
  *
  * The track is brought to MIX_TARGETS.trackLufs (measured once, see loudness.ts) and given its place:
  * the pocket EQ takes a little of the low end and of the presence region (where a voice lives) off the
  * music, and the duck steps the music back by MIX_TARGETS.duckDb while a voice is sung (the voices
- * key it) — the voice in front without either having to be louder than it is. Each vocal has a slow
+ * key it) — the voice in front without either having to be louder than it is; the music's own peaks are
+ * held under TRACK_CEILING_DB so the sum's limiter is not driven by the music alone. Each vocal has a slow
  * rider steering it to MIX_TARGETS.vocalDb (K-weighted: the ear's measure) and a limiter of its own
  * under the vocal ceiling (a hot peak never reaches the sum); the two offsets are the device's Track /
  * Vocal controls (dB, ±30, a balance on top of a mix that is already right); the guard (K-weighted)
@@ -23,10 +24,20 @@ import { dbToGain } from './gain.ts';
 import { makeCompressor, safetyStage, type Compressor, type SafetyStage, LIMITER_LOOKAHEAD_S, LIMITER_RATIO } from './dynamics.ts';
 import { kWeighting, MIX_TARGETS, PERFORMER_MONITOR } from './loudness.ts';
 
-/** The buses' ceiling (dBFS): an AAC encoder overshoots a dense mix by about a dB; this keeps the decoded file under full scale. */
-export const MIX_CEILING_DB = -2;
-/** Each vocal's own ceiling in the mix (dBFS), after its rider: its loudest peak is held here before the sum (the density of a record's vocal: a voice at −9 K-weighted needs it). */
-export const VOCAL_CEILING_DB = -1.5;
+/** The buses' ceiling (dBFS): an AAC encoder overshoots a dense mix by about half a decibel; this keeps the decoded file under full scale (the studio e2e measures the saved file's true peak). */
+export const MIX_CEILING_DB = -1.5;
+/** Each vocal's own ceiling in the mix (dBFS), after its rider: its loudest peak is held here before the sum (the density of a record's vocal; the sum's own ceiling is half a decibel under it). */
+export const VOCAL_CEILING_DB = -1;
+/** The vocal limiter's release (s): short enough to give the level back between a voice's peaks (the loudness a record's vocal has under its ceiling), long enough never to ripple within a note. */
+export const VOCAL_LIMITER_RELEASE_S = 0.05;
+/**
+ * The music's own ceiling in the mix (dBFS), after its pocket (24 Nov): a mastered track brought to −14 LUFS peaks
+ * near the bus's ceiling on its own, and a voice on top of it drove the sum's limiter into taking 2 LU off every
+ * sung phrase — the voice lost what its rider gave it. Its loudest peaks held here (a limiter with the same
+ * lookahead as the voices', so the two stay in time) cost the music a fraction of a decibel and leave the sum's
+ * limiter the little it should do. The singer's ears take the track from the player, not from here.
+ */
+export const TRACK_CEILING_DB = -4;
 /**
  * The music's pocket: a shade off the low end (a bass-heavy backing masks a voice and eats the limiter) and off
  * the presence region (2–5 kHz, where a voice lives), and the rumble under 30 Hz gone — static, gentle, on every
@@ -70,7 +81,7 @@ export interface LevelerConfig {
  * on a noisy microphone. It measures K-weighted, as the ear does: the target is LUFS-like.
  */
 export const VOCAL_RIDER: LevelerConfig = { target: MIX_TARGETS.vocalDb, minDb: -12, maxDb: 26, gate: -45, up: 1.5, down: 2, windowMs: 2000, farDb: 6, farMul: 4, floorMargin: 8, floorKeep: 12, floorSeconds: 8, kWeighted: true };
-/** The monitor's rider (PERFORMER MODE): the same rider, to the singer's own level in their ears — half as loud as the published voice (loudness.ts PERFORMER_MONITOR). */
+/** The monitor's rider (PERFORMER MODE): the same rider, to the singer's own level in their ears — about half as loud as the published voice (loudness.ts PERFORMER_MONITOR; its own number, never the bus's). */
 export const MONITOR_RIDER: LevelerConfig = { ...VOCAL_RIDER, target: PERFORMER_MONITOR.vocalDb };
 /** The guard on the sum: turns down (never up) when the mix runs hotter than the mix target on average — K-weighted, so a bass-heavy track is judged by its loudness. */
 export const MIX_GUARD: LevelerConfig = { target: MIX_TARGETS.mixDb, minDb: -36, maxDb: 0, gate: -40, up: 1, down: 2, windowMs: 600, farDb: 6, farMul: 3, kWeighted: true };
@@ -125,6 +136,7 @@ export class MixBus {
   readonly safety: SafetyStage;
   private readonly backingNorm: GainNode;
   private readonly pocket: { input: AudioNode; output: AudioNode; nodes: AudioNode[] };
+  private readonly trackLimiter: Compressor;
   private readonly ducker: AudioWorkletNode | null;
   private readonly vocalOffset: GainNode;
   private readonly guard: AudioWorkletNode | null;
@@ -146,13 +158,16 @@ export class MixBus {
     this.vocalOffset = ctx.createGain();
     this.sum = ctx.createGain();
     this.pocket = trackPocket(ctx);
+    this.trackLimiter = makeCompressor(ctx, workletAvailable, { lookaheadFrames: Math.round(LIMITER_LOOKAHEAD_S * ctx.sampleRate), ramp: 0.01 });
+    this.trackLimiter.set({ thresholdDb: TRACK_CEILING_DB, kneeDb: 0, ratio: LIMITER_RATIO, attackS: 0.0003, releaseS: 0.1, makeupDb: 0 }, 0);
     this.ducker = workletAvailable ? this.makeDucker() : null;
     this.backingIn.connect(this.backingNorm).connect(this.pocket.input);
+    this.pocket.output.connect(this.trackLimiter.input);
     if (this.ducker) {
-      this.pocket.output.connect(this.ducker, 0, 0);
+      this.trackLimiter.output.connect(this.ducker, 0, 0);
       this.vocalOffset.connect(this.ducker, 0, 1); // the voices key the duck
       this.ducker.connect(this.backingOut);
-    } else this.pocket.output.connect(this.backingOut);
+    } else this.trackLimiter.output.connect(this.backingOut);
     this.backingOut.connect(this.sum);
     this.vocalOffset.connect(this.sum);
     this.backingMeter = ctx.createAnalyser();
@@ -207,9 +222,10 @@ export class MixBus {
   addVocal(id: string, source: AudioNode): MixVocal {
     this.removeVocal(id);
     const rider = this.workletAvailable ? leveler(this.ctx, VOCAL_RIDER) : null;
-    // The voice's own ceiling: a limiter with a short lookahead, so its loudest peak after the rider never reaches the sum.
+    // The voice's own ceiling: a limiter with a short lookahead, so its loudest peak after the rider never reaches the sum
+    // (its release short enough to give the level back between a voice's peaks — the density of a record's vocal).
     const limiter = makeCompressor(this.ctx, this.workletAvailable, { lookaheadFrames: Math.round(LIMITER_LOOKAHEAD_S * this.ctx.sampleRate), ramp: 0.01 });
-    limiter.set({ thresholdDb: VOCAL_CEILING_DB, kneeDb: 0, ratio: LIMITER_RATIO, attackS: 0.0003, releaseS: 0.08, makeupDb: 0 }, 0);
+    limiter.set({ thresholdDb: VOCAL_CEILING_DB, kneeDb: 0, ratio: LIMITER_RATIO, attackS: 0.0003, releaseS: VOCAL_LIMITER_RELEASE_S, makeupDb: 0 }, 0);
     const out = this.ctx.createGain();
     if (rider) source.connect(rider).connect(limiter.input);
     else source.connect(limiter.input);
@@ -258,6 +274,7 @@ export class MixBus {
   dispose(): void {
     for (const id of this.vocalIds) this.removeVocal(id);
     for (const n of [this.backingIn, this.backingNorm, ...this.pocket.nodes, this.backingOut, this.vocalOffset, this.sum, this.safety.output]) n.disconnect();
+    this.trackLimiter.disconnect();
     this.ducker?.disconnect();
     this.guard?.disconnect();
     this.safety.limiter.disconnect();

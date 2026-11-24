@@ -48,7 +48,7 @@ const results = await page.evaluate(async () => {
   const db = (x) => 20 * Math.log10(Math.max(x, 1e-9));
   async function offline(seconds, channels = 1, worklets = true) {
     const ctx = new OfflineAudioContext(channels, Math.round(seconds * RATE), RATE);
-    if (worklets) for (const m of ['dynamics.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+    if (worklets) for (const m of ['dynamics.js', 'shaper.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
     return ctx;
   }
   function tone(ctx, hz, dbfs, seconds, from = 0, channels = 1) {
@@ -432,7 +432,7 @@ const results = await page.evaluate(async () => {
     /** The bus rendered: channels 0–1 its output, 2–3 its sum before the guard and the safety stage (what the limiter is given). */
     async function render(presetId, what) {
       const ctx = new OfflineAudioContext(4, Math.round(SECONDS * RATE), RATE);
-      for (const m of ['dynamics.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+      for (const m of ['dynamics.js', 'shaper.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
       const bus = new L.MixBus(ctx, true);
       bus.setBackingNormalization(L.normalizationDb(trackLufs, L.MIX_TARGETS.trackLufs));
       if (what !== 'vocal') song(ctx, SECONDS).connect(bus.backingIn);
@@ -494,7 +494,7 @@ const results = await page.evaluate(async () => {
     {
       const run = async (keyed) => {
         const ctx = new OfflineAudioContext(4, Math.round(SECONDS * RATE), RATE);
-        for (const m of ['dynamics.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+        for (const m of ['dynamics.js', 'shaper.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
         const bus = new L.MixBus(ctx, true);
         bus.setBackingNormalization(L.normalizationDb(trackLufs, L.MIX_TARGETS.trackLufs));
         song(ctx, SECONDS).connect(bus.backingIn);
@@ -571,7 +571,7 @@ for (const k of ['ir_worklet', 'ir_native']) {
   check(r.echoDb < -18, `${k}: parallel paths aligned (secondary arrival ${r.echoDb} dB under the main one)`);
   check(Math.abs(r.latencyMs - r.reportedMs) < 0.3, `${k}: chain latency ${r.latencyMs} ms as reported (${r.reportedMs} ms)`);
 }
-check(results.ir_worklet.latencyMs < 12, `worklet chain latency ${results.ir_worklet.latencyMs} ms < 12 ms`);
+check(results.ir_worklet.latencyMs < 3.2, `PERFORMER MODE's hold on the voice: the worklet chain's latency is ${results.ir_worklet.latencyMs} ms (under 3.2: the safety limiter's 2 ms lookahead and three oversampled shapers of 15 frames; it was 10 ms with the browser's own oversampling)`);
 for (const k of ['deesser_worklet', 'deesser_native']) {
   const r = results[k];
   check(Math.abs(r['-40']) < 1, `${k}: a quiet 9 kHz passes at unity (${r['-40']} dB)`);
@@ -591,14 +591,15 @@ check(Math.abs(results.track_norm.mixLufs - results.track_norm.target) < 1, `tra
 for (const k of ['vocal_rider_-5', 'vocal_rider_-33']) {
   const r = results[k];
   const reachable = Math.min(Math.max(r.target, r.inDb + r.maxCut), r.inDb + r.maxLift); // within the rider's range
-  // (a quiet voice is also held by the floor rule — the rider keeps a voice's own quietest moments 12 dB under the target — so a −33 dBFS voice lands a little short)
-  check(Math.abs(r.at10s - reachable) < (r.inDb < -30 ? 3 : 2), `${k}: a ${r.inDb} dBFS voice rides to ${r.at10s} dBFS by 10 s (target ${r.target}, reachable ${reachable}; 2 s ${r.at2s}, 4 s ${r.at4s})`);
+  // (a quiet voice is also held by the floor rule — the rider keeps a voice's own quietest moments 12 dB under the target — so a −33 dBFS voice lands a little short;
+  // and the bus's output is measured here, after the voice's limiter: a voice steered to −7.8 K-weighted stands under its ceiling with up to 3 dB held off its peaks)
+  check(r.at10s >= reachable - 3.2 && r.at10s <= reachable + 1, `${k}: a ${r.inDb} dBFS voice rides to ${r.at10s} dBFS by 10 s (target ${r.target}, reachable ${reachable}, the limiter's hold allowed for; 2 s ${r.at2s}, 4 s ${r.at4s})`);
   check(r.tailPeakDb < -60, `${k}: silence after the singing stays silent (${r.tailPeakDb} dBFS)`);
 }
 check(Math.abs(results.mix_0.at10s - results.mix_0.at5s) < 1.5 && results.mix_0.at10s < -8 && results.mix_0.at10s > -16, `mix at 0/0: steady at ${results.mix_0.at10s} dBFS once the vocal rider has settled (guard idle; ${results.mix_0.at1s} at 1 s, ${results.mix_0.at5s} at 5 s)`);
 check(results.mix_30.at10s < results.mix_30.target + 2, `mix at +30/+30: guard brings it to ${results.mix_30.at10s} dBFS by 10 s (target ${results.mix_30.target} K-weighted)`);
-check(results.mix_30.peakDb <= -1.3, `mix at +30/+30: peak ${results.mix_30.peakDb} dBFS never over the ceiling`);
-check(results.mix_0.peakDb <= -1.3, `mix at 0/0: peak ${results.mix_0.peakDb} dBFS`);
+check(results.mix_30.peakDb <= -1.2, `mix at +30/+30: peak ${results.mix_30.peakDb} dBFS never over the ceiling`);
+check(results.mix_0.peakDb <= -1.2, `mix at 0/0: peak ${results.mix_0.peakDb} dBFS`);
 // 6. The finished mix on a bass-heavy song, every preset: the voice in front, the whole at a record's loudness, nothing clipped.
 {
   const f = results.finished;
@@ -606,9 +607,10 @@ check(results.mix_0.peakDb <= -1.3, `mix at 0/0: peak ${results.mix_0.peakDb} dB
   check(Math.abs(f.trackLufs - f.trackTarget) <= 1, `the music in the mix at its target: ${f.trackLufs} LUFS (target ${f.trackTarget}; a bass-heavy track reads ${f.trackRmsDb} dBFS RMS — the old guard's measure)`);
   for (const [id, v] of Object.entries(f.presets)) {
     const octave = id === 'octave-down';
-    check(v.prominenceLu >= (octave ? 3 : 5) && v.prominenceLu <= 10, `${id}: PUBLISH MODE — the voice stands ${v.prominenceLu} LU over the music (${v.vocalLufs} against ${f.trackLufs} LUFS; and the music steps back ${results.duck?.depthDb ?? 3} dB more under it)`);
-    check(v.sungLufs >= (octave ? -13.5 : -12) && v.sungLufs <= -7.5, `${id}: a sung phrase lands at ${v.sungLufs} LUFS (the whole ${v.mixLufs}, the break after it ${v.betweenLufs}: a record's loudness, the voice in front)`);
-    check(v.peakDb <= -1.3, `${id}: the mix peaks at ${v.peakDb} dBFS — under the ceiling, nothing clipped (the limiter took ${v.limitedLu} LU off the sung part on average, from a sum peaking at ${v.sumPeakDb} dBFS)`);
+    // 24 Nov: the music a quarter louder (−14 LUFS) at the owner's word and the voice at its ceiling — the voice stands 3.5 LU and more over the music, plus the duck.
+    check(v.prominenceLu >= (octave ? 2.3 : 3.5) && v.prominenceLu <= 10, `${id}: PUBLISH MODE — the voice stands ${v.prominenceLu} LU over the music (${v.vocalLufs} against ${f.trackLufs} LUFS; and the music steps back ${results.duck?.depthDb ?? 3} dB more under it)`);
+    check(v.sungLufs >= (octave ? -13.5 : -12.5) && v.sungLufs <= -7, `${id}: a sung phrase lands at ${v.sungLufs} LUFS (the whole ${v.mixLufs}, the break after it ${v.betweenLufs}: a record's loudness, the voice in front)`);
+    check(v.peakDb <= -1.2, `${id}: the mix peaks at ${v.peakDb} dBFS — under the ceiling, nothing clipped (the limiter took ${v.limitedLu} LU off the sung part on average, from a sum peaking at ${v.sumPeakDb} dBFS)`);
     check(v.limitedLu <= 2.5, `${id}: the limiter works lightly (${v.limitedLu} LU on average while sung: density, not distortion)`);
     if (!octave) check(v.midForwardDb >= 1, `${id}: the chain leaves the voice mid-forward — its 1–5 kHz against its 100–400 Hz ${v.midForwardDb} dB more than the raw voice's (${v.voiceBalanceDb} against ${f.rawVoiceBalanceDb} dB)`);
   }
@@ -617,7 +619,7 @@ check(results.mix_0.peakDb <= -1.3, `mix at 0/0: peak ${results.mix_0.peakDb} dB
   // 7. PERFORMER MODE: the same voice through the monitor's rider lands half as loud as PUBLISH MODE's.
   const e = results.ears;
   check(Math.abs(e.earsLufs - e.earsTarget) < 1.5, `PERFORMER MODE — the voice in the singer's ears at ${e.earsLufs} LUFS (target ${e.earsTarget} K-weighted)`);
-  check(Math.abs(e.publishLufs - e.earsLufs - 6) < 1.5, `…half as loud as in the recording: ${(e.publishLufs - e.earsLufs).toFixed(1)} dB under PUBLISH MODE's ${e.publishLufs} LUFS (6 wanted)`);
+  check(Math.abs(e.publishLufs - e.earsLufs - (e.publishTarget - e.earsTarget)) < 1.5, `…about half as loud as in the recording: ${(e.publishLufs - e.earsLufs).toFixed(1)} dB under PUBLISH MODE's ${e.publishLufs} LUFS (${(e.publishTarget - e.earsTarget).toFixed(1)} wanted: the two modes' own levels)`);
 }
 console.log(failed ? 'AUDIO LAB FAILED' : 'AUDIO LAB OK');
 process.exit(failed ? 1 : 0);

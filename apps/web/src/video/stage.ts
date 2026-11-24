@@ -2,7 +2,8 @@
  * The virtual stage: every performer (1..10) is cut out of their camera and placed in one straight
  * row over the shared stage background — the same size, evenly spaced by stage slot, every head at
  * the same height, behind a lit riser that hides everything below the chest — like performers in
- * a line across a stage, wherever each of them really is.
+ * a line across a stage, wherever each of them really is. The first singer stands in the middle and
+ * the others fill in to their right and left in turn (`rowOrder`).
  *
  * One rule, every stage: a singer is drawn exactly as their own device frames them, and every
  * device frames its singer the same way (the stage frame, `framing.ts`: the head the same size at
@@ -23,6 +24,7 @@
  * video), so nothing is drawn twice; a recorder draws the background under it itself.
  */
 import type { UnpackedFrame } from './alphaPack.ts';
+import { STAGE_FRAME } from './framing.ts';
 
 export type PerformerSource =
   | { kind: 'person'; canvas: HTMLCanvasElement; version: () => number }
@@ -77,10 +79,20 @@ export const RISER_COVER = 0.4;
 const RISER_MIN = 0.09;
 /** …and never taller than this in 'show' mode (small slots, a crowd of ten, sit lower rather than behind a wall). */
 const RISER_MAX = 0.4;
-/** 'show' and 'solo': the row's slots start about here from the top when they are big (one or two singers): the heads a little under. */
-const ROW_TOP = 0.08;
+/**
+ * 'show' and 'solo': where the top of a singer's head (the crown) sits, down the picture, when the slots are big (one
+ * or two singers; a fuller row is as wide as its slots allow and stands on the riser instead): near the top edge —
+ * the picture is the singer from the crown to the chest, not air over their head (24 Nov: the owner's "framing
+ * downward, to chest level"). The crown's place in a slot follows from the stage frame (framing.ts: the head's top
+ * `headroom` into the frame) and the slot's own headroom.
+ */
+const CROWN: Record<StageMode, number> = { show: 0.08, solo: 0.05, stage: 0 };
+/** 'show': the slots this tall against the picture when nothing limits them (24 Nov: a fifth taller than the 1.2 of before — the singer a fifth bigger). */
+const SHOW_SCALE = 1.44;
 /** 'solo': the slots this much taller than 'show' gives them — the singer half as big again. */
 const SOLO_SCALE = 1.5;
+/** 'stage' (the lyrics above): the slot's height against the picture by how many sing (24 Nov: a fifth taller than before). */
+const STAGE_SLOT_FRAC = (n: number): number => (n === 1 ? 0.6 : n === 2 ? 0.576 : n <= 4 ? 0.54 : n <= 6 ? 0.48 : 0.432);
 /**
  * A stage with nobody's picture on it (the audience's view: no video reaches them; a lobby before the
  * cameras are on) is a still: it is redrawn only now and then, to catch a change — a frame arriving, an
@@ -92,6 +104,8 @@ const MAX_WIDTH = 1600;
 const FILL_W = 0.94;
 /** Headroom above the frame, as a fraction of the slot height. */
 export const HEADROOM = 0.045;
+/** How far into a slot (as a fraction of its height) the singer's crown sits: the slot's headroom, then the stage frame's. */
+const CROWN_IN_SLOT = HEADROOM + STAGE_FRAME.headroom * (1 - HEADROOM);
 /**
  * A cut-out is never blown up past this many times its own pixels (at a 720-tall picture; scaled
  * with the picture): a frame that arrived small (a weak link) stays a sharp figure with stage
@@ -117,14 +131,19 @@ export function arcLift(width: number, height: number, x: number, mode: StageMod
   return height * ARC_LIFT[mode] * u * u;
 }
 
+/** Where a slot `slotH` tall must start (its top edge) for the singer's crown to sit at the mode's place down the picture. */
+export function rowTop(height: number, slotH: number, mode: StageMode): number {
+  return height * CROWN[mode] - slotH * CROWN_IN_SLOT;
+}
+
 /**
  * How tall the riser band is (above the picture's bottom edge, in the middle) for slots `slotH` tall:
- * 'show' puts the row's heads near the top of the picture and the riser takes the rest, within
- * bounds; 'stage' (lyrics above) keeps the riser slim at the bottom.
+ * 'show' puts the row's crowns near the top of the picture and the riser takes the rest, within
+ * bounds; 'stage' (lyrics above) and 'solo' keep the riser slim at the bottom.
  */
 export function riserBand(height: number, slotH: number, mode: StageMode): number {
   if (mode !== 'show') return height * RISER_MIN;
-  return Math.max(height * RISER_MIN, Math.min(height * RISER_MAX, height - height * ROW_TOP - slotH * (1 - RISER_COVER)));
+  return Math.max(height * RISER_MIN, Math.min(height * RISER_MAX, height - rowTop(height, slotH, mode) - slotH * (1 - RISER_COVER)));
 }
 
 /** The top edge of the riser at `x`: the band's height up from the picture's bottom edge, lifted along the arc. */
@@ -153,16 +172,15 @@ export function layoutStage(width: number, height: number, count: number, mode: 
   if (mode === 'show' || mode === 'solo') {
     // The singers are the picture: a slot taller than it (its lower part hides behind the riser and runs on below the
     // picture), so one or two singers stand big; a fuller row is as wide as its slots allow. 'solo' (the Studio's saved
-    // performance) has them half as big again: a medium close-up, the frame's top at the row top, the chest behind the riser.
-    h = height * 1.2 * (mode === 'solo' ? SOLO_SCALE : 1);
+    // performance) has them half as big again: a medium close-up, the crown near the top edge, the chest at the bottom.
+    h = height * SHOW_SCALE * (mode === 'solo' ? SOLO_SCALE : 1);
     w = h * 0.75;
     if (w > slotW * FILL_W) {
       w = slotW * FILL_W;
       h = w / 0.75;
     }
   } else {
-    const hFrac = n === 1 ? 0.5 : n === 2 ? 0.48 : n <= 4 ? 0.45 : n <= 6 ? 0.4 : 0.36;
-    h = height * hFrac;
+    h = height * STAGE_SLOT_FRAC(n);
     w = h * 0.75;
     if (w > slotW * 0.96) {
       w = slotW * 0.96;
@@ -172,9 +190,21 @@ export function layoutStage(width: number, height: number, count: number, mode: 
   return Array.from({ length: n }, (_, i) => {
     const cx = slotW * (i + 0.5);
     const y = floorAt(width, height, cx, h, mode) - h;
-    // 'solo': a slot taller than the picture keeps its top (the head) at the row top rather than standing on the riser's floor.
-    return { id: String(i), x: cx - w / 2, y: mode === 'solo' ? Math.max(height * ROW_TOP, y) : y, w, h };
+    // 'solo': a slot taller than the picture is placed for the crown (rowTop) rather than standing on the riser's floor;
+    // a fuller row's smaller slots stand on the floor as in 'show'.
+    return { id: String(i), x: cx - w / 2, y: mode === 'solo' ? Math.max(rowTop(height, h, mode), y) : y, w, h };
   });
+}
+
+/**
+ * The row's order (24 Nov): the first singer (slot 1 — the Studio's own singer, a meet's host) in the middle, the
+ * next to their right, the next to their left, and so on outward — a join or a stage fills in on either side of the
+ * primary performer, who stays where they were. Returns, for each singer in slot order, the index of their place in
+ * the row of `n` places laid left to right by `layoutStage`.
+ */
+export function rowOrder(n: number): number[] {
+  const centre = Math.floor((n - 1) / 2);
+  return Array.from({ length: n }, (_, k) => (k === 0 ? centre : centre + Math.ceil(k / 2) * (k % 2 === 1 ? 1 : -1)));
 }
 
 /**
@@ -309,7 +339,8 @@ export class StageCompositor {
       return;
     }
     const tiles = layoutStage(W, H, this.performers.length, this.mode);
-    this.tiles = tiles.map((t, i) => ({ ...t, id: this.performers[i]!.id, performer: this.performers[i]! }));
+    const order = rowOrder(this.performers.length);
+    this.tiles = this.performers.map((p, k) => ({ ...tiles[order[k]!]!, id: p.id, performer: p }));
     // Every singer's frame, whole, as their own device framed it — the same picture in every mode.
     const now = performance.now();
     for (const t of this.tiles) {

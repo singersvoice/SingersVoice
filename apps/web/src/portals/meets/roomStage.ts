@@ -170,9 +170,9 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   const micForVoice = opts.engine?.micOpen.value ?? false;
   useEffect(() => {
     const level = opts.engine?.recorder?.level;
-    if (app.framing !== 'voice' || !level) return;
+    if (!level) return;
     return effect(() => feed.voice(level.value));
-  }, [app.framing, opts.engine, micForVoice]);
+  }, [opts.engine, micForVoice]);
   // The stage frame's word on my distance to the camera (sit back / come closer), for the stage strip.
   const [distance, setDistance] = useState<'close' | 'far' | null>(null);
   useEffect(() => {

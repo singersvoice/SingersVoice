@@ -1,6 +1,6 @@
 # Product and architecture
 
-Updated 23 Nov 2026.
+Updated 24 Nov 2026.
 
 ## What SingersVoice is
 
@@ -31,15 +31,19 @@ commercial. The app is a PWA: **after a deploy every device must close and reope
 ## The two user-facing modes (the owner's vocabulary)
 
 - **Performer mode** — the singer's stage view: the lyrics (only ever shown to singers on stage), their own picture
-  framed to chest level by default (the seat; "Zoom with my voice" pushes in on the face while they sing), the
-  controls. Audio in Performer mode = what the singer hears (see `audio-modes.md`: PERFORMER MODE).
+  framed once from the crown to the chest and left still and centred by default (the seat; **AUTOZOOM** — off by
+  default since 24 Nov — pushes in on the face while they sing and follows them when they move), the controls.
+  Audio in Performer mode = what the singer hears (see `audio-modes.md`: PERFORMER MODE).
 - **Publisher / Publish mode** — the show for others and the record of it: the performers huge on an elegant stage,
   **no lyrics**, the backing track blended with every singer's vocal (each with their own voice settings); the
   saved take / film, the broadcast, the audience's stage. Audio = PUBLISH MODE.
 
 The live stream must match what the singer sees of themselves in Performer mode (framing choices strictly kept,
-no extra zoom); the stage is one straight row of equal singers (up to 10); publisher mode is for Club owners and
-Super admins only.
+no extra zoom); the stage is one straight row of equal singers (up to 10) **ordered from the middle out** (24 Nov:
+the first singer — the Studio's own, a meet's host — in the centre, the next to their right, the next to their
+left…; a join fills in on either side of the primary performer); every picture, camera, positioning and zoom choice
+is the same component and the same stage code in OFFLINE PERFORMANCES and LIVE MEETS (`components/PictureChoices.tsx`,
+`video/stage.ts`, `video/framing.ts`); publisher mode is for Club owners and Super admins only.
 
 ## Sign-in, storage
 

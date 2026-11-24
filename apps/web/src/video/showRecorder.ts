@@ -129,6 +129,10 @@ export class ShowRecorder {
   readonly canvas: HTMLCanvasElement;
   private readonly c2d: CanvasRenderingContext2D;
   private readonly compositor: StageCompositor;
+  /** The row as the saved show lays it out right now (support, the e2e): each singer's place, left to right, with their label. */
+  get row(): { label: string; x: number; w: number }[] {
+    return [...this.compositor.tiles].sort((a, b) => a.x - b.x).map((t) => ({ label: t.performer.label, x: Math.round(t.x), w: Math.round(t.w) }));
+  }
   /** The brand's mark over every frame (the recording, the film, the broadcast carry it). */
   readonly mark = new BrandMark();
   private performers: StagePerformer[] = [];

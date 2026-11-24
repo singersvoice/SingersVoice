@@ -329,11 +329,12 @@ export const SEAT = {
 export type SeatState = 'settling' | 'gliding' | 'held';
 
 /**
- * How a singer's frame behaves once set — their choice (Settings → Camera, the stage's Picture sheet):
- * 'voice' (the default): still, and pushed in on the singer's face while they sing — a close-up for the
- * phrase, back out to head and shoulders in the break (a director's push-in on the soloist); 'still':
- * framed once and left alone — it follows only a singer who has plainly moved somewhere else and stayed
- * there; 'follow': re-framed with a glide when they have shifted in their chair.
+ * How a singer's frame behaves once set — their one switch, AUTOZOOM (Settings → Camera, the stage's Camera &
+ * zoom sheet; 24 Nov: off by default, the owner's word): 'still' (AUTOZOOM off, the default): framed once and
+ * left alone — stable and centred; it follows only a singer who has plainly moved somewhere else and stayed
+ * there; 'voice' (AUTOZOOM on): pushed in on the singer's face while they sing — a close-up for the phrase, back
+ * out to head and shoulders in the break (a director's push-in on the soloist) — and re-framed with a glide when
+ * they have shifted in their chair; 'follow': the re-framing without the push-in (kept for a save that chose it).
  */
 export type Framing = 'still' | 'follow' | 'voice';
 export const FRAMINGS: readonly Framing[] = ['still', 'follow', 'voice'];
@@ -342,7 +343,7 @@ export const FRAMINGS: readonly Framing[] = ['still', 'follow', 'voice'];
 export type Picture = 'cutout' | 'camera';
 export const PICTURES: readonly Picture[] = ['cutout', 'camera'];
 
-/** 'still': the margins a singer has to leave, and for how long, before the frame follows them at all. */
+/** 'still' (AUTOZOOM off): the margins a singer has to leave, and for how long, before the frame follows them at all. */
 export const STILL = { reseatAfterMs: 6000, driftX: 0.3, driftUp: 0.16, driftDown: 0.34, sizeMin: 0.5, sizeMax: 2 } as const;
 
 /**
@@ -478,9 +479,9 @@ export class Seat {
     return this.singing ? VOICE_ZOOM.max : 1;
   }
 
-  /** The margins and the hold for the framing chosen: 'follow' takes the seat's own, 'still' and 'voice' the wide ones. */
+  /** The margins and the hold for the framing chosen: 'still' (AUTOZOOM off) takes the wide ones, 'voice' and 'follow' the seat's own. */
   private margins(): { reseatAfterMs: number; driftX: number; driftUp: number; driftDown: number; sizeMin: number; sizeMax: number } {
-    return this.framing === 'follow' ? this.opts : STILL;
+    return this.framing === 'still' ? STILL : this.opts;
   }
 
   /**

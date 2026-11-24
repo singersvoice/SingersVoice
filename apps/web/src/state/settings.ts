@@ -20,13 +20,15 @@ export interface AppSettings {
   cutout: boolean;
   /** My picture on every stage: me cut out of my room ('cutout'), or my camera picture as it is, room and all ('camera'). video/framing.ts. */
   picture: Picture;
-  /** How my frame behaves: pushed in on my face while I sing (the default), still, or following me when I move. video/framing.ts. */
+  /** How my frame behaves (AUTOZOOM): still (the default, 24 Nov), pushed in on my face while I sing and following me when I move ('voice' — AUTOZOOM on), or following only. video/framing.ts. */
   framing: Framing;
   /** One-time migration markers for the virtual-stage defaults. */
   stageV3: boolean;
   stageV4: boolean;
   /** One-time migration marker: the framing's default became the voice zoom (a save from before keeps nothing else). */
   framingV2: boolean;
+  /** One-time migration marker (24 Nov): AUTOZOOM off for everyone once — the voice zoom had only ever been the default, never a choice. */
+  autozoomV1: boolean;
   singerSlot: number;
   countIn: boolean;
   showCueDeck: boolean;
@@ -76,10 +78,11 @@ export const APP_DEFAULTS: AppSettings = {
   cameraDeviceId: '',
   cutout: true,
   picture: 'cutout',
-  framing: 'voice',
+  framing: 'still',
   stageV3: true,
   stageV4: true,
   framingV2: true,
+  autozoomV1: true,
   singerSlot: 1,
   countIn: true,
   showCueDeck: true,
@@ -132,9 +135,11 @@ function migrateApp(v: AppSettings): AppSettings {
   delete (v as Partial<Record<'zoomPreset' | 'autoZoom', unknown>>).autoZoom;
   // The picture and framing choices: a save from before them keeps what its cut-out switch said; anything odd is the default.
   if (!PICTURES.includes(v.picture)) v = { ...v, picture: v.cutout === false ? 'camera' : 'cutout' };
-  if (!FRAMINGS.includes(v.framing)) v = { ...v, framing: 'voice' };
-  // The voice zoom became the default framing: a save from before starts on it once (the choice is the singer's from then on).
+  if (!FRAMINGS.includes(v.framing)) v = { ...v, framing: 'still' };
+  // The voice zoom became the default framing on 22 Nov: a save from before started on it once.
   if (stored.framingV2 !== true) v = { ...v, framing: 'voice', framingV2: true };
+  // 24 Nov: AUTOZOOM is off by default — every save goes to 'still' once (the voice zoom had only ever been the default); the switch is the singer's from then on.
+  if (stored.autozoomV1 !== true) v = { ...v, framing: 'still', autozoomV1: true };
   // The balance's defaults rose (the voice in front of the music): a save never moved off the old 0 / 0 takes the new ones once; a balance the singer set stays theirs.
   if (stored.mixV2 !== true) v = { ...v, mixV2: true };
   // The mix of 23 Nov is right on its own (the voice in front, the music full): a balance still at the earlier build's
