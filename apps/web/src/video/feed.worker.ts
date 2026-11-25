@@ -19,6 +19,7 @@
  */
 import { EXPOSURE_EVERY_MS, Exposure, personLuma } from './enhance.ts';
 import { cropFactor, distanceNote, measureMask, plausibleHead, Seat, visiblePart, type Framing, type PersonMeasure, type Picture } from './framing.ts';
+import { FrameStillness, workerStillnessContext } from './stillness.ts';
 import { alphaFromMaskPixels, drawCover, fillSoftCenterMask, MASK_H, MASK_W, MODEL_RETRY_MS, SEND_TIMEOUT_MS, TARGET_FPS, withTimeout } from './segmentCore.ts';
 
 export type FeedMode = 'loading' | 'model' | 'oval' | 'off';
@@ -53,6 +54,8 @@ export interface FeedMeta {
   gain: number;
   /** The last measurement of the singer, as a key (the page's stillness clock), or null. */
   measure: string | null;
+  /** How long the camera's own pixels have stood exactly still (ms; stillness.ts): a frozen camera, past a few seconds. */
+  stillMs: number;
   stalls: number;
 }
 export type FeedOut =
@@ -203,6 +206,8 @@ class FeedPipeline {
   private writing = false;
   private reader: ReadableStreamDefaultReader<VideoFrame> | null = null;
   private pending: ImageBitmap | null = null;
+  /** The camera's pixels against the frame before (a frozen camera presents the same ones). */
+  private readonly stillness = new FrameStillness(workerStillnessContext);
 
   constructor(private readonly o: FeedInit) {
     const mk = (w: number, h: number, alpha: boolean, read = false) => {
@@ -220,7 +225,7 @@ class FeedPipeline {
     this.probe = mk(PROBE_W, PROBE_H, false, true)[1];
     this.luma = mk(LUMA_W, LUMA_H, true, true)[1];
     this.seat = new Seat(o.width, o.height);
-    this.setLook(o.picture ?? 'cutout', o.framing ?? 'still');
+    this.setLook(o.picture ?? 'cutout', o.framing ?? 'follow');
     this.canFilter = typeof (this.framedCtx as { filter?: unknown }).filter === 'string';
     this.maskCtx.fillStyle = '#000';
     this.maskCtx.fillRect(0, 0, o.width, o.height);
@@ -325,6 +330,7 @@ class FeedPipeline {
   /** One camera frame in (a bitmap this worker now owns). */
   take(bmp: ImageBitmap): void {
     if (!this.running) return bmp.close();
+    this.stillness.sample(bmp, bmp.width, bmp.height, performance.now());
     if (this.mode === 'model' && this.seg) void this.sendToModel(bmp);
     else {
       this.drawOval(bmp);
@@ -524,7 +530,7 @@ class FeedPipeline {
       else packedBitmap = this.packed.transferToImageBitmap();
     }
     const person = this.framed.transferToImageBitmap();
-    const meta: FeedMeta = { frame: this.frame, fps: this.fps, mode: this.mode, maskMode: this.maskMode, coverage: this.coverage, note: this.note, seatState: this.seat.state(now), gain, measure: this.measureKey, stalls: this.stalls };
+    const meta: FeedMeta = { frame: this.frame, fps: this.fps, mode: this.mode, maskMode: this.maskMode, coverage: this.coverage, note: this.note, seatState: this.seat.state(now), gain, measure: this.measureKey, stillMs: this.stillness.stillFor(now), stalls: this.stalls };
     post({ type: 'frame', person, packed: packedBitmap, meta }, packedBitmap ? [person, packedBitmap] : [person]);
   }
 

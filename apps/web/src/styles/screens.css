@@ -767,6 +767,27 @@
 .bg-grid button.on {
   border-color: var(--accent);
 }
+/* Select mode: a box in the corner of every tile, ticked when the tile is selected for deletion */
+.bg-grid button.selecting .check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 2px solid #fff;
+  background: rgba(0, 0, 0, 0.5);
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+.bg-grid button.selecting .check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.bg-grid button.selecting.on {
+  border-color: var(--danger, #e5484d);
+}
 /* No virtual background: a plain dark tile with a camera on it (the singer's own room is the background then) */
 .bg-grid button.none .nonebg {
   position: absolute;

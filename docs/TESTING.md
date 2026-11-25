@@ -25,7 +25,7 @@ Live build: **https://www.singersvoice.com/** (and, while the move is on, https:
 3. **Track Maker** → pick an mp3/m4a → paste lyrics (one line each) → choose singers + pattern → *Apply* → Timing:
    play and tap **Mark** on each line → *Review & save* → *Sing it now*.
    - Or **Library → Import** with an SVOld `*.trackmaker.json` + its mp3.
-4. **Sing** → *Start singing* (3-2-1) → sing → *Finish take* → *Play mix* → **Keep**.
+4. **Sing** → *Start singing* (3-2-1) → sing → *Finish* → *Play mix* (seek anywhere, ±10 s, Pause) → **Save** (or *Discard*; *Cancel* at any point before).
 5. **Performances** → the take is listed (Temp/Kept); open → play / download.
 6. **Settings** → VoxForge presets (try *Hard Tune* with auto-tune) — *Preview my voice* hears each one live, every tweak applied as it is made, *Save my sound* writes the Config files now; text size A++ / Max; backgrounds (**NONE** shows the camera picture as it is). Audio → the Track / Vocal volume in the recording, the mix and the broadcast (0 / 0 to start — the mix itself puts the voice in front; *Default* brings them back). Camera → *Auto zoom* (off to start with: your picture framed once, still and centred; on: the picture pushes in on the face while you sing, back out to the chest when you stop, and follows you when you move).
 7. Turn the phone off-line (airplane mode) and reopen the app: the shell loads; device-mode tracks still play.
@@ -50,7 +50,13 @@ CI uploads the screenshots as an artifact on every PR.
 
 `node tools/ci/audio-lab.mjs` renders the real vocal chain and mix bus offline in Chromium
 (OfflineAudioContext with the AudioWorklets, esbuild-bundled from `apps/web/src/audio/lab.ts`) and
-measures them with synthetic signals — what a listener would hear, in numbers: the chain's impulse
+measures them with synthetic signals — what a listener would hear, in numbers: **the voice gate** (section 0:
+the room between phrases at least 10 dB down; a breath in a break — band-limited noise at −28 dBFS, as loud as quiet
+singing — at least 15 dB down at the chain's output and a breath right after a phrase at least 8 dB down in its second
+half; the sung phrase, its last 100 ms and its first 30 ms untouched, a leading "s" within 4 dB); **the howl
+suppressor** (section 0a: a 9.3 kHz tone rising from −60 to −12 dBFS over 1.5 s beside a voice leaves at least
+25 dB down once steady and under −40 dBFS at 1 s on its way up, the voice under 4 kHz within 0.3 dB of the render
+without the tone, and a voice alone — its harmonics, its vibrato — is never notched); the chain's impulse
 response has one arrival (every parallel path delay-matched, no comb filter) and the worklet chain holds
 the voice under 3.2 ms (PERFORMER MODE's share of what a singer hears late: the safety limiter's 2 ms and
 three `sv-shaper` stages of 15 frames), the de-esser passes a
@@ -127,7 +133,8 @@ seven on it is a demonstration of a starved device (docs/LIVE_MEET_RELIABILITY.m
 ## Live meet with two performers (`tools/ci/live-duet.mjs`)
 
 Two Chromium contexts with a synthetic-person clip as the fake camera (`tools/ci/fake-person.mjs`,
-so the real segmentation model has someone to cut out) — the host on a desktop viewport, a guest on a phone — import
+so the real segmentation model has someone to cut out; every frame carries sensor noise of its own, as a
+real camera's do, so the camera-health pixel clock sees a live camera in it) — the host on a desktop viewport, a guest on a phone — import
 the sample track and meet in one room. The host takes a slot and must see herself cut out on the
 lobby's stage within seconds; the guest arrives as audience and finds the stage open (*Take a stage
 slot*); the host switches it off, so he asks to sing, the host sees the request and lets him on;
@@ -168,7 +175,12 @@ grant: a plain account finds Publishing closed (*for club owners*), the Plans pa
 plans (to be asked of the admin, no Stripe here), the super admin grants the Club owner plan on the
 Admin page, and Publishing opens for that account at once — the singers themselves have the SVV plan
 granted at the start, which is what puts their picture on stage
-(`tools/ci/roles-e2e.mjs` has the rest). Runs in CI after the viewport screenshots:
+(`tools/ci/roles-e2e.mjs` has the rest). **The cameras' health** on alice's and bob's stages is
+logged from the lobby to the end (every change, with the clock that spoke — `frozenBy` — and the
+camera line as it stood): a live camera is never called frozen on its picture (the pixel clock, the
+measurement clock) on the synthetic person; frames the straining test machine presents late (the
+frames-stopped clock, four browsers on two cores) are listed, not failed. Runs in CI after the
+viewport screenshots:
 
 ```bash
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/live-duet.mjs screenshots
@@ -208,7 +220,18 @@ the meet; back in the room the song picker offers them above the list, and alice
 picked from there is the song up for the meet, with its catalog and registry ids. Then alice **unshares** her folder: carol still gets the song, from bob's shared copy;
 with every copy unshared, dave's Sing says the files are no longer shared, nothing is saved, no
 access is counted, the record is marked unavailable and the row says so. A run of searches changes
-no count. Runs in CI before the live meet.
+no count. Then (24 Nov) **sound settings files and the Backgrounds folder**, in the fake Drive: alice's
+*Save Sound Settings* writes one file to Drive › SingersVoice › Config named by her initials, the date and
+the time, holding the whole sound (the preset and its tweaks, the tempo and key, the ears, the Track / Vocal
+balance); *Share* puts it in the service's sound catalog where bob's *Import Sound Settings* lists it under
+"Shared by other singers" — applied, bob's device has every one of alice's values and the controls show
+them; *Delete* bins the file and withdraws the share. alice's picker copies the 36 built-in pictures into
+Drive › SingersVoice › Backgrounds (each stamped with its id) and lists them all; an upload from the device
+(a 2400×1350 picture) lands in the folder scaled and re-encoded (WebP, well under the original) and becomes
+the chosen background, drawn from its own picture; *Select* → the upload and one built-in → *Delete selected*
+(the dialog confirmed) bins both, hides the built-in on the account, lists neither, and the background falls
+back to a built-in picture; *Restore built-in backgrounds* brings it back and copies it in again. Runs in
+CI before the live meet.
 
 ```bash
 BASE_PATH=/SingersVoice/ npm run build && node tools/ci/tracks-e2e.mjs screenshots
@@ -257,6 +280,19 @@ file (frame by frame, through the Performances player):
   strip's show stage (×1.5, measured), the crown near the top edge (from 1.5 % down, under 40 %) and the whole head in
   the upper part with the chest below it; the Performances player as tall as the window allows, at the file's own
   aspect; *Play mix* in the review plays the take through the mix bus.
+- **The review's timeline** (24 Nov): Forward 10 s while playing (the position jumps ahead and plays on), Back 10 s,
+  Pause holds the position and offers Play mix, the bar seeks the paused take anywhere, Play mix goes on from there;
+  *Discard* beside *Save* while the take is only in Temp, gone once it is saved (the button then says Saved).
+- **The track's speed in the file**: two 5-second stretches of the saved file, 22 s apart, are located in the song by
+  its sweep (`audio-measure.mjs` `locate`): the distance between them on the song's clock is 22 s within 15 ms
+  (measured: 0.1 ms) — no drift, no slowing, no speeding.
+- **A frozen camera** (section 5b; `video/stillness.ts`, `localFeed.ts`, `capture.ts`): mid-song the camera is swapped
+  for a canvas stream presenting one frame of the fake person over and over (the frames flow, the pixels never
+  change — a camera driver frozen on a frame); the feed calls it frozen on its pixels within 7 s (measured 5.1), the
+  stage restarts the camera by itself within 12 s (5.5): one video-only capture, the microphone, the recorder, the
+  song and the audio context untouched, the picture flowing again, the take's vocal whole.
+- **Cancel**: before Start the stage has Cancel (back to the track list) and Home; during a take Cancel stops the song
+  and the recorder, throws the take away — no review — and returns to the stage.
 - **The two listening modes on the stage**: with *Hear myself* on, the monitor's rider (PERFORMER MODE,
   `__svEngine.monitorOutDb`) is read beside the mix bus's voice meter (PUBLISH MODE, `__svShow.mixLevels()`)
   while the fake microphone sings — the ears within 3 dB of −15 (K-weighted), the bus's voice −13…−7 dBFS RMS
@@ -294,7 +330,7 @@ Three singers, Google Drive faked per singer (as the track e2e), fake cameras wi
 person (`fake-person.mjs`: the real segmentation model cuts them out) and a fake microphone. alice
 imports a 24-second song and sings it in the Studio with her camera on: the take lands in her Drive
 as the show **and her cut-out video beside it** (alpha-packed, found again from the show's own
-properties, Keep moving both). **Invite others to join**: both files shared anyone-with-the-link,
+properties, Save moving both). **Invite others to join**: both files shared anyone-with-the-link,
 the song in the track database, the invite on record with one layer — alice, her cut-out, where its
 frame 0 falls on the show — and the link is the app's own page. bob, a **free account** (voice
 alone in a live meet, `/me` says so), opens the link: the show and alice's cut-out come through the
@@ -448,7 +484,14 @@ is never blocked by a frame the old one still owes, a track's mute / ended event
 once, a camera whose frames were flowing and stop for five seconds is called frozen (and a camera
 whose frames never flowed, a hidden page or a muted track is never judged by frames).
 
-**A still picture** (`feedHealth.test.ts`, `stageStill.test.ts`): a camera presenting the same
+**The meet session's clock** (`meetSession.test.ts`): an answer older than the room the stream pushed
+(the service's `serverEpochMs`) leaves the room as it stands and gives up only its own lines (the
+video hours, the chat); an older pushed room is ignored; one of the same instant or newer is applied;
+one without a clock (an older service) as it comes.
+
+**A still picture** (`feedHealth.test.ts`, `stageStill.test.ts`): a camera whose pixels stand
+exactly still (the same frame over and over, three at least) is called frozen within
+`PIXELS_STILL_AFTER` seconds and ok once they move, a dark picture never; one presenting the same
 picture (the model measuring the singer exactly the same, cut-out after cut-out) is called frozen
 after `STILL_AFTER` seconds and ok once it moves; a pixel of sway, the silhouette, or nobody in the
 picture never is. On the stage, a remote performer whose frames arrive with the same 16×21 sample

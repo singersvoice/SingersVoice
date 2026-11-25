@@ -263,7 +263,7 @@ async function singThrough(p, during) {
   throw new Error(`${p.name}'s take never saved`);
 }
 const keep = async (p) => {
-  await p.page.getByRole('button', { name: 'Keep', exact: true }).click();
+  await p.page.getByRole('button', { name: 'Save', exact: true }).click();
   await p.page.locator('[data-review][data-saved-state="kept"]').waitFor({ timeout: 60000 });
 };
 const invite = async (p) => {
@@ -396,7 +396,7 @@ try {
   const maskCorner = () => bob.page.evaluate(() => { const f = window.__svFeed; if (!f) return -1; const d = f.maskCanvas.getContext('2d').getImageData(4, 4, 1, 1).data; return d[0]; });
   const maskAfter = async (want) => { for (let i = 0; i < 40; i++) { const v = await maskCorner(); if (want(v)) return v; await wait(250); } return maskCorner(); };
   check((await bob.page.locator('.sheet [role=radiogroup][aria-label="My picture"] button').allInnerTexts()).join('|') === 'Me on the stage|My camera as it is' && (await bob.page.locator('.sheet').getByRole('checkbox', { name: 'Auto zoom' }).count()) === 1, 'the sheet offers the picture (me on the stage / my camera as it is) and the Auto zoom switch');
-  check((await bob.page.locator('.sheet').getByRole('checkbox', { name: 'Auto zoom' }).isChecked()) === false, 'Auto zoom is off by default: the picture framed once, still and centred — the same switch a live meet has');
+  check((await bob.page.locator('.sheet').getByRole('checkbox', { name: 'Auto zoom' }).isChecked()) === false, 'Auto zoom is off by default: the picture held head to chest, centred, following a move — the same switch a live meet has');
   await bob.page.locator('.sheet').getByRole('radio', { name: 'My camera as it is' }).click();
   const cornerCamera = await maskAfter((v) => v > 200);
   check(cornerCamera > 200, `'My camera as it is': the picture goes out whole, room and all (mask corner ${cornerCamera})`);

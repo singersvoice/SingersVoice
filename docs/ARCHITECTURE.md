@@ -270,9 +270,18 @@ mounted until it wraps up, even once the meet is back in the lobby. The full wal
    otherwise (`POLL_PUSHED`); without it (a browser that cannot keep a stream, a proxy that will not)
    the old pace — 2 / 1.5 / 2 / 5 s. The stream is pinged every 25 s, re-made by the browser when it
    drops (a snapshot is fetched on every open, so nothing said meanwhile is missed), and closed by
-   the service when the meet ends. On Cloudflare every request of every meet goes through the one
-   Durable Object, so an in-memory map of who listens is the whole truth there too; on Node one
-   process serves every meet. Every link of the mesh also carries a small negotiated data channel
+   the service when the meet ends. Every state the service hands out — a pushed room, a heartbeat's
+   or an action's answer — is stamped with the service's clock at the instant the state was read
+   (`serverEpochMs`, app.ts `roomOf`: as it was read, not when the answer was finished, so an answer
+   slow to finish never outranks a room read after it), and the session keeps the newest it has seen
+   (`MeetSession.stateAt`): an answer that reaches a busy page after a room the stream pushed in the
+   meantime (the host's own switch answered just before a listener came in, read by the page just
+   after the push that named them; a heartbeat read just before a cued pause landed, answered after
+   the room that carried the landing) leaves the room alone and gives up only its own lines — the
+   video hours, the chat (25 Nov: without that, the listener was gone from the host's list until the
+   next heartbeat, 30 s with the stream open, and a guest's stage stayed "Pausing…"). On Cloudflare every request of every
+   meet goes through the one Durable Object, so an in-memory map of who listens is the whole truth
+   there too; on Node one process serves every meet. Every link of the mesh also carries a small negotiated data channel
    (`sv`, id 1, made on both sides before the first offer so it never renegotiates): after any
    action of a device (`MeetSession.onActed`) it says *changed* to every linked peer as well, and
    each one fetches the snapshot at once — belt and braces: the singers and the show view follow a
@@ -329,15 +338,29 @@ never allowed to freeze the singer: frames go to it one at a time, a frame unans
 keeps moving off the camera) until the model answers or `MODEL_RETRY_MS` pass; every `start()` is a
 new generation, so a late answer or a frame the old camera still owes never blocks the new one.
 `video/localFeed.ts` watches the camera itself (`health`, `onHealth`): the track's mute / ended
-events, and the video's `requestVideoFrameCallback` — frames that were flowing (ten at least) and
-then stop for `FROZEN_AFTER` seconds while the page is visible and the track calls itself live is
-`'frozen'` (never a raw-pixel heuristic: a plain wall or a synthetic camera shows the same bytes for
-ever and is perfectly alive; a browser without frame callbacks is not judged by frames) — and so
-is a camera that keeps presenting the same picture: the model's measurement of the singer (head
-and body, to the probe pixel) identical across new cut-outs for `STILL_AFTER` seconds, which a
+events; the video's `requestVideoFrameCallback` — frames that were flowing (ten at least) and
+then stop for `FROZEN_AFTER` seconds (5) while the page is visible and the track calls itself live
+(a browser without frame callbacks is not judged by frames; a sampler that was itself starved for
+seconds judges nothing on that stretch); and, since 24 Nov, the camera's own pixels
+(`video/stillness.ts`): four 16-px patches of every frame read at the camera's own resolution —
+never a scaled copy, which averages the sensor's noise away — and compared with the frame before;
+byte-identical for `PIXELS_STILL_AFTER` seconds (3), the same picture three frames in a row at
+least (`SAME_FRAMES`: two frames alike taken seconds apart by a sampler that runs now and then —
+the model slow on a straining device — prove nothing), is `'frozen'`. A real camera's frames are never
+the same twice, however still the singer or plain the wall (the sensor's noise sees to that; a dark
+picture — a lens covered — is flat and noiseless and is left out); a camera driver frozen on a frame
+presents the same bytes over and over, which looked alive to every other API and used to take the
+measurement clock's fifteen seconds (the owner's 24 Nov recording: two freezes of exactly 15 s). A
+synthetic camera feeding one unchanging picture is called frozen and restarted — the camera alone;
+its picture was a still anyway (the e2es' synthetic person carries a little sensor noise of its own
+for that reason, `tools/ci/fake-person.mjs`). `frozenBy` says which clock spoke (support / e2e). The model's measurement of the singer (head and body, to the probe
+pixel) identical across new cut-outs for `STILL_AFTER` seconds (15) stays as the fallback, which a
 real person never is (the mask's own edge moves), while a camera pointed at nobody measures
-nothing and the silhouette is never the model's word. The room
-(`roomStage.ts`) and the studio restart the camera once by themselves and then offer a button;
+nothing and the silhouette is never the model's word. The room (`roomStage.ts`) and the studio
+restart the camera by themselves at most once in `AUTO_RESTART_EVERY_MS` (15 s) — the camera alone:
+`capture.ts` `restartCamera` never touches the microphone, the recorder or the song (on iOS the
+camera alone is asked for first and the pair re-captured only if the browser ended the microphone
+with it) — and offer a button;
 every other stage tells a still picture too — `StageCompositor` samples each remote performer's
 picture (16×21, once a second) and marks `still` after `STILL_AFTER_MS` of the very same bytes
 (`onStill`), the room's strip and the show view say so in words, and the strip offers
@@ -1225,13 +1248,21 @@ the track's `ended` closes it and the mic status says so; not on iOS (one captur
 *singing* (a raw peak above −34 dBFS, gained below −18 dBFS, for three readings) lifts the trim 1 dB
 at a time up to +12 dB — room noise between phrases never does, which is what used to drive the gain
 to the ceiling and the noise floor with it; past −6 dBFS it drops 2 dB at once (floor −6 dB) — slow
-up, fast down, no pumping, never clipped. Then: trim → **noise gate** (`sv-gate`: a downward expander —
-the room's level is tracked as the quietest the input has lately been, the threshold sits 8 dB above
-it, and under it the gain falls 3 dB per dB down to −18 dB, soft-kneed; opens in 3 ms, holds 120 ms,
-closes over 180 ms — so the hiss of a phone's microphone, a fan, the street, which the compressor's
-makeup, the exciter, the air shelf and the rider used to lift into a steady hiss between phrases, is
-turned down while nobody sings and is out of the way the moment somebody does; *Noise gate* in the
-panel, on by default) → pitch worklet (the pitch-synchronous shifter and the NSDF auto-tune, below) →
+up, fast down, no pumping, never clipped. Then: trim → **howl suppressor** (`sv-howl`, 24 Nov: a
+feedback squeal — one pure tone standing still in frequency, nothing beside it, no partial under it,
+keeping its level or growing, found by a 2048-point FFT every 512 frames — is notched the moment it is
+recognised, −36 dB at Q 24 for ten seconds, four notches at most; the look runs on the input so a tone
+still there keeps its notch; always on, no latency; an earbud of a wired inline-mic earphone by its
+microphone closes exactly such a loop) → **voice gate** (`sv-gate`, 24 Nov: a downward expander that
+opens on EVIDENCE OF A VOICE — a period found by a normalized autocorrelation on a 12 kHz copy
+(32 ms window, 75 Hz–1 kHz, two agreeing hops), or a level within 3 dB of the voice's own recent level,
+or a bright sibilant near it, or a transient — each standing 8 dB over the room's floor (the quietest
+the input has lately been); voiced evidence holds 150 ms, the rest 60 ms; without evidence the gain
+falls to −range (36 dB at full amount, 27 at the default) over 180 ms, opening again in 3 ms — so the
+hiss of a phone's microphone, a fan, the street AND the singer's own breaths between phrases, which a
+level-based gate let through at the voice's level once the compressors and the riders had lifted them,
+are turned down whenever no voice is heard and are out of the way the moment one is; *Voice gate* in
+the panel, on by default) → pitch worklet (the pitch-synchronous shifter and the NSDF auto-tune, below) →
 HPF → low shelf 120 Hz / peak 1.2 kHz / **presence peak 3.2 kHz** / high shelf 6.5 kHz
 → compressor → **parallel compression** (a crushed copy, 10:1 from −36 dB with +16 dB of its own
 makeup, blended under the dry vocal: soft phrases up, transients kept — punch without

@@ -6,6 +6,11 @@
 // magenta one left of the yellow one is as the camera saw it; mirrored, they swap sides. (On the
 // cheeks, not the torso: the stage's close-up on the face while the singer is heard — the zoom with the
 // voice — and the riser in front of the chest never hide them.)
+// Every frame carries a little sensor noise of its own (±2 in luma on one pixel in forty, a fixed pseudo-random
+// pattern per frame), as a real camera's do: no two frames of the clip are byte-identical in any 16-px patch, so the
+// camera-health pixel clock (stillness.ts) sees a live camera in it — a noiseless clip looped under load had read as a
+// frozen one. Sparse, not on every pixel: dense noise defeats the video encoders' skipped blocks and had four
+// browsers' worth of encoders starving the test machine.
 //   node tools/ci/fake-person.mjs out.y4m
 import { writeFileSync } from 'node:fs';
 
@@ -31,6 +36,15 @@ function rgb(x, y, t) {
 }
 
 const parts = [Buffer.from(`YUV4MPEG2 W${W} H${H} F15:1 Ip A1:1 C420jpeg\n`)];
+let seed = 0x9e3779b9;
+const noise = () => {
+  // xorshift32: the sensor's noise — one pixel in forty off by ±2, a different pattern every frame
+  seed ^= seed << 13;
+  seed ^= seed >>> 17;
+  seed ^= seed << 5;
+  const r = (seed >>> 0) % 80;
+  return r === 0 ? 2 : r === 1 ? -2 : 0;
+};
 for (let f = 0; f < FRAMES; f++) {
   const t = f / 15;
   const Y = Buffer.alloc(W * H);
@@ -39,7 +53,7 @@ for (let f = 0; f < FRAMES; f++) {
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const [r, g, b] = rgb(x, y, t);
-      Y[y * W + x] = Math.round(0.257 * r + 0.504 * g + 0.098 * b + 16);
+      Y[y * W + x] = Math.round(0.257 * r + 0.504 * g + 0.098 * b + 16) + noise();
       if (x % 2 === 0 && y % 2 === 0) {
         const i = (y / 2) * (W / 2) + x / 2;
         U[i] = Math.round(-0.148 * r - 0.291 * g + 0.439 * b + 128);

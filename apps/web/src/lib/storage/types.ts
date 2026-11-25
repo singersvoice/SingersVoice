@@ -74,6 +74,26 @@ export interface PerformanceFiles {
 
 export type Progress = (p: { label: string; fraction: number }) => void;
 
+/** A saved sound settings file as listed: its id in the store, its name (`<initials>_<date>_<time>`), when it was saved. */
+export interface SoundSettingsEntry {
+  id: string;
+  name: string;
+  createdAt: string;
+  link?: string;
+}
+
+/** A background in the singer's own store (the Backgrounds folder). */
+export interface BackgroundEntry {
+  id: string;
+  name: string;
+  createdAt: string;
+  mimeType: string;
+  bytes: number;
+  /** The built-in picture this is a copy of (its id in the bundle), when it is one. */
+  stock?: string;
+  link?: string;
+}
+
 /**
  * A performance's video written as it is recorded — an hour-long meet never has to fit in the
  * browser's memory: pieces go out in order (Drive: a resumable upload, finished with the total;
@@ -137,6 +157,21 @@ export interface StorageProvider {
 
   getConfig<T>(name: string): Promise<T | null>;
   setConfig(name: string, value: unknown): Promise<void>;
+
+  /** The saved sound settings files in the Config folder (sounds.ts): newest first. */
+  listSoundSettings(): Promise<SoundSettingsEntry[]>;
+  getSoundSettings(id: string): Promise<unknown | null>;
+  /** A sound settings file written to the Config folder as `<name>.svsound.json` (a second save under the same name replaces it). */
+  saveSoundSettings(name: string, value: unknown): Promise<SoundSettingsEntry>;
+  deleteSoundSettings(id: string): Promise<void>;
+
+  /** The singer's own stage backgrounds (the Backgrounds folder; BackgroundPicker.tsx): newest first. */
+  listBackgrounds(): Promise<BackgroundEntry[]>;
+  /** The picture itself (the file as uploaded). */
+  getBackground(id: string): Promise<Blob | null>;
+  /** A background put in the Backgrounds folder: `stock` names the built-in picture it is a copy of (the picker then draws the bundled one). */
+  saveBackground(name: string, blob: Blob, opts?: { stock?: string }): Promise<BackgroundEntry>;
+  deleteBackgrounds(ids: string[]): Promise<void>;
 
   quota(): Promise<{ used: number; total: number } | null>;
 }

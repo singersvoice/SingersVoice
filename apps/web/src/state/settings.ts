@@ -12,7 +12,10 @@ import { provider } from './session.ts';
 export interface AppSettings {
   schema: 'singersvoice.app-settings.v2';
   textScale: number; // 1.0 | 1.3 | 1.6 | 2.0
+  /** The stage background: a built-in picture's id, `none`, or an upload's (`mybg:…`, lib/backgrounds.ts). */
   backgroundId: string;
+  /** Built-in pictures the singer deleted from their picker (their ids); "Restore built-in backgrounds" empties it. */
+  hiddenBackgrounds: string[];
   cameraOn: boolean;
   cameraFacing: 'user' | 'environment';
   cameraDeviceId: string;
@@ -20,7 +23,7 @@ export interface AppSettings {
   cutout: boolean;
   /** My picture on every stage: me cut out of my room ('cutout'), or my camera picture as it is, room and all ('camera'). video/framing.ts. */
   picture: Picture;
-  /** How my frame behaves (AUTOZOOM): still (the default, 24 Nov), pushed in on my face while I sing and following me when I move ('voice' — AUTOZOOM on), or following only. video/framing.ts. */
+  /** How my frame behaves (AUTOZOOM): 'follow' (the default, 24 Nov evening) — framed head to chest and kept that way, the frame following me when I or the camera move; 'voice' (AUTOZOOM on) — pushed in on my face while I sing as well; 'still' — an older save's: framed once and left alone. video/framing.ts. */
   framing: Framing;
   /** One-time migration markers for the virtual-stage defaults. */
   stageV3: boolean;
@@ -29,6 +32,8 @@ export interface AppSettings {
   framingV2: boolean;
   /** One-time migration marker (24 Nov): AUTOZOOM off for everyone once — the voice zoom had only ever been the default, never a choice. */
   autozoomV1: boolean;
+  /** One-time migration marker (24 Nov, evening): AUTOZOOM off means 'follow' now (head to chest, kept so when the camera moves) — a save still on 'still' takes it once. */
+  autozoomV2: boolean;
   singerSlot: number;
   countIn: boolean;
   showCueDeck: boolean;
@@ -73,16 +78,18 @@ export const APP_DEFAULTS: AppSettings = {
   schema: 'singersvoice.app-settings.v2',
   textScale: 1,
   backgroundId: 'mytestbg1',
+  hiddenBackgrounds: [],
   cameraOn: true,
   cameraFacing: 'user',
   cameraDeviceId: '',
   cutout: true,
   picture: 'cutout',
-  framing: 'still',
+  framing: 'follow',
   stageV3: true,
   stageV4: true,
   framingV2: true,
   autozoomV1: true,
+  autozoomV2: true,
   singerSlot: 1,
   countIn: true,
   showCueDeck: true,
@@ -135,11 +142,13 @@ function migrateApp(v: AppSettings): AppSettings {
   delete (v as Partial<Record<'zoomPreset' | 'autoZoom', unknown>>).autoZoom;
   // The picture and framing choices: a save from before them keeps what its cut-out switch said; anything odd is the default.
   if (!PICTURES.includes(v.picture)) v = { ...v, picture: v.cutout === false ? 'camera' : 'cutout' };
-  if (!FRAMINGS.includes(v.framing)) v = { ...v, framing: 'still' };
+  if (!FRAMINGS.includes(v.framing)) v = { ...v, framing: 'follow' };
   // The voice zoom became the default framing on 22 Nov: a save from before started on it once.
   if (stored.framingV2 !== true) v = { ...v, framing: 'voice', framingV2: true };
   // 24 Nov: AUTOZOOM is off by default — every save goes to 'still' once (the voice zoom had only ever been the default); the switch is the singer's from then on.
   if (stored.autozoomV1 !== true) v = { ...v, framing: 'still', autozoomV1: true };
+  // 24 Nov, evening: AUTOZOOM off keeps the singer framed head to chest when they or the camera move ('follow'); a save on 'still' takes it once, a switch turned on ('voice') stays.
+  if (stored.autozoomV2 !== true) v = { ...v, framing: v.framing === 'voice' ? 'voice' : 'follow', autozoomV2: true };
   // The balance's defaults rose (the voice in front of the music): a save never moved off the old 0 / 0 takes the new ones once; a balance the singer set stays theirs.
   if (stored.mixV2 !== true) v = { ...v, mixV2: true };
   // The mix of 23 Nov is right on its own (the voice in front, the music full): a balance still at the earlier build's
@@ -152,6 +161,7 @@ function migrateApp(v: AppSettings): AppSettings {
   if (!Number.isFinite(Number(v.trackDb))) v = { ...v, trackDb: MIX_TRACK_DEFAULT_DB };
   if (!Number.isFinite(Number(v.vocalDb))) v = { ...v, vocalDb: MIX_VOCAL_DEFAULT_DB };
   if (!TV_LOOKS.includes(v.tvLook)) v = { ...v, tvLook: 'both' };
+  if (!Array.isArray(v.hiddenBackgrounds) || v.hiddenBackgrounds.some((x) => typeof x !== 'string')) v = { ...v, hiddenBackgrounds: [] };
   if (typeof v.socialOffer !== 'boolean') v = { ...v, socialOffer: true };
   if (!Number.isFinite(v.clipSeconds) || v.clipSeconds < 15 || v.clipSeconds > 180) v = { ...v, clipSeconds: 60 };
   return v;

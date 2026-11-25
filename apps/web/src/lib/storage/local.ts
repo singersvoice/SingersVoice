@@ -5,7 +5,24 @@
 import { normalizeTrack, singersLine, type PerformanceManifest, type TrackPackageV2 } from '@singersvoice/protocol';
 import { idb, STORES } from '../idb.ts';
 import { storageEstimate } from '../platform.ts';
-import type { LoadedPerformance, LoadedTrack, PerformanceFiles, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
+import type { BackgroundEntry, LoadedPerformance, LoadedTrack, PerformanceFiles, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, SoundSettingsEntry, StorageProvider, TrackSummary } from './types.ts';
+
+/** A sound settings file on this device: under the config store as `sound:<name>`. */
+interface SoundRecord {
+  name: string;
+  createdAt: string;
+  value: unknown;
+}
+/** A background on this device: under the config store as `background:<id>`. */
+interface BackgroundRecord {
+  id: string;
+  name: string;
+  createdAt: string;
+  blob: Blob;
+  stock?: string;
+}
+const SOUND_PREFIX = 'sound:';
+const BACKGROUND_PREFIX = 'background:';
 
 interface TrackRecord {
   track: TrackPackageV2;
@@ -216,6 +233,57 @@ export class LocalProvider implements StorageProvider {
 
   async setConfig(name: string, value: unknown): Promise<void> {
     await idb.put(STORES.config, name, value);
+  }
+
+  async listSoundSettings(): Promise<SoundSettingsEntry[]> {
+    const keys = (await idb.keys(STORES.config)).map(String).filter((k) => k.startsWith(SOUND_PREFIX));
+    const out: SoundSettingsEntry[] = [];
+    for (const k of keys) {
+      const r = await idb.get<SoundRecord>(STORES.config, k);
+      if (r) out.push({ id: k, name: r.name, createdAt: r.createdAt });
+    }
+    return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
+
+  async getSoundSettings(id: string): Promise<unknown | null> {
+    return (await idb.get<SoundRecord>(STORES.config, id))?.value ?? null;
+  }
+
+  async saveSoundSettings(name: string, value: unknown): Promise<SoundSettingsEntry> {
+    const id = `${SOUND_PREFIX}${name}`;
+    const existing = await idb.get<SoundRecord>(STORES.config, id);
+    const createdAt = existing?.createdAt ?? new Date().toISOString();
+    await idb.put(STORES.config, id, { name, createdAt, value } satisfies SoundRecord);
+    return { id, name, createdAt };
+  }
+
+  async deleteSoundSettings(id: string): Promise<void> {
+    await idb.del(STORES.config, id);
+  }
+
+  async listBackgrounds(): Promise<BackgroundEntry[]> {
+    const keys = (await idb.keys(STORES.config)).map(String).filter((k) => k.startsWith(BACKGROUND_PREFIX));
+    const out: BackgroundEntry[] = [];
+    for (const k of keys) {
+      const r = await idb.get<BackgroundRecord>(STORES.config, k);
+      if (r) out.push({ id: k, name: r.name, createdAt: r.createdAt, mimeType: r.blob.type, bytes: r.blob.size, ...(r.stock ? { stock: r.stock } : {}) });
+    }
+    return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
+
+  async getBackground(id: string): Promise<Blob | null> {
+    return (await idb.get<BackgroundRecord>(STORES.config, id))?.blob ?? null;
+  }
+
+  async saveBackground(name: string, blob: Blob, opts: { stock?: string } = {}): Promise<BackgroundEntry> {
+    const id = `${BACKGROUND_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const createdAt = new Date().toISOString();
+    await idb.put(STORES.config, id, { id, name, createdAt, blob, ...(opts.stock ? { stock: opts.stock } : {}) } satisfies BackgroundRecord);
+    return { id, name, createdAt, mimeType: blob.type, bytes: blob.size, ...(opts.stock ? { stock: opts.stock } : {}) };
+  }
+
+  async deleteBackgrounds(ids: string[]): Promise<void> {
+    for (const id of ids) await idb.del(STORES.config, id);
   }
 
   async quota(): Promise<{ used: number; total: number } | null> {

@@ -206,7 +206,7 @@ try {
   }, 40000);
   check(Boolean(settled?.head), `the singer is framed on the live stage strip before the song (head ${settled?.head ? `${settled.head.w}×${settled.head.h} of ${settled.w}×${settled.h}` : 'not found'})`);
   const strip = settled;
-  check(strip?.framing === 'still' && strip.picture === 'cutout', `the defaults: AUTOZOOM off (the frame set once and still), the picture is the cut-out (${strip?.framing}, ${strip?.picture})`);
+  check(strip?.framing === 'follow' && strip.picture === 'cutout', `the defaults: AUTOZOOM off (the frame holds the singer head to chest and follows a move), the picture is the cut-out (${strip?.framing}, ${strip?.picture})`);
   check(strip?.heard === false, 'before the song nobody is heard: no push-in');
   // The live strip is the show stage (the meet's size for a singer): the saved file is measured against it below — by the
   // head's WIDTH against the picture's height (the fake person stands close: their chin can meet the riser, their width never).
@@ -388,16 +388,47 @@ try {
   check(Boolean(savedId), `the take saved (${savedId})`);
   const review = page.locator('[data-review]');
   check((await review.locator('[data-mix-default]').count()) === 0, 'the review balance stands at the defaults (no Default button to press)');
-  await review.getByRole('button', { name: 'Play mix' }).click();
+  await review.locator('[data-review-play]').click();
   await wait(1500);
   const reviewPlaying = await page.evaluate(() => {
-    const b = [...document.querySelectorAll('[data-review] button')].find((x) => /Stop/.test(x.textContent || ''));
-    return Boolean(b);
+    const b = document.querySelector('[data-review] [data-review-play]');
+    return Boolean(b && /Pause/.test(b.textContent || ''));
   });
-  check(reviewPlaying, 'Play mix plays the take (the track and the vocal through the mix bus) — Stop is offered');
-  await review.getByRole('button', { name: 'Stop', exact: true }).click();
-  await review.getByRole('button', { name: 'Keep', exact: true }).click();
+  check(reviewPlaying, 'Play mix plays the take (the track and the vocal through the mix bus) — Pause is offered');
+  // The review's timeline (24 Nov): forward and back by ten seconds, and anywhere on the bar, while it plays and while it is paused.
+  const posAt = () => page.evaluate(() => Number(document.querySelector('[data-review-timeline] input[type=range]').value));
+  const p0 = await posAt();
+  await review.locator('[data-review-forward]').click();
+  await wait(700);
+  const p1 = await posAt();
+  check(p1 >= p0 + 9000 && p1 <= p0 + 12000 && reviewPlaying, `forward 10 s while playing: ${(p0 / 1000).toFixed(1)} → ${(p1 / 1000).toFixed(1)} s, and it plays on`);
+  await review.locator('[data-review-back]').click();
+  await wait(500);
+  const p2 = await posAt();
+  check(p2 < p1 - 8000 && p2 >= 0, `back 10 s: ${(p1 / 1000).toFixed(1)} → ${(p2 / 1000).toFixed(1)} s`);
+  await review.locator('[data-review-play]').click(); // pause
+  await wait(400);
+  const paused = await posAt();
+  await wait(1200);
+  check(Math.abs((await posAt()) - paused) < 100 && /Play mix/.test(await review.locator('[data-review-play]').innerText()), `Pause holds the position (${(paused / 1000).toFixed(1)} s) and offers Play mix`);
+  await page.evaluate(() => {
+    const r = document.querySelector('[data-review-timeline] input[type=range]');
+    r.value = String(20000);
+    r.dispatchEvent(new Event('input', { bubbles: true }));
+    r.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await wait(300);
+  const sought = await posAt();
+  check(Math.abs(sought - 20000) < 300, `the bar moves the paused take to any point (${(sought / 1000).toFixed(1)} s)`);
+  await review.locator('[data-review-play]').click(); // on from there
+  await wait(1500);
+  const resumed = await posAt();
+  check(resumed > 20800 && resumed < 23500, `Play mix goes on from there (${(resumed / 1000).toFixed(1)} s after 1.5 s)`);
+  await review.locator('[data-review-play]').click();
+  check((await review.locator('[data-discard-take]').count()) === 1, 'Discard is offered beside Save while the take is only in Temp');
+  await review.getByRole('button', { name: 'Save', exact: true }).click();
   await page.locator('[data-review][data-saved-state="kept"]').waitFor({ timeout: 60000 });
+  check((await review.locator('[data-discard-take]').count()) === 0 && /Saved/.test(await review.locator('[data-save-take]').innerText()), 'once saved, Discard is gone (a saved performance is never thrown away from here) and the button says Saved');
   // The saved performance in Performances: the player, and the frames.
   await page.goto(url('/studio/performances'), { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /^Play CI Studio Song/ }).first().click();
@@ -480,11 +511,107 @@ try {
     // 24 Nov: the music a quarter louder (−14 LUFS) at the owner's word, the voice at its ceiling: the phrases stand 4 LU and more over the breaks (plus the duck's 3 while sung).
     check(sung - between >= 4 && sung >= -11, `the voice is in front in the file: the sung phrases at ${sung.toFixed(1)} LUFS short-term, the breaks between them at ${between.toFixed(1)} (${(sung - between).toFixed(1)} LU apart)`);
     check(peak <= -0.5, `nothing near full scale in the file (true peak ${peak} dBFS: the bus's −1.5 ceiling and the AAC encoder's overshoot)`);
+    // The track's speed in the file (24 Nov: "the track must keep its exact speed, no slowing, speeding or drift"): two stretches
+    // of the saved file located in the song by its sweep (audio-measure.mjs) — the distance between them on the song's clock is
+    // the distance between them in the file, to the millisecond.
+    {
+      const { decodeToPcm, locate } = await import('./audio-measure.mjs');
+      const filePcm = decodeToPcm(takeFile);
+      const songPcm = decodeToPcm(song);
+      const seg = (from, len) => filePcm.subarray(Math.round(from * 48000), Math.round((from + len) * 48000));
+      const [a, b] = [locate(seg(3, 5), songPcm, 48000), locate(seg(25, 5), songPcm, 48000)];
+      const spanS = b.positionS - a.positionS;
+      const driftMs = (spanS - 22) * 1000;
+      check(a.r > 0.3 && b.r > 0.3 && Math.abs(driftMs) <= 15, `the track keeps its speed in the file: 22 s of the file is ${spanS.toFixed(3)} s of the song (drift ${driftMs.toFixed(1)} ms; the stretches matched r ${a.r.toFixed(2)} / ${b.r.toFixed(2)})`);
+    }
   }
   check(Boolean(quietFrame?.shown) && quietFrame.shown.h >= quietFrame.win.h * 0.45 && quietFrame.shown.bottom <= quietFrame.win.h, `the Performances player uses the window: ${quietFrame?.shown?.w}×${quietFrame?.shown?.h} shown in a ${quietFrame?.win?.w}×${quietFrame?.win?.h} window, inside it`);
   check(Boolean(quietFrame) && Math.abs(quietFrame.shown.w / quietFrame.shown.h - quietFrame.w / quietFrame.h) < 0.05, `…at the file's own aspect (${quietFrame?.w}:${quietFrame?.h})`);
   await page.screenshot({ path: path.join(out, 'studio-06-performance.png') });
   await page.keyboard.press('Escape');
+
+  // ======== 5b. A frozen camera: found within seconds, restarted by itself — the camera alone, the voice and the song untouched ========
+  // The camera is swapped mid-song for a stream that presents the same picture over and over (a canvas drawing one frame of the
+  // fake person 15 times a second: the frames flow, the pixels never change — exactly what a camera driver frozen on a frame
+  // looks like). localFeed.ts calls it frozen on its pixels within PIXELS_STILL_AFTER seconds, Sing.tsx restarts the camera
+  // (capture.ts: closed and opened again, one video-only capture), and the microphone, the recorder and the song go on.
+  {
+    const cam = await person('cam');
+    const camTrack = await importSong(cam);
+    const pg = cam.page;
+    await pg.goto(url(`/studio/sing/${encodeURIComponent(camTrack)}`), { waitUntil: 'networkidle' });
+    await pg.getByRole('button', { name: 'Start singing' }).waitFor({ timeout: 60000 });
+    check((await waitForModel(pg)) !== null, 'frozen camera: the model runs on the stage');
+    await seatHeld(pg);
+    await pg.getByRole('button', { name: 'Start singing' }).click();
+    await pg.locator('button', { hasText: 'Finish' }).waitFor({ timeout: 30000 });
+    await wait(3000);
+    const before = await pg.evaluate(() => ({ gum: window.__gum.length, cameraId: window.__svCamera.stream && window.__svCamera.stream.id, micOpen: window.__svEngine.micOpen.value, recording: Boolean(window.__svEngine.recorder && window.__svEngine.recorder.recording), playing: Boolean(window.__svEngine.player && window.__svEngine.player.playing), health: window.__svFeed.health, frame: window.__svFeed.frame }));
+    check(before.health === 'ok' && before.micOpen && before.recording && before.playing, `before the freeze: the camera ${before.health}, the microphone open, the recorder recording, the song playing`);
+    // The health is logged as it changes (the stage's own handler still runs after): 'frozen' lasts only until the fresh camera attaches, a second or so — too short to be caught by polling on a busy machine.
+    await pg.evaluate(() => {
+      const feed = window.__svFeed;
+      const prev = feed.onHealth;
+      window.__healthLog = [];
+      feed.onHealth = (h) => {
+        window.__healthLog.push({ at: Date.now(), h });
+        if (prev) prev(h);
+      };
+    });
+    const frozeAt = Date.now();
+    await pg.evaluate(() => {
+      const feed = window.__svFeed;
+      const v = feed.video;
+      const c = document.createElement('canvas');
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(v, 0, 0);
+      const snap = document.createElement('canvas');
+      snap.width = c.width;
+      snap.height = c.height;
+      snap.getContext('2d').drawImage(c, 0, 0);
+      const stream = c.captureStream(15);
+      window.__svFrozen = { stream, timer: setInterval(() => ctx.drawImage(snap, 0, 0), 66) };
+      feed.attach(stream, true);
+    });
+    const frozen = await until(() => pg.evaluate(() => window.__healthLog.find((e) => e.h === 'frozen')?.at ?? null), 15000);
+    const frozenAfterS = frozen ? (frozen - frozeAt) / 1000 : null;
+    check(frozen !== null && frozenAfterS <= 7, `the frozen camera is found in ${frozenAfterS === null ? 'never' : `${frozenAfterS.toFixed(1)} s`} (its pixels still: localFeed.ts PIXELS_STILL_AFTER)`);
+    // The restart: a new camera stream (not the frozen one), the health back to ok, frames flowing on the strip.
+    const restarted = await until(() => pg.evaluate(() => (window.__svCamera.stream && window.__svCamera.stream.id !== window.__svFrozen.stream.id && window.__svFeed.health === 'ok' ? Date.now() : null)), 15000);
+    const restartedAfterS = restarted ? (restarted - frozeAt) / 1000 : null;
+    check(restarted !== null && restartedAfterS <= 12, `…and restarted by itself: a fresh camera, the health ok again, ${restartedAfterS === null ? 'never' : `${restartedAfterS.toFixed(1)} s after the freeze`}`);
+    await wait(2500);
+    const after = await pg.evaluate(() => ({ gum: window.__gum.slice(-1)[0], gums: window.__gum.length, cameraId: window.__svCamera.stream && window.__svCamera.stream.id, micOpen: window.__svEngine.micOpen.value, recording: Boolean(window.__svEngine.recorder && window.__svEngine.recorder.recording), playing: Boolean(window.__svEngine.player && window.__svEngine.player.playing), ctxState: window.__svEngine.ctx.state, health: window.__svFeed.health, frame: window.__svFeed.frame, line: window.__svFeed.cameraLine }));
+    check(after.gums === before.gum + 1 && after.gum.video && !after.gum.audio, `the restart was one video-only capture (${after.gums - before.gum} capture${after.gums - before.gum === 1 ? '' : 's'}, the last ${after.gum && after.gum.video ? 'video' : ''}${after.gum && after.gum.audio ? '+audio' : ''}): the microphone was never touched`);
+    check(after.micOpen && after.recording && after.playing && after.ctxState === 'running', `the voice and the song went on through it: the microphone open, the recorder recording, the song playing, the audio context ${after.ctxState}`);
+    check(after.frame > before.frame && after.health === 'ok', `the picture flows again after the restart (${after.frame - before.frame} frames since; ${after.line})`);
+    await pg.evaluate(() => clearInterval(window.__svFrozen.timer));
+    await pg.getByRole('button', { name: 'Finish' }).click();
+    await pg.locator('[data-review]').waitFor({ timeout: 60000 });
+    // The vocal recorded through the freeze and the restart is whole: a WAV of the take's length (16-bit mono at 48 kHz: 96 bytes a millisecond).
+    const review = await pg.locator('[data-review]').innerText();
+    const m = /(\d+):(\d\d) · vocal ([\d.]+) MB WAV/.exec(review);
+    const tookS = m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
+    const wavS = m ? (Number(m[3]) * 1048576) / 96000 : NaN;
+    // (the recorder runs from before the song's first beat — the lead-in and the moment before Start — so the WAV is a little longer than the take, never shorter)
+    check(m !== null && wavS >= tookS - 0.3 && wavS <= tookS + 4, `the take's vocal is whole: ${wavS.toFixed(1)} s of WAV for a take of ${tookS} s (no gap at the restart)`);
+    await pg.screenshot({ path: path.join(out, 'studio-05b-frozen-camera-review.png') });
+    // Cancel (24 Nov): on the stage before Start, a way back (Cancel, Home); during a take, Cancel stops everything and throws it away — no review, nothing saved.
+    await pg.getByRole('button', { name: 'Sing again' }).click();
+    await pg.getByRole('button', { name: 'Start singing' }).waitFor({ timeout: 60000 });
+    check((await pg.locator('[data-cancel-stage]').count()) === 1 && /\/studio\/sing/.test((await pg.locator('[data-cancel-stage]').getAttribute('href')) ?? '') && (await pg.locator('[data-home]').count()) === 1, 'before Start: Cancel (back to the track list) and Home are on the stage');
+    await pg.getByRole('button', { name: 'Start singing' }).click();
+    await pg.locator('button', { hasText: 'Finish' }).waitFor({ timeout: 30000 });
+    await wait(2500);
+    await pg.locator('[data-cancel-take]').click(); // (the dialog is accepted by the page's handler)
+    await pg.locator('.toast', { hasText: /Take cancelled/ }).waitFor({ timeout: 15000 });
+    await pg.getByRole('button', { name: 'Start singing' }).waitFor({ timeout: 15000 });
+    const cancelled = await pg.evaluate(() => ({ review: document.querySelector('[data-review]') !== null, playing: Boolean(window.__svEngine.player && window.__svEngine.player.playing), recording: Boolean(window.__svEngine.recorder && window.__svEngine.recorder.recording) }));
+    check(!cancelled.review && !cancelled.playing && !cancelled.recording, 'Cancel during the take: the song and the recorder stopped, no review, back to the stage as before Start');
+    await cam.ctx.close();
+  }
 
   // ======== 6. The permissions ========
   // A phone that says it is an iPhone: the camera comes WITH the microphone at the stage's entry (one question), the

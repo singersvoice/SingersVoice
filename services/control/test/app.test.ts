@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { AdminBillingOverview, AdminCouponsResponse, AdminSocialStatus, BillingSettings, BlockedUser, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlanOffer, PlansResponse, PromoCode, PromoPreview, SocialPost, SocialStatus, UserRecord } from '@singersvoice/protocol';
-import { LIVE_KEEP } from '@singersvoice/protocol';
+import type { AdminBillingOverview, AdminCouponsResponse, AdminSocialStatus, BillingSettings, BlockedUser, CatalogListResponse, ClubStatus, JoinInvite, JoinMeetResponse, Meet, MeetSnapshot, OrderRecord, PaymentRecord, PlanOffer, PlansResponse, PromoCode, PromoPreview, SharedSound, SocialPost, SocialStatus, SoundListResponse, UserRecord } from '@singersvoice/protocol';
+import { AUDIO_SETTINGS_DEFAULTS, LIVE_KEEP, VOXFORGE_RANGES } from '@singersvoice/protocol';
 import { createApp, type AppDeps } from '../src/app.ts';
 import { edgeCacheControl, edgeCacheTtl } from '../src/worker.ts';
 import { signStripePayload } from '../src/billing.ts';
@@ -84,6 +84,36 @@ describe('sv-control API', () => {
     expect(pull.pulls).toBe(1);
     expect((await app.request('/catalog/tracks/trk-1', { method: 'DELETE', headers: as('bob') })).status).toBe(404);
     expect((await app.request('/catalog/tracks/trk-1', { method: 'DELETE', headers: as('alice') })).status).toBe(200);
+  });
+
+  it('sound settings: a saved sound file is shared, listed for everyone, validated, and withdrawn only by its owner', async () => {
+    const file = { schema: 'singersvoice.sound-settings.v1', name: 'AL_20261124_205130', ownerName: 'alice', createdAt: '2026-11-24T20:51:30.000Z', audio: { ...AUDIO_SETTINGS_DEFAULTS, activePresetId: 'warm', params: { ...AUDIO_SETTINGS_DEFAULTS.params, eqPres: 99, gtAmt: 0.5 }, tempo: 0.9, keyShift: 2, monitorDb: 3 }, balance: { trackDb: -3, vocalDb: 4.5 } };
+    const r = await app.request('/catalog/sounds', { method: 'POST', headers: as('alice'), body: JSON.stringify({ file }) });
+    expect(r.status).toBe(201);
+    const shared = await json<{ sound: SharedSound }>(r);
+    expect(shared.sound.soundId).toBe('dev-alice:AL_20261124_205130');
+    expect(shared.sound.presetId).toBe('warm');
+    expect(shared.sound.file.audio.params.eqPres).toBe(VOXFORGE_RANGES.eqPres.max); // clamped to its range
+    expect(shared.sound.file.audio.params.gtAmt).toBe(0.5);
+    expect(shared.sound.file.audio.tempo).toBe(0.9);
+    expect(shared.sound.file.balance).toEqual({ trackDb: -3, vocalDb: 4.5 });
+    // Everyone sees it; a search by the owner's name or the preset finds it.
+    const list = await json<SoundListResponse>(await app.request('/catalog/sounds?q=warm', { headers: as('bob') }));
+    expect(list.total).toBe(1);
+    expect(list.items[0]!.ownerName).toBe('alice');
+    expect((await json<SoundListResponse>(await app.request('/catalog/sounds?mine=1', { headers: as('bob') }))).total).toBe(0);
+    // Shared again (a newer save under the same name): refreshed, not doubled.
+    expect((await app.request('/catalog/sounds', { method: 'POST', headers: as('alice'), body: JSON.stringify({ file: { ...file, balance: { trackDb: 0, vocalDb: 0 } } }) })).status).toBe(200);
+    expect((await json<SoundListResponse>(await app.request('/catalog/sounds', { headers: as('bob') }))).total).toBe(1);
+    // Not a sound settings file, or a name that is not initials_date_time, or too big: refused.
+    expect((await app.request('/catalog/sounds', { method: 'POST', headers: as('alice'), body: JSON.stringify({ file: { schema: 'something.else' } }) })).status).toBe(400);
+    expect((await app.request('/catalog/sounds', { method: 'POST', headers: as('alice'), body: JSON.stringify({ file: { ...file, name: 'my sound' } }) })).status).toBe(400);
+    const bloated = { ...file, audio: { ...file.audio, userPresets: Array.from({ length: 400 }, (_, i) => ({ id: `p${i}`, name: 'x'.repeat(50), params: {} })) } };
+    expect((await app.request('/catalog/sounds', { method: 'POST', headers: as('alice'), body: JSON.stringify({ file: bloated }) })).status).toBe(413);
+    // Only the owner withdraws it.
+    expect((await app.request('/catalog/sounds/dev-alice:AL_20261124_205130', { method: 'DELETE', headers: as('bob') })).status).toBe(404);
+    expect((await app.request('/catalog/sounds/dev-alice:AL_20261124_205130', { method: 'DELETE', headers: as('alice') })).status).toBe(200);
+    expect((await app.request('/catalog/sounds/dev-alice:AL_20261124_205130', { headers: as('bob') })).status).toBe(404);
   });
 
   it("catalog: the service fetches a published track's files from the owner's Drive for another account (no key, no CORS)", async () => {

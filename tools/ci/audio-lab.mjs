@@ -48,7 +48,7 @@ const results = await page.evaluate(async () => {
   const db = (x) => 20 * Math.log10(Math.max(x, 1e-9));
   async function offline(seconds, channels = 1, worklets = true) {
     const ctx = new OfflineAudioContext(channels, Math.round(seconds * RATE), RATE);
-    if (worklets) for (const m of ['dynamics.js', 'shaper.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+    if (worklets) for (const m of ['dynamics.js', 'shaper.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'howl.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
     return ctx;
   }
   function tone(ctx, hz, dbfs, seconds, from = 0, channels = 1) {
@@ -165,7 +165,48 @@ const results = await page.evaluate(async () => {
   }
   const pitchOnly = (extra) => ({ ...L.VOXFORGE_DEFAULTS, gtOn: false, eqOn: false, compOn: false, pcOn: false, dsOn: false, exOn: false, satOn: false, chOn: false, dlOn: false, rvOn: false, rdOn: false, ...extra });
 
-  // 0. The noise gate: the room between phrases turned down, the voice itself untouched and let through at once.
+  /** Noise shaped like a breath or an "s": white noise through one-pole high- and low-passes (twice each), a soft rise and fall, at `dbfs` RMS. */
+  function shapedNoise(ctx, dbfs, seconds, from, loHz, hiHz, riseS = 0.05) {
+    const n = Math.round(seconds * RATE);
+    const buf = ctx.createBuffer(1, n, RATE);
+    const d = buf.getChannelData(0);
+    const aLo = Math.exp((-2 * Math.PI * loHz) / RATE);
+    const aHi = Math.exp((-2 * Math.PI * hiHz) / RATE);
+    let hp1 = 0, hp2 = 0, p1 = 0, p2 = 0, lp1 = 0, lp2 = 0;
+    for (let i = 0; i < n; i++) {
+      const x = Math.random() * 2 - 1;
+      hp1 = aLo * (hp1 + x - p1); p1 = x;
+      hp2 = aLo * (hp2 + hp1 - p2); p2 = hp1;
+      lp1 += (1 - aHi) * (hp2 - lp1);
+      lp2 += (1 - aHi) * (lp1 - lp2);
+      const t = i / RATE;
+      const env = Math.min(1, t / riseS, (seconds - t) / riseS);
+      d[i] = lp2 * Math.max(0, env);
+    }
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += d[i] * d[i];
+    const g = Math.pow(10, dbfs / 20) / Math.sqrt(sum / n);
+    for (let i = 0; i < n; i++) d[i] *= g;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.start(from);
+    return src;
+  }
+  /** The level of one frequency (a sine's dBFS) between `from` and `to`, by Goertzel. */
+  function toneDb(d, hz, from, to) {
+    const a = Math.round(from * RATE);
+    const n = Math.round((to - from) * RATE);
+    const w = (2 * Math.PI * hz) / RATE;
+    let re = 0, im = 0;
+    for (let i = 0; i < n; i++) {
+      re += d[a + i] * Math.cos(w * i);
+      im -= d[a + i] * Math.sin(w * i);
+    }
+    return db((2 * Math.sqrt(re * re + im * im)) / n);
+  }
+
+  // 0. The voice gate: the room, the breaths and the noises between phrases turned down; the voice itself untouched and let
+  //    through at once — a sung phrase, its first 30 ms, the "s" that starts a word.
   {
     const r = {};
     for (const gate of [false, true]) {
@@ -174,12 +215,78 @@ const results = await page.evaluate(async () => {
       chain.apply({ ...L.presetParams('studio'), gtOn: gate, rvOn: false, rdOn: false });
       noise(ctx, -52, 6).connect(chain.input); // the room: a phone's hiss, all along
       voice(ctx, -20, 2).connect(chain.input); // a phrase…
-      voice(ctx, -20, 2, 4).connect(chain.input); // …a break of two seconds, a phrase
+      shapedNoise(ctx, -30, 0.5, 2.25, 300, 3000).connect(chain.input); // …a breath right after it (as loud as quiet singing)…
+      shapedNoise(ctx, -28, 0.7, 3.5, 300, 3000).connect(chain.input); // …a long breath in the break…
+      shapedNoise(ctx, -25, 0.1, 4.9, 5000, 10000, 0.01).connect(chain.input); // …an "s" starting the next word…
+      voice(ctx, -20, 1, 5).connect(chain.input); // …the phrase
       chain.output.connect(ctx.destination);
       const d = (await ctx.startRendering()).getChannelData(0);
-      r[gate ? 'on' : 'off'] = { room: +rmsDb(d, 2.6, 3.9).toFixed(1), voice: +rmsDb(d, 4.5, 5.9).toFixed(1), onset: +rmsDb(d, 4.0, 4.03).toFixed(1), tail: +rmsDb(d, 2.0, 2.1).toFixed(1) };
+      r[gate ? 'on' : 'off'] = {
+        room: +rmsDb(d, 3.0, 3.4).toFixed(1),
+        breathAfter: +rmsDb(d, 2.5, 2.75).toFixed(1),
+        breathBreak: +rmsDb(d, 3.75, 4.2).toFixed(1),
+        sibilant: +rmsDb(d, 4.91, 4.99).toFixed(1),
+        voice: +rmsDb(d, 5.3, 5.9).toFixed(1),
+        onset: +rmsDb(d, 5.0, 5.03).toFixed(1),
+        tail: +rmsDb(d, 1.9, 2.0).toFixed(1),
+      };
     }
     out.gate = r;
+  }
+
+  // 0a. The howl suppressor: a pure tone that grows into a squeal (feedback) is notched within a fraction of a second; the
+  //     voice beside it is untouched; a voice alone (its harmonics, its vibrato) is never taken for one.
+  {
+    const howlAt = 9300;
+    const render = async (withTone) => {
+      const ctx = await offline(4, 1, true);
+      const chain = L.createVoxForgeChain(ctx, true);
+      chain.apply(pitchOnly({})); // the stages off: what changes is the notch
+      voice(ctx, -20, 4).connect(chain.input);
+      if (withTone) {
+        // The squeal: −60 dBFS at 0.5 s, up to −12 by 2 s (an exponential rise, as a loop's is), held to the end.
+        const buf = ctx.createBuffer(1, 4 * RATE, RATE);
+        const d0 = buf.getChannelData(0);
+        for (let i = 0; i < d0.length; i++) {
+          const t = i / RATE;
+          const level = t < 0.5 ? -200 : t < 2 ? -60 + ((t - 0.5) / 1.5) * 48 : -12;
+          d0[i] = Math.pow(10, level / 20) * Math.sin((2 * Math.PI * howlAt * i) / RATE);
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.start(0);
+        src.connect(chain.input);
+      }
+      chain.output.connect(ctx.destination);
+      const d = (await ctx.startRendering()).getChannelData(0);
+      await new Promise((res) => setTimeout(res, 50)); // the worklet's last report
+      return { d, found: chain.howl.found, notches: chain.howl.notches };
+    };
+    const plain = await render(false);
+    const howled = await render(true);
+    // The voice's own band (under 4 kHz) with and without the tone: the notch at 9.3 kHz leaves it alone.
+    const lowBand = (d, from, to) => {
+      const a = Math.round(from * RATE);
+      const n = Math.round((to - from) * RATE);
+      const aLp = Math.exp((-2 * Math.PI * 4000) / RATE);
+      let lp = 0, s = 0;
+      for (let i = 0; i < n; i++) {
+        lp += (1 - aLp) * (d[a + i] - lp);
+        s += lp * lp;
+      }
+      return db(Math.sqrt(s / n));
+    };
+    out.howl = {
+      inToneDb: -12,
+      toneAt1s: +toneDb(howled.d, howlAt, 1.0, 1.3).toFixed(1), // the tone is −44…−34 dBFS on its way in here
+      toneAt2s: +toneDb(howled.d, howlAt, 2.2, 2.5).toFixed(1),
+      toneAt3s: +toneDb(howled.d, howlAt, 3.5, 3.9).toFixed(1),
+      voiceWithTone: +lowBand(howled.d, 2.2, 3.9).toFixed(2),
+      voiceAlone: +lowBand(plain.d, 2.2, 3.9).toFixed(2),
+      found: howled.found,
+      notches: howled.notches,
+      falseAlarms: plain.found,
+    };
   }
 
   // 0b. The pitch stage: a shift lands on pitch with hardly a ripple (one head, pitch-synchronous splices); auto-tune pulls a flat tone to its note; the delay is told.
@@ -242,6 +349,7 @@ const results = await page.evaluate(async () => {
       const ctx = await offline(2, 1, worklets);
       const chain = L.createVoxForgeChain(ctx, worklets);
       chain.apply({ ...L.VOXFORGE_DEFAULTS, pitchOn: false, eqOn: false, compOn: false, pcOn: false, dsOn: true, dsAmt: 0.5, exOn: false, satOn: false, chOn: false, dlOn: false, rvOn: false, rdOn: false });
+      chain.setHowl(false); // (a lone 9 kHz tone standing still IS a squeal to the howl suppressor: off for this measurement)
       tone(ctx, 9000, level, 2).connect(chain.input);
       chain.output.connect(ctx.destination);
       const d = (await ctx.startRendering()).getChannelData(0);
@@ -432,7 +540,7 @@ const results = await page.evaluate(async () => {
     /** The bus rendered: channels 0–1 its output, 2–3 its sum before the guard and the safety stage (what the limiter is given). */
     async function render(presetId, what) {
       const ctx = new OfflineAudioContext(4, Math.round(SECONDS * RATE), RATE);
-      for (const m of ['dynamics.js', 'shaper.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+      for (const m of ['dynamics.js', 'shaper.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'howl.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
       const bus = new L.MixBus(ctx, true);
       bus.setBackingNormalization(L.normalizationDb(trackLufs, L.MIX_TARGETS.trackLufs));
       if (what !== 'vocal') song(ctx, SECONDS).connect(bus.backingIn);
@@ -494,7 +602,7 @@ const results = await page.evaluate(async () => {
     {
       const run = async (keyed) => {
         const ctx = new OfflineAudioContext(4, Math.round(SECONDS * RATE), RATE);
-        for (const m of ['dynamics.js', 'shaper.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
+        for (const m of ['dynamics.js', 'shaper.js', 'leveler.js', 'pitch-shifter.js', 'gate.js', 'howl.js', 'ducker.js']) await ctx.audioWorklet.addModule('/worklets/' + m);
         const bus = new L.MixBus(ctx, true);
         bus.setBackingNormalization(L.normalizationDb(trackLufs, L.MIX_TARGETS.trackLufs));
         song(ctx, SECONDS).connect(bus.backingIn);
@@ -552,9 +660,18 @@ const check = (ok, what) => {
 console.log(JSON.stringify(results, null, 1));
 {
   const g = results.gate;
-  check(g.off.room - g.on.room >= 10, `noise gate: the room between phrases ${g.off.room} → ${g.on.room} dBFS (${(g.off.room - g.on.room).toFixed(1)} dB down)`);
-  check(Math.abs(g.on.voice - g.off.voice) < 0.5, `noise gate: the sung phrase untouched (${g.on.voice} vs ${g.off.voice} dBFS)`);
-  check(Math.abs(g.on.onset - g.off.onset) < 3, `noise gate: the phrase's first 30 ms through at once (${g.on.onset} vs ${g.off.onset} dBFS)`);
+  check(g.off.room - g.on.room >= 10, `voice gate: the room between phrases ${g.off.room} → ${g.on.room} dBFS (${(g.off.room - g.on.room).toFixed(1)} dB down)`);
+  check(g.off.breathBreak - g.on.breathBreak >= 15, `voice gate: a breath in a break (−28 dBFS, as loud as quiet singing) ${g.off.breathBreak} → ${g.on.breathBreak} dBFS (${(g.off.breathBreak - g.on.breathBreak).toFixed(1)} dB down at the chain's output, the compressors behind the gate allowed for)`);
+  check(g.off.breathAfter - g.on.breathAfter >= 8, `voice gate: a breath right after a phrase, its second half ${g.off.breathAfter} → ${g.on.breathAfter} dBFS (${(g.off.breathAfter - g.on.breathAfter).toFixed(1)} dB down)`);
+  check(Math.abs(g.on.voice - g.off.voice) < 0.5, `voice gate: the sung phrase untouched (${g.on.voice} vs ${g.off.voice} dBFS)`);
+  check(Math.abs(g.on.tail - g.off.tail) < 0.5, `voice gate: the phrase's last 100 ms untouched (${g.on.tail} vs ${g.off.tail} dBFS)`);
+  check(Math.abs(g.on.onset - g.off.onset) < 3, `voice gate: the phrase's first 30 ms through at once (${g.on.onset} vs ${g.off.onset} dBFS)`);
+  check(Math.abs(g.on.sibilant - g.off.sibilant) < 4, `voice gate: the "s" that starts the word comes through (${g.on.sibilant} vs ${g.off.sibilant} dBFS)`);
+  const h = results.howl;
+  check(h.toneAt2s <= h.inToneDb - 25, `howl suppressor: a 9.3 kHz squeal at ${h.inToneDb} dBFS leaves at ${h.toneAt2s} dBFS by 2.2 s (${(h.inToneDb - h.toneAt2s).toFixed(1)} dB down; at 1 s ${h.toneAt1s}, at 3.5 s ${h.toneAt3s}) — notches ${JSON.stringify(h.notches)}`);
+  check(h.toneAt1s <= -40, `howl suppressor: caught on its way up — by 1 s (the tone −44…−34 dBFS going in) it leaves at ${h.toneAt1s} dBFS`);
+  check(Math.abs(h.voiceWithTone - h.voiceAlone) < 0.3, `howl suppressor: the voice beside the squeal untouched (${h.voiceWithTone} vs ${h.voiceAlone} dBFS under 4 kHz)`);
+  check(h.falseAlarms === 0 && h.found >= 1, `howl suppressor: a voice alone is never taken for a squeal (${h.falseAlarms} notches), the squeal was (${h.found})`);
   const P = results.pitch;
   const cents = (a, b) => 1200 * Math.log2(a / b);
   check(Math.abs(cents(P.up1.outHz, P.up1.inHz * Math.pow(2, 1 / 12))) < 8, `pitch +1 st: ${P.up1.inHz} → ${P.up1.outHz} Hz (${cents(P.up1.outHz, P.up1.inHz * Math.pow(2, 1 / 12)).toFixed(1)} cents off)`);

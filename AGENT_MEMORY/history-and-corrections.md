@@ -1,6 +1,54 @@
 # History: bugs, misunderstandings, corrections, outstanding
 
-Updated 24 Nov 2026. Newest first. Each entry: what was wrong → what was done → what proves it.
+Updated 24 Nov 2026 (evening). Newest first. Each entry: what was wrong → what was done → what proves it.
+
+## 24 Nov 2026 (evening) — enhancements & fixes from PPD24_1.mp4
+- The owner (20:51, with PPD24_1.mp4 and 19 background pictures): squeaks at 00:30 and 01:46; breaths too loud (01:33,
+  the interlude); shareable sound settings files named initials_date_time with an Import dropdown; the track's speed
+  never to drift; head-to-chest framing kept despite camera movement; frozen performer pictures found and recovered
+  without touching the audio; Cancel everywhere, Save / Discard in place of Keep; seeking in the review; backgrounds in
+  Drive › Backgrounds with upload / select / delete; the 19 pictures made selectable.
+- What the recording showed (331 s, −10.9 LUFS, true peak +0.1): the squeaks were pure tones at 7.1 kHz (29.4–30.7 s)
+  and 9.25→9.43 kHz (106.4–108.5 s) growing 20→41 dB over the voice — acoustic feedback (the singer wears a wired
+  earphone with an inline microphone; a hand at the earbud in both frames); the performer's picture froze twice for
+  15.3 and 15.5 s (180 s, 297 s) — the old measurement clock (15 s) plus a restart; the picture is "My camera as it is"
+  with the crown at the camera's top edge (the camera sits low: no frame can add headroom the camera does not see);
+  no dropouts in the audio, the track's speed in the file steady (video 331.0 s / audio 331.0 s).
+- Done: the voice-evidence gate and the howl suppressor (audio-modes.md); 'follow' the AUTOZOOM-off framing
+  (`autozoomV2`); the pixel stillness clock (3 s) with a 15-s restart cadence and a camera-only restart (iOS: the
+  camera alone tried first); the karaoke video steered by rate; Cancel / Home on the stage, Save / Discard and a
+  seekable review; sound settings files + the service's sound catalog + Import; the Backgrounds folder as the record
+  with upload / select / delete / restore; the 19 pictures bundled (webp, thumbs) and copied to every account's folder.
+- Proof: audio lab (§0: the room −26 dB, a breath in a break −17 dB and one right after a phrase −16 dB at the chain's
+  output, the phrase / its first 30 ms / its last 100 ms / a leading "s" untouched; §0a: a 9.3 kHz squeal −36 dB by
+  2.2 s, −74 dBFS at 1 s on its way up, the voice beside it untouched, a voice alone never notched); studio e2e (the
+  track's speed in the file: drift 0.1 ms over 22 s; the frozen camera found in 5.1 s and restarted 5.5 s after the
+  freeze with one video-only capture, the microphone / recorder / song untouched, the vocal whole; the review's
+  forward / back / pause / seek; Save / Discard; Cancel); tracks e2e (the sound file in Drive › Config with the whole
+  sound, shared and listed for bob, applied — every control follows; deleted and withdrawn; the 36 built-in pictures
+  copied into Drive › Backgrounds, an upload scaled to WebP and chosen, Select → Delete to the Drive bin, Restore);
+  protocol tests (initials, names, parsing and clamping); control tests (the sound catalog: validation, owner-only
+  withdrawal, 16 KB cap).
+- Correction on the way: the live e2e's stages had shown "Your camera froze" during the second song in every run
+  (since before this change): the test's synthetic person — a noiseless 2-s clip, its four patches alike over its last
+  seven frames — read as a frozen camera to the pixel clock whenever the starved model sampled it two seconds apart.
+  Two frames alike seconds apart prove nothing: the clock now wants the same frame three times in a row
+  (`SAME_FRAMES`), and the clip carries sensor noise of its own like a real camera's; the live e2e logs every change
+  of the cameras' health with the clock that spoke (`frozenBy`) and fails on a live camera called frozen on its
+  picture — and on the fixed build the health log reads "ok throughout" on both singers' devices, no freeze called at
+  all (every earlier run had shown "Your camera froze" during the second song).
+- Correction on the way (25 Nov, 00:30): the roles e2e failed twice at "the host blocks erin": her chip showed and
+  was gone a moment later, back 30 s on. Not the service (reproduced clean against it alone): the host's page had
+  applied the answer to its own members-only switch — built before erin came in, read after the room the stream
+  pushed with her in it — over the newer room. `MeetSession.stateAt`: every state is stamped `serverEpochMs`, an
+  older answer leaves the room alone and gives up only its own lines (the video hours, the chat). Unit-tested
+  (`test/meetSession.test.ts`); roles e2e 100 again. The same race the other way round in the live e2e (the guest's
+  stage "Pausing…" 17 s after the pause landed, twice): a heartbeat whose state was read before the landing but
+  whose answer was finished — and stamped — after the room that carried it. The stamp is now taken as the state is
+  read (app.ts `roomOf`), so a slow answer never outranks a room read after it.
+- **Not verifiable here, said so:** real acoustic feedback on the owner's earphones (the lab's squeal is synthetic);
+  iOS's answer to a second, video-only capture (the fallback re-captures the pair as before); the owner's own Drive
+  (the copies of the built-in pictures are made at the next sign-in, by the app).
 
 ## 24 Nov 2026 — refinement: latency, levels, the performer's picture, AUTOZOOM
 - The owner (23 Nov, 23:57): "the latest fixes are better"; then: the monitoring delay ("a fraction of a second") to

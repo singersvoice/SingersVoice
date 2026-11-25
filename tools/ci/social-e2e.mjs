@@ -109,7 +109,7 @@ try {
   await page.getByRole('button', { name: 'Finish' }).click();
   await page.locator('[data-review]').waitFor({ timeout: 60000 });
   await page.locator('[data-review][data-saved-state="temp"]').waitFor({ timeout: 60000 });
-  await page.getByRole('button', { name: 'Keep', exact: true }).click();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
   await page.locator('[data-review][data-saved-state="kept"]').waitFor({ timeout: 60000 });
   await page.locator('[data-clip-sheet]').waitFor({ timeout: 20000 });
   check(true, 'the take kept: the clip sheet opens by itself (Settings → Social offers it)');

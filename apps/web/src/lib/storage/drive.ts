@@ -21,6 +21,7 @@ import {
   performanceVideoName,
   safeName,
   singersLine,
+  SOUND_SETTINGS_EXT,
   type DriveFolderKey,
   type FileEntry,
   type PerformanceChapter,
@@ -31,7 +32,7 @@ import {
 import { extFromMime } from '../decode.ts';
 import { AuthExpiredError, freshToken, type GoogleToken } from '../google.ts';
 import { md5Blob } from '../md5.ts';
-import type { LoadedPerformance, PerformanceFiles, LoadedTrack, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, StorageProvider, TrackSummary } from './types.ts';
+import type { BackgroundEntry, LoadedPerformance, PerformanceFiles, LoadedTrack, PerformanceStream, PerformanceSummary, Progress, ProviderLinks, SoundSettingsEntry, StorageProvider, TrackSummary } from './types.ts';
 
 /** Google's API host — or, for the browser tests only, a fake standing in for it (`sv.googleApiBase` on the device). */
 const GOOGLE_API = (() => {
@@ -1007,6 +1008,68 @@ export class DriveProvider implements StorageProvider {
     else await this.upload(name, blob, this.folder('config'), { [APP_PROPS.type]: 'config', [APP_PROPS.id]: name });
   }
 
+  // ---------- Sound settings files (sounds.ts): Config/<name>.svsound.json, stamped svType=soundSettings ----------
+
+  private soundEntry(f: DriveFile): SoundSettingsEntry {
+    return { id: f.id, name: f.appProperties?.[APP_PROPS.id] ?? f.name.replace(/\.svsound\.json$/, ''), createdAt: f.createdTime ?? '', link: f.webViewLink };
+  }
+
+  async listSoundSettings(): Promise<SoundSettingsEntry[]> {
+    await this.ready();
+    const files = await this.list(`appProperties has { key='${APP_PROPS.type}' and value='soundSettings' } and trashed=false`);
+    return files.map((f) => this.soundEntry(f)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
+
+  async getSoundSettings(id: string): Promise<unknown | null> {
+    await this.ready();
+    return this.downloadJson<unknown>(id).catch(() => null);
+  }
+
+  async saveSoundSettings(name: string, value: unknown): Promise<SoundSettingsEntry> {
+    await this.ready();
+    const blob = new Blob([JSON.stringify(value, null, 1)], { type: 'application/json' });
+    const existing = await this.list(`appProperties has { key='${APP_PROPS.id}' and value='${esc(name)}' } and appProperties has { key='${APP_PROPS.type}' and value='soundSettings' } and trashed=false`, 2);
+    if (existing[0]) return this.soundEntry(await this.replaceContent(existing[0].id, blob));
+    return this.soundEntry(await this.upload(`${name}${SOUND_SETTINGS_EXT}`, blob, this.folder('config'), { [APP_PROPS.type]: 'soundSettings', [APP_PROPS.id]: name }));
+  }
+
+  async deleteSoundSettings(id: string): Promise<void> {
+    await this.ready();
+    await this.req(`${API}/files/${id}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
+  }
+
+  // ---------- Backgrounds: the Backgrounds folder is the singer's own set, stamped svType=background ----------
+
+  private backgroundEntry(f: DriveFile): BackgroundEntry {
+    const p = f.appProperties ?? {};
+    return { id: f.id, name: p.svLabel || f.name.replace(/\.[a-z0-9]+$/i, ''), createdAt: f.createdTime ?? '', mimeType: f.mimeType, bytes: Number(f.size ?? 0), ...(p.svStock ? { stock: p.svStock } : {}), link: f.webViewLink };
+  }
+
+  async listBackgrounds(): Promise<BackgroundEntry[]> {
+    await this.ready();
+    const files = await this.list(`appProperties has { key='${APP_PROPS.type}' and value='background' } and trashed=false`);
+    return files.map((f) => this.backgroundEntry(f)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }
+
+  async getBackground(id: string): Promise<Blob | null> {
+    await this.ready();
+    return this.download(id).catch(() => null);
+  }
+
+  async saveBackground(name: string, blob: Blob, opts: { stock?: string } = {}): Promise<BackgroundEntry> {
+    await this.ready();
+    const ext = imageExt(blob.type);
+    const props: Record<string, string> = { [APP_PROPS.type]: 'background', [APP_PROPS.id]: `bg-${Date.now().toString(36)}`, svLabel: name.slice(0, 80) };
+    if (opts.stock) props.svStock = opts.stock;
+    return this.backgroundEntry(await this.upload(`${safeName(name)}.${ext}`, blob, this.folder('backgrounds'), props));
+  }
+
+  /** Gone to the Drive bin (the singer can take one back from there). */
+  async deleteBackgrounds(ids: string[]): Promise<void> {
+    await this.ready();
+    for (const id of ids) await this.req(`${API}/files/${id}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
+  }
+
   async quota(): Promise<{ used: number; total: number } | null> {
     const j = await this.req<{ storageQuota?: { usage?: string; limit?: string } }>(`${API}/about?fields=storageQuota`);
     if (!j.storageQuota) return null;
@@ -1015,6 +1078,15 @@ export class DriveProvider implements StorageProvider {
 }
 
 // ---------- helpers ----------
+
+/** The file extension for a picture's MIME type. */
+export function imageExt(mime: string): string {
+  const m = mime.toLowerCase();
+  if (m.includes('png')) return 'png';
+  if (m.includes('webp')) return 'webp';
+  if (m.includes('gif')) return 'gif';
+  return 'jpg';
+}
 
 function esc(v: string): string {
   return v.replace(/\\/g, '\\\\').replace(/'/g, "\\'");

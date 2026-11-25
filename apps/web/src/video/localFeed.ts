@@ -18,6 +18,7 @@ import { FeedWorkerLink, feedWorkerSupported, type FeedMeta } from './feedWorker
 import { cropFactor, distanceNote, measureMask, plausibleHead, Seat, visiblePart, type Framing, type PersonMeasure, type Picture, type SeatState } from './framing.ts';
 import { PersonSegmenter, type SegmenterMode } from './segmenter.ts';
 import type { PerformerSource } from './stage.ts';
+import { FrameStillness, pageStillnessContext } from './stillness.ts';
 
 /** Tests and support: `localStorage['sv.feedWorker'] = '0'` keeps the pipeline on the page. */
 const workerWanted = (): boolean => {
@@ -39,17 +40,27 @@ const LUMA_H = 64;
 const PROBE_W = 120;
 const PROBE_H = 160;
 const PROBE_EVERY_MS = 150;
-/** The camera's own health: frames that were flowing and then stop for this many seconds (the page visible all the while) is a frozen camera. */
+/**
+ * The camera's own health: frames that were flowing and then stop for this many seconds (the page visible all the while) is a
+ * frozen camera. Five seconds, not fewer: a device straining under a full stage presents its camera's frames late and in bursts,
+ * and a shorter clock calls that frozen (the live e2e on two cores) — the owner's freezes (frames flowing, the picture the
+ * same) are the pixel clock's, below, and that one needs no more than three.
+ */
 export const FROZEN_AFTER = 5;
 /** Frames that must have flowed before their stopping means anything (a video that never fires frame callbacks is not judged by them). */
 const FLOWING_FRAMES = 10;
 /**
- * A camera that keeps presenting the same picture is frozen as much as one whose frames stop: the model's
- * measurement of the singer (head and body, to the probe pixel) identical across new cut-outs for this many
- * seconds. A real person, however still, never measures exactly the same for that long — the mask's own edge
- * moves — and a camera pointed at nobody measures nothing, so neither is ever called frozen.
+ * A camera that keeps presenting the same picture is frozen as much as one whose frames stop. Two clocks say so:
+ * the camera's own pixels exactly the same, frame after frame (three at least), for PIXELS_STILL_AFTER seconds
+ * (stillness.ts: a real camera's frames are never byte-identical, the sensor's noise sees to that — 24 Nov, in
+ * place of the 15 s the measurement clock took in the owner's recording); and, where the pixels cannot be read, the model's
+ * measurement of the singer (head and body, to the probe pixel) identical across new cut-outs for STILL_AFTER
+ * seconds (a real person, however still, never measures exactly the same for that long).
  */
+export const PIXELS_STILL_AFTER = 3;
 export const STILL_AFTER = 15;
+/** A camera restarted by itself (a freeze, a mute, an end) at most once in this long: a camera that stays frozen gets the button, never a loop of restarts. */
+export const AUTO_RESTART_EVERY_MS = 15_000;
 
 /** What the camera is doing: live, muted by the browser, ended (the browser took it away), or frozen on one picture. */
 export type FeedHealth = 'ok' | 'muted' | 'ended' | 'frozen';
@@ -131,6 +142,8 @@ export class LocalFeed {
    * API. The room restarts the camera on anything but 'ok'.
    */
   health: FeedHealth = 'ok';
+  /** Which clock called the camera frozen the last time: its frames stopped, its pixels stood still, or the model's measurement did (support / e2e). */
+  frozenBy: 'frames' | 'pixels' | 'measure' | '' = '';
   onHealth: ((h: FeedHealth) => void) | null = null;
   private healthTimer: ReturnType<typeof setInterval> | undefined;
   private watched: MediaStreamTrack | null = null;
@@ -142,6 +155,10 @@ export class LocalFeed {
   /** The last measurement of the singer (as a key) and since when it has not changed (0: it changes). */
   private lastMeasure: string | null = null;
   private stillSince = 0;
+  /** The camera's pixels against the frame before, read on the page (the worker reads its own and says `stillMs`). */
+  private readonly stillness = new FrameStillness(pageStillnessContext);
+  private stillPixelsMs = 0;
+  private lastStillSeg = -1;
   /** Frames the camera presented in the last second (0 where the browser gives no frame callbacks), for the strip's camera line. */
   cameraFps = 0;
   private framesAtSample = 0;
@@ -359,8 +376,9 @@ export class LocalFeed {
       this.note = meta.note;
       this.onNote?.(meta.note);
     }
-    // The stillness clock (a camera presenting the same picture over and over) runs on the worker's measurements.
+    // The stillness clocks (a camera presenting the same picture over and over) run on the worker's pixels and measurements.
     const now = performance.now();
+    this.stillPixelsMs = meta.stillMs;
     if (meta.measure === null) {
       this.lastMeasure = null;
       this.stillSince = 0;
@@ -397,6 +415,10 @@ export class LocalFeed {
     this.lastFrameAt = 0;
     this.lastMeasure = null;
     this.stillSince = 0;
+    this.stillPixelsMs = 0;
+    this.stillness.reset();
+    this.lastStillSeg = -1;
+    this.lastSampleAt = 0;
     this.visibleSince = performance.now();
     this.setHealth(track ? (track.readyState === 'ended' ? 'ended' : track.muted ? 'muted' : 'ok') : 'ok');
     if (!track) return;
@@ -435,12 +457,20 @@ export class LocalFeed {
     });
   }
 
+  /** How long the camera's pixels have stood exactly still (ms): the worker's word, or the page's own reading. */
+  get pixelsStillMs(): number {
+    return this.workerOn ? this.stillPixelsMs : this.stillness.stillFor(performance.now());
+  }
+
   /**
    * Once a second: frames that were flowing (FLOWING_FRAMES of them at least) and have stopped for FROZEN_AFTER seconds — the
    * page visible all the while, the track calling itself live and unmuted — is a frozen camera, and so is one whose
-   * picture has not changed for STILL_AFTER seconds (the model measuring the singer exactly the same, cut-out after
-   * cut-out); frames flowing again, or the picture moving again, is 'ok'.
+   * picture has not changed: its pixels exactly the same for PIXELS_STILL_AFTER seconds, or the model measuring the
+   * singer exactly the same, cut-out after cut-out, for STILL_AFTER; frames flowing again, or the picture moving again,
+   * is 'ok'.
    */
+  private lastSampleAt = 0;
+
   private sampleHealth(): void {
     this.cameraFps = Math.max(0, this.framesSeen - this.framesAtSample);
     this.framesAtSample = this.framesSeen;
@@ -448,10 +478,20 @@ export class LocalFeed {
     if (!t || t.readyState !== 'live' || t.muted) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return; // a hidden page presents no frames
     const now = performance.now();
+    // This sampler itself held up (the page starved of its timers for seconds: a device straining): the frames may well have
+    // been presented and their callbacks not run — the frames-stopped clock starts over on that stretch (the pixel clock and
+    // the measurement clock stand: they count frames that did come).
+    const starved = this.lastSampleAt > 0 && now - this.lastSampleAt > 2500;
+    this.lastSampleAt = now;
+    if (starved) this.lastFrameAt = now;
     const flowed = this.framesSeen >= FLOWING_FRAMES;
     const stopped = flowed && now - Math.max(this.lastFrameAt, this.visibleSince) >= FROZEN_AFTER * 1000;
-    const still = this.stillSince > 0 && now - this.stillSince >= STILL_AFTER * 1000;
-    if (stopped || still) this.setHealth('frozen');
+    const pixels = this.pixelsStillMs >= PIXELS_STILL_AFTER * 1000;
+    const still = pixels || (this.stillSince > 0 && now - this.stillSince >= STILL_AFTER * 1000);
+    if (stopped || still) {
+      if (this.health !== 'frozen') this.frozenBy = stopped ? 'frames' : pixels ? 'pixels' : 'measure';
+      this.setHealth('frozen');
+    }
     else if (this.health === 'frozen' && (!flowed || now - this.lastFrameAt < 1500)) this.setHealth('ok');
   }
 
@@ -526,7 +566,8 @@ export class LocalFeed {
     const cut = `${this.picture === 'camera' ? `camera picture (${model})` : `cut-out ${model}`}${this.workerOn ? ' (worker)' : ''} · frame ${this.seat.framing === 'follow' ? 'follows' : this.seat.framing === 'voice' ? 'on the voice' : 'still'}`;
     const frames = this.framesSeen > 0 ? `camera ${this.cameraFps} fps` : 'camera (frames not told)';
     const lift = this.exposure.lift >= 3 ? ` · lifted +${this.exposure.lift}%` : '';
-    const still = this.stillSince ? ` · picture still ${Math.round((performance.now() - this.stillSince) / 1000)} s` : '';
+    const stillMs = Math.max(this.stillSince ? performance.now() - this.stillSince : 0, this.pixelsStillMs);
+    const still = stillMs ? ` · picture still ${Math.round(stillMs / 1000)} s` : '';
     return `${frames} · ${cut}${lift}${still}`;
   }
 
@@ -555,6 +596,11 @@ export class LocalFeed {
 
   private tick(): void {
     const now = performance.now();
+    if (this.own.frame !== this.lastStillSeg && this.video.videoWidth) {
+      // The camera's own pixels, once per frame the segmenter took: the frozen-camera clock (stillness.ts).
+      this.lastStillSeg = this.own.frame;
+      this.stillness.sample(this.video, this.video.videoWidth, this.video.videoHeight, now);
+    }
     this.measure(now);
     this.measureLuma(now);
     const gain = this.exposure.step();

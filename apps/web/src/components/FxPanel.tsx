@@ -6,7 +6,7 @@ type OnKey = 'gtOn' | 'pitchOn' | 'eqOn' | 'compOn' | 'pcOn' | 'dsOn' | 'exOn' |
 
 const SECTIONS: { title: string; on: OnKey | null; keys: NumKey[] }[] = [
   { title: 'Gain', on: null, keys: ['inGain', 'outGain'] },
-  { title: 'Noise gate (the room between phrases)', on: 'gtOn', keys: ['gtAmt'] },
+  { title: 'Voice gate (the room and the breaths between phrases)', on: 'gtOn', keys: ['gtAmt'] },
   { title: 'Pitch & Auto-tune', on: 'pitchOn', keys: ['octave', 'pitchSt', 'pitchCt', 'autoStr', 'autoSpeed'] },
   { title: 'EQ', on: 'eqOn', keys: ['hpfHz', 'eqLow', 'eqLm', 'eqMid', 'presHz', 'eqPres', 'eqHi'] },
   { title: 'Compressor', on: 'compOn', keys: ['cThr', 'cRat', 'cAtk', 'cRel', 'cMk'] },

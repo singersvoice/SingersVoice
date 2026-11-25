@@ -52,6 +52,39 @@ const browser = await pw.chromium.launch({ args: ['--use-fake-device-for-media-s
 let failed = false;
 const extraPages = {};
 const check = (ok, what) => { console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`); if (!ok) failed = true; };
+// Every change of the camera's health on a stage, from now on (localFeed.ts: which clock called it frozen, the camera
+// line as it stood), kept on the page in window.__healthLog; called again wherever the stage may have made a new feed.
+const watchHealth = (...pages) =>
+  Promise.all(
+    pages.map((pg) =>
+      pg.evaluate(() => {
+        const feed = window.__svFeed;
+        if (!feed || feed.__healthWatched) return;
+        feed.__healthWatched = true;
+        window.__healthLog = window.__healthLog ?? [];
+        let inner = feed.onHealth;
+        Object.defineProperty(feed, 'onHealth', {
+          configurable: true,
+          get: () => (h) => {
+            window.__healthLog.push({ at: Date.now(), h, by: feed.frozenBy, line: feed.cameraLine });
+            if (inner) inner(h);
+          },
+          set: (f) => {
+            inner = f;
+          },
+        });
+      }).catch(() => undefined),
+    ),
+  );
+// The cameras' health over the meet so far, from the pages' logs: printed; checked (a live camera never called frozen
+// on its picture) when the run got to the end.
+const reportHealth = async (asCheck) => {
+  for (const [who, pg] of [['alice', alice.page], ['bob', bob.page]]) {
+    const log = await pg.evaluate(() => (window.__healthLog ?? []).map((e) => ({ ...e, at: new Date(e.at).toISOString().slice(11, 19) }))).catch(() => []);
+    console.log(`camera health ${who}: ${log.length ? log.map((e) => `${e.at} ${e.h}${e.h === 'frozen' ? ` (${e.by}; ${e.line})` : ''}`).join(' · ') : 'ok throughout'}`);
+    if (asCheck) check(!log.some((e) => e.h === 'frozen' && e.by !== 'frames'), `${who}'s live camera was never called frozen on its picture (the pixel and measurement clocks; ${log.filter((e) => e.h === 'frozen').length} freeze(s) logged${log.some((e) => e.by === 'frames') ? ", the frames-stopped clock's under load" : ''})`);
+  }
+};
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Polls `fn` every half second until it answers something truthy (that), or `ms` have passed (null). */
 const until = async (fn, ms = 20000) => {
@@ -263,6 +296,11 @@ try {
   check(sa2.performers === '2' && sb2.performers === '2', 'both lobby stages lay out 2 performers');
   check(sa2.linked === '1' && sb2.linked === '1' && /1\/1 video linked/.test(sa2.text), `video linked both ways in the lobby (${Math.round((Date.now() - tLobby) / 1000)} s)`);
   check(sa2.left > 100 && sa2.right > 100 && sb2.left > 100 && sb2.right > 100, 'both singers are drawn on both lobby stages');
+  // The camera's health on each stage, every change of it from here to the end (localFeed.ts: which clock called it
+  // frozen, the camera line as it stood): a live camera — the synthetic person with their sensor noise — is never
+  // frozen on its pixels; a device straining under four browsers may well present no frame for seconds (the
+  // frames-stopped clock), and that is listed, not failed.
+  await watchHealth(alice.page, bob.page);
   await bob.page.screenshot({ path: `${out}/lobby-bob-onstage.png` });
   await alice.page.evaluate(() => { window.__svMeshId = Math.random(); window.__svMesh.__id = window.__svMeshId; });
 
@@ -385,9 +423,9 @@ try {
       const drawer = bob.page.locator('.drawer[aria-label="My picture"]');
       await drawer.waitFor({ timeout: 10000 });
       const autozoom = drawer.getByRole('checkbox', { name: 'Auto zoom' });
-      check((await autozoom.count()) === 1 && (await autozoom.isChecked()) === false, "LIVE MEETS have the Studio's picture choices: the Auto zoom switch, off by default (the picture framed once, still and centred)");
+      check((await autozoom.count()) === 1 && (await autozoom.isChecked()) === false, "LIVE MEETS have the Studio's picture choices: the Auto zoom switch, off by default (the picture held head to chest, centred)");
       check((await drawer.locator('[role=radiogroup][aria-label="My picture"] button').allInnerTexts()).join('|') === 'Me on the stage|My camera as it is', '…and the same two pictures (me on the stage / my camera as it is)');
-      check((await bob.page.evaluate(() => window.__svFeed && window.__svFeed.seat ? window.__svFeed.seat.framing : null)) === 'still', "the singer's frame on the live stage is 'still' (AUTOZOOM off) — the same seat as the Studio's");
+      check((await bob.page.evaluate(() => window.__svFeed && window.__svFeed.seat ? window.__svFeed.seat.framing : null)) === 'follow', "the singer's frame on the live stage is 'follow' (AUTOZOOM off: head to chest, following a move) — the same seat as the Studio's");
       await bob.page.getByRole('button', { name: 'Close my picture' }).click();
     } else check(false, 'the My picture button is on the live stage for a singer with video');
   }
@@ -416,14 +454,20 @@ try {
   check(bobPid !== '' && holdOnBob !== null && holdOnBob === (alignA?.plan.delays[bobPid] ?? -1), `the hold the plan gives bob's voice is what the host's link applies (${holdOnBob} ms)`);
   const meshAfter = await alice.page.evaluate(() => window.__svMesh && window.__svMesh.__id);
   check(meshBefore !== undefined && meshBefore === meshAfter, 'the same video mesh carries on from the lobby into the song (no reconnection)');
+  // Frames flowing on both devices within 25 s: the moment both are seen flowing counts (a 1.5-s window read again
+  // later, after the stats below have been gathered from four busy browsers, can land on a stall of the test machine's).
   const t0 = Date.now();
-  while (Date.now() - t0 < 25000 && ((await remoteFrames(alice.page)) < 2 || (await remoteFrames(bob.page)) < 2)) await wait(500);
+  let bothFlowing = false;
+  while (Date.now() - t0 < 25000 && !bothFlowing) {
+    bothFlowing = (await remoteFrames(alice.page)) >= 2 && (await remoteFrames(bob.page)) >= 2;
+    if (!bothFlowing) await wait(500);
+  }
   const vids = (p) => p.evaluate(() => [...document.querySelectorAll('video')].map((v) => ({ w: v.videoWidth, rs: v.readyState, paused: v.paused, muted: v.srcObject ? (v.srcObject.getVideoTracks()[0] || {}).muted : null, tracks: v.srcObject ? v.srcObject.getVideoTracks().length : 0 })));
   console.log('videos alice:', JSON.stringify(await vids(alice.page)), 'bob:', JSON.stringify(await vids(bob.page)));
   const rtp = (p) => p.evaluate(async () => ({ mesh: window.__svMesh ? await window.__svMesh.stats() : null, feed: window.__svFeed ? { frame: window.__svFeed.frame, seg: window.__svFeed.segmenter.frame, mode: window.__svFeed.mode, level: window.__svFeed.level } : null }));
   console.log('rtp alice:', JSON.stringify(await rtp(alice.page)), 'bob:', JSON.stringify(await rtp(bob.page)));
 
-  check((await remoteFrames(alice.page)) >= 2 && (await remoteFrames(bob.page)) >= 2, `remote video frames flowing on both devices (${Math.round((Date.now() - t0) / 1000)} s)`);
+  check(bothFlowing, `remote video frames flowing on both devices (${Math.round((Date.now() - t0) / 1000)} s)`);
   await wait(1500);
   const stageInfo = async (p) => p.evaluate(() => {
     const bar = document.querySelector('.sing .stagebar');
@@ -942,6 +986,7 @@ try {
     b3 = await stageInfo(bob.page);
   }
   check(a3.performers === '3' && b3.performers === '3' && /2\/2 video linked/.test(a3.text) && /2\/2 video linked/.test(b3.text), `the second song runs on the same stage, now with three singers (${a3.text} / ${b3.text}, ${Math.round((Date.now() - t3) / 1000)} s)`);
+  await watchHealth(alice.page, bob.page);
   // The show view (its page busy with the broadcast encoder) follows within a moment: the state is waited for, not read once.
   const showFollows = async () => /Up next|Now singing/.test(await carol.page.locator('.show-top').innerText().catch(() => '')) || (await carol.page.locator('.show[data-state="live"]').isVisible().catch(() => false));
   const tFollow = Date.now();
@@ -976,6 +1021,7 @@ try {
   const rejoinApart = Math.abs(rejoinB.posMs - rejoinA.posMs - (rejoinB.now - rejoinA.now)); // the two readings against their read times
   console.log('after rejoin:', JSON.stringify({ alice: rejoinA, bob: rejoinB, apart: rejoinApart }));
   check(rejoinB.playing && rejoinApart < 2500, `the singer who left is back in the song, in step with the stage (${Math.round(rejoinA.posMs / 1000)} s / ${Math.round(rejoinB.posMs / 1000)} s, ${Math.round(rejoinApart)} ms apart)`);
+  await watchHealth(alice.page, bob.page);
   // …or stop the song for everyone, like the host: everyone is back on the lobby stage; nothing saves (the film runs on).
   await bob.page.getByRole('button', { name: 'Stop the song for everyone' }).click();
   await alice.page.locator('.stagestrip[data-onstage="1"]').waitFor({ timeout: 120000 });
@@ -1056,7 +1102,7 @@ try {
   check((await bob.page.locator('[data-chapter], [data-event]').count()) === 0, 'no chapter files, no filming to group: the film is one row');
   await bob.page.screenshot({ path: `${out}/performances-bob.png` });
   const bobTakes = (await bob.page.locator('.list .item').allInnerTexts()).map((t) => t.replace(/\s+/g, ' '));
-  check(!bobTakes.some((t) => /CI Sample Song/.test(t) && /Kept/.test(t)), `a singer has no take of their own per song — nothing was saved on their device (${bobTakes.length} items)`);
+  check(!bobTakes.some((t) => /CI Sample Song/.test(t) && /Saved/.test(t)), `a singer has no take of their own per song — nothing was saved on their device (${bobTakes.length} items)`);
   // The host plays the film from Performances ("Chapters": the in-app player with a button per mark): it is the 1280×720
   // broadcast picture, with the whole mix, for the whole meet.
   await navigate(alice.page, `${new URL(base).pathname}studio/performances`);
@@ -1207,6 +1253,8 @@ try {
     check(footageSound.voice > 6, `the footage of the broadcast carries the singers' voices (${footageSound.voice.toFixed(1)} dB above the song alone)`);
   } else check(false, 'the footage of the broadcast can be played from Performances');
   await carolPerf.close();
+  // The cameras' health over the whole meet, as watched from the lobby on.
+  await reportHealth(true);
   // "Failed to load resource" is the browser noting any non-2xx fetch (a deleted meet's last heartbeat, say); the VideoFrame note is Chromium's own on a frame it dropped inside a stopped track; real errors are the rest.
   const errs = Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon|Failed to load resource|VideoFrame was garbage collected/.test(e))]));
   check(Object.values(errs).every((v) => !v.length), `no page errors (${JSON.stringify(errs).slice(0, 300)})`);
@@ -1214,6 +1262,7 @@ try {
 } catch (e) {
   failed = true;
   console.error('FAIL', e);
+  await reportHealth(false);
   await alice.page.screenshot({ path: `${out}/duet-alice-fail.png` }).catch(() => {});
   await bob.page.screenshot({ path: `${out}/duet-bob-fail.png` }).catch(() => {});
   for (const [n, p] of Object.entries(extraPages)) await p.screenshot({ path: `${out}/duet-${n}-fail.png` }).catch(() => {});

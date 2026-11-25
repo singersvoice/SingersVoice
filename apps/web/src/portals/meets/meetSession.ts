@@ -58,6 +58,14 @@ export class MeetSession {
   private pokeAgain = false;
   /** Heartbeats failed in a row (the backoff doubles with each). */
   private failures = 0;
+  /**
+   * The service's clock on the newest state this device holds (`serverEpochMs`, stamped by the service as the state
+   * was read — app.ts `roomOf`). An answer older than it — an action's or a heartbeat's answer that reached a busy
+   * page after the room the stream pushed in the meantime, or one whose state was read before a cued pause landed
+   * and finished after the room that carried the landing — would turn the clock back (a listener who had just come
+   * in gone again until the next heartbeat; a stage still "Pausing…"): its room is left alone, its own lines taken.
+   */
+  private stateAt = 0;
   /** After every action of this device went through (the snapshot is applied): the room tells its peers to fetch it now. */
   onActed: (() => void) | null = null;
   /** The service says a WebRTC signal waits for this device (polled when the event carries none). */
@@ -254,9 +262,21 @@ export class MeetSession {
     this.lastSeq = Math.max(this.lastSeq, ...fresh.map((c) => c.seq));
   }
 
+  /** Whether a state stamped `at` by the service is the newest this device has seen (and so is applied). */
+  private newest(at: number | undefined): boolean {
+    if (typeof at !== 'number' || !Number.isFinite(at) || at >= this.stateAt) {
+      if (typeof at === 'number' && Number.isFinite(at)) this.stateAt = at;
+      return true;
+    }
+    return false;
+  }
+
   private apply(snap: MeetSnapshot): void {
-    this.snapshot.value = snap;
-    if (snap.you) this.you.value = snap.you;
+    if (this.newest(snap.serverEpochMs)) {
+      this.snapshot.value = snap;
+      if (snap.you) this.you.value = snap.you;
+    }
+    // This device's own: the video hours (a heartbeat's answer alone carries them) and the chat (merged by sequence).
     if (snap.yourVideo) this.yourVideo.value = snap.yourVideo;
     this.takeChat(snap.chat);
   }
@@ -267,6 +287,7 @@ export class MeetSession {
    * names this device where it was (taken off the stage by the host, say), the heartbeat is asked now.
    */
   private applyRoom(room: RoomUpdate): void {
+    if (!this.newest(room.serverEpochMs)) return; // an older room than the one this device holds (a stream catching up): nothing to learn from it
     const prev = this.snapshot.value;
     const me = this.you.value;
     const named = me ? room.participants.find((p) => p.participantId === me.participantId) : undefined;

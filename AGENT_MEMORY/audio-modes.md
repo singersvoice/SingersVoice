@@ -1,6 +1,6 @@
 # Audio: the two listening modes, their levels and the vocal-loudness requirement
 
-Updated 24 Nov 2026. Read this before touching `apps/web/src/audio/*`, `packages/protocol/src/audio.ts`,
+Updated 24 Nov 2026 (evening). Read this before touching `apps/web/src/audio/*`, `packages/protocol/src/audio.ts`,
 `apps/web/public/worklets/*`, `apps/web/src/video/showRecorder.ts`, `apps/web/src/broadcast/*`.
 
 ## The two modes (the owner's words, 23 Nov 2026)
@@ -109,6 +109,41 @@ voice leaves each within 0.6 dB of the others (−16.2…−16.8 dBFS), so a pre
 Physical limit to remember: a voice cannot be pushed past about −9.5 K-weighted under a −1 dBFS ceiling — the
 rider pushes, the limiter holds, and the energy goes into limiting (density, then pumping), not loudness. Vocal
 "strength" beyond that comes from the balance (the track under it, the duck) and the tone (mid-forward EQ).
+
+## The voice gate and the howl suppressor (24 Nov evening; both modes, at the chain's start)
+
+The vocal chain starts `trim → sv-howl → sv-gate → pitch → …` (`voxforge.ts`); both stages are before every
+compressor, add no latency, and serve the singer's ears and the record alike (there is one chain).
+
+**`sv-gate` — a voice-evidence expander** (`public/worklets/gate.js`). The owner's recording of 24 Nov had breaths
+as loud as the sung lines (01:33, the interlude): a level-based expander cannot tell a breath taken close to the
+microphone from quiet singing, and everything behind the gate (the parallel compressor at −36 dB 10:1, the chain's
+rider, the bus's rider) lifts what passes. The gate now opens on evidence of a voice — a period found (NSDF ≥ 0.6
+on two agreeing 5-ms hops, a 32 ms window at 12 kHz, 75 Hz–1 kHz), a level within `loudUnder` 3 dB of the voice's
+own recent level (`singRef`: the voiced hops' level, falling 2 dB/s, never under −45, starting at −30), a bright
+sound (≥ 60 % of the energy over 4 kHz) within 12 dB of it (a sibilant starting a word), or a 10 dB transient — each
+standing `offset` 8 dB over the room's floor. Voiced evidence holds 150 ms, the rest 60 ms; without evidence the gain
+falls to −range over the 180 ms release (attack 3 ms). `range = 36 · gtAmt` (27 dB at the default 0.75; was 24 · gtAmt)
+because the parallel compressor behind the gate lifts anything near its threshold back by ten to one: 27 dB before it
+is about 20 dB at the chain's output. Measured (audio lab §0): the room −26 dB; a −28 dBFS breath in a break −17 dB
+and a −30 dBFS breath right after a phrase −16 dB (its second half) at the chain's output; the sung phrase, its last
+100 ms and its first 30 ms untouched (a hard onset opens it on the transient; a soft onset opens within ~15 ms on the
+period), a leading "s" untouched. The singer's control is unchanged (Voice gate on/off, "Room and breaths turned
+down"); the gate reports `{ floorDb, gainDb, voiced, singRef }` for support and the e2es.
+
+**`sv-howl` — a feedback suppressor** (`public/worklets/howl.js`). The squeaks at 00:30 and 01:46 of the same recording
+were pure tones (7.1 kHz; 9.25→9.43 kHz) with nothing beside them, growing 20 dB in two seconds: a loop closed by the
+earbud of a wired inline-mic earphone near its microphone. The stage looks at the input with a 2048-point FFT every
+512 frames; a bin over −55 dB that is a local maximum, ≥ 20 dB over the median of ±500 Hz (28 dB under 1.5 kHz), with
+no other peak within ±600 Hz inside 12 dB and no partial at f/2 or f/3 (a voice's harmonic has its fundamental
+under it), within 30 dB of the loudest bin, standing within one bin for 8 looks (85 ms; 18 looks under 1.5 kHz)
+without falling more than 2 dB between looks, gets a peaking notch of −36 dB at Q 24 for 10 s (renewed while the
+tone is heard; four at most, the oldest replaced). The look runs on the input, before the notches, so a tone that
+keeps coming (the loop still closed) keeps its notch. Always on (no singer control; the lab turns it off for its
+pure-tone measurements with `chain.setHowl(false)`). Measured (audio lab §0a): a 9.3 kHz squeal rising from −60 to
+−12 dBFS over 1.5 s leaves at −74 dBFS at 1 s (−44…−34 going in: caught on its way up) and −48 dBFS once steady
+(36 dB down); the voice under 4 kHz within 0.01 dB of the render without the tone; a voice alone (its harmonics,
+its vibrato) never notched. Real feedback on the owner's earphones could not be reproduced here.
 
 ## Presets (`packages/protocol/src/audio.ts`)
 

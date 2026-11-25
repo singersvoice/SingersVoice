@@ -1,6 +1,7 @@
 /**
  * VoxForge vocal chain on Web Audio (the browser twin of the JUCE plugin):
- * trim → noise gate (worklet: the room turned down between phrases) → pitch/auto-tune (worklet) → HPF → EQ
+ * trim → howl suppressor (worklet: a feedback squeal notched the moment it starts) → voice gate (worklet: the
+ * room and the breaths turned down whenever no voice is heard) → pitch/auto-tune (worklet) → HPF → EQ
  * (low · body · mid · presence · air) → compressor → parallel "punch" compression → de-esser → exciter →
  * saturation → chorus → stereo delay → reverb → rider → safety (limiter + soft clip) → out.
  *
@@ -31,11 +32,22 @@ export interface VoxForgeChain {
   readonly latencyFrames: number;
   /** How long the pitch stage holds the voice right now (ms, averaged over the last seconds): 0 while it passes the voice straight through. */
   readonly pitchDelayMs: number;
-  /** The noise gate as it stands (support / tests): the room it tracks and the gain it applies. */
-  readonly gate: { floorDb: number; gainDb: number };
+  /** The voice gate as it stands (support / tests): the room it tracks, the gain it applies, whether it hears a voice, the voice's recent level. */
+  readonly gate: { floorDb: number; gainDb: number; voiced: boolean; singRef: number };
+  /** The howl suppressor as it stands (support / tests): the notches in place and how many squeals it has caught. */
+  readonly howl: { notches: { hz: number; db: number }[]; found: number };
+  /** The howl suppressor on or off (support / the lab: a lone pure tone IS a squeal to it). On from the start. */
+  setHowl(on: boolean): void;
 }
 
 const dB = (v: number) => Math.pow(10, v / 20);
+/**
+ * The voice gate's range at full amount (dB; 27 at the default 0.75): what the room and a breath are turned down by
+ * before the compressors. Deep on purpose — the parallel compressor behind the gate lifts anything near its −36 dB
+ * threshold back up by ten to one, so a breath has to land well under it to stay down: 27 dB here is about 20 dB at
+ * the chain's output (audio lab §0).
+ */
+const GATE_RANGE_DB = 36;
 /**
  * Web Audio's lowpass / highpass take their Q in DECIBELS (a resonance), not as a quality factor:
  * a Butterworth section (Q 0.7071) is −3.01 dB there. Two in a row make a Linkwitz-Riley split.
@@ -103,9 +115,23 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
 
   let pitchNode: AudioWorkletNode | null = null;
   let gateNode: AudioWorkletNode | null = null;
+  let howlNode: AudioWorkletNode | null = null;
   let pitchDelayMs = 0;
-  const gate = { floorDb: -90, gainDb: 0 };
+  const gate = { floorDb: -90, gainDb: 0, voiced: false, singRef: -30 };
+  const howl: VoxForgeChain['howl'] = { notches: [], found: 0 };
   if (workletAvailable) {
+    try {
+      howlNode = new AudioWorkletNode(ctx, 'sv-howl', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+      howlNode.port.onmessage = (e: MessageEvent) => {
+        const m = e.data as { type?: string; notches?: { hz: number; db: number }[]; found?: number };
+        if (m.type === 'howl') {
+          howl.notches = m.notches ?? [];
+          howl.found = m.found ?? howl.found;
+        }
+      };
+    } catch {
+      howlNode = null;
+    }
     try {
       pitchNode = new AudioWorkletNode(ctx, 'sv-pitch-shifter', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       pitchNode.port.addEventListener('message', (e: MessageEvent) => {
@@ -119,10 +145,12 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
     try {
       gateNode = new AudioWorkletNode(ctx, 'sv-gate', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
       gateNode.port.onmessage = (e: MessageEvent) => {
-        const m = e.data as { type?: string; floorDb?: number; gainDb?: number };
+        const m = e.data as { type?: string; floorDb?: number; gainDb?: number; voiced?: boolean; singRef?: number };
         if (m.type === 'gate') {
           gate.floorDb = m.floorDb ?? gate.floorDb;
           gate.gainDb = m.gainDb ?? gate.gainDb;
+          gate.voiced = m.voiced ?? gate.voiced;
+          gate.singRef = m.singRef ?? gate.singRef;
         }
       };
     } catch {
@@ -258,6 +286,10 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
 
   // ---- wiring ----
   let last: AudioNode = input;
+  if (howlNode) {
+    last.connect(howlNode);
+    last = howlNode;
+  }
   if (gateNode) {
     last.connect(gateNode);
     last = gateNode;
@@ -342,7 +374,7 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
     }
     if (gateNode) {
       gateNode.parameters.get('enabled')?.setValueAtTime(p.gtOn && p.gtAmt > 0 ? 1 : 0, t);
-      gateNode.parameters.get('range')?.setTargetAtTime(24 * Math.max(0, Math.min(1, p.gtAmt)), t, ramp);
+      gateNode.parameters.get('range')?.setTargetAtTime(GATE_RANGE_DB * Math.max(0, Math.min(1, p.gtAmt)), t, ramp);
     }
 
     hpf.frequency.setTargetAtTime(p.eqOn ? p.hpfHz : 20, t, ramp);
@@ -414,6 +446,7 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
     for (const c of [comp, pcComp, dsComp, safety.limiter, exShaper, shaper]) c.disconnect();
     pitchNode?.disconnect();
     gateNode?.disconnect();
+    howlNode?.disconnect();
   }
 
   return {
@@ -430,5 +463,9 @@ export function createVoxForgeChain(ctx: BaseAudioContext, workletAvailable: boo
       return pitchNode ? pitchDelayMs : 0;
     },
     gate,
+    howl,
+    setHowl(on: boolean) {
+      howlNode?.parameters.get('enabled')?.setValueAtTime(on ? 1 : 0, ctx.currentTime);
+    },
   };
 }

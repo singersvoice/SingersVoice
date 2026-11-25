@@ -12,6 +12,8 @@ export class Camera {
   readonly on = signal(false);
   readonly facing = signal<'user' | 'environment'>('user');
   readonly deviceLabel = signal('');
+  /** Bumped when the video track is replaced in place (`replaceVideo`): whoever reads `stream` in a render follows the new one. */
+  readonly gen = signal(0);
   /** The microphone this camera was captured with (iOS: one capture per page — capture.ts), for the engine to adopt. */
   private audio: MediaTrackConstraints | null = null;
 
@@ -46,6 +48,27 @@ export class Camera {
     return this.audio;
   }
 
+  /**
+   * A fresh video track in place of the one running, the microphone captured with the camera (iOS) left exactly as it
+   * is: the old video tracks stop, the new one joins the same stream (the engine's adopted audio track is untouched).
+   */
+  replaceVideo(fresh: MediaStream): void {
+    const current = this.stream;
+    if (!current) {
+      this.adopt(fresh);
+      return;
+    }
+    for (const t of current.getVideoTracks()) {
+      t.stop();
+      current.removeTrack(t);
+    }
+    for (const t of fresh.getVideoTracks()) current.addTrack(t);
+    this.deviceLabel.value = fresh.getVideoTracks()[0]?.label ?? 'Camera';
+    this.stream = new MediaStream(current.getTracks()); // a new object: whoever watches the stream sees a new camera
+    this.on.value = true;
+    this.gen.value++;
+  }
+
   /** Use a stream captured elsewhere (combined audio+video getUserMedia on iOS). */
   adopt(stream: MediaStream, facing: 'user' | 'environment' = this.facing.value): void {
     this.stream?.getTracks().forEach((t) => t.stop());
@@ -53,6 +76,25 @@ export class Camera {
     this.facing.value = facing;
     this.deviceLabel.value = stream.getVideoTracks()[0]?.label ?? 'Camera';
     this.on.value = true;
+  }
+
+  /**
+   * The camera off while the microphone captured with it stays (iOS: the two came in one capture; the engine holds the
+   * audio track): the video tracks alone are stopped, the stream keeps the audio track for a later `replaceVideo`.
+   */
+  closeVideo(): void {
+    const current = this.stream;
+    if (!current) return;
+    for (const t of current.getVideoTracks()) {
+      t.stop();
+      current.removeTrack(t);
+    }
+    if (!current.getAudioTracks().some((t) => t.readyState === 'live')) {
+      this.close();
+      return;
+    }
+    this.on.value = false;
+    this.gen.value++;
   }
 
   async flip(): Promise<void> {

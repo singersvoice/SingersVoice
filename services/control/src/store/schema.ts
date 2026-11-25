@@ -33,6 +33,15 @@ CREATE TABLE IF NOT EXISTS catalog_tracks (
 );
 CREATE INDEX IF NOT EXISTS idx_catalog_published ON catalog_tracks(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_catalog_owner ON catalog_tracks(owner_user_id);
+CREATE TABLE IF NOT EXISTS catalog_sounds (
+  sound_id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL,
+  data TEXT NOT NULL,
+  search TEXT NOT NULL DEFAULT '',
+  published_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_sounds_published ON catalog_sounds(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_catalog_sounds_owner ON catalog_sounds(owner_user_id);
 CREATE TABLE IF NOT EXISTS meets (
   meet_id TEXT PRIMARY KEY,
   join_code TEXT NOT NULL UNIQUE,

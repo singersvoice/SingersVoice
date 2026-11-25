@@ -1,6 +1,6 @@
 # Recording and publishing workflows
 
-Updated 23 Nov 2026. Both listening modes (`audio-modes.md`) apply to every workflow here: what the singer
+Updated 24 Nov 2026 (evening). Both listening modes (`audio-modes.md`) apply to every workflow here: what the singer
 hears is PERFORMER MODE; every saved or sent output is PUBLISH MODE through the one mix bus.
 
 ## Offline takes (the Studio, `apps/web/src/portals/studio/Sing.tsx`)
@@ -10,14 +10,26 @@ hears is PERFORMER MODE; every saved or sent output is PUBLISH MODE through the 
   mic goes through the VoxForge chain (`audio/voxforge.ts`); the take recorder keeps the vocal (`vocal.wav`,
   48 kHz); the `ShowRecorder` ('solo' stage) films the stage and mixes the track + the voice through the
   **mix bus** (PUBLISH MODE) into the saved video. The monitor (PERFORMER MODE) is a separate path.
-- Review: Play mix plays the take through the same bus (`audio/takePlayback.ts`) — the review is the file. Keep
-  saves to Drive › SingersVoice › Performances (one level of files; a manifest `performance.json`, the vocal, the
-  video). The Performances page plays saved takes through the bus too; a meet's film plays as a video.
+- Review (24 Nov evening): Play mix / Pause plays the take through the same bus (`audio/takePlayback.ts`: a timeline of its
+  own — `positionMs`, `seek`, `pause`, `resume`) — the review is the file; the seek bar moves anywhere, Back / Forward
+  10 s, the show video kept on the take's timeline (`syncVideo`). **Save** (was Keep) files it in Drive › SingersVoice ›
+  Performances (one level of files; a manifest `performance.json`, the vocal, the video); **Discard** removes the Temp
+  copy only and goes back to the stage — it is gone once the take is saved (a saved performance is deleted from the
+  Performances page, with its own confirmation, never from the review). The Performances page says Saved (was Kept)
+  and plays saved takes through the bus too; a meet's film plays as a video.
+- Cancel (24 Nov evening): before Start the stage has Cancel (back to the track list / the performances for a join) and a
+  Home button; during a take Cancel (the Home icon, with a confirmation) stops the song, the recorder and the show,
+  throws the take away — nothing saved, no review — and returns to the stage as before Start (the camera stays on).
+- The camera's health on the stage: a frozen camera (its pixels still for 3 s, `video/stillness.ts`) is restarted by
+  itself within seconds — the camera alone; the microphone, the recorder and the song go on (studio e2e §5b measures it:
+  found in ~5 s, restarted ~6 s after the freeze, one video-only capture, the vocal whole).
 - Sync: the recording holds the track back by the device's measured round trip (`audio/sync.ts`); after each take
   the vocal is laid against the track and corrected when a clear lag is found.
 - **Joins:** a solo performance can be shared; another singer opens it from the portal and adds their own video
   and vocal to the same song (video allowed for everyone offline); the share link is view-only.
 - The rotating SV logo sits top-right on every stored recording.
+- Sound settings files and the singer's backgrounds: `defaults-and-preferences.md` (Save Sound Settings / Import Sound
+  Settings / Share; the Backgrounds folder as the record, upload / select / delete / restore).
 
 ## Live meets (`apps/web/src/portals/meets/*`, `services/control`)
 

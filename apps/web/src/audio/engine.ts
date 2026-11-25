@@ -24,7 +24,7 @@ export function noteName(midi: number): string {
 }
 
 /** Every AudioWorklet module the engine's context runs (the mix buses load the same files on theirs). */
-export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'mix-out.js', 'dynamics.js', 'shaper.js', 'leveler.js', 'gate.js', 'ducker.js'] as const;
+export const WORKLET_MODULES = ['pitch-shifter.js', 'recorder.js', 'mix-tap.js', 'mix-out.js', 'dynamics.js', 'shaper.js', 'leveler.js', 'gate.js', 'howl.js', 'ducker.js'] as const;
 
 /** Every stream in the app runs at 48 kHz (Opus, AAC, the mix): the context asks for it, so nothing is resampled block by block on the way. */
 export const ENGINE_RATE = 48000;
@@ -332,6 +332,11 @@ export class AudioEngine {
     // Talk-back may have been switched while the capture was on its way: the track is brought to the setting now wanted.
     this.aecSwap = this.aecSwap.then(() => this.applyAec()).catch(() => undefined);
     return videoStream;
+  }
+
+  /** The microphone's live track (null when none is open): a camera restart checks it survived. */
+  get micTrack(): MediaStreamTrack | null {
+    return this.micStream?.getAudioTracks().find((t) => t.readyState === 'live') ?? null;
   }
 
   closeMic(): void {

@@ -4,16 +4,17 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { getEngine, noteName, type AudioEngine } from '../../audio/engine.ts';
 import { bleedOffset, lagIsStrong, monoOf } from '../../audio/sync.ts';
 import { backgroundById, backgroundSrc, backgrounds, loadBackgrounds, StageBackground, BackgroundPicker, pickBackground } from '../../components/BackgroundPicker.tsx';
+import { isMyBackground, loadMyBackgrounds, myBackgrounds } from '../../lib/backgrounds.ts';
 import { ClipSheet } from '../../components/ClipSheet.tsx';
 import { VirtualStage } from '../../components/VirtualStage.tsx';
 import { FxPanel, PresetChips } from '../../components/FxPanel.tsx';
-import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcImage, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcTv, IcZoom } from '../../components/icons.tsx';
+import { IcCamera, IcCameraOff, IcDownload, IcFlip, IcHeadphones, IcHome, IcImage, IcPause, IcPlay, IcShare, IcSkipBack, IcSliders, IcStop, IcTv, IcZoom } from '../../components/icons.tsx';
 import { KaraokeVideo } from '../../components/KaraokeVideo.tsx';
 import { CueDeck, LyricsPanel } from '../../components/LyricsPanel.tsx';
 import { LevelDot, MicStatus } from '../../components/MicStatus.tsx';
 import { EarsDelayNote, EarsLevel, MixBalance } from '../../components/MixBalance.tsx';
 import { SeekBar } from '../../components/SeekBar.tsx';
-import { SaveSoundButton, VoicePreview } from '../../components/SoundPreview.tsx';
+import { SoundSettingsPanel, VoicePreview } from '../../components/SoundPreview.tsx';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
 import { TvPanel } from '../../components/TvPanel.tsx';
 import { tvLink } from '../../lib/tv.ts';
@@ -31,9 +32,9 @@ import { errorText, toast } from '../../lib/toast.ts';
 import { accountUserId, isDrive, profile, role, withProvider } from '../../state/session.ts';
 import { appSettings, audioSettings, updateApp, updateAudio } from '../../state/settings.ts';
 import { Camera } from '../../video/camera.ts';
-import { openCamera, openMicWithCamera, releaseMicAfterSong, restartCamera } from '../../video/capture.ts';
+import { closeCamera, openCameraKeepingMic, openMicWithCamera, releaseMicAfterSong, restartCamera } from '../../video/capture.ts';
 import { isPermissionDenied, mediaPermissions, permissionHelp } from '../../lib/permissions.ts';
-import { LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
+import { AUTO_RESTART_EVERY_MS, LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
 import { ShowRecorder } from '../../video/showRecorder.ts';
 import { TakePlayback } from '../../audio/takePlayback.ts';
 import { StageCompositor } from '../../video/stage.ts';
@@ -176,9 +177,10 @@ export function Sing(props: { id?: string; joinId?: string }) {
   /** The take's video is the show: my cut-out on the stage background with the mix — the singers half as big again as a meet's show (no lyrics to share the picture with), no empty stage under them. */
   const show = useMemo(() => new ShowRecorder(undefined, undefined, undefined, 'solo'), []);
   useEffect(() => {
-    (window as unknown as { __svFeed?: LocalFeed; __svShow?: ShowRecorder }).__svFeed = feed; // support / e2e hooks
+    (window as unknown as { __svFeed?: LocalFeed; __svShow?: ShowRecorder; __svCamera?: Camera }).__svFeed = feed; // support / e2e hooks
     (window as unknown as { __svShow?: ShowRecorder }).__svShow = show;
-  }, [feed, show]);
+    (window as unknown as { __svCamera?: Camera }).__svCamera = camera;
+  }, [feed, show, camera]);
   const [blend, setBlend] = useState<'loading' | 'model' | 'oval' | 'off'>('off');
   const startedEpoch = useRef(0);
   const raf = useRef(0);
@@ -277,9 +279,12 @@ export function Sing(props: { id?: string; joinId?: string }) {
   }, [layers]);
 
   // My cut-out on the virtual stage follows the camera stream, framing and slot.
+  void camera.gen.value; // (a video track replaced in place — an iOS camera restart — re-renders: `camera.stream` is read fresh)
   const camStream = camera.stream;
   const camOn = camera.on.value;
-  // The camera's health: a camera the browser muted or ended, or one frozen on a picture, is restarted — once by itself, then from a tap.
+  // The camera's health: a camera the browser muted or ended, or one frozen on a picture (localFeed.ts: its pixels still for a
+  // few seconds), is restarted by itself — the camera alone, never the microphone or the song (capture.ts) — at most once in
+  // AUTO_RESTART_EVERY_MS; the button on the strip does it any time.
   const [camHealth, setCamHealth] = useState<FeedHealth>('ok');
   /** The browser said no to the camera (its own setting): said on the stage, with the way back. */
   const [camBlocked, setCamBlocked] = useState(false);
@@ -288,7 +293,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
   useEffect(() => {
     feed.onHealth = (h) => {
       setCamHealth(h);
-      if (h === 'ok' || !camera.on.value || Date.now() - autoRestartAt.current < 60_000) return;
+      if (h === 'ok' || !camera.on.value || Date.now() - autoRestartAt.current < AUTO_RESTART_EVERY_MS) return;
       autoRestartAt.current = Date.now();
       void restartCam();
     };
@@ -320,13 +325,15 @@ export function Sing(props: { id?: string; joinId?: string }) {
     // My cut-out beside the show (join.ts): what the next singer's stage will draw me from.
     show.setCutoutSource(camOn && feed.source.kind === 'person' ? { person: feed.canvas, mask: feed.maskCanvas } : null);
   }, [camStream, camOn, mySlot, stageSlot, facing, layers]);
-  // The recording draws the same background the stage shows.
+  // The recording draws the same background the stage shows (an upload of the singer's own once the Backgrounds folder is listed).
   const bgItems = backgrounds.value;
+  const myBgItems = myBackgrounds.value;
   useEffect(() => {
     void loadBackgrounds();
+    if (isMyBackground(app.backgroundId)) void loadMyBackgrounds();
     const item = backgroundById(app.backgroundId);
     show.setBackground(item ?? null, backgroundSrc(item));
-  }, [app.backgroundId, bgItems.length]);
+  }, [app.backgroundId, bgItems.length, myBgItems]);
 
   // Apply FX whenever settings change.
   useEffect(() => {
@@ -347,8 +354,9 @@ export function Sing(props: { id?: string; joinId?: string }) {
   useEffect(() => {
     if (phase === 'loading' || phase === 'review') return;
     if (app.cameraOn && videoAllowed && !camera.on.value) {
-      // (on iOS the microphone comes with it: one prompt, one capture for the whole visit — capture.ts)
-      openCamera(camera)
+      // (on iOS the microphone comes with it: one prompt, one capture for the whole visit — capture.ts; with the microphone
+      // already open, the camera alone joins it: the voice is never touched by the camera button)
+      openCameraKeepingMic(engineRef.current, camera)
         .then(() => setCamBlocked(false))
         .catch((e) => {
           if (isPermissionDenied(e)) {
@@ -356,7 +364,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
             toast(`The camera is blocked in this browser — singing without video. ${permissionHelp('camera')}`, 'warn', 12000);
           } else toast('Camera unavailable — singing without video', 'warn');
         });
-    } else if ((!app.cameraOn || !videoAllowed) && camera.on.value) camera.close();
+    } else if ((!app.cameraOn || !videoAllowed) && camera.on.value) closeCamera(engineRef.current, camera);
   }, [app.cameraOn, app.cameraFacing, app.cameraDeviceId, phase, videoAllowed, cameraAllowedAgain]);
 
   useEffect(() => {
@@ -474,6 +482,32 @@ export function Sing(props: { id?: string; joinId?: string }) {
     show.resume();
     player.onEnded = () => void finishRef.current();
     setPhase('playing');
+  };
+
+  /** Stop everything and throw the take away — nothing is saved; back to the stage as it was before Start (the camera stays). */
+  const cancelTake = async () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (!confirm('Stop and throw this take away? Nothing of it is saved.')) return;
+    cancelAnimationFrame(raf.current);
+    setPhase('finishing');
+    setCountdown(null);
+    try {
+      const player = engine.player;
+      if (player) {
+        player.onEnded = null;
+        player.stop();
+      }
+      if (engine.recorder?.recording) await engine.recorder.stop().catch(() => undefined);
+      await show.stop().catch(() => undefined);
+      layers?.sync(0, 0, false);
+      releaseMicAfterSong(engine);
+      await keepAwake(false);
+    } finally {
+      tMs.value = 0;
+      setPhase('ready');
+      toast('Take cancelled — nothing was saved', 'ok', 4000);
+    }
   };
 
   /** Throw the current take away and start the song again from the top. */
@@ -664,6 +698,15 @@ export function Sing(props: { id?: string; joinId?: string }) {
         <section class="controls compact">
           <SeekBar tMs={tMs} durationMs={track.durationMs} onSeek={!join && (phase === 'playing' || phase === 'paused') ? seek : undefined} />
           <div class="main">
+            {live ? (
+              <button class="btn icon" aria-label="Cancel the take" title="Cancel: stop and throw this take away (nothing is saved)" data-cancel-take onClick={() => void cancelTake()}>
+                <IcHome />
+              </button>
+            ) : (
+              <a class="btn icon" aria-label="Home" title="Home — leave the stage (nothing has been recorded)" href={href('/')} data-home>
+                <IcHome />
+              </a>
+            )}
             <button class={`btn icon ${app.cameraOn && videoAllowed ? 'on' : ''}`} aria-label="Camera" title={videoAllowed ? 'Camera' : 'Your account is audio only — no camera'} onClick={() => updateApp({ cameraOn: !app.cameraOn })} disabled={busy || !videoAllowed}>
               {app.cameraOn && videoAllowed ? <IcCamera /> : <IcCameraOff />}
             </button>
@@ -701,9 +744,14 @@ export function Sing(props: { id?: string; joinId?: string }) {
                 </button>
               </>
             ) : (
-              <button class="btn big primary" onClick={() => void start()} disabled={busy}>
-                {busy ? <Spinner /> : <IcPlay />} {busy ? (phase === 'finishing' ? 'Wrapping up…' : 'Starting…') : 'Start singing'}
-              </button>
+              <>
+                <button class="btn big primary" onClick={() => void start()} disabled={busy}>
+                  {busy ? <Spinner /> : <IcPlay />} {busy ? (phase === 'finishing' ? 'Wrapping up…' : 'Starting…') : 'Start singing'}
+                </button>
+                <a class="btn ghost" href={href(join ? '/studio/performances' : '/studio/sing')} title={join ? 'Back to the performances — nothing is recorded' : 'Back to the track list — nothing is recorded'} data-cancel-stage>
+                  Cancel
+                </a>
+              </>
             )}
           </div>
           <div class="row between small">
@@ -757,7 +805,7 @@ export function Sing(props: { id?: string; joinId?: string }) {
           </div>
           {!live && <VoicePreview engine={engineRef.current} compact />}
           <FxPanel value={audio} onChange={updateAudio} />
-          <SaveSoundButton compact />
+          <SoundSettingsPanel compact />
         </div>
       </Sheet>
 
@@ -825,6 +873,9 @@ export function Review(props: {
   const heardShift = props.heardShift ?? null;
   const [nudge, setNudge] = useState(0);
   const [playing, setPlaying] = useState(false);
+  /** Where the review is on the take's timeline (ms), written every frame while it plays: the seek bar and the clock read it. */
+  const tMs = useSignal(0);
+  const clockRaf = useRef(0);
   const [saving, setSaving] = useState<{ label: string; fraction: number } | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [savedState, setSavedState] = useState<'temp' | 'kept' | null>(null);
@@ -846,6 +897,8 @@ export function Review(props: {
     void saveTake('temp');
     return () => {
       stop();
+      cancelAnimationFrame(clockRaf.current);
+      clearTimeout(videoStart.current);
       player.current?.close();
       player.current = null;
     };
@@ -854,29 +907,70 @@ export function Review(props: {
   const balance = appSettings.value;
   useEffect(() => player.current?.setBalance(balance.trackDb, balance.vocalDb), [balance.trackDb, balance.vocalDb]);
 
+  /** The show video put on the take's timeline at `ms`: its frame 0 sits at `videoOffsetMs` (before the track, when negative). */
+  const videoStart = useRef<ReturnType<typeof setTimeout>>();
+  const syncVideo = (ms: number, play: boolean) => {
+    const v = videoRef.current;
+    clearTimeout(videoStart.current);
+    if (!v || take.videoOffsetMs === null) return;
+    const vt = (ms - take.videoOffsetMs) / 1000; // the video's own time for the take's `ms`
+    if (vt >= 0) {
+      v.currentTime = vt;
+      if (play) void v.play().catch(() => undefined);
+      else v.pause();
+    } else {
+      v.pause();
+      v.currentTime = 0;
+      if (play) videoStart.current = setTimeout(() => void videoRef.current?.play().catch(() => undefined), -vt * 1000);
+    }
+  };
+
   const stop = () => {
     player.current?.stop();
+    cancelAnimationFrame(clockRaf.current);
+    clearTimeout(videoStart.current);
     setPlaying(false);
     videoRef.current?.pause();
   };
 
-  const play = async () => {
+  /** The clock while the review plays: the seek bar follows the audio. */
+  const runClock = () => {
+    cancelAnimationFrame(clockRaf.current);
+    const tick = () => {
+      const p = player.current;
+      if (!p) return;
+      tMs.value = p.positionMs();
+      if (p.playing) clockRaf.current = requestAnimationFrame(tick);
+    };
+    clockRaf.current = requestAnimationFrame(tick);
+  };
+
+  const play = async (fromMs = tMs.peek() >= take.durationMs ? 0 : tMs.peek()) => {
     stop();
     const p = player.current ?? new TakePlayback();
     player.current = p;
     const a = appSettings.peek();
-    await p.play({ backing: loaded.audio, trackId: props.join ? undefined : loaded.track.trackId, vocal: take.vocal, vocalAtMs: alignMs, trackDb: a.trackDb, vocalDb: a.vocalDb, onEnded: () => setPlaying(false) });
-    if (videoRef.current && take.videoOffsetMs !== null) {
-      const vo = take.videoOffsetMs / 1000;
-      videoRef.current.currentTime = Math.max(0, -vo);
-      setTimeout(() => void videoRef.current?.play().catch(() => undefined), Math.max(0, vo * 1000) + 200);
-    }
+    await p.play({ backing: loaded.audio, trackId: props.join ? undefined : loaded.track.trackId, vocal: take.vocal, vocalAtMs: alignMs, trackDb: a.trackDb, vocalDb: a.vocalDb, onEnded: () => (setPlaying(false), videoRef.current?.pause(), (tMs.value = p.durationMs || take.durationMs)) }, fromMs);
+    syncVideo(fromMs, true);
     setPlaying(true);
+    runClock();
   };
+
+  /** Move to `ms` on the take's timeline: playing, it plays on from there; stopped, the next Play starts there. */
+  const seekTo = (ms: number) => {
+    const to = Math.max(0, Math.min(take.durationMs, ms));
+    tMs.value = to;
+    if (playing) void play(to);
+    else {
+      void player.current?.seek(to);
+      syncVideo(to, false);
+    }
+  };
+  const skip = (deltaMs: number) => seekTo(tMs.peek() + deltaMs);
 
   async function saveTake(state: 'temp' | 'kept'): Promise<void> {
     if (!take.vocal.size && !take.video) return;
-    setSaving({ label: state === 'temp' ? 'Securing take in Temp' : 'Keeping performance', fraction: 0.02 });
+    setSaving({ label: state === 'temp' ? 'Securing take in Temp' : 'Saving performance', fraction: 0.02 });
     try {
       if (savedId && state === 'kept') {
         await withProvider((p) => p.keepPerformance(savedId));
@@ -900,7 +994,7 @@ export function Review(props: {
       }
       setSavedState(state);
       if (state === 'kept') {
-        toast(`Kept in ${isDrive.value ? `Drive › SingersVoice › Performances › ${props.mode === 'live' ? 'Live' : 'Offline'}` : 'Performances'}`, 'ok', 5000);
+        toast(`Saved in ${isDrive.value ? `Drive › SingersVoice › Performances › ${props.mode === 'live' ? 'Live' : 'Offline'}` : 'Performances'}`, 'ok', 5000);
         if (appSettings.peek().socialOffer && take.video && take.video.size > 0) {
           stop();
           setClipping(true);
@@ -930,14 +1024,17 @@ export function Review(props: {
     }
   };
 
+  /** Throw this take away: its Temp copy goes (only that one — a saved performance is never touched here), and back to the stage. */
   const discard = async () => {
-    if (!confirm('Discard this take?')) return;
+    if (savedState === 'kept') return; // (the button is gone once saved; Performances deletes a saved one, with its own confirmation)
+    if (!confirm('Discard this take? It is removed for good; your saved performances are not affected.')) return;
     stop();
     try {
       if (savedId) await withProvider((p) => p.deletePerformance(savedId));
     } catch (e) {
       toast(errorText(e), 'warn');
     }
+    toast('Take discarded', 'ok', 3000);
     props.onAgain();
   };
 
@@ -954,16 +1051,25 @@ export function Review(props: {
             {take.video && take.video.size ? ` · show video ${(take.video.size / 1048576).toFixed(1)} MB` : ''}
             {take.cutout && take.cutout.size ? ` · your cut-out ${(take.cutout.size / 1048576).toFixed(1)} MB` : ''}
           </div>
-          {savedState === 'temp' && <span class="chip warn">In Temp — auto-deletes in 7 days unless kept</span>}
-          {savedState === 'kept' && <span class="chip ok">Kept</span>}
+          {savedState === 'temp' && <span class="chip warn">In Temp — auto-deletes in 7 days unless saved</span>}
+          {savedState === 'kept' && <span class="chip ok">Saved</span>}
           {saving && <Progress fraction={saving.fraction} label={saving.label} />}
         </div>
         <div class="perf-player">
           {videoUrl && <video ref={videoRef} src={videoUrl} muted playsInline />}
           {videoUrl && <div class="small faint">The video is the show itself — your cut-out on the stage, with the mix as its sound. Play mix plays the take through the same mix (the track, your voice at the Track / Vocal volume), so what you hear here is what is saved.</div>}
+          <div data-review-timeline>
+            <SeekBar tMs={tMs} durationMs={take.durationMs} onSeek={seekTo} />
+          </div>
           <div class="row">
-            <button class="btn primary" onClick={() => (playing ? stop() : void play())}>
-              {playing ? <IcStop /> : <IcPlay />} {playing ? 'Stop' : 'Play mix'}
+            <button class="btn icon" aria-label="Back 10 seconds" title="Back 10 seconds" data-review-back onClick={() => skip(-10_000)}>
+              <IcSkipBack />
+            </button>
+            <button class="btn primary" data-review-play onClick={() => (playing ? stop() : void play())}>
+              {playing ? <IcPause /> : <IcPlay />} {playing ? 'Pause' : 'Play mix'}
+            </button>
+            <button class="btn icon" aria-label="Forward 10 seconds" title="Forward 10 seconds" data-review-forward onClick={() => skip(10_000)}>
+              <IcSkipBack style="transform:scaleX(-1)" />
             </button>
             <MixBalance compact />
             <div style="flex:1">
@@ -977,12 +1083,14 @@ export function Review(props: {
           </div>
         </div>
         <div class="grid-2">
-          <button class="btn accent lg" disabled={saving !== null || savedState === 'kept'} onClick={() => void saveTake('kept')}>
-            Keep
+          <button class="btn accent lg" disabled={saving !== null || savedState === 'kept'} onClick={() => void saveTake('kept')} data-save-take>
+            {savedState === 'kept' ? 'Saved' : 'Save'}
           </button>
-          <button class="btn danger lg" disabled={saving !== null} onClick={() => void discard()}>
-            Discard
-          </button>
+          {savedState !== 'kept' && (
+            <button class="btn danger lg" disabled={saving !== null} onClick={() => void discard()} data-discard-take>
+              Discard
+            </button>
+          )}
         </div>
         {take.video && take.video.size > 0 && (
           <button class="btn" disabled={saving !== null} onClick={() => (stop(), setClipping(true))} data-post-clip>

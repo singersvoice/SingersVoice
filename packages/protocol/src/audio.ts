@@ -16,8 +16,8 @@
 export interface VoxForgeParams {
   inGain: number; // dB -24..24
   outGain: number; // dB -24..24
-  gtOn: boolean; // noise gate: the room (hiss, a fan) turned down while nobody sings, out of the way the moment somebody does
-  gtAmt: number; // 0..1 how far the room is turned down (1 = 24 dB)
+  gtOn: boolean; // voice gate: the room (hiss, a fan) and the breaths turned down whenever no voice is heard, out of the way the moment one is
+  gtAmt: number; // 0..1 how far the room and the breaths are turned down (1 = 36 dB before the compressors; voxforge.ts)
   pitchOn: boolean;
   octave: number; // -2..2 (×12 st)
   pitchSt: number; // -12..12 semitones
@@ -76,7 +76,7 @@ export interface ParamRange {
 export const VOXFORGE_RANGES: Record<Exclude<keyof VoxForgeParams, `${string}On`>, ParamRange> = {
   inGain: { min: -24, max: 24, step: 0.5, unit: 'dB', label: 'Input trim' },
   outGain: { min: -24, max: 24, step: 0.5, unit: 'dB', label: 'Output gain' },
-  gtAmt: { min: 0, max: 1, step: 0.01, unit: '', label: 'Room turned down' },
+  gtAmt: { min: 0, max: 1, step: 0.01, unit: '', label: 'Room and breaths turned down' },
   octave: { min: -2, max: 2, step: 1, unit: 'oct', label: 'Octave' },
   pitchSt: { min: -12, max: 12, step: 1, unit: 'st', label: 'Pitch' },
   pitchCt: { min: -100, max: 100, step: 1, unit: 'ct', label: 'Sharp' },

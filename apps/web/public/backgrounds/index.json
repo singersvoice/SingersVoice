@@ -161,6 +161,177 @@
    "width": 1000,
    "height": 560,
    "label": "MyTestBG18"
+  },
+  {
+   "id": "rainy-forest-road",
+   "kind": "image",
+   "src": "rainy-forest-road.webp",
+   "thumb": "thumbs/rainy-forest-road.webp",
+   "width": 1200,
+   "height": 800,
+   "label": "Rainy forest road"
+  },
+  {
+   "id": "tv-studio",
+   "kind": "image",
+   "src": "tv-studio.webp",
+   "thumb": "thumbs/tv-studio.webp",
+   "width": 480,
+   "height": 360,
+   "label": "TV studio"
+  },
+  {
+   "id": "shelf-wall",
+   "kind": "image",
+   "src": "shelf-wall.webp",
+   "thumb": "thumbs/shelf-wall.webp",
+   "width": 642,
+   "height": 360,
+   "label": "Shelf wall"
+  },
+  {
+   "id": "blue-led-stage",
+   "kind": "image",
+   "src": "blue-led-stage.webp",
+   "thumb": "thumbs/blue-led-stage.webp",
+   "width": 612,
+   "height": 408,
+   "label": "Blue LED stage"
+  },
+  {
+   "id": "brick-tv-set",
+   "kind": "image",
+   "src": "brick-tv-set.webp",
+   "thumb": "thumbs/brick-tv-set.webp",
+   "width": 620,
+   "height": 350,
+   "label": "Brick TV set"
+  },
+  {
+   "id": "purple-spotlights",
+   "kind": "image",
+   "src": "purple-spotlights.webp",
+   "thumb": "thumbs/purple-spotlights.webp",
+   "width": 624,
+   "height": 349,
+   "label": "Purple spotlights"
+  },
+  {
+   "id": "gold-curtain-theatre",
+   "kind": "image",
+   "src": "gold-curtain-theatre.webp",
+   "thumb": "thumbs/gold-curtain-theatre.webp",
+   "width": 691,
+   "height": 388,
+   "label": "Gold curtain theatre"
+  },
+  {
+   "id": "gold-award",
+   "kind": "image",
+   "src": "gold-award.webp",
+   "thumb": "thumbs/gold-award.webp",
+   "width": 768,
+   "height": 432,
+   "label": "Gold award"
+  },
+  {
+   "id": "gold-light-podium",
+   "kind": "image",
+   "src": "gold-light-podium.webp",
+   "thumb": "thumbs/gold-light-podium.webp",
+   "width": 612,
+   "height": 361,
+   "label": "Gold light podium"
+  },
+  {
+   "id": "gold-stripes",
+   "kind": "image",
+   "src": "gold-stripes.webp",
+   "thumb": "thumbs/gold-stripes.webp",
+   "width": 612,
+   "height": 367,
+   "label": "Gold stripes"
+  },
+  {
+   "id": "disco-floor",
+   "kind": "image",
+   "src": "disco-floor.webp",
+   "thumb": "thumbs/disco-floor.webp",
+   "width": 480,
+   "height": 270,
+   "label": "Disco floor"
+  },
+  {
+   "id": "disco-stage",
+   "kind": "image",
+   "src": "disco-stage.webp",
+   "thumb": "thumbs/disco-stage.webp",
+   "width": 350,
+   "height": 233,
+   "label": "Disco stage"
+  },
+  {
+   "id": "red-curtain-stage",
+   "kind": "image",
+   "src": "red-curtain-stage.webp",
+   "thumb": "thumbs/red-curtain-stage.webp",
+   "width": 612,
+   "height": 349,
+   "label": "Red curtain stage"
+  },
+  {
+   "id": "red-spotlights",
+   "kind": "image",
+   "src": "red-spotlights.webp",
+   "thumb": "thumbs/red-spotlights.webp",
+   "width": 642,
+   "height": 360,
+   "label": "Red spotlights"
+  },
+  {
+   "id": "lake-window",
+   "kind": "image",
+   "src": "lake-window.webp",
+   "thumb": "thumbs/lake-window.webp",
+   "width": 1920,
+   "height": 1440,
+   "label": "Lake window"
+  },
+  {
+   "id": "forest-boardwalk",
+   "kind": "image",
+   "src": "forest-boardwalk.webp",
+   "thumb": "thumbs/forest-boardwalk.webp",
+   "width": 1344,
+   "height": 768,
+   "label": "Forest boardwalk"
+  },
+  {
+   "id": "lake-boardwalk",
+   "kind": "image",
+   "src": "lake-boardwalk.webp",
+   "thumb": "thumbs/lake-boardwalk.webp",
+   "width": 1400,
+   "height": 980,
+   "label": "Lake boardwalk"
+  },
+  {
+   "id": "rain-on-window",
+   "kind": "image",
+   "src": "rain-on-window.webp",
+   "thumb": "thumbs/rain-on-window.webp",
+   "width": 740,
+   "height": 491,
+   "label": "Rain on the window"
+  },
+  {
+   "id": "rainy-jungle-road",
+   "kind": "image",
+   "src": "rainy-jungle-road.webp",
+   "thumb": "thumbs/rainy-jungle-road.webp",
+   "width": 740,
+   "height": 493,
+   "label": "Rainy jungle road"
   }
  ]
 }

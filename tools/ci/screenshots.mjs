@@ -121,8 +121,8 @@ for (const m of matrix) {
       await page.getByText('Your take').waitFor({ timeout: 30000 });
       await wait(1500);
       await shot('15-review');
-      await page.getByRole('button', { name: 'Keep' }).click();
-      await page.getByText('Kept', { exact: true }).first().waitFor({ timeout: 30000 });
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+      await page.getByText('Saved', { exact: true }).first().waitFor({ timeout: 30000 });
       await wait(500);
       // A take with a show video kept: the clip sheet opens by itself (Settings → Social) — pictured, then closed.
       if (await page.locator('[data-clip-sheet]').count()) {

@@ -25,7 +25,7 @@ import { LiveShow, useLiveStatus, type LiveShowState } from '../../components/Li
 import { EarsDelayNote, EarsLevel, MixBalance } from '../../components/MixBalance.tsx';
 import { audienceLine } from './audience.ts';
 import { PictureChoices } from '../../components/PictureChoices.tsx';
-import { SaveSoundButton } from '../../components/SoundPreview.tsx';
+import { SoundSettingsPanel } from '../../components/SoundPreview.tsx';
 import { TvPanel } from '../../components/TvPanel.tsx';
 import { tvLink } from '../../lib/tv.ts';
 import { Page } from '../../components/Shell.tsx';
@@ -1338,7 +1338,7 @@ function LiveStage(props: {
               <summary>Tweak the voice FX — every control of the vocal chain, live on your voice</summary>
               <FxPanel value={audio} onChange={updateAudio} compact />
             </details>
-            <SaveSoundButton compact />
+            <SoundSettingsPanel compact />
           </div>
         )}
         <section class="controls compact">

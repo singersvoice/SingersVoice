@@ -4,7 +4,7 @@ import { BackgroundPicker, pickBackground } from '../components/BackgroundPicker
 import { FxPanel } from '../components/FxPanel.tsx';
 import { PermissionLine } from '../components/PermissionLine.tsx';
 import { EarsLevel, MixBalance } from '../components/MixBalance.tsx';
-import { SaveSoundButton, VoicePreview } from '../components/SoundPreview.tsx';
+import { SoundSettingsPanel, VoicePreview } from '../components/SoundPreview.tsx';
 import { IcDrive } from '../components/icons.tsx';
 import { dbLabel, INSTRUMENT_LEVELS } from '../components/MicStatus.tsx';
 import { PictureChoices } from '../components/PictureChoices.tsx';
@@ -308,7 +308,7 @@ export function Settings() {
           <h2>VoxForge voice</h2>
           <p class="small muted">Every preset and every tweak can be heard on your own voice before a song: Preview opens the microphone through the chain as it stands. Saved automatically to {isDrive.value ? 'Drive › SingersVoice › Config › audio_plugin_settings.json' : 'this device'} — and now, with Save.</p>
           <VoicePreview />
-          <SaveSoundButton />
+          <SoundSettingsPanel />
           <FxPanel value={audio} onChange={updateAudio} />
         </section>
 

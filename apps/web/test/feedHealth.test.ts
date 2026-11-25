@@ -5,7 +5,7 @@
  * API calls healthy. A video that never presented frames is never judged by them.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { FROZEN_AFTER, LocalFeed, STILL_AFTER, type FeedHealth } from '../src/video/localFeed.ts';
+import { FROZEN_AFTER, LocalFeed, PIXELS_STILL_AFTER, STILL_AFTER, type FeedHealth } from '../src/video/localFeed.ts';
 import { fakeDom, FakeStream, FakeTrack } from './helpers/fakeDom.ts';
 
 const dom = fakeDom();
@@ -111,6 +111,37 @@ describe('LocalFeed health', () => {
       await vi.advanceTimersByTimeAsync(50);
     }
   };
+
+  it('calls a camera whose pixels stand exactly still frozen within PIXELS_STILL_AFTER seconds (frames flowing all the while), and ok once they move — a dark picture never', async () => {
+    vi.useFakeTimers();
+    try {
+      const feed = new LocalFeed();
+      const seen: FeedHealth[] = [];
+      feed.onHealth = (h) => seen.push(h);
+      feed.attach(new FakeStream([new FakeTrack()]) as unknown as MediaStream, false);
+      feed.segmenter.mode = 'model';
+      const live = dom.current.video.pixels;
+      await present(feed, 2, (t) => figureMask(60 + (Math.floor(t / 150) % 2 ? 1 : 0)));
+      expect(seen).toEqual([]);
+      const frozenPixels = live();
+      dom.current.video.pixels = () => frozenPixels; // the camera presents the same frame over and over (the model still answers: the same cut-out)
+      await present(feed, PIXELS_STILL_AFTER + 1.5, () => figureMask(60));
+      expect(seen).toEqual(['frozen']);
+      expect(feed.cameraLine).toMatch(/picture still \d+ s/);
+      dom.current.video.pixels = live; // it moves again
+      await present(feed, 3, (t) => figureMask(60 + (Math.floor(t / 150) % 2 ? 1 : 0)));
+      expect(seen).toEqual(['frozen', 'ok']);
+      // A lens covered: flat black, noiseless — not a frozen camera.
+      const dark = new Uint8ClampedArray(64 * 16 * 4);
+      dom.current.video.pixels = () => dark;
+      await present(feed, PIXELS_STILL_AFTER + 3, () => new Uint8ClampedArray(120 * 160 * 4));
+      expect(seen).toEqual(['frozen', 'ok']);
+      dom.current.video.pixels = live;
+      feed.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('calls a camera that keeps presenting the same picture frozen — the model measuring the singer exactly the same for STILL_AFTER seconds — and ok once it moves', async () => {
     vi.useFakeTimers();

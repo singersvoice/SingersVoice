@@ -23,6 +23,10 @@ import {
   normalizeWatchUrl,
   type CatalogPublishRequest,
   type CatalogTrack,
+  parseSoundSettings,
+  SOUND_NAME,
+  type SharedSound,
+  type SoundPublishRequest,
   isDriveUrl,
   isRegistryId,
   registrySourceKey,
@@ -772,6 +776,49 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     return ok ? c.json({ ok: true as const }) : err(c, 404, 'no_track', 'Not in the catalog (or not yours)');
   });
 
+  // ---------- Shared sound settings (sounds.ts): a saved sound file, a few kilobytes of JSON, kept here for any singer to import ----------
+
+  const SOUND_MAX_BYTES = 16 * 1024;
+
+  app.get('/catalog/sounds', async (c) => {
+    const { store } = c.get('deps');
+    const q = (c.req.query('q') ?? '').trim().slice(0, 80);
+    const mine = c.req.query('mine') === '1';
+    const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') ?? 50)));
+    const offset = Math.max(0, Number(c.req.query('cursor') ?? 0));
+    const { items, total } = await store.listSounds(q, offset, limit, mine ? c.get('user').userId : undefined);
+    return c.json({ items, total });
+  });
+
+  app.get('/catalog/sounds/:id', async (c) => {
+    const sound = await c.get('deps').store.getSound(c.req.param('id'));
+    return sound ? c.json({ sound }) : err(c, 404, 'no_sound', 'These sound settings are not shared (or were withdrawn)');
+  });
+
+  app.post('/catalog/sounds', async (c) => {
+    const raw = await c.req.text();
+    if (raw.length > SOUND_MAX_BYTES) return err(c, 413, 'too_large', 'A sound settings file is a few kilobytes');
+    let body: SoundPublishRequest | null = null;
+    try {
+      body = JSON.parse(raw) as SoundPublishRequest;
+    } catch {
+      body = null;
+    }
+    if (!SOUND_NAME.test(String(body?.file?.name ?? ''))) return err(c, 400, 'bad_request', 'The name must be initials_date_time (what Save Sound Settings gives a file)');
+    const file = body?.file ? parseSoundSettings(body.file) : null;
+    if (!file) return err(c, 400, 'bad_request', 'file must be a sound settings file (singersvoice.sound-settings.v1)');
+    const user = c.get('user');
+    const now = new Date().toISOString();
+    const sound: SharedSound = { soundId: `${user.userId}:${file.name}`, ownerUserId: user.userId, ownerName: user.name, name: file.name, presetId: file.audio.activePresetId, publishedAt: now, updatedAt: now, file: { ...file, ownerName: user.name } };
+    const existing = await c.get('deps').store.getSound(sound.soundId);
+    return c.json({ sound: await c.get('deps').store.publishSound(sound) }, existing ? 200 : 201);
+  });
+
+  app.delete('/catalog/sounds/:id', async (c) => {
+    const ok = await c.get('deps').store.unpublishSound(c.req.param('id'), c.get('user').userId);
+    return ok ? c.json({ ok: true as const }) : err(c, 404, 'no_sound', 'Not shared (or not yours)');
+  });
+
   app.post('/catalog/tracks/:id/pull', async (c) => {
     const { store } = c.get('deps');
     const t = await store.getCatalogTrack(c.req.param('id'));
@@ -1069,30 +1116,34 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
    * idle expiry), the people still heard from, the slots of those who are not freed — written and told when
    * that moved anything. Every snapshot and every room event starts here.
    */
-  async function roomOf(store: SqlStore, meetId: string): Promise<{ meet: Meet; active: StoredParticipant[] } | null> {
+  async function roomOf(store: SqlStore, meetId: string): Promise<{ meet: Meet; active: StoredParticipant[]; at: number } | null> {
     const meet = await store.getMeet(meetId);
     if (!meet) return null;
     ensureMeet(meet);
     let changed = tick(meet);
     const stored = await store.listParticipants(meetId);
-    const rec = reconcile(meet, stored);
+    // The instant this state is true for (`serverEpochMs` of every snapshot and room built from it): stamped here, as the
+    // state is read, not when the answer is finished — a device keeps the newest state by this stamp (MeetSession.stateAt),
+    // and an answer that took longer to finish must not outrank a room read after it.
+    const at = Date.now();
+    const rec = reconcile(meet, stored, at);
     changed = changed || rec.changed;
     if (changed) {
       await store.saveMeet(meet);
       events.changed(meetId);
     }
-    return { meet, active: rec.active as StoredParticipant[] };
+    return { meet, active: rec.active as StoredParticipant[], at };
   }
 
   async function snapshot(c: Context<Env>, meetId: string, you?: StoredParticipant, chatSince?: number): Promise<MeetSnapshot | null> {
     const { store } = c.get('deps');
     const room = await roomOf(store, meetId);
     if (!room) return null;
-    const { meet, active } = room;
+    const { meet, active, at } = room;
     const participants = visibleParticipants(meet, active, you && isHost(meet, you) ? Infinity : undefined).map((p) => publicOf(p as StoredParticipant));
     const chat = chatSince !== undefined ? await store.chatSince(meetId, chatSince) : await store.chatTail(meetId, 50);
     const [recordings, performances] = await Promise.all([store.listRecordings(meetId), store.listPerformancesForMeet(meetId)]);
-    return { meet, participants, chat, recordings, performances, serverEpochMs: Date.now(), mixListening: store.mixListening(meetId), ...(you ? { you: publicOf(you) } : {}) };
+    return { meet, participants, chat, recordings, performances, serverEpochMs: at, mixListening: store.mixListening(meetId), ...(you ? { you: publicOf(you) } : {}) };
   }
 
   /** The room for the event stream (events.ts): built once per change, the host's view and everyone else's. */
@@ -1100,9 +1151,9 @@ export function createApp(getDeps: (env: Record<string, unknown>) => Promise<App
     const store = (await getDeps({})).store;
     const room = await roomOf(store, meetId);
     if (!room) return null;
-    const { meet, active } = room;
+    const { meet, active, at } = room;
     const [recordings, performances] = await Promise.all([store.listRecordings(meetId), store.listPerformancesForMeet(meetId)]);
-    const base = { meet, recordings, performances, serverEpochMs: Date.now(), mixListening: store.mixListening(meetId) };
+    const base = { meet, recordings, performances, serverEpochMs: at, mixListening: store.mixListening(meetId) };
     return {
       host: { ...base, participants: visibleParticipants(meet, active, Infinity).map((p) => publicOf(p as StoredParticipant)) },
       public: { ...base, participants: visibleParticipants(meet, active).map((p) => publicOf(p as StoredParticipant)) },

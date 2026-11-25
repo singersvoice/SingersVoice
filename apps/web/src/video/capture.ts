@@ -83,17 +83,60 @@ export async function openInstrument(engine: AudioEngine): Promise<void> {
   await engine.openInstrument({ deviceId: app.instrumentDeviceId, gainDb: app.instrumentDb }).catch(() => undefined);
 }
 
+/** The camera's constraints from the saved settings (the device chosen, or the facing). */
+function videoConstraints(): MediaTrackConstraints {
+  const app = appSettings.peek();
+  const size = cameraSize();
+  return app.cameraDeviceId ? { deviceId: { exact: app.cameraDeviceId }, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } } : { facingMode: app.cameraFacing, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30, max: 30 } };
+}
+
 /**
- * The camera again, after it froze or went dark (a track the browser muted or ended, a picture that
- * stopped moving): with the mic open on iOS the two are re-captured together, elsewhere the camera
- * alone is closed and opened.
+ * The camera off while the microphone stays open (24 Nov: the camera button and the camera's health never touch the
+ * voice): on iOS, where the two came in one capture, the video tracks alone are stopped and the engine's audio track
+ * lives on; elsewhere the camera's own capture is closed.
+ */
+export function closeCamera(engine: AudioEngine | null, camera: Camera): void {
+  if (isIOS && engine?.micOpen.value && camera.stream?.getAudioTracks().some((t) => t.readyState === 'live')) camera.closeVideo();
+  else camera.close();
+}
+
+/**
+ * The camera on (or on again) while the microphone stays open — the camera button turned on mid-song, a frozen camera
+ * restarted. Elsewhere than iOS that is the camera's own capture. On iOS with the microphone open (captured with
+ * the camera) the camera alone is asked for and the microphone watched for a moment: where the browser keeps the
+ * first capture (recent iOS does), the fresh video track joins the stream the microphone is in and the voice never
+ * stops; where the browser ends the microphone with the second capture (older iOS), the two are captured together
+ * again, as before — a short gap in the voice rather than no camera.
+ */
+export async function openCameraKeepingMic(engine: AudioEngine | null, camera: Camera): Promise<void> {
+  if (!(isIOS && engine?.micOpen.value)) {
+    await openCamera(camera);
+    return;
+  }
+  const mic = engine.micTrack;
+  if (mic) {
+    try {
+      const fresh = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(), audio: false });
+      await new Promise((r) => setTimeout(r, 400));
+      if (mic.readyState === 'live' && !mic.muted) {
+        camera.replaceVideo(fresh);
+        return;
+      }
+      fresh.getTracks().forEach((t) => t.stop()); // the microphone did not survive the second capture: the old way
+    } catch {
+      /* the camera alone was refused: the old way */
+    }
+  }
+  camera.close(); // microphone and all: a fresh capture for both
+  await openMicWithCamera(engine, camera);
+}
+
+/**
+ * The camera again, after it froze or went dark (a track the browser muted or ended, a picture that stopped
+ * moving): the camera alone — the microphone, the recorder and the song are never touched (24 Nov): closed
+ * (`closeCamera`) and opened (`openCameraKeepingMic`).
  */
 export async function restartCamera(engine: AudioEngine | null, camera: Camera): Promise<void> {
-  const app = appSettings.peek();
-  if (isIOS && engine?.micOpen.value && app.cameraOn) {
-    camera.close(); // the capture that froze goes, microphone and all: a fresh one for both
-    return openMicWithCamera(engine, camera);
-  }
-  camera.close();
-  if (app.cameraOn) await openCamera(camera);
+  closeCamera(engine, camera);
+  if (appSettings.peek().cameraOn) await openCameraKeepingMic(engine, camera);
 }

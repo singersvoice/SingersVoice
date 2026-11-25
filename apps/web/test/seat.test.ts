@@ -113,9 +113,13 @@ describe('the seat', () => {
     expect(seat.target).not.toBe(target);
   });
 
-  it("'still' (the default): a singer who leans in or shifts in the chair is never re-framed — only one who went somewhere else and stayed", () => {
+  it("'follow' is the default (24 Nov evening: head to chest, kept so when the singer or the camera moves)", () => {
+    expect(new Seat(W, H).framing).toBe('follow');
+  });
+
+  it("'still' (an older save's choice): a singer who leans in or shifts in the chair is never re-framed — only one who went somewhere else and stayed", () => {
     const seat = new Seat(W, H);
-    expect(seat.framing).toBe('still');
+    seat.framing = 'still';
     let t = feed(seat, 0, SEAT.settleMs + 300, jitter(STANDARD));
     const target = seat.target!;
     t += SEAT.glideMs;

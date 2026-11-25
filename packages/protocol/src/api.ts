@@ -1,5 +1,6 @@
 /** sv-control HTTP API shapes shared by the client and the server. All routes are JSON. */
 import type { CatalogListResponse, CatalogPublishRequest, CatalogTrack } from './catalog.ts';
+import type { SharedSound, SoundListResponse, SoundPublishRequest } from './sounds.ts';
 import type { InviteRequest, JoinInvite } from './join.ts';
 import type { ChatMessage, LinkSummary, Meet, MeetPerformance, MeetRecording, MeetRole, MeetSignal, MeetSignalType, Participant, RegisterPerformanceRequest, SongPick, StagePolicy, TvSignal } from './meet.ts';
 import type { MixBatch } from './mix.ts';
@@ -260,6 +261,11 @@ export interface Routes {
   'POST /catalog/tracks': { req: CatalogPublishRequest; res: { track: CatalogTrack } };
   'DELETE /catalog/tracks/:id': { res: { ok: true } };
   'POST /catalog/tracks/:id/pull': { res: { ok: true; pulls: number } };
+  /** The shared sound settings (sounds.ts): everyone's, newest first; `mine=1` only this account's. */
+  'GET /catalog/sounds': { res: SoundListResponse };
+  'GET /catalog/sounds/:id': { res: { sound: SharedSound } };
+  'POST /catalog/sounds': { req: SoundPublishRequest; res: { sound: SharedSound } };
+  'DELETE /catalog/sounds/:id': { res: { ok: true } };
   /** The master track database (registry.ts): what singers have sung, grouped by song, the latest sung first. */
   'GET /tracks/search': { res: TrackSearchResponse };
   /** Recommendations (prefs.ts): the songs in the given languages (`languages=Hindi,Telugu`), the most sung first — grouped as a search is. */

@@ -163,7 +163,7 @@ try {
     return { videoMs: v ? Math.round(v.currentTime * 1000) : -1, tMs: bar ? Number(bar.value) : -1, paused: v?.paused, rate: v?.playbackRate };
   });
   ok(during.videoMs > 3000 && Math.abs(during.videoMs - during.tMs) < 450, `the video runs on the song's clock while it plays (video ${during.videoMs} ms, song ${during.tMs} ms)`);
-  ok(during.paused === false && during.rate === 1, 'the video plays at the song\'s tempo');
+  ok(during.paused === false && Math.abs(during.rate - 1) <= 0.04, `the video plays at the song's tempo — steered onto the song's clock by its rate, within 4 % (rate ${during.rate})`);
   await shot('05-sing-video-playing');
   await page.getByRole('button', { name: 'Pause' }).click();
   await wait(1200);

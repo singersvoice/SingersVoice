@@ -1,5 +1,5 @@
 /** The SVT DB store: users, public track catalog, meets, participants, chat, recordings, publishing. */
-import { accessOf, cleanOffer, cleanPromo, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type BlockedUser, type Bookmark, type PlanOffer, type PlanOfferInput, type PromoCode, type PromoCodeInput, type SocialNetwork, type SocialPost, type SocialPostStatus, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
+import { accessOf, cleanOffer, cleanPromo, normalizeCode, normalizeBookmark, normalizePrefs, bookmarkKey, DEFAULT_BILLING_SETTINGS, DEFAULT_PLANS, LIVE_KEEP, MIX_KEEP, asPlanId, completePlans, entitlementOf, mediaOfEntitlement, newRegistryId, periodKey, planOf, publishingClosedReason, registrySourceKey, songKey, subscriptionStatus, type BillingSettings, type BlockedUser, type Bookmark, type PlanOffer, type PlanOfferInput, type PromoCode, type PromoCodeInput, type SocialNetwork, type SocialPost, type SocialPostStatus, type BookmarkInput, type SongPrefs, type StageBookmark, type Coupon, type CouponRow, type CouponSettings, type CatalogTrack, type SharedSound, type ClubMember, type EntitlementInput, type JoinInvite, type OrderRecord, type OrderStatus, type PaymentRecord, type PlanDef, type PlanId, type ChatMessage, type Destination, type Meet, type MeetPerformance, type MeetRecording, type LiveSegmentInfo, type MeetSignal, type MixBatch, type Participant, type PublishJob, type RegisterTrackRequest, type TrackAccessMine, type TrackCopyRequest, type TrackFileRefs, type TrackMetaPatch, type TrackRecord, type TrackSearchGroup, type TrackSearchResponse, type UserRecord, type PublishJobLive, type UserRole, type UserSubscription } from '@singersvoice/protocol';
 import type { Driver } from './driver.ts';
 import { clone, jobDurableKey, LiveRooms, liveWorthy, meetDurableKey, participantDurableKey, SOFT_FLUSH_MS, type LiveMeet } from './live.ts';
 import { COLUMN_MIGRATIONS, SCHEMA_SQL } from './schema.ts';
@@ -1082,6 +1082,47 @@ export class SqlStore {
     const total = Number((await this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM catalog_tracks ${w}`, params))?.n ?? 0);
     const rows = await this.db.all<{ data: string; pulls: number }>(`SELECT data, pulls FROM catalog_tracks ${w} ORDER BY published_at DESC LIMIT ? OFFSET ?`, [...params, limit, offset]);
     return { items: rows.map((r) => ({ ...(JSON.parse(r.data) as CatalogTrack), pulls: Number(r.pulls) })), total };
+  }
+
+  // ---------- shared sound settings (sounds.ts) ----------
+
+  /** A sound settings file shared: one entry per saved file (owner + name); shared again, it is refreshed. */
+  async publishSound(sound: SharedSound): Promise<SharedSound> {
+    const search = `${sound.name} ${sound.ownerName} ${sound.presetId}`.toLowerCase();
+    const existing = await this.getSound(sound.soundId);
+    const out: SharedSound = existing ? { ...sound, publishedAt: existing.publishedAt } : sound;
+    if (existing) await this.db.run('UPDATE catalog_sounds SET data=?, search=? WHERE sound_id=?', [JSON.stringify(out), search, sound.soundId]);
+    else await this.db.run('INSERT INTO catalog_sounds (sound_id, owner_user_id, data, search, published_at) VALUES (?,?,?,?,?)', [sound.soundId, sound.ownerUserId, JSON.stringify(out), search, sound.publishedAt]);
+    return out;
+  }
+
+  async unpublishSound(soundId: string, ownerUserId: string): Promise<boolean> {
+    const s = await this.getSound(soundId);
+    if (!s || s.ownerUserId !== ownerUserId) return false;
+    await this.db.run('DELETE FROM catalog_sounds WHERE sound_id=?', [soundId]);
+    return true;
+  }
+
+  async getSound(soundId: string): Promise<SharedSound | null> {
+    const r = await this.db.get<{ data: string }>('SELECT data FROM catalog_sounds WHERE sound_id=?', [soundId]);
+    return r ? (JSON.parse(r.data) as SharedSound) : null;
+  }
+
+  async listSounds(q: string, offset: number, limit: number, ownerUserId?: string): Promise<{ items: SharedSound[]; total: number }> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    for (const word of q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8)) {
+      where.push("search LIKE ? ESCAPE '\\'");
+      params.push(`%${word.replace(/[%_\\]/g, (c) => `\\${c}`)}%`);
+    }
+    if (ownerUserId) {
+      where.push('owner_user_id=?');
+      params.push(ownerUserId);
+    }
+    const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const total = Number((await this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM catalog_sounds ${w}`, params))?.n ?? 0);
+    const rows = await this.db.all<{ data: string }>(`SELECT data FROM catalog_sounds ${w} ORDER BY published_at DESC LIMIT ? OFFSET ?`, [...params, limit, offset]);
+    return { items: rows.map((r) => JSON.parse(r.data) as SharedSound), total };
   }
 
   async countPull(trackId: string): Promise<number> {

@@ -1,9 +1,10 @@
 /**
  * The singer's two picture choices, the same two rows wherever they appear (Settings → Camera, the Studio's Camera &
  * zoom sheet, the meet's Picture sheet — offline performances and live meets alike): what their picture is — them cut
- * out on the stage, or their camera as it is — and AUTOZOOM: off (the default), their frame is set once and left
- * alone, stable and centred; on, the picture pushes in on their face while they sing and follows them when they move
- * (video/framing.ts). A plain switch; a tap applies at once, on every stage and in what goes out.
+ * out on the stage, or their camera as it is — and AUTOZOOM: off (the default), their frame holds them head to chest,
+ * centred, and follows with a glide when they or the camera move ('follow'); on, the picture pushes in on their face
+ * while they sing as well ('voice'; video/framing.ts). A plain switch; a tap applies at once, on every stage and in
+ * what goes out.
  */
 import type { Picture } from '../video/framing.ts';
 import { appSettings, updateApp } from '../state/settings.ts';
@@ -23,9 +24,9 @@ export function PictureChoices(props: { compact?: boolean }) {
       <div data-autozoom={autozoom ? 'on' : 'off'}>
         <Switch
           checked={autozoom}
-          onChange={(v) => updateApp({ framing: v ? 'voice' : 'still' })}
+          onChange={(v) => updateApp({ framing: v ? 'voice' : 'follow' })}
           label={AUTOZOOM_LABEL}
-          hint={props.compact ? 'Off: your picture is framed once and stays still and centred. On: a close-up on your face while you sing, out again in the breaks, and the frame follows you when you move.' : 'Off (to start with): your picture is framed once — head and shoulders, centred — and stays exactly there; nothing zooms or moves. On: a smooth close-up on your face while you sing, back out in the breaks between phrases (a breath never moves it), and the frame follows you, smoothly, when you move in your chair.'}
+          hint={props.compact ? 'Off: your picture holds you head to chest, centred, and follows you with a smooth glide when you or the camera move — nothing zooms. On: a close-up on your face while you sing, out again in the breaks.' : 'Off (to start with): your picture holds you head to chest, centred, and stays that way — when you shift in your chair or the camera moves, the frame follows with one smooth glide; nothing zooms. On: a smooth close-up on your face while you sing, back out to head and chest in the breaks between phrases (a breath never moves it).'}
         />
       </div>
     </>

@@ -5,7 +5,7 @@
  */
 import { MAX_OPEN_MEETS, MAX_PERFORMERS, meetIsOpen, type CatalogTrack, type Meet } from '@singersvoice/protocol';
 import { useEffect, useState } from 'preact/hooks';
-import { BackgroundPicker, pickBackground } from '../../components/BackgroundPicker.tsx';
+import { sharedBackgroundId, BackgroundPicker, pickBackground } from '../../components/BackgroundPicker.tsx';
 import { IcChat, IcPlus, IcStop, IcTrash, IcUsers } from '../../components/icons.tsx';
 import { Page } from '../../components/Shell.tsx';
 import { Empty, Field, Progress, Sheet, Spinner, Switch } from '../../components/ui.tsx';
@@ -87,7 +87,7 @@ export function MeetsHome() {
         trackId: fromCatalog?.trackId ?? t?.trackId ?? null,
         trackTitle: fromCatalog?.title ?? t?.title ?? '',
         catalogTrackId,
-        backgroundId: app.backgroundId,
+        backgroundId: sharedBackgroundId(app.backgroundId), // (an upload of my own is mine alone: a meet's stage takes a built-in picture every device has)
         ...(clubOwner ? { membersOnly } : {}),
       });
       go(`/meet/${encodeURIComponent(r.meet.meetId)}`);

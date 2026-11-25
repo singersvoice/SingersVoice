@@ -77,7 +77,7 @@ export class FakeStream {
 
 export interface FakeDom {
   contexts: (FakeCtx & Record<string, unknown>)[];
-  video: { readyState: number; videoWidth: number; videoHeight: number; srcObject: unknown; isConnected: boolean; play: () => Promise<void>; pause: () => void; load: () => void; addEventListener: (n: string, cb: EventListener) => void; removeEventListener: (n: string, cb: EventListener) => void; removeAttribute: (n: string) => void; paused: boolean; duration: number; src: string; remove: () => void; onpause: unknown; muted: boolean; playsInline: boolean; autoplay: boolean; style: { cssText: string }; setAttribute: () => void; currentTime: number; requestVideoFrameCallback?: (cb: () => void) => number; frame: () => void };
+  video: { readyState: number; videoWidth: number; videoHeight: number; srcObject: unknown; isConnected: boolean; play: () => Promise<void>; pause: () => void; load: () => void; addEventListener: (n: string, cb: EventListener) => void; removeEventListener: (n: string, cb: EventListener) => void; removeAttribute: (n: string) => void; paused: boolean; duration: number; src: string; remove: () => void; onpause: unknown; muted: boolean; playsInline: boolean; autoplay: boolean; style: { cssText: string }; setAttribute: () => void; currentTime: number; requestVideoFrameCallback?: (cb: () => void) => number; frame: () => void; /** The camera's own pixels, as a canvas drawing the video reads them (a live camera's never repeat; a test makes them). */ pixels: () => Uint8ClampedArray };
   document: { visibilityState: string; dispatchEvent: (e: Event) => boolean };
 }
 
@@ -128,6 +128,11 @@ function installFakeDom(): FakeDom {
       pending = null;
       cb?.();
     },
+    pixels: () => {
+      const d = new Uint8ClampedArray(64 * 16 * 4);
+      for (let i = 0; i < d.length; i++) d[i] = 100 + Math.floor(Math.random() * 40);
+      return d;
+    },
   };
   const events = new EventTarget();
   const document = {
@@ -141,6 +146,12 @@ function installFakeDom(): FakeDom {
       if (tag === 'video') return video;
       const ctx = fakeContext();
       contexts.push(ctx);
+      // A canvas the camera's video is drawn on reads the camera's own pixels (`video.pixels`: noise, as a live camera's are, unless a test says otherwise).
+      const draw = ctx.drawImage as (...a: unknown[]) => void;
+      ctx.drawImage = (...a: unknown[]) => {
+        draw(...a);
+        if (a[0] === video) ctx.pixels = video.pixels();
+      };
       return { width: 0, height: 0, style: {} as Record<string, string>, className: '', getContext: () => ctx };
     },
   };

@@ -318,7 +318,7 @@ export function Performances() {
                 onChange={setFilter}
                 options={[
                   { v: 'all', label: 'All' },
-                  { v: 'kept', label: 'Kept' },
+                  { v: 'kept', label: 'Saved' },
                   { v: 'temp', label: 'Temp (7 days)' },
                 ]}
               />
@@ -354,7 +354,7 @@ export function Performances() {
                   </div>
                 </div>
                 <div class="actions">
-                  <span class={`chip ${p.state === 'temp' ? 'warn' : 'ok'}`}>{p.state === 'temp' ? `Temp · ${daysLeft(p.expiresAt)}` : 'Kept'}</span>
+                  <span class={`chip ${p.state === 'temp' ? 'warn' : 'ok'}`}>{p.state === 'temp' ? `Temp · ${daysLeft(p.expiresAt)}` : 'Saved'}</span>
                   {joinControls(p)}
                   <button class="btn sm danger" disabled={deleting !== null} aria-label={`Delete ${p.trackTitle}`} title="Delete permanently from your Drive" onClick={() => void deleteRows([{ id: p.performanceId, show: false }], `"${p.trackTitle}"`)}>
                     {deleting?.id === p.performanceId ? <Spinner /> : <IcTrash size={14} />} Delete
@@ -445,7 +445,7 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
     setBusy(true);
     try {
       await withProvider((p) => p.keepPerformance(props.summary.performanceId));
-      toast('Kept', 'ok');
+      toast('Saved', 'ok');
       props.onChanged();
     } catch (e) {
       toast(errorText(e), 'error');
@@ -538,7 +538,7 @@ function PerformanceDetail(props: { summary: PerformanceSummary; show: MeetPerfo
         </button>
         {s.state === 'temp' && (
           <button class="btn accent" disabled={busy} onClick={() => void keep()}>
-            Keep
+            Save
           </button>
         )}
         {isDrive.value && (

@@ -17,6 +17,7 @@ export * from './prefs.ts';
 export * from './ytTracks.ts';
 export * from './api.ts';
 export * from './backgrounds.ts';
+export * from './sounds.ts';
 
 export const PROTOCOL_VERSION = '2.1.0';
 export * from './mix.ts';

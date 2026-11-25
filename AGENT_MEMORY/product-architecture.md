@@ -49,8 +49,11 @@ is the same component and the same stage code in OFFLINE PERFORMANCES and LIVE M
 
 Google sign-in only; the singer's Google Drive is linked at onboarding and holds everything ("everything on Google
 Drive"): `SingersVoice/Tracks`, `SingersVoice/Performances` (one level of song files, no per-take folders; the only
-option is a permanent Delete), `SingersVoice/Config` (`app_settings.json`, `audio_plugin_settings.json`). A
-"device" mode (no Google) exists for tests and local use only. Tracks are shared through the SVT DB catalog
+option is a permanent Delete), `SingersVoice/Config` (`app_settings.json`, `audio_plugin_settings.json`, and since
+24 Nov the saved sound settings files `<initials>_<date>_<time>.svsound.json`), `SingersVoice/Backgrounds` (since
+24 Nov the record of the singer's stage backgrounds: the built-in pictures copied in once, their uploads). A
+"device" mode (no Google) exists for tests and local use only. The control service's catalogs: tracks
+(`/catalog/tracks`, the SVT DB) and shared sound settings (`/catalog/sounds`: the JSON itself, a few kilobytes). Tracks are shared through the SVT DB catalog
 (a central track database: song, artists, movie, year, language, a 12-char id, shareable Drive URL, last-accessed
 in UTC; tabs All · My Drive · Public Catalog · YouTube; Sing copies a track into the singer's own Tracks folder).
 

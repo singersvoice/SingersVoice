@@ -23,7 +23,7 @@
 //   6. Searches never count: the access counts stand still through all the searching.
 //   npm run build (BASE_PATH=/SingersVoice/) && node tools/ci/tracks-e2e.mjs [outDir]
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -617,6 +617,107 @@ try {
   for (const q of ['ci', 'sample', 'song', 'bob']) await asUser('dave', 'GET', `/tracks/search?q=${q}`);
   const end = (await recordOf('dave', 'CI Sample Song')).record;
   check(end.accessCount === afterFail.accessCount && end.lastAccessedAt === afterFail.lastAccessedAt && end.accessCount === soFar.accessCount + 1, `searching changed nothing: ${end.accessCount} accesses (bob's and alice's, carol's one), last sung ${end.lastAccessedAt}`);
+
+  // ---- 7. Sound settings as files in Drive › Config, shared through the service; the Backgrounds folder as the record ----
+  {
+    const aliceDrive = driveOf('alice');
+    const filesOf = (d, pred) => [...d.files.values()].filter((f) => pred(f) && !d.isTrashed(f));
+    // alice's sound, distinctive: the Warm preset with a tweak, a tempo, a key, a balance.
+    await alice.page.goto(`${base}home?${control}`, { waitUntil: 'networkidle' });
+    await wait(3000); // (the start's pull of the Config folder's copies is over: nothing lands on top of what is set here)
+    await alice.page.evaluate(() => {
+      const a = JSON.parse(localStorage.getItem('sv.settings.audio') || '{}');
+      localStorage.setItem('sv.settings.audio', JSON.stringify({ ...a, activePresetId: 'custom', params: { ...(a.params || {}), eqPres: 4.5, gtAmt: 0.33 }, tempo: 0.93, keyShift: 2, monitorDb: 1.5, updatedAt: new Date().toISOString() }));
+      const app = JSON.parse(localStorage.getItem('sv.settings.app') || '{}');
+      localStorage.setItem('sv.settings.app', JSON.stringify({ ...app, trackDb: -3, vocalDb: 4.5, mixV2: true, mixV3: true, mixV4: true, updatedAt: new Date().toISOString() }));
+    });
+    await alice.page.goto(`${base}settings?${control}#voice`, { waitUntil: 'networkidle' }); // (a fresh load: the settings are read from the device at the start)
+    const panel = alice.page.locator('[data-sound-settings]').first();
+    await panel.waitFor();
+    await panel.locator('[data-save-sound-button]').click();
+    await alice.page.locator('.toast', { hasText: /Sound settings saved as A_\d{8}_\d{6}/ }).waitFor({ timeout: 20000 });
+    const soundFiles = filesOf(aliceDrive, (f) => f.appProperties.svType === 'soundSettings');
+    check(soundFiles.length === 1 && /^A_\d{8}_\d{6}\.svsound\.json$/.test(soundFiles[0].name), `Save Sound Settings wrote one file to alice's Drive, named by her initials, the date and the time (${soundFiles.map((f) => f.name).join(', ')})`);
+    const saved = soundFiles[0] ? JSON.parse(Buffer.from(soundFiles[0].bytes).toString('utf8')) : null;
+    const configFolder = [...aliceDrive.files.values()].find((f) => f.name === 'Config' && f.mimeType.includes('folder'));
+    check(Boolean(saved) && saved.schema === 'singersvoice.sound-settings.v1' && saved.audio.activePresetId === 'custom' && saved.audio.params.eqPres === 4.5 && saved.audio.params.gtAmt === 0.33 && saved.audio.tempo === 0.93 && saved.audio.keyShift === 2 && saved.audio.monitorDb === 1.5 && saved.balance.trackDb === -3 && saved.balance.vocalDb === 4.5, `…the complete sound: the preset and its tweaks, the tempo and key, the ears, the Track / Vocal balance (${saved ? `${saved.audio.activePresetId}, tempo ${saved.audio.tempo}, key ${saved.audio.keyShift}, balance ${saved.balance.trackDb}/${saved.balance.vocalDb}` : 'no file'})`);
+    check(Boolean(configFolder) && Boolean(soundFiles[0]) && soundFiles[0].parents.includes(configFolder.id), 'in the Config folder');
+    const name = saved ? saved.name : '';
+    // Listed under "My saved settings" and shared with everyone.
+    const select = panel.locator('[data-import-sound]');
+    await alice.page.waitForFunction((n) => [...document.querySelectorAll('[data-import-sound] option')].some((o) => o.textContent.includes(n)), name, { timeout: 15000 });
+    const mineOption = await select.locator('option').filter({ hasText: name }).first().getAttribute('value');
+    await select.selectOption(mineOption);
+    await panel.locator('[data-share-sound]').click();
+    await alice.page.locator('.toast', { hasText: /shared — every SingersVoice singer/ }).waitFor({ timeout: 20000 });
+    const catalog = (await asUser('bob', 'GET', '/catalog/sounds')).json;
+    check(catalog && catalog.total === 1 && catalog.items[0].name === name && catalog.items[0].ownerName === 'alice' && catalog.items[0].presetId === 'custom', `shared: the service lists it for everyone (${catalog ? `${catalog.total}: ${catalog.items.map((i) => `${i.name} by ${i.ownerName}`).join(', ')}` : 'no answer'})`);
+    await alice.page.screenshot({ path: `${out}/tracks-sound-settings-alice.png`, fullPage: true });
+    // bob imports it: every control follows.
+    await bob.page.goto(`${base}settings?${control}#voice`, { waitUntil: 'networkidle' });
+    const bobPanel = bob.page.locator('[data-sound-settings]').first();
+    await bobPanel.waitFor();
+    await bob.page.waitForFunction((n) => [...document.querySelectorAll('[data-import-sound] optgroup[label="Shared by other singers"] option')].some((o) => o.textContent.includes(n)), name, { timeout: 15000 });
+    const sharedOption = await bobPanel.locator('[data-import-sound] option').filter({ hasText: name }).first().getAttribute('value');
+    check(Boolean(sharedOption) && sharedOption.startsWith('shared:'), `bob's Import Sound Settings lists alice's under "Shared by other singers" (${sharedOption})`);
+    await bobPanel.locator('[data-import-sound]').selectOption(sharedOption);
+    await bobPanel.locator('[data-import-sound-apply]').click();
+    await bob.page.locator('.toast', { hasText: /applied — every control follows/ }).waitFor({ timeout: 20000 });
+    const bobNow = await bob.page.evaluate(() => ({ audio: JSON.parse(localStorage.getItem('sv.settings.audio') || '{}'), app: JSON.parse(localStorage.getItem('sv.settings.app') || '{}') }));
+    check(bobNow.audio.activePresetId === 'custom' && bobNow.audio.params.eqPres === 4.5 && bobNow.audio.params.gtAmt === 0.33 && bobNow.audio.tempo === 0.93 && bobNow.audio.keyShift === 2 && bobNow.audio.monitorDb === 1.5 && bobNow.app.trackDb === -3 && bobNow.app.vocalDb === 4.5, `bob now has alice's sound: ${bobNow.audio.activePresetId}, presence ${bobNow.audio.params.eqPres}, gate ${bobNow.audio.params.gtAmt}, tempo ${bobNow.audio.tempo}, key ${bobNow.audio.keyShift}, ears ${bobNow.audio.monitorDb}, balance ${bobNow.app.trackDb}/${bobNow.app.vocalDb}`);
+    const presenceShown = await bob.page.locator('label.param').filter({ has: bob.page.locator('span', { hasText: /^Presence$/ }) }).first().locator('.v').innerText().catch(() => '');
+    check(/4\.5/.test(presenceShown), `…and the controls show it (presence ${presenceShown.trim() || 'not shown'})`);
+    await bob.page.screenshot({ path: `${out}/tracks-sound-settings-bob.png`, fullPage: true });
+    // A file that is not sound settings is refused on import; alice deletes hers (the share withdrawn too).
+    alice.page.once('dialog', (d) => void d.accept());
+    await alice.page.locator('[data-delete-sound]').click();
+    await alice.page.locator('.toast', { hasText: /deleted/ }).waitFor({ timeout: 20000 });
+    check(filesOf(aliceDrive, (f) => f.appProperties.svType === 'soundSettings').length === 0 && (await asUser('bob', 'GET', '/catalog/sounds')).json.total === 0, 'Delete: the file is in the Drive bin and the share is withdrawn');
+
+    // The Backgrounds folder: the built-in pictures copied in once, an upload from the device, Select → Delete, Restore.
+    await alice.page.goto(`${base}settings?${control}#backgrounds`, { waitUntil: 'networkidle' });
+    const picker = alice.page.locator('[data-background-picker]').first();
+    await picker.waitFor();
+    const stockIndex = JSON.parse(readFileSync('apps/web/public/backgrounds/index.json', 'utf8')).items;
+    const stockCount = stockIndex.filter((i) => i.kind === 'image').length; // (the pictures are copied to the folder; the one video background stays in the bundle)
+    const seeded = await (async () => {
+      for (let i = 0; i < 120; i++) {
+        const n = filesOf(aliceDrive, (f) => f.appProperties.svType === 'background' && f.appProperties.svStock).length;
+        if (n >= stockCount && !(await picker.locator('.spinner').count())) return n;
+        await wait(500);
+      }
+      return filesOf(aliceDrive, (f) => f.appProperties.svType === 'background' && f.appProperties.svStock).length;
+    })();
+    const bgFolder = [...aliceDrive.files.values()].find((f) => f.name === 'Backgrounds' && f.mimeType.includes('folder'));
+    check(seeded === stockCount && filesOf(aliceDrive, (f) => f.appProperties.svType === 'background').every((f) => bgFolder && f.parents.includes(bgFolder.id)), `the ${stockCount} built-in pictures are in Drive › SingersVoice › Backgrounds, each stamped with its id (${seeded} copied)`);
+    check((await picker.locator('[data-bg-item]').count()) === stockIndex.length, `the picker shows them all (${await picker.locator('[data-bg-item]').count()} of ${stockIndex.length} built-in backgrounds)`);
+    // An upload from the device: a 1600×900 picture, scaled and re-encoded on the way, chosen as the background.
+    const pic = path.join(work, 'my-wall.png');
+    execFileSync('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=2400x1350:rate=1', '-frames:v', '1', pic]);
+    await picker.locator('[data-bg-upload]').setInputFiles(pic);
+    await alice.page.locator('.toast', { hasText: /1 background added to Drive/ }).waitFor({ timeout: 30000 });
+    const uploads = filesOf(aliceDrive, (f) => f.appProperties.svType === 'background' && !f.appProperties.svStock);
+    const chosen = await alice.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}').backgroundId);
+    check(uploads.length === 1 && /^image\/(webp|jpeg)$/.test(uploads[0].mimeType) && uploads[0].bytes.length < 1500000 && uploads[0].appProperties.svLabel === 'my-wall', `the upload is in the Backgrounds folder, scaled and re-encoded (${uploads[0]?.mimeType}, ${Math.round((uploads[0]?.bytes.length ?? 0) / 1024)} KB, "${uploads[0]?.appProperties.svLabel}")`);
+    check(chosen.startsWith('mybg:') && (await picker.locator('[data-bg-mine][aria-selected="true"]').count()) === 1, `…and chosen as the stage background (${chosen})`);
+    check((await picker.locator('[data-bg-mine] img').first().getAttribute('src'))?.startsWith('blob:') === true, 'the picker draws it from its own picture');
+    // Select → Delete: the upload and one built-in picture; the dialog confirms; the folder and the picker follow.
+    alice.page.once('dialog', (d) => void d.accept());
+    await picker.locator('[data-bg-select]').click();
+    await picker.locator('[data-bg-item][data-bg-mine]').click();
+    await picker.locator('[data-bg-item="disco-floor"]').click();
+    await picker.locator('[data-bg-delete]').click();
+    await alice.page.locator('.toast', { hasText: /2 backgrounds deleted/ }).waitFor({ timeout: 30000 });
+    const afterDelete = await alice.page.evaluate(() => JSON.parse(localStorage.getItem('sv.settings.app') || '{}'));
+    check(filesOf(aliceDrive, (f) => f.appProperties.svType === 'background' && !f.appProperties.svStock).length === 0 && filesOf(aliceDrive, (f) => f.appProperties.svStock === 'disco-floor').length === 0, 'both are in the Drive bin');
+    check(afterDelete.hiddenBackgrounds.includes('disco-floor') && !afterDelete.backgroundId.startsWith('mybg:') && (await picker.locator('[data-bg-item="disco-floor"]').count()) === 0 && (await picker.locator('[data-bg-mine]').count()) === 0, `the picker no longer lists them; the background fell back to a built-in picture (${afterDelete.backgroundId})`);
+    await picker.locator('[data-bg-restore]').click();
+    await alice.page.locator('.toast', { hasText: /built-in backgrounds are back/ }).waitFor({ timeout: 30000 });
+    await alice.page.waitForFunction(() => document.querySelector('[data-bg-item="disco-floor"]') !== null, null, { timeout: 15000 });
+    const restored = filesOf(aliceDrive, (f) => f.appProperties.svStock === 'disco-floor');
+    check(restored.length === 1 && (await picker.locator('[data-bg-item="disco-floor"]').count()) === 1, 'Restore built-in backgrounds: the picture is back in the picker and copied to the folder again');
+    await alice.page.screenshot({ path: `${out}/tracks-backgrounds-alice.png`, fullPage: true });
+  }
   check(Object.values(errors).every((v) => v.filter((e) => !/favicon|Failed to load resource|403|404/.test(e)).length === 0), `no page errors (${JSON.stringify(Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, v.filter((e) => !/favicon|Failed to load resource|403|404/.test(e))]))).slice(0, 400)})`);
   await carol.ctx.close();
   await dave.ctx.close();

@@ -330,11 +330,13 @@ export type SeatState = 'settling' | 'gliding' | 'held';
 
 /**
  * How a singer's frame behaves once set — their one switch, AUTOZOOM (Settings → Camera, the stage's Camera &
- * zoom sheet; 24 Nov: off by default, the owner's word): 'still' (AUTOZOOM off, the default): framed once and
- * left alone — stable and centred; it follows only a singer who has plainly moved somewhere else and stayed
- * there; 'voice' (AUTOZOOM on): pushed in on the singer's face while they sing — a close-up for the phrase, back
- * out to head and shoulders in the break (a director's push-in on the soloist) — and re-framed with a glide when
- * they have shifted in their chair; 'follow': the re-framing without the push-in (kept for a save that chose it).
+ * zoom sheet; 24 Nov: off by default, the owner's word): 'follow' (AUTOZOOM off, the default since the evening
+ * of 24 Nov — "head to chest, kept so when the camera moves"): framed head to chest and re-framed with one glide
+ * when the singer has shifted in their chair or the camera has moved (the seat's margins, `SEAT`); 'voice'
+ * (AUTOZOOM on): the same, and pushed in on the singer's face while they sing — a close-up for the phrase, back out
+ * to head and chest in the break (a director's push-in on the soloist); 'still' (an older save's choice, the
+ * default of the morning of 24 Nov): framed once and left alone — it follows only a singer who has plainly moved
+ * somewhere else and stayed there (`STILL`'s wide margins).
  */
 export type Framing = 'still' | 'follow' | 'voice';
 export const FRAMINGS: readonly Framing[] = ['still', 'follow', 'voice'];
@@ -389,7 +391,7 @@ export class Seat {
   /** The frame held, or being glided to — null while the seat is settling (the whole camera frame is drawn). */
   target: FrameRect | null = null;
   /** How the frame behaves once set (`Framing`); changed at any time. */
-  framing: Framing = 'still';
+  framing: Framing = 'follow';
   /** Where `target` has the head (set from the median head the seat was set from). */
   private basis: HeadPlace | null = null;
   private from: FrameRect | null = null;

@@ -27,9 +27,9 @@ import { chapterCue } from '../../video/chapters.ts';
 import { alignLine, alignPlan, delayFor, type AlignPlan, type PeerArrival } from '../../video/align.ts';
 import { UnpackedFrame } from '../../video/alphaPack.ts';
 import type { Camera } from '../../video/camera.ts';
-import { openCamera as captureCamera } from '../../video/capture.ts';
+import { closeCamera, openCameraKeepingMic } from '../../video/capture.ts';
 import { isPermissionDenied, permissionHelp } from '../../lib/permissions.ts';
-import { LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
+import { AUTO_RESTART_EVERY_MS, LocalFeed, type FeedHealth } from '../../video/localFeed.ts';
 import { MeetRecorder, stageSound } from '../../video/meetRecorder.ts';
 import { PerformerMesh, type LinkHealth, type PeerState } from '../../video/peers.ts';
 import type { SegmenterMode } from '../../video/segmenter.ts';
@@ -92,6 +92,7 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
   const [camError, setCamError] = useState<string | null>(null);
   const app = appSettings.value;
   const onStage = you.slot !== null;
+  void camera.gen.value; // (a video track replaced in place — an iOS camera restart — re-renders: `camera.stream` is read fresh)
   const camStream = camera.stream;
   const camOn = camera.on.value;
   const facing = camera.facing.value;
@@ -117,7 +118,7 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     holdUntil.current = Date.now() + 8000;
     opening.current = (async () => {
       try {
-        await captureCamera(camera);
+        await openCameraKeepingMic(opts.engine, camera);
         setCamError(null);
       } catch (e) {
         setCamError(isPermissionDenied(e) ? `The camera is blocked in this browser. ${permissionHelp('camera')}` : e instanceof Error ? e.message : String(e));
@@ -140,7 +141,7 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
       return () => clearTimeout(t);
     }
     if (app.cameraOn && videoAllowed && !camOn && !opts.preparing) void openCamera();
-    if ((!app.cameraOn || !videoAllowed) && camOn && !opts.preparing) camera.close();
+    if ((!app.cameraOn || !videoAllowed) && camOn && !opts.preparing) closeCamera(opts.engine, camera);
   }, [onStage, app.cameraOn, camOn, opts.preparing, videoAllowed]);
 
   // What this device sends right now, as the other side is told (peers.ts `announceMedia`): a link carrying nothing is then a broken one or a quiet one, never a guess.
@@ -265,8 +266,8 @@ export function useRoomStage(session: MeetSession, meet: Meet, you: Participant,
     feed.onHealth = (h) => {
       setCamHealth(h);
       if (h === 'ok' || !onStage || !camOn) return;
-      // one restart by itself per minute: a camera that stays frozen gets the button, not a loop of prompts
-      if (Date.now() - autoRestartAt.current < 60_000) return;
+      // one restart by itself per AUTO_RESTART_EVERY_MS: a camera that stays frozen gets the button, not a loop of prompts
+      if (Date.now() - autoRestartAt.current < AUTO_RESTART_EVERY_MS) return;
       autoRestartAt.current = Date.now();
       void restartCamera();
     };
